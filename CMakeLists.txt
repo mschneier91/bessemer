@@ -31,7 +31,6 @@ find_package(MFEM REQUIRED)   # provides the `incns_mfem` interface target
 
 enable_testing()
 
-# Sprint 1.0b: harness only -- a hello-world MPI target and its trivial ctest.
-# src/ (libincns) lands in 1.1 and later sub-sprints.
+add_subdirectory(src)    # libincns
 add_subdirectory(apps)
 add_subdirectory(test)

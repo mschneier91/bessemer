@@ -1,0 +1,10 @@
+# libincns -- the solver library. Grows one module per sub-sprint; a driver or
+# test never edits it to run a case. Sprint 1.1 seeds it with mesh + spaces.
+add_library(incns STATIC
+  mesh/periodic_box.cpp
+  spaces/mixed_spaces.cpp)
+
+# Public: headers are included as "mesh/...", "spaces/..." from this root, and
+# every consumer needs MFEM.
+target_include_directories(incns PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(incns PUBLIC incns_mfem)
