@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "cpu",
+      "displayName": "CPU (RelWithDebInfo, ccache, Ninja)",
+      "description": "The build that matters for Sprint 1. Toolchain comes from the activated spack env.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/cpu",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "mpicxx",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "USE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "cuda",
+      "inherits": "cpu",
+      "displayName": "CUDA (optional, off by default)",
+      "description": "Enable only on a machine with a GPU + CUDA toolkit.",
+      "binaryDir": "${sourceDir}/build/cuda",
+      "cacheVariables": {
+        "USE_CUDA": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cpu", "configurePreset": "cpu" },
+    { "name": "cuda", "configurePreset": "cuda" }
+  ],
+  "testPresets": [
+    {
+      "name": "cpu",
+      "configurePreset": "cpu",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

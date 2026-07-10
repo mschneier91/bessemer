@@ -1,0 +1,35 @@
+# test/baselines.yaml -- the single source of truth for all stored numerical
+# baselines (CLAUDE.md 1.0b). Test sources MUST read expected values from here;
+# never hardcode a baseline as a magic number in test code.
+#
+# Populated per sub-sprint as checks come online. Sprint 1.0b introduces no
+# numerics, so every section below is an empty placeholder documenting the schema.
+#
+# Conventions:
+#   * Iteration-count baselines are recorded per preconditioner (jacobi vs amg),
+#     per grad-div setting (gd0 vs gdpos), and -- because AMG counts are legitimately
+#     rank-count-sensitive -- per rank count. Jacobi counts should agree across
+#     np to within +/-1, so a single value with a tolerance band suffices there.
+#   * Solver-health baselines are per-dt (the Sprint-1 pressure-mass Schur block
+#     degrades as dt shrinks; that is expected, not a regression).
+
+schema_version: 1
+
+# FGMRES outer-iteration counts. Example shape (filled in 1.5/1.6/1.10):
+#   stokes_schur:
+#     jacobi:
+#       gd0:   { dt_1e-2: <count>, tol_band: 2 }
+#       gdpos: { dt_1e-2: <count>, tol_band: 2 }
+#     amg:
+#       gd0:   { np1: <count>, np2: <count>, np4: <count>, tol_band: 2 }
+solver_iterations: {}
+
+# Convergence-oracle rates (filled in 1.5/1.8). Targets derive from the configured
+# (k_u, k_p) pair; defaults are Q3/Q2 => velocity order 4, pressure order 3.
+#   tgv2d:
+#     spatial:  { velocity_order: <rate>, pressure_order: <rate>, slack: 0.2 }
+#     temporal: { bdf2: 2.0, bdf3: 3.0, slack: 0.2 }
+convergence_rates: {}
+
+# Divergence norms (filled in 1.10). ||div u|| ceilings, gamma=0 vs gamma>0.
+divergence: {}

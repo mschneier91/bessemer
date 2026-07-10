@@ -1,0 +1,24 @@
+spack:
+  specs:
+    - mfem@develop+gslib+lapack+libceed+mpi+shared+static+suite-sparse
+      ^gslib@1.0.9 cflags="-fPIC"
+
+    - cmake
+    - ninja
+    - openmpi
+
+    - googletest
+    - astyle
+    - yaml-cpp
+
+    # - py-pybind11
+
+  packages:
+    all:
+      providers:
+        mpi: [openmpi]
+
+  concretizer:
+    unify: true
+
+  view: true

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(sbatch:*)",
+      "Bash(srun:*)",
+      "Bash(flux:*)",
+      "Bash(bsub:*)",
+      "Bash(rm -rf:*)",
+      "Bash(git push:*)",
+      "Bash(git push --force:*)",
+      "Bash(spack uninstall:*)",
+      "Bash(sudo:*)"
+    ],
+    "allow": [
+      "Bash(./scripts/env.sh:*)",
+      "Bash(./scripts/build.sh:*)",
+      "Bash(./scripts/test.sh:*)",
+      "Bash(./scripts/style.sh:*)",
+      "Bash(cmake:*)",
+      "Bash(ninja:*)",
+      "Bash(ctest:*)",
+      "Bash(mpirun -np 2:*)",
+      "Bash(mpirun -np 4:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout -b:*)",
+      "Bash(astyle:*)"
+    ]
+  }
+}

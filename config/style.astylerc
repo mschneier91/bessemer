@@ -1,0 +1,18 @@
+# astyle options -- matches MFEM's C++ convention (Allman braces, 3-space indent).
+# Pinned to astyle 3.4.11 (desktop env lockfile). See scripts/style.sh.
+
+--style=allman
+--indent=spaces=3
+--indent-switches
+--min-conditional-indent=0
+--pad-header
+--pad-oper
+--unpad-paren
+--align-pointer=type
+--align-reference=type
+--convert-tabs
+--max-code-length=80
+--keep-one-line-blocks
+--keep-one-line-statements
+--indent-preproc-define
+--lineend=linux

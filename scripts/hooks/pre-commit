@@ -1,0 +1,9 @@
+#!/bin/sh
+# Pre-commit hook: reject commits whose C++ sources are not astyle-clean.
+# Installed via `git config core.hooksPath scripts/hooks` (see scripts/install-hooks.sh).
+# Delegates to scripts/style.sh, which activates the spack env first.
+
+_hook_dir=$(cd "$(dirname "$0")" && pwd)
+_repo_root=$(cd "$_hook_dir/../.." && pwd)
+
+exec "$_repo_root/scripts/style.sh" check

@@ -1,0 +1,13 @@
+# Build trees (per preset). Never committed; never `rm -rf`'d (warm ccache).
+/build/
+
+# Spack env internals live under environments/<machine>/.spack-env; keep the
+# committed spack.yaml + spack.lock, ignore the generated view/state.
+environments/*/.spack-env/
+
+# Editor / OS / tooling cruft
+*.orig
+*.swp
+__pycache__/
+.cache/
+compile_commands.json
