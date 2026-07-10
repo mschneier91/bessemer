@@ -4,7 +4,8 @@ add_library(incns STATIC
   mesh/periodic_box.cpp
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
-  util/profiler.cpp)
+  util/profiler.cpp
+  post/pressure_mean.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
 # every consumer needs MFEM.
