@@ -554,6 +554,12 @@ Launched by a human via the batch scheduler. See Guardrails.
 ## Coding conventions
 
 - C++17, MFEM style: `mfem::` types, RAII, no raw `new`/`delete` in new code.
+- **Doxygen docstrings on every public API entity.** Each header carries an `@file`
+  brief; every public class/struct, free function, enum, and data member gets a Doxygen
+  comment (`/** @brief ... */` with `@param`/`@return`/`@pre`/`@tparam` as applicable;
+  `///` briefs for members and trivial accessors). Struct/enum members use `///` (or
+  trailing `///<`) so Doxygen actually captures them — a plain `//` does not. `.cpp`
+  implementation comments stay plain `//` (they document *how*, not the API).
 - **Modular:** one concern per file, small classes, no god-class. A new module lands with
   its unit test in the same change.
 - **Quad/hex only:** assert element geometry is `Geometry::SQUARE` / `Geometry::CUBE`;
