@@ -30,3 +30,7 @@ GENERATE_LATEX         = NO
 
 # Graphviz diagrams if `dot` is available; harmless when it is not.
 HAVE_DOT               = NO
+
+# Document the active (profiling-enabled) branch of INCNS_PROFILE.
+ENABLE_PREPROCESSING   = YES
+PREDEFINED             = INCNS_ENABLE_PROFILING

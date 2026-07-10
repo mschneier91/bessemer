@@ -24,6 +24,10 @@ if(USE_CUDA)
   enable_language(CUDA)
 endif()
 
+# INCNS_PROFILE scoped timing in libincns' own hot paths (lightweight; on by
+# default). Consumers opt in per target via the INCNS_ENABLE_PROFILING define.
+option(INCNS_PROFILING "Enable INCNS_PROFILE scoped timing in libincns" ON)
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 # Dependencies come exclusively from the activated spack env (see scripts/env.sh).
