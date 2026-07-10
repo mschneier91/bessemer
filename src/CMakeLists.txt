@@ -2,7 +2,8 @@
 # test never edits it to run a case. Sprint 1.1 seeds it with mesh + spaces.
 add_library(incns STATIC
   mesh/periodic_box.cpp
-  spaces/mixed_spaces.cpp)
+  spaces/mixed_spaces.cpp
+  quadrature/rule_book.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
 # every consumer needs MFEM.

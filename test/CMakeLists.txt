@@ -40,3 +40,4 @@ endfunction()
 
 incns_add_mpi_test(periodic_box_test periodic_box_test.cpp)
 incns_add_mpi_test(mixed_spaces_test mixed_spaces_test.cpp)
+incns_add_mpi_test(rule_book_test rule_book_test.cpp)
