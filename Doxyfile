@@ -1,0 +1,32 @@
+# Doxygen configuration for libincns. Curated (not `doxygen -g` defaults) so the
+# knobs that matter are visible. Run via scripts/docs.sh; output is written under
+# build/ (git-ignored). Only the library public API (src/) is documented here.
+
+PROJECT_NAME           = "incns"
+PROJECT_BRIEF          = "High-order finite element incompressible Navier-Stokes solver (MFEM)"
+OUTPUT_DIRECTORY       = build/docs
+
+INPUT                  = src
+FILE_PATTERNS          = *.hpp *.cpp
+RECURSIVE              = YES
+STRIP_FROM_PATH        = src
+
+# Extract only *documented* entities and warn about anything missing docs, so the
+# "Doxygen on every public API entity" convention is actually enforced by a run.
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = YES
+HIDE_UNDOC_MEMBERS     = NO
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES
+QUIET                  = YES
+
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+
+# Graphviz diagrams if `dot` is available; harmless when it is not.
+HAVE_DOT               = NO
