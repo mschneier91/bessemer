@@ -36,7 +36,8 @@ struct StokesOperatorOptions
  * Blocks (all partial assembly, AssemblyLevel::PARTIAL, acting on true dofs):
  *  - @b Mass:       velocity vector mass @c M (GL rule, or collocated GLL when
  *    StokesOperatorOptions::collocated_mass is set -- then @c M is diagonal);
- *  - @b Viscous:    @c nu*K with @c K the vector Laplacian (VectorDiffusion);
+ *  - @b Momentum:   @c A = mass_coeff*M + nu*K (VectorMass + VectorDiffusion;
+ *    the steady block when @c mass_coeff = 0);
  *  - @b Divergence: @c B = (div u, q) mapping velocity to pressure;
  *    @c B^T (the pressure gradient block) is its MultTranspose.
  *
@@ -59,7 +60,7 @@ public:
     * @param rules     Quadrature source (borrowed, must outlive this).
     * @param opts      Viscosity and mass-rule options.
     * @param ess_tdofs Optional essential (Dirichlet) velocity true dofs. When
-    *        given, Viscous() is a ConstrainedOperator (identity on the
+    *        given, Momentum() is a ConstrainedOperator (identity on the
     *        eliminated rows/columns) and Divergence() has the corresponding
     *        trial columns eliminated -- both expose EliminateRHS for the
     *        Dirichlet contribution to the right-hand side. When null (the
@@ -118,8 +119,8 @@ private:
    mfem::Array<int> ess_p_tdofs_;
 
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
-   mfem::ParBilinearForm
-   momentum_form_;  ///< Momentum block form (mass+diffusion).
+   /// Momentum block form (mass + diffusion integrators).
+   mfem::ParBilinearForm momentum_form_;
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.

@@ -61,3 +61,5 @@ incns_add_mpi_test(stokes_solver_test stokes_solver_test.cpp)
 incns_add_mpi_test(schur_quality_test schur_quality_test.cpp
   INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
 target_link_libraries(schur_quality_test PRIVATE yaml-cpp::yaml-cpp)
+
+incns_add_mpi_test(multistep_coeffs_test multistep_coeffs_test.cpp)
