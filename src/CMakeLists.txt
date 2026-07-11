@@ -11,7 +11,8 @@ add_library(incns STATIC
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
   solver/stokes_solver.cpp
-  time/multistep_coeffs.cpp)
+  time/multistep_coeffs.cpp
+  time/time_integrator.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
 # every consumer needs MFEM.

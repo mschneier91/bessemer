@@ -63,3 +63,5 @@ incns_add_mpi_test(schur_quality_test schur_quality_test.cpp
 target_link_libraries(schur_quality_test PRIVATE yaml-cpp::yaml-cpp)
 
 incns_add_mpi_test(multistep_coeffs_test multistep_coeffs_test.cpp)
+incns_add_mpi_test(unsteady_mms_test unsteady_mms_test.cpp)
+incns_add_mpi_test(tgv_stokes_temporal_test tgv_stokes_temporal_test.cpp)

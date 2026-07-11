@@ -14,6 +14,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    : spaces_(spaces), opts_(opts), nu_(opts.nu), mass_coeff_(opts.mass_coeff),
      mass_form_(&spaces.Velocity()),
      momentum_form_(&spaces.Velocity()),
+     viscous_form_(&spaces.Velocity()),
      div_form_(&spaces.Velocity(), &spaces.Pressure())
 {
    INCNS_PROFILE("stokes_operator::assemble");
@@ -84,6 +85,18 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       momentum_form_.FormSystemMatrix(ess_tdofs_, K_);
       momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
       momentum_form_.AssembleDiagonal(momentum_diag_);
+   }
+
+   // --- pure viscous nu*K, UNCONSTRAINED: explicit RHS terms in time steppers -
+   {
+      INCNS_PROFILE("viscous_unconstrained");
+      auto* kui = new VectorDiffusionIntegrator(nu_);
+      kui->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
+      viscous_form_.AddDomainIntegrator(kui);
+      viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      viscous_form_.Assemble();
+      Array<int> no_ess;
+      viscous_form_.FormSystemMatrix(no_ess, Kunc_);
    }
 
    // --- divergence block B = (div u, q): default exactness order

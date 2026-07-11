@@ -82,6 +82,14 @@ public:
    mfem::Operator& Momentum() { return *K_.Ptr(); }
 
    /**
+    * @brief The pure viscous operator @c nu*K on true dofs, UNCONSTRAINED
+    *        (no Dirichlet elimination) -- for explicit right-hand-side terms
+    *        of time steppers (e.g. the trapezoidal starter's K u^0 term).
+    * @return Unconstrained operator regardless of @c ess_tdofs.
+    */
+   mfem::Operator& ViscousUnconstrained() { return *Kunc_.Ptr(); }
+
+   /**
     * @brief The divergence block @c B (velocity true dofs -> pressure true
     *        dofs), with the convention @c (B u)_i = (div u, q_i).
     * @return Rectangular operator; MultTranspose applies @c B^T.
@@ -121,10 +129,12 @@ private:
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
    /// Momentum block form (mass + diffusion integrators).
    mfem::ParBilinearForm momentum_form_;
+   mfem::ParBilinearForm viscous_form_;   ///< Pure viscous form (unconstrained).
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.
    mfem::OperatorPtr K_; ///< True-dof momentum operator.
+   mfem::OperatorPtr Kunc_; ///< True-dof unconstrained viscous operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
    mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).

@@ -48,33 +48,44 @@ void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,
 {
    INCNS_PROFILE("stokes_solver::solve");
 
+   // Momentum forcing (f, v). Fast assembly per project policy: the device
+   // (GPU) path is exercised from day one even though CPU is the target.
+   ParLinearForm f_form(&spaces_.Velocity());
+   auto* fi = new VectorDomainLFIntegrator(forcing);
+   const int dim = spaces_.Dim();
+   const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+   fi->SetIntRule(&rules_.Get(geom, 2 * spaces_.OrderU() + 2));
+   f_form.AddDomainIntegrator(fi);
+   f_form.UseFastAssembly(true);
+   f_form.Assemble();
+   std::unique_ptr<HypreParVector> f_true(f_form.ParallelAssemble());
+
+   // One-shot semantics: cold start from zero.
+   u = 0.0;
+   p = 0.0;
+   SolveTrue(*f_true, u, p);
+}
+
+void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
+                             ParGridFunction& p)
+{
+   INCNS_PROFILE("stokes_solver::solve_true");
+
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
    BlockVector x(const_cast<Array<int>&>(offsets));
    BlockVector b(const_cast<Array<int>&>(offsets));
-   x = 0.0;
    b = 0.0;
 
-   // Dirichlet data -> u's boundary, then into the true-dof initial guess. The
-   // eliminated (identity) rows of the block system reproduce these values.
-   u = 0.0;
+   // Dirichlet data (at the BC's current time) -> u's boundary; the incoming
+   // u/p act as the Krylov warm start. The eliminated (identity) rows of the
+   // block system reproduce the boundary values.
    bc_.ProjectDirichlet(u);
    u.GetTrueDofs(x.GetBlock(0));
+   p.GetTrueDofs(x.GetBlock(1));
 
    {
       INCNS_PROFILE("rhs");
-
-      // Momentum forcing (f, v). Fast assembly per project policy: the device
-      // (GPU) path is exercised from day one even though CPU is the target.
-      ParLinearForm f_form(&spaces_.Velocity());
-      auto* fi = new VectorDomainLFIntegrator(forcing);
-      const int dim = spaces_.Dim();
-      const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-      fi->SetIntRule(&rules_.Get(geom, 2 * spaces_.OrderU() + 2));
-      f_form.AddDomainIntegrator(fi);
-      f_form.UseFastAssembly(true);
-      f_form.Assemble();
-      std::unique_ptr<HypreParVector> f_true(f_form.ParallelAssemble());
-      b.GetBlock(0) = *f_true;
+      b.GetBlock(0) = b_mom;
 
       // Dirichlet elimination on both RHS blocks:
       //   momentum: b_u -= A u_D, then b_u[ess] = u_D[ess];

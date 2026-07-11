@@ -79,6 +79,24 @@ public:
    void Solve(mfem::VectorCoefficient& forcing, mfem::ParGridFunction& u,
               mfem::ParGridFunction& p);
 
+   /**
+    * @brief Lower-level solve with a caller-assembled momentum right-hand side
+    *        (true dofs, BEFORE Dirichlet elimination) -- the time stepper's
+    *        entry point: it adds BDF history / explicit starter terms itself.
+    *
+    * Projects the Dirichlet data at the BC's CURRENT time onto @p u (set
+    * BoundaryConditions::SetTime first -- re-elimination every step), uses the
+    * incoming @p u / @p p as the Krylov warm start, eliminates the Dirichlet
+    * contribution from both RHS blocks, solves, distributes, and mean-
+    * normalizes @p p when the null space exists.
+    *
+    * @param b_mom Momentum RHS on velocity true dofs (not yet eliminated).
+    * @param u     In: warm start; out: velocity solution (Dirichlet imposed).
+    * @param p     In: warm start; out: pressure solution.
+    */
+   void SolveTrue(const mfem::Vector& b_mom, mfem::ParGridFunction& u,
+                  mfem::ParGridFunction& p);
+
    /// @return FGMRES iterations of the last Solve().
    int Iterations() const { return iterations_; }
 
