@@ -13,12 +13,20 @@ add_library(incns STATIC
   solver/stokes_solver.cpp
   time/multistep_coeffs.cpp
   time/time_integrator.cpp
-  time/adaptive_controller.cpp)
+  time/adaptive_controller.cpp
+  config/parameters.cpp
+  config/initial_conditions.cpp
+  post/output.cpp
+  solver/stokes_case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
 # every consumer needs MFEM.
 target_include_directories(incns PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(incns PUBLIC incns_mfem)
+
+# The YAML deck loader; PRIVATE -- no yaml-cpp types leak into public headers.
+find_package(yaml-cpp REQUIRED)
+target_link_libraries(incns PRIVATE yaml-cpp::yaml-cpp)
 
 # PRIVATE: libincns' own hot paths get INCNS_PROFILE; the define does not
 # propagate to consumers, so they choose their own profiling toggle.

@@ -34,6 +34,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       StokesSolverOptions so;
       so.nu = 0.5 * opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
+      so.grad_div = opts_.grad_div;
       so.mass_coeff = 1.0 / dt_;
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
@@ -90,6 +91,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       StokesSolverOptions so;
       so.nu = opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
+      so.grad_div = opts_.grad_div;
       so.mass_coeff = c0; // the leading BDF weight beta0/dt -- exact match
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;

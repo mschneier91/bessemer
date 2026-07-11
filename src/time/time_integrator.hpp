@@ -38,6 +38,8 @@ struct TimeIntegratorOptions
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    bool collocated_mass = false; ///< GLL collocated mass option.
+   double grad_div =
+      0.0;        ///< Grad-div scale c_gd (gamma = c_gd*h); 0 = off.
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.

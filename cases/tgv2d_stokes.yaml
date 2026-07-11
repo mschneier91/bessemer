@@ -1,0 +1,25 @@
+# 2D Taylor-Green vortex, unsteady Stokes, fully periodic [0, 2*pi]^2.
+# The TGV velocity solves unforced Stokes exactly (pressure -> 0), so this is
+# the standard smoke case for the deck-driven pipeline: run with
+#   run_case cases/tgv2d_stokes.yaml
+# Omitted fields keep their library defaults (Q3/Q2, BDF2, etc.).
+
+physics:
+  nu: 1.0
+
+mesh:
+  dim: 2
+  elements: [8, 8]
+  # lengths default to 2*pi per direction; fully periodic by default
+
+time:
+  dt: 0.02
+  t_final: 0.2
+
+initial_velocity: taylor_green_2d
+
+output:
+  enabled: true
+  path: tgv2d_out
+  name: tgv2d
+  interval: 5

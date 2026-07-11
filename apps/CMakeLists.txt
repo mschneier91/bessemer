@@ -2,3 +2,10 @@
 # preset), so MPI is linked by the wrapper; incns_mfem brings MFEM + its TPLs.
 add_executable(hello_mpi hello_mpi.cpp)
 target_link_libraries(hello_mpi PRIVATE incns_mfem)
+
+# Case drivers: the generic YAML deck runner and the in-code TGV example.
+add_executable(run_case run_case.cpp)
+target_link_libraries(run_case PRIVATE incns)
+
+add_executable(taylor_green taylor_green.cpp)
+target_link_libraries(taylor_green PRIVATE incns)

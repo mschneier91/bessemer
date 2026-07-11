@@ -68,3 +68,20 @@ incns_add_mpi_test(tgv_stokes_temporal_test tgv_stokes_temporal_test.cpp)
 incns_add_mpi_test(adaptive_controller_test adaptive_controller_test.cpp)
 incns_add_mpi_test(adaptive_tgv_test adaptive_tgv_test.cpp)
 incns_add_mpi_test(grad_div_test grad_div_test.cpp)
+incns_add_mpi_test(deck_test deck_test.cpp
+  INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml")
+
+# The actual driver executables, run on the committed deck (label fast).
+foreach(np IN LISTS INCNS_TEST_NPS)
+  add_test(NAME run_case_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml)
+  set_tests_properties(run_case_np${np} PROPERTIES
+    LABELS "fast" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "run_case: done")
+  add_test(NAME taylor_green_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:taylor_green>)
+  set_tests_properties(taylor_green_np${np} PROPERTIES
+    LABELS "fast" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "taylor_green: done")
+endforeach()
