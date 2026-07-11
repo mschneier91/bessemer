@@ -10,6 +10,7 @@
       "binaryDir": "${sourceDir}/build/cpu",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O3 -g -DNDEBUG",
         "CMAKE_CXX_COMPILER": "mpicxx",
         "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
         "USE_CUDA": "OFF"
