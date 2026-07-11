@@ -23,8 +23,11 @@ struct StokesSolverOptions
 {
    double nu = 1.0;              ///< Kinematic viscosity.
    bool collocated_mass = false; ///< GLL collocated mass option (see 1.4).
-   double mass_coeff =
-      0.0;      ///< Momentum-block mass factor (beta0/dt); 0 = steady.
+   /// Momentum-block mass factor (beta0/dt); 0 = steady.
+   double mass_coeff = 0.0;
+   /// Grad-div scale c_gd (gamma(x) = c_gd * h_K); 0 = off. Never enters the
+   /// Schur block -- it stays nu * M_p^{-1} with gamma on or off.
+   double grad_div = 0.0;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.

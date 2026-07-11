@@ -58,16 +58,17 @@ per-case edit.
   Δt are *expected in Sprint 1*, not a bug to chase. **The
   preconditioner deep-dive — Cahouet–Chabard, the L_p solve, its BCs and null space — is
   Sprint 2.** Do not build any of it, or stub it, in Sprint 1.
-- **Grad–div term (optional):** augmented γ (∇·u, ∇·v) on the velocity block, runtime γ.
+- **Grad–div term (optional):** augmented γ (∇·u, ∇·v) on the velocity block. **γ is
+  order-h and spatially varying** (human decision, 2026-07-11): γ(x) = c_gd·h_K per
+  element with the runtime scale c_gd — not a global constant.
   No native H1 grad–div integrator exists, so use `ElasticityIntegrator` with
-  **λ = γ, μ = 0** (elasticity form is λ(∇·u,∇·v) + 2μ(ε(u),ε(v)); μ = 0 leaves grad–div).
-  Partial assembly is supported for it. Improves mass conservation — ‖∇·u‖ should drop
-  when on. **γ enters the preconditioner:** with grad–div on, the Schur mass term scales
-  as **(ν+γ) M_p⁻¹**, not ν M_p⁻¹ (augmented-Lagrangian form). This applies to the
-  **Sprint-1 pressure-mass block directly** — Ŝ⁻¹ = (ν+γ) M_p⁻¹ — and to the mass term of
-  Cahouet–Chabard later. Miss the γ and iteration counts blow up exactly
-  when γ is doing its job. Large γ also stiffens the velocity block and weakens Jacobi,
-  so the γ>0 path keeps its **own iteration-count baseline** (see Fast tier).
+  **λ = γ(x), μ = 0** (elasticity form is λ(∇·u,∇·v) + 2μ(ε(u),ε(v)); μ = 0 leaves
+  grad–div). Partial assembly is supported for it. Improves mass conservation — ‖∇·u‖
+  should drop when on. **γ never enters the Schur complement or the preconditioner —
+  period** (human decision, 2026-07-11, superseding the earlier (ν+γ) guidance): γ ~ h is
+  negligible there, especially in the DNS/LES regime. Ŝ⁻¹ is ν M_p⁻¹ with γ on or off,
+  and the later Cahouet–Chabard block is likewise unmodified. The γ>0 path keeps its
+  **own iteration-count baseline** (see Fast tier) purely as a regression guard.
 - **Assembly:** partial assembly (`AssemblyLevel::PARTIAL`) on the tensor-product elements
   — affordable high order on CPU (sum factorization), GPU path open for later. Prefer
   `mfem::forall` for new kernels.

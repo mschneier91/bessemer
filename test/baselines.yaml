@@ -33,6 +33,16 @@ solver_iterations:
       n4: 9
       n8: 8
       n16: 7
+    # gamma = grad_div_scale * h per element on the velocity block; the Schur
+    # block is UNCHANGED (nu * M_p^{-1} -- gamma never enters it, user decision).
+    grad_div_scale: 1.0
+    jacobi_gdpos:
+      # Seeded 2026-07-11 (desktop, MFEM dev 4.9.1): identical at np {1,2,4}.
+      # Barely above the gamma=0 counts and mesh-flat -- empirical confirmation
+      # that leaving gamma out of the Schur block costs nothing.
+      n4: 10
+      n8: 10
+      n16: 10
 
 # Convergence-oracle rates (filled in 1.5/1.8). Targets derive from the configured
 # (k_u, k_p) pair; defaults are Q3/Q2 => velocity order 4, pressure order 3.

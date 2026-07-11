@@ -36,7 +36,8 @@ namespace
 {
 
 // One implicit solve on the fully periodic [0,2pi]^2 box at fixed dt.
-int SolveAndCountIterations(int n, double nu, double mass_coeff, double rtol)
+int SolveAndCountIterations(int n, double nu, double mass_coeff, double rtol,
+                            double grad_div)
 {
    BoxSpec s;
    s.dim = 2;
@@ -50,6 +51,7 @@ int SolveAndCountIterations(int n, double nu, double mass_coeff, double rtol)
    StokesSolverOptions opts;
    opts.nu = nu;
    opts.mass_coeff = mass_coeff;
+   opts.grad_div = grad_div;
    opts.rtol = rtol;
    opts.max_iter = 2000;
    opts.kdim = 300;
@@ -81,28 +83,45 @@ TEST(SchurQuality, MeshRobustIterationsAtFixedDt)
    const double rtol = node["rtol"].as<double>();
    const int band = node["band"].as<int>();
    const int flat_band = node["flat_band"].as<int>();
-   const YAML::Node base = node["jacobi"];
 
-   int iters_min = 1 << 30, iters_max = 0;
-   for (const auto& entry : base)
+   // Separate baselines for gamma = 0 (jacobi) and gamma > 0 (jacobi_gdpos):
+   // grad-div changes the velocity block, and a regression in one must not be
+   // masked by the other. gamma NEVER enters the Schur block (user decision) --
+   // both runs use the identical nu * M_p^{-1} preconditioner.
+   struct Config { const char* key; double c_gd; };
+   const Config configs[2] =
    {
-      const std::string key = entry.first.as<std::string>(); // "n4", "n8", ...
-      const int n = std::stoi(key.substr(1));
-      const int expected = entry.second.as<int>();
+      {"jacobi", 0.0},
+      {"jacobi_gdpos", node["grad_div_scale"].as<double>()}
+   };
+   for (const Config& cfg : configs)
+   {
+      const YAML::Node base = node[cfg.key];
+      ASSERT_TRUE(base) << cfg.key << " baseline block missing";
 
-      const int iters = SolveAndCountIterations(n, nu, mass_coeff, rtol);
-      if (Mpi::Root())
+      int iters_min = 1 << 30, iters_max = 0;
+      for (const auto& entry : base)
       {
-         mfem::out << "[schur] n=" << n << " iters=" << iters
-                   << " baseline=" << expected << std::endl;
-      }
-      EXPECT_LE(std::abs(iters - expected), band)
-            << "n=" << n << ": iteration count drifted from baseline";
-      iters_min = std::min(iters_min, iters);
-      iters_max = std::max(iters_max, iters);
-   }
+         const std::string key = entry.first.as<std::string>(); // "n4", ...
+         const int n = std::stoi(key.substr(1));
+         const int expected = entry.second.as<int>();
 
-   // Mesh robustness: the count may not grow materially with refinement.
-   EXPECT_LE(iters_max - iters_min, flat_band)
-         << "iteration count is not mesh-robust";
+         const int iters =
+            SolveAndCountIterations(n, nu, mass_coeff, rtol, cfg.c_gd);
+         if (Mpi::Root())
+         {
+            mfem::out << "[schur:" << cfg.key << "] n=" << n << " iters="
+                      << iters << " baseline=" << expected << std::endl;
+         }
+         EXPECT_LE(std::abs(iters - expected), band)
+               << cfg.key << " n=" << n
+               << ": iteration count drifted from baseline";
+         iters_min = std::min(iters_min, iters);
+         iters_max = std::max(iters_max, iters);
+      }
+
+      // Mesh robustness: the count may not grow materially with refinement.
+      EXPECT_LE(iters_max - iters_min, flat_band)
+            << cfg.key << ": iteration count is not mesh-robust";
+   }
 }

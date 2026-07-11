@@ -27,6 +27,12 @@ struct StokesOperatorOptions
    /// @c A = mass_coeff * M + nu * K. Zero (the default) gives the steady
    /// block; the unsteady stepper passes the BDF factor @c beta0/dt.
    double mass_coeff = 0.0;
+   /// Grad-div augmentation scale @c c_gd: adds gamma (div u, div v) to the
+   /// momentum block with the ORDER-H, spatially varying coefficient
+   /// gamma(x) = c_gd * h_K per element. Zero (the default) disables it.
+   /// gamma never enters the Schur complement or the preconditioner -- the
+   /// Schur block is nu * M_p^{-1} with gamma on or off.
+   double grad_div = 0.0;
 };
 
 /**
@@ -118,6 +124,9 @@ private:
    StokesOperatorOptions opts_;      ///< Assembly options.
    mfem::ConstantCoefficient nu_;    ///< Viscosity coefficient (owned).
    mfem::ConstantCoefficient mass_coeff_; ///< Momentum-block mass coefficient.
+   /// Grad-div coefficient gamma(x) = c_gd * h_K (owned; null when disabled).
+   std::unique_ptr<mfem::Coefficient> gamma_;
+   mfem::ConstantCoefficient zero_mu_;    ///< mu = 0 for ElasticityIntegrator.
    /// Essential velocity true dofs. Must outlive the constrained operators:
    /// MFEM's (Rectangular)ConstrainedOperator MakeRef's the list, it does not
    /// copy it, so this is a member rather than a constructor local.

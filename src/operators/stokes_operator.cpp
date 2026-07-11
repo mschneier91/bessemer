@@ -1,5 +1,6 @@
 #include "operators/stokes_operator.hpp"
 
+#include "mesh/mesh_size_coefficient.hpp"
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
 #include "util/profiler.hpp"
 
@@ -12,6 +13,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                                const StokesOperatorOptions& opts,
                                const Array<int>* ess_tdofs)
    : spaces_(spaces), opts_(opts), nu_(opts.nu), mass_coeff_(opts.mass_coeff),
+     zero_mu_(0.0),
      mass_form_(&spaces.Velocity()),
      momentum_form_(&spaces.Velocity()),
      viscous_form_(&spaces.Velocity()),
@@ -22,6 +24,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    MFEM_VERIFY(opts_.nu > 0.0, "stokes_operator: viscosity must be positive");
    MFEM_VERIFY(opts_.mass_coeff >= 0.0,
                "stokes_operator: mass_coeff must be non-negative");
+   MFEM_VERIFY(opts_.grad_div >= 0.0,
+               "stokes_operator: grad_div scale must be non-negative");
    ParMesh& mesh = *spaces_.Velocity().GetParMesh();
    AssertTensorProductGeometry(mesh);
 
@@ -79,6 +83,19 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
          auto* mmi = new VectorMassIntegrator(mass_coeff_);
          mmi->SetIntRule(mass_rule);
          momentum_form_.AddDomainIntegrator(mmi);
+      }
+      if (opts_.grad_div > 0.0)
+      {
+         // gamma (div u, div v) with gamma(x) = c_gd * h_K, via
+         // ElasticityIntegrator(lambda = gamma, mu = 0): the elasticity form is
+         // lambda (div u, div v) + 2 mu (eps(u), eps(v)), so mu = 0 leaves pure
+         // grad-div (no native H1 grad-div integrator exists). Stiffness-type
+         // integrand -> the 2k + dim - 1 default rule. gamma never enters the
+         // Schur block (see pressure_schur -- it stays nu * M_p^{-1}).
+         gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+         auto* gdi = new ElasticityIntegrator(*gamma_, zero_mu_);
+         gdi->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
+         momentum_form_.AddDomainIntegrator(gdi);
       }
       momentum_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       momentum_form_.Assemble();
