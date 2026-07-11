@@ -33,6 +33,7 @@ double MassWeightedMean(const ParGridFunction& p, const RuleBook& rules)
    auto* integ = new DomainLFIntegrator(one);
    integ->SetIntRule(&rules.Get(geom, 2 * order));
    ones.AddDomainIntegrator(integ);
+   ones.UseFastAssembly(true); // device-ready assembly path (project policy)
    ones.Assemble();
 
    std::unique_ptr<HypreParVector> ones_true(ones.ParallelAssemble());

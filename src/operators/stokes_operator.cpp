@@ -9,7 +9,8 @@ namespace incns
 using namespace mfem;
 
 StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
-                               const StokesOperatorOptions& opts)
+                               const StokesOperatorOptions& opts,
+                               const Array<int>* ess_tdofs)
    : spaces_(spaces), opts_(opts), nu_(opts.nu),
      mass_form_(&spaces.Velocity()),
      viscous_form_(&spaces.Velocity()),
@@ -24,6 +25,11 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    const int dim = spaces_.Dim();
    const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
    const int ku = spaces_.OrderU();
+
+   // Essential velocity dofs eliminated from the viscous block and the
+   // divergence trial columns; empty when no Dirichlet BCs are given. Stored as
+   // a member: the constrained operators MakeRef this list.
+   if (ess_tdofs) { ess_tdofs_ = *ess_tdofs; }
 
    // --- velocity mass: GL 2k default, or the collocated GLL (diagonal) rule --
    const IntegrationRule* mass_rule;
@@ -64,8 +70,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       viscous_form_.AddDomainIntegrator(ki);
       viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       viscous_form_.Assemble();
-      Array<int> empty;
-      viscous_form_.FormSystemMatrix(empty, K_);
+      viscous_form_.FormSystemMatrix(ess_tdofs_, K_);
+      viscous_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+      viscous_form_.AssembleDiagonal(viscous_diag_);
    }
 
    // --- divergence block B = (div u, q): default exactness order
@@ -77,8 +84,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       div_form_.AddDomainIntegrator(di);
       div_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       div_form_.Assemble();
-      Array<int> empty_u, empty_p;
-      div_form_.FormRectangularSystemMatrix(empty_u, empty_p, B_);
+      div_form_.FormRectangularSystemMatrix(ess_tdofs_, ess_p_tdofs_, B_);
    }
 }
 

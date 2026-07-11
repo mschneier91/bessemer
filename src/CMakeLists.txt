@@ -7,7 +7,10 @@ add_library(incns STATIC
   util/profiler.cpp
   post/pressure_mean.cpp
   bc/boundary_conditions.cpp
-  operators/stokes_operator.cpp)
+  operators/stokes_operator.cpp
+  operators/pressure_schur.cpp
+  operators/block_preconditioner.cpp
+  solver/stokes_solver.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
 # every consumer needs MFEM.

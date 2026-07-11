@@ -51,12 +51,19 @@ class StokesOperator
 public:
    /**
     * @brief Assemble the blocks.
-    * @param spaces Mixed velocity/pressure spaces (borrowed, must outlive this).
-    * @param rules  Quadrature source (borrowed, must outlive this).
-    * @param opts   Viscosity and mass-rule options.
+    * @param spaces    Mixed velocity/pressure spaces (borrowed, must outlive this).
+    * @param rules     Quadrature source (borrowed, must outlive this).
+    * @param opts      Viscosity and mass-rule options.
+    * @param ess_tdofs Optional essential (Dirichlet) velocity true dofs. When
+    *        given, Viscous() is a ConstrainedOperator (identity on the
+    *        eliminated rows/columns) and Divergence() has the corresponding
+    *        trial columns eliminated -- both expose EliminateRHS for the
+    *        Dirichlet contribution to the right-hand side. When null (the
+    *        default), the operators are unconstrained.
     */
    StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
-                  const StokesOperatorOptions& opts = StokesOperatorOptions());
+                  const StokesOperatorOptions& opts = StokesOperatorOptions(),
+                  const mfem::Array<int>* ess_tdofs = nullptr);
 
    /// @return The velocity mass operator @c M on true dofs.
    mfem::Operator& Mass() { return *M_.Ptr(); }
@@ -78,6 +85,13 @@ public:
     */
    const mfem::Vector& MassDiagonal() const { return mass_diag_; }
 
+   /**
+    * @brief Assembled diagonal of the (unconstrained) viscous operator.
+    * @return Velocity true-dof vector, used for the Jacobi velocity block of
+    *         the preconditioner (essential dofs are handled by the smoother).
+    */
+   const mfem::Vector& ViscousDiagonal() const { return viscous_diag_; }
+
    /// @return The options this operator was assembled with.
    const StokesOperatorOptions& Options() const { return opts_; }
 
@@ -85,6 +99,13 @@ private:
    MixedSpaces& spaces_;             ///< Mixed spaces (borrowed).
    StokesOperatorOptions opts_;      ///< Assembly options.
    mfem::ConstantCoefficient nu_;    ///< Viscosity coefficient (owned).
+   /// Essential velocity true dofs. Must outlive the constrained operators:
+   /// MFEM's (Rectangular)ConstrainedOperator MakeRef's the list, it does not
+   /// copy it, so this is a member rather than a constructor local.
+   mfem::Array<int> ess_tdofs_;
+   /// Essential pressure true dofs -- always empty (the pressure level is never
+   /// pinned); a member for the same MakeRef lifetime reason.
+   mfem::Array<int> ess_p_tdofs_;
 
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
    mfem::ParBilinearForm viscous_form_;   ///< Velocity vector diffusion form.
@@ -93,7 +114,8 @@ private:
    mfem::OperatorPtr M_; ///< True-dof mass operator.
    mfem::OperatorPtr K_; ///< True-dof viscous operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
-   mfem::Vector mass_diag_; ///< Assembled mass diagonal (true dofs).
+   mfem::Vector mass_diag_;    ///< Assembled mass diagonal (true dofs).
+   mfem::Vector viscous_diag_; ///< Assembled viscous diagonal (true dofs).
 };
 
 } // namespace incns
