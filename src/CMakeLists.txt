@@ -12,7 +12,8 @@ add_library(incns STATIC
   operators/block_preconditioner.cpp
   solver/stokes_solver.cpp
   time/multistep_coeffs.cpp
-  time/time_integrator.cpp)
+  time/time_integrator.cpp
+  time/adaptive_controller.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
 # every consumer needs MFEM.

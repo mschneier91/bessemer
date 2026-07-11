@@ -3,6 +3,7 @@
 #include "time/multistep_coeffs.hpp"
 #include "util/profiler.hpp"
 
+#include <cmath>
 #include <vector>
 
 namespace incns
@@ -16,7 +17,10 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       VectorCoefficient& forcing,
       const TimeIntegratorOptions& opts)
    : spaces_(spaces), rules_(rules), bc_(bc), forcing_(forcing), opts_(opts),
-     u_(&spaces.Velocity()), p_(&spaces.Pressure())
+     u_(&spaces.Velocity()), p_(&spaces.Pressure()),
+     u2_scratch_(&spaces.Velocity()), p2_scratch_(&spaces.Pressure()),
+     u3_scratch_(&spaces.Velocity()), p3_scratch_(&spaces.Pressure()),
+     dt_(opts.dt)
 {
    INCNS_PROFILE("time_integrator::setup");
 
@@ -24,28 +28,25 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    MFEM_VERIFY(opts_.order == 2 || opts_.order == 3,
                "time_integrator: order must be 2 (production) or 3 (test-only)");
 
-   auto make_solver = [&](double nu_eff, double mass_coeff)
+   // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
+   // halving the viscosity passed to the solver (the Schur scale follows).
    {
       StokesSolverOptions so;
-      so.nu = nu_eff;
+      so.nu = 0.5 * opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
-      so.mass_coeff = mass_coeff;
+      so.mass_coeff = 1.0 / dt_;
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
       so.max_iter = opts_.max_iter;
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;
-      return std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
-   };
+      trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
+   }
 
-   const double dt = opts_.dt;
-   // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
-   // halving the viscosity passed to the solver (the Schur scale follows).
-   trap_ = make_solver(0.5 * opts_.nu, 1.0 / dt);
-   // Uniform-step BDF factors beta0/dt; the per-step weights are recomputed
-   // from the stored times in Step() and checked against these.
-   bdf2_ = make_solver(opts_.nu, 1.5 / dt);
-   if (opts_.order == 3) { bdf3_ = make_solver(opts_.nu, (11.0 / 6.0) / dt); }
+   if (opts_.adaptive)
+   {
+      controller_ = std::make_unique<AdaptiveController>(opts_.controller);
+   }
 
    u_ = 0.0;
    p_ = 0.0;
@@ -65,6 +66,42 @@ void StokesTimeIntegrator::SetInitialVelocity(VectorCoefficient& u0)
    hist_times_.push_front(0.0);
 }
 
+void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
+{
+   MFEM_VERIFY(controller_, "time_integrator: dt ceiling requires adaptive mode");
+   controller_->SetDtCeiling(std::move(ceiling));
+}
+
+bool StokesTimeIntegrator::Done() const
+{
+   if (opts_.adaptive)
+   {
+      return t_ >= opts_.t_final - 1e-12 * std::max(1.0, std::abs(opts_.t_final));
+   }
+   return t_ >= opts_.t_final - 0.5 * opts_.dt;
+}
+
+StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
+      double c0)
+{
+   if (!cache.solver || std::abs(c0 - cache.c0) > 1e-12 * std::abs(c0))
+   {
+      INCNS_PROFILE("time_integrator::rebuild_solver");
+      StokesSolverOptions so;
+      so.nu = opts_.nu;
+      so.collocated_mass = opts_.collocated_mass;
+      so.mass_coeff = c0; // the leading BDF weight beta0/dt -- exact match
+      so.rtol = opts_.rtol;
+      so.atol = opts_.atol;
+      so.max_iter = opts_.max_iter;
+      so.kdim = opts_.kdim;
+      so.print_level = opts_.print_level;
+      cache.solver = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
+      cache.c0 = c0;
+   }
+   return *cache.solver;
+}
+
 void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
 {
    forcing_.SetTime(t);
@@ -80,19 +117,49 @@ void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
    F = *f_true;
 }
 
-void StokesTimeIntegrator::Step()
+void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
+      double t_new, Vector& b)
 {
-   INCNS_PROFILE("time_integrator::step");
-
-   MFEM_VERIFY(!hist_.empty(),
-               "time_integrator: call SetInitialVelocity first");
-
-   const double dt = opts_.dt;
-   const double t_new = t_ + dt;
+   // BDF-k: M sum_j c_j u^{n+1-j} + nu K u^{n+1} + B^T p = F^{n+1}
+   // => A u^{n+1} - B^T p = F^{n+1} - M sum_{j>=1} c_j u^{n+1-j}.
    const int n_u = spaces_.Velocity().GetTrueVSize();
+   AssembleForcing(t_new, b);
+   Vector combo(n_u), tmp(n_u);
+   combo = 0.0;
+   for (std::size_t j = 1; j < c.size(); ++j)
+   {
+      combo.Add(c[j], hist_[j - 1]);
+   }
+   // Any solver's Mass() is the same plain M (mass_coeff scales only the
+   // momentum block); the trapezoidal solver always exists.
+   trap_->Blocks().Mass().Mult(combo, tmp);
+   b -= tmp;
+}
 
-   // Time-dependent data advanced EVERY step: Dirichlet re-elimination happens
-   // inside SolveTrue with the BC coefficients at t_new.
+void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
+                                  ParGridFunction& u_gf, ParGridFunction& p_gf)
+{
+   if (&u_gf != &u_) { u_ = u_gf; }
+   if (&p_gf != &p_) { p_ = p_gf; }
+
+   hist_.push_front(u_true);
+   hist_times_.push_front(t_new);
+   const std::size_t needed =
+      (opts_.adaptive || opts_.order == 3) ? 3 : 2;
+   while (hist_.size() > needed)
+   {
+      hist_.pop_back();
+      hist_times_.pop_back();
+   }
+
+   t_ = t_new;
+   ++step_count_;
+}
+
+void StokesTimeIntegrator::StepStartup()
+{
+   const double t_new = t_ + dt_;
+   const int n_u = spaces_.Velocity().GetTrueVSize();
    bc_.SetTime(t_new);
 
    Vector b(n_u);
@@ -110,42 +177,20 @@ void StokesTimeIntegrator::Step()
       b += f1;
       b *= 0.5;
       trap_->Blocks().Mass().Mult(hist_[0], tmp);
-      b.Add(1.0 / dt, tmp);
+      b.Add(1.0 / dt_, tmp);
       trap_->Blocks().ViscousUnconstrained().Mult(hist_[0], tmp); // (nu/2) K u^0
       b -= tmp;
       solver = trap_.get();
    }
    else
    {
-      // BDF-k: M sum_j c_j u^{n+1-j} + nu K u^{n+1} + B^T p = F^{n+1}
-      // => A u^{n+1} - B^T p = F^{n+1} - M sum_{j>=1} c_j u^{n+1-j},
-      // with A's mass factor beta0/dt = c[0]. Weights come from the ACTUAL
-      // stored times (variable-step-ready; uniform here).
-      const bool use_bdf3 = (opts_.order == 3 && step_count_ >= 2);
-      const int k = use_bdf3 ? 3 : 2;
-      solver = use_bdf3 ? bdf3_.get() : bdf2_.get();
-
-      std::vector<double> times;
-      times.push_back(t_new);
-      for (int j = 0; j < k; ++j) { times.push_back(hist_times_[j]); }
+      // Second step: BDF2 from {u^1, u^0} (weights from the actual times).
+      std::vector<double> times = {t_new, hist_times_[0], hist_times_[1]};
       const std::vector<double> c = BdfWeights(times);
-
-      // The solver's momentum block was assembled with the uniform-step
-      // beta0/dt; the recomputed weight must match (guards step bookkeeping).
-      MFEM_VERIFY(std::abs(c[0] - solver->Blocks().Options().mass_coeff) <=
-                  1e-10 * std::abs(c[0]),
-                  "time_integrator: BDF leading weight does not match the "
-                  "assembled mass factor (step bookkeeping bug)");
-
-      AssembleForcing(t_new, b);
-      Vector combo(n_u), tmp(n_u);
-      combo = 0.0;
-      for (int j = 1; j <= k; ++j) { combo.Add(c[j], hist_[j - 1]); }
-      solver->Blocks().Mass().Mult(combo, tmp);
-      b -= tmp;
+      solver = &EnsureBdfSolver(bdf2_, c[0]);
+      AssembleBdfRhs(c, t_new, b);
    }
 
-   // u_/p_ carry the previous step's fields: warm start + Dirichlet target.
    solver->SolveTrue(b, u_, p_);
    last_iterations_ = solver->Iterations();
    MFEM_VERIFY(solver->Converged(),
@@ -154,17 +199,118 @@ void StokesTimeIntegrator::Step()
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
-   hist_.push_front(std::move(u_true));
-   hist_times_.push_front(t_new);
-   const std::size_t needed = (opts_.order == 3) ? 3 : 2;
-   while (hist_.size() > needed)
-   {
-      hist_.pop_back();
-      hist_times_.pop_back();
-   }
+   Commit(t_new, u_true, u_, p_);
+}
 
-   t_ = t_new;
-   ++step_count_;
+void StokesTimeIntegrator::StepFixed()
+{
+   const double t_new = t_ + dt_;
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+   bc_.SetTime(t_new);
+
+   const bool use_bdf3 = (opts_.order == 3 && step_count_ >= 2);
+   const int k = use_bdf3 ? 3 : 2;
+   std::vector<double> times;
+   times.push_back(t_new);
+   for (int j = 0; j < k; ++j) { times.push_back(hist_times_[j]); }
+   const std::vector<double> c = BdfWeights(times);
+   StokesSolver& solver =
+      EnsureBdfSolver(use_bdf3 ? bdf3_ : bdf2_, c[0]);
+
+   Vector b(n_u);
+   AssembleBdfRhs(c, t_new, b);
+   solver.SolveTrue(b, u_, p_);
+   last_iterations_ = solver.Iterations();
+   MFEM_VERIFY(solver.Converged(),
+               "time_integrator: implicit solve did not converge at t = "
+               << t_new);
+
+   Vector u_true(n_u);
+   u_.GetTrueDofs(u_true);
+   Commit(t_new, u_true, u_, p_);
+}
+
+void StokesTimeIntegrator::StepAdaptive()
+{
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+   const MPI_Comm comm = spaces_.Velocity().GetComm();
+
+   while (true)
+   {
+      // Never overshoot t_final.
+      const double dt = std::min(dt_, opts_.t_final - t_);
+      const double t_new = t_ + dt;
+      bc_.SetTime(t_new);
+
+      // BDF2 candidate -- the only one that may advance the solution.
+      std::vector<double> t2 = {t_new, hist_times_[0], hist_times_[1]};
+      const std::vector<double> c2 = BdfWeights(t2);
+      Vector b2(n_u);
+      AssembleBdfRhs(c2, t_new, b2);
+      u2_scratch_ = u_;
+      p2_scratch_ = p_;
+      StokesSolver& s2 = EnsureBdfSolver(bdf2_, c2[0]);
+      s2.SolveTrue(b2, u2_scratch_, p2_scratch_);
+      last_iterations_ = s2.Iterations();
+      MFEM_VERIFY(s2.Converged(),
+                  "time_integrator: BDF2 solve did not converge at t = "
+                  << t_new);
+
+      // BDF3 candidate -- auxiliary, formed ONLY for the LTE estimate (the
+      // difference approximates the LTE of the order-2 step); never advances.
+      std::vector<double> t3 = {t_new, hist_times_[0], hist_times_[1],
+                                hist_times_[2]
+                               };
+      const std::vector<double> c3 = BdfWeights(t3);
+      Vector b3(n_u);
+      AssembleBdfRhs(c3, t_new, b3);
+      u3_scratch_ = u_;
+      p3_scratch_ = p_;
+      StokesSolver& s3 = EnsureBdfSolver(bdf3_, c3[0]);
+      s3.SolveTrue(b3, u3_scratch_, p3_scratch_);
+      MFEM_VERIFY(s3.Converged(),
+                  "time_integrator: BDF3 solve did not converge at t = "
+                  << t_new);
+
+      // Control on VELOCITY only (pressure is algebraic), global norms.
+      Vector u2_true(n_u), u3_true(n_u);
+      u2_scratch_.GetTrueDofs(u2_true);
+      u3_scratch_.GetTrueDofs(u3_true);
+      Vector diff(u2_true);
+      diff -= u3_true;
+      const double lte = std::sqrt(InnerProduct(comm, diff, diff));
+      const double u_norm = std::sqrt(InnerProduct(comm, u2_true, u2_true));
+
+      const bool accepted = controller_->Evaluate(t_, dt, lte, u_norm);
+      dt_ = controller_->NextDt();
+      if (accepted)
+      {
+         Commit(t_new, u2_true, u2_scratch_, p2_scratch_);
+         return;
+      }
+      // Rejected: retry from the same state at the controller's smaller dt.
+   }
+}
+
+void StokesTimeIntegrator::Step()
+{
+   INCNS_PROFILE("time_integrator::step");
+   MFEM_VERIFY(!hist_.empty(),
+               "time_integrator: call SetInitialVelocity first");
+
+   // The first two steps have too little history for the BDF3 estimator, so
+   // they run un-adapted at the initial dt (trapezoidal starter, then BDF2).
+   if (step_count_ < 2)
+   {
+      StepStartup();
+      return;
+   }
+   if (opts_.adaptive)
+   {
+      StepAdaptive();
+      return;
+   }
+   StepFixed();
 }
 
 void StokesTimeIntegrator::Run()

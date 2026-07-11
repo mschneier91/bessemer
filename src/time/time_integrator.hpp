@@ -1,7 +1,8 @@
 /**
  * @file time_integrator.hpp
- * @brief In-repo fixed-step time integrator for unsteady Stokes
- *        (trapezoidal starter -> BDF2 -> BDF3-in-test-mode ramp).
+ * @brief In-repo time integrator for unsteady Stokes: fixed-step
+ *        (trapezoidal starter -> BDF2 -> BDF3-in-test-mode) and adaptive
+ *        (BDF2 advancing, BDF3 LTE estimator, PI controller).
  */
 #ifndef INCNS_TIME_TIME_INTEGRATOR_HPP
 #define INCNS_TIME_TIME_INTEGRATOR_HPP
@@ -10,6 +11,7 @@
 #include "quadrature/rule_book.hpp"
 #include "solver/stokes_solver.hpp"
 #include "spaces/mixed_spaces.hpp"
+#include "time/adaptive_controller.hpp"
 #include "mfem.hpp"
 
 #include <deque>
@@ -22,12 +24,19 @@ namespace incns
 struct TimeIntegratorOptions
 {
    double nu = 1.0;              ///< Kinematic viscosity.
-   double dt = 1e-2;             ///< Fixed time step (adaptive is 1.9).
+   double dt = 1e-2;             ///< Fixed step size / adaptive initial guess.
    double t_final = 1.0;         ///< End time for Run().
    /// BDF order: 2 = production; 3 = TEST-ONLY (marched directly solely to
-   /// validate the order-3 path that drives the 1.9 LTE estimator -- never a
-   /// production advancing scheme).
+   /// validate the order-3 path that drives the adaptive LTE estimator --
+   /// never a production advancing scheme). Ignored when adaptive is on
+   /// (the solution always advances with the order-2 step).
    int order = 2;
+   /// Adaptive stepping (default stays fixed-step BDF2). The LTE is estimated
+   /// from the difference between the BDF2 and BDF3 solutions each step;
+   /// control acts on VELOCITY only (index-2 DAE: pressure is algebraic).
+   bool adaptive = false;
+   /// Controller tolerances and constants (used when adaptive is on).
+   AdaptiveControllerOptions controller;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
@@ -37,8 +46,8 @@ struct TimeIntegratorOptions
 };
 
 /**
- * @brief Fixed-step implicit time integrator for unsteady Stokes -- written
- *        in-repo (deliberately NOT mfem::ODESolver).
+ * @brief Time integrator for unsteady Stokes -- written in-repo (deliberately
+ *        NOT mfem::ODESolver).
  *
  * Each step solves the coupled saddle-point system
  * @code
@@ -60,21 +69,34 @@ struct TimeIntegratorOptions
  * (test) mode the ramp extends: trapezoidal -> BDF2 -> BDF3, each startup step
  * with LTE O(dt^3), preserving the global order 3.
  *
- * BDF weights are recomputed from the ACTUAL stored node times each step via
- * multistep_coeffs (uniform here, but variable-step-ready for 1.9). The AB/EXT
- * half is dormant for Stokes -- nothing to extrapolate (pure BDF); convection
- * uses it in Sprint 2.
+ * @b Adaptive mode. From the third step on (three history levels), each
+ * attempt solves BOTH the BDF2 and BDF3 candidates from the same accepted
+ * history; the solution ALWAYS advances with the order-2 candidate (no local
+ * extrapolation), the order-3 one exists only for the LTE estimate
+ * ||u2 - u3||. The AdaptiveController accepts/rejects (retrying rejected
+ * steps at its proposed dt) and proposes the next step through the mixed
+ * atol/rtol test and the PI law, capped by the pluggable dt ceiling (inert in
+ * Sprint 1; Sprint 2 wires the convective CFL). The step history is recorded
+ * and exposed via Controller().
+ *
+ * The momentum operator depends on beta0/dt, so solvers are cached per
+ * leading BDF weight and rebuilt whenever it changes (cheap with the Jacobi
+ * default -- a design reason AMG is not the default; the Sprint-1 Schur block
+ * is dt-independent). BDF weights are recomputed from the ACTUAL stored node
+ * times each step via multistep_coeffs -- never uniform-step values under a
+ * varying dt. The AB/EXT half is dormant for Stokes -- nothing to extrapolate
+ * (pure BDF); convection uses it in Sprint 2.
  */
 class StokesTimeIntegrator
 {
 public:
    /**
-    * @brief Set up the integrator (assembles one solver per active scheme).
+    * @brief Set up the integrator.
     * @param spaces  Mixed velocity/pressure spaces (borrowed).
     * @param rules   Quadrature source (borrowed).
     * @param bc      Boundary conditions; SetTime is driven by the integrator.
     * @param forcing Momentum forcing f(x, t); SetTime is driven per step.
-    * @param opts    Physics, step, and Krylov options.
+    * @param opts    Physics, stepping, and Krylov options.
     */
    StokesTimeIntegrator(MixedSpaces& spaces, const RuleBook& rules,
                         BoundaryConditions& bc,
@@ -88,7 +110,14 @@ public:
     */
    void SetInitialVelocity(mfem::VectorCoefficient& u0);
 
-   /// Advance one step of the ramp/scheme; updates Velocity()/Pressure().
+   /**
+    * @brief Install the adaptive dt ceiling hook (stability, not accuracy).
+    *        Inert by default; Sprint 2 wires the convective CFL bound.
+    * @param ceiling Callback returning the max admissible dt at a time.
+    */
+   void SetDtCeiling(AdaptiveController::DtCeilingFn ceiling);
+
+   /// Advance one (accepted) step; in adaptive mode this may retry internally.
    void Step();
 
    /// March Step() until Done().
@@ -97,11 +126,18 @@ public:
    /// @return Current time.
    double Time() const { return t_; }
 
-   /// @return True once t_final is reached (within half a step).
-   bool Done() const { return t_ >= opts_.t_final - 0.5 * opts_.dt; }
+   /// @return True once t_final is reached.
+   bool Done() const;
 
-   /// @return FGMRES iterations of the most recent step.
+   /// @return FGMRES iterations of the most recent implicit solve.
    int LastIterations() const { return last_iterations_; }
+
+   /// @return Completed (accepted) steps.
+   int StepCount() const { return step_count_; }
+
+   /// @return The adaptive controller (step history, rejection counts);
+   ///         null in fixed-step mode.
+   const AdaptiveController* Controller() const { return controller_.get(); }
 
    /// @return The velocity field (updated by Step()).
    mfem::ParGridFunction& Velocity() { return u_; }
@@ -110,27 +146,56 @@ public:
    mfem::ParGridFunction& Pressure() { return p_; }
 
 private:
+   /// A solver cached per leading BDF weight (the momentum mass factor).
+   struct SolverCache
+   {
+      std::unique_ptr<StokesSolver> solver; ///< The cached solver.
+      double c0 = -1.0;                     ///< Leading weight it was built with.
+   };
+
+   /// @return The cached solver rebuilt if @p c0 differs from the cached one.
+   StokesSolver& EnsureBdfSolver(SolverCache& cache, double c0);
+
    /// Assemble the forcing functional F(t) on velocity true dofs.
    void AssembleForcing(double t, mfem::Vector& F);
 
-   MixedSpaces& spaces_;            ///< Mixed spaces (borrowed).
-   const RuleBook& rules_;          ///< Quadrature source (borrowed).
-   BoundaryConditions& bc_;         ///< Boundary conditions (borrowed).
-   mfem::VectorCoefficient& forcing_; ///< Momentum forcing (borrowed).
-   TimeIntegratorOptions opts_;     ///< Options.
+   /// Build the BDF right-hand side for weights @p c at time @p t_new.
+   void AssembleBdfRhs(const std::vector<double>& c, double t_new,
+                       mfem::Vector& b);
 
-   std::unique_ptr<StokesSolver> trap_;  ///< Trapezoidal starter solver.
-   std::unique_ptr<StokesSolver> bdf2_;  ///< BDF2 solver.
-   std::unique_ptr<StokesSolver> bdf3_;  ///< BDF3 solver (test mode only).
+   void StepStartup();  ///< Trapezoidal starter / early BDF2 steps.
+   void StepFixed();    ///< Fixed-step BDF2/BDF3 step.
+   void StepAdaptive(); ///< Adaptive attempt loop (BDF2 + BDF3 candidates).
+
+   /// Commit an accepted velocity/pressure into fields and history.
+   void Commit(double t_new, const mfem::Vector& u_true,
+               mfem::ParGridFunction& u_gf, mfem::ParGridFunction& p_gf);
+
+   MixedSpaces& spaces_;              ///< Mixed spaces (borrowed).
+   const RuleBook& rules_;            ///< Quadrature source (borrowed).
+   BoundaryConditions& bc_;           ///< Boundary conditions (borrowed).
+   mfem::VectorCoefficient& forcing_; ///< Momentum forcing (borrowed).
+   TimeIntegratorOptions opts_;       ///< Options.
+
+   std::unique_ptr<StokesSolver> trap_; ///< Trapezoidal starter solver.
+   SolverCache bdf2_;                   ///< BDF2 solver cache.
+   SolverCache bdf3_;                   ///< BDF3 solver cache.
+
+   std::unique_ptr<AdaptiveController> controller_; ///< Adaptive mode only.
 
    mfem::ParGridFunction u_;  ///< Velocity field.
    mfem::ParGridFunction p_;  ///< Pressure field.
+   mfem::ParGridFunction u2_scratch_; ///< BDF2 candidate (adaptive).
+   mfem::ParGridFunction p2_scratch_; ///< BDF2 candidate pressure (adaptive).
+   mfem::ParGridFunction u3_scratch_; ///< BDF3 candidate (adaptive).
+   mfem::ParGridFunction p3_scratch_; ///< BDF3 candidate pressure (adaptive).
 
-   std::deque<mfem::Vector> hist_;   ///< Velocity true-dof history, newest first.
-   std::deque<double> hist_times_;   ///< Times of the history entries.
+   std::deque<mfem::Vector> hist_; ///< Velocity true-dof history, newest first.
+   std::deque<double> hist_times_; ///< Times of the history entries.
 
    double t_ = 0.0;           ///< Current time.
-   int step_count_ = 0;       ///< Completed steps.
+   double dt_ = 0.0;          ///< Current step size (varies in adaptive mode).
+   int step_count_ = 0;       ///< Completed (accepted) steps.
    int last_iterations_ = 0;  ///< Iterations of the most recent solve.
 };
 
