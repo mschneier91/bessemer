@@ -11,14 +11,16 @@ using namespace mfem;
 StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                                const StokesOperatorOptions& opts,
                                const Array<int>* ess_tdofs)
-   : spaces_(spaces), opts_(opts), nu_(opts.nu),
+   : spaces_(spaces), opts_(opts), nu_(opts.nu), mass_coeff_(opts.mass_coeff),
      mass_form_(&spaces.Velocity()),
-     viscous_form_(&spaces.Velocity()),
+     momentum_form_(&spaces.Velocity()),
      div_form_(&spaces.Velocity(), &spaces.Pressure())
 {
    INCNS_PROFILE("stokes_operator::assemble");
 
    MFEM_VERIFY(opts_.nu > 0.0, "stokes_operator: viscosity must be positive");
+   MFEM_VERIFY(opts_.mass_coeff >= 0.0,
+               "stokes_operator: mass_coeff must be non-negative");
    ParMesh& mesh = *spaces_.Velocity().GetParMesh();
    AssertTensorProductGeometry(mesh);
 
@@ -61,18 +63,27 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_form_.AssembleDiagonal(mass_diag_);
    }
 
-   // --- viscous block nu*K: default exactness order 2k + dim - 1 (covers the
-   // metric factors on deformed elements, not just the affine minimum) ---------
+   // --- momentum block A = mass_coeff*M + nu*K. Diffusion at the default
+   // exactness order 2k + dim - 1 (covers the metric factors on deformed
+   // elements, not just the affine minimum); the mass term reuses the mass rule
+   // (incl. the collocated-GLL option -- the SEM payoff is exactly a diagonal
+   // mass contribution in this block at small dt) ------------------------------
    {
-      INCNS_PROFILE("viscous");
+      INCNS_PROFILE("momentum");
       auto* ki = new VectorDiffusionIntegrator(nu_);
       ki->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
-      viscous_form_.AddDomainIntegrator(ki);
-      viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      viscous_form_.Assemble();
-      viscous_form_.FormSystemMatrix(ess_tdofs_, K_);
-      viscous_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-      viscous_form_.AssembleDiagonal(viscous_diag_);
+      momentum_form_.AddDomainIntegrator(ki);
+      if (opts_.mass_coeff > 0.0)
+      {
+         auto* mmi = new VectorMassIntegrator(mass_coeff_);
+         mmi->SetIntRule(mass_rule);
+         momentum_form_.AddDomainIntegrator(mmi);
+      }
+      momentum_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      momentum_form_.Assemble();
+      momentum_form_.FormSystemMatrix(ess_tdofs_, K_);
+      momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+      momentum_form_.AssembleDiagonal(momentum_diag_);
    }
 
    // --- divergence block B = (div u, q): default exactness order

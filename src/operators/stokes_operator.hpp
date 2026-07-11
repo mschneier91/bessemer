@@ -23,6 +23,10 @@ struct StokesOperatorOptions
    /// Use the collocated Gauss-Lobatto mass rule (diagonal, SEM lumping)
    /// instead of the default Gauss-Legendre rule.
    bool collocated_mass = false;
+   /// Coefficient of the mass term in the momentum block:
+   /// @c A = mass_coeff * M + nu * K. Zero (the default) gives the steady
+   /// block; the unsteady stepper passes the BDF factor @c beta0/dt.
+   double mass_coeff = 0.0;
 };
 
 /**
@@ -65,11 +69,16 @@ public:
                   const StokesOperatorOptions& opts = StokesOperatorOptions(),
                   const mfem::Array<int>* ess_tdofs = nullptr);
 
-   /// @return The velocity mass operator @c M on true dofs.
+   /// @return The velocity mass operator @c M on true dofs (unconstrained;
+   ///         used for the BDF history right-hand side in the unsteady solve).
    mfem::Operator& Mass() { return *M_.Ptr(); }
 
-   /// @return The viscous operator @c nu*K on true dofs.
-   mfem::Operator& Viscous() { return *K_.Ptr(); }
+   /**
+    * @brief The momentum block @c A = mass_coeff * M + nu * K on true dofs
+    *        (equal to @c nu*K when @c mass_coeff is zero).
+    * @return Constrained when essential dofs were given at construction.
+    */
+   mfem::Operator& Momentum() { return *K_.Ptr(); }
 
    /**
     * @brief The divergence block @c B (velocity true dofs -> pressure true
@@ -86,11 +95,11 @@ public:
    const mfem::Vector& MassDiagonal() const { return mass_diag_; }
 
    /**
-    * @brief Assembled diagonal of the (unconstrained) viscous operator.
+    * @brief Assembled diagonal of the (unconstrained) momentum block.
     * @return Velocity true-dof vector, used for the Jacobi velocity block of
     *         the preconditioner (essential dofs are handled by the smoother).
     */
-   const mfem::Vector& ViscousDiagonal() const { return viscous_diag_; }
+   const mfem::Vector& MomentumDiagonal() const { return momentum_diag_; }
 
    /// @return The options this operator was assembled with.
    const StokesOperatorOptions& Options() const { return opts_; }
@@ -99,6 +108,7 @@ private:
    MixedSpaces& spaces_;             ///< Mixed spaces (borrowed).
    StokesOperatorOptions opts_;      ///< Assembly options.
    mfem::ConstantCoefficient nu_;    ///< Viscosity coefficient (owned).
+   mfem::ConstantCoefficient mass_coeff_; ///< Momentum-block mass coefficient.
    /// Essential velocity true dofs. Must outlive the constrained operators:
    /// MFEM's (Rectangular)ConstrainedOperator MakeRef's the list, it does not
    /// copy it, so this is a member rather than a constructor local.
@@ -108,14 +118,15 @@ private:
    mfem::Array<int> ess_p_tdofs_;
 
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
-   mfem::ParBilinearForm viscous_form_;   ///< Velocity vector diffusion form.
+   mfem::ParBilinearForm
+   momentum_form_;  ///< Momentum block form (mass+diffusion).
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.
-   mfem::OperatorPtr K_; ///< True-dof viscous operator.
+   mfem::OperatorPtr K_; ///< True-dof momentum operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
-   mfem::Vector mass_diag_;    ///< Assembled mass diagonal (true dofs).
-   mfem::Vector viscous_diag_; ///< Assembled viscous diagonal (true dofs).
+   mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
+   mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).
 };
 
 } // namespace incns

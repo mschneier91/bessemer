@@ -125,7 +125,7 @@ TEST(StokesOperator, CollocatedMassDiagonal3D) { CheckCollocatedDiagonality(3); 
 
 // The viscous operator annihilates constant fields (its null space contains
 // rigid translations): K * const = 0 to roundoff.
-TEST(StokesOperator, ViscousAnnihilatesConstants)
+TEST(StokesOperator, MomentumAnnihilatesConstantsWhenSteady)
 {
    Mesh serial = MakeBoxMesh(UnitBox(2, 3));
    ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -137,7 +137,7 @@ TEST(StokesOperator, ViscousAnnihilatesConstants)
 
    Vector c(spaces.Velocity().GetTrueVSize()), y(c.Size());
    c = 1.0;
-   op.Viscous().Mult(c, y);
+   op.Momentum().Mult(c, y);
    const double err = std::sqrt(InnerProduct(MPI_COMM_WORLD, y, y));
    EXPECT_LE(err, 1e-12);
 }

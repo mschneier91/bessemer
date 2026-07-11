@@ -15,14 +15,24 @@
 
 schema_version: 1
 
-# FGMRES outer-iteration counts. Example shape (filled in 1.5/1.6/1.10):
-#   stokes_schur:
-#     jacobi:
-#       gd0:   { dt_1e-2: <count>, tol_band: 2 }
-#       gdpos: { dt_1e-2: <count>, tol_band: 2 }
-#     amg:
-#       gd0:   { np1: <count>, np2: <count>, np4: <count>, tol_band: 2 }
-solver_iterations: {}
+# FGMRES outer-iteration counts.
+# schur_quality_2d_periodic: fully periodic [0,2pi]^2, Q3/Q2, one implicit solve
+# at fixed dt with momentum block mass_coeff*M + nu*K (mass_coeff = beta0/dt for
+# BDF2 at dt = 0.01). Jacobi velocity block; counts agree across np in {1,2,4}
+# within `band`. `flat_band` bounds max-min across the meshes (mesh robustness).
+# Grad-div (gdpos) and AMG baselines land in 1.10 / when AMG is wired.
+solver_iterations:
+  schur_quality_2d_periodic:
+    nu: 1.0
+    mass_coeff: 150.0   # beta0/dt = 1.5/0.01
+    rtol: 1.0e-8
+    band: 3
+    flat_band: 5
+    jacobi:
+      # Seeded 2026-07-10 (desktop, MFEM dev 4.9.1): identical at np {1,2,4}.
+      n4: 9
+      n8: 8
+      n16: 7
 
 # Convergence-oracle rates (filled in 1.5/1.8). Targets derive from the configured
 # (k_u, k_p) pair; defaults are Q3/Q2 => velocity order 4, pressure order 3.

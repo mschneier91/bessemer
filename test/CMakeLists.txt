@@ -4,6 +4,7 @@
 
 find_program(MPIEXEC_EXECUTABLE NAMES mpirun REQUIRED)
 find_package(GTest REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # Rank counts every test is registered at (guardrail: never above 4).
 set(INCNS_TEST_NPS 1 2 4)
@@ -54,3 +55,9 @@ incns_add_mpi_test(pressure_mean_test pressure_mean_test.cpp)
 incns_add_mpi_test(stokes_operator_test stokes_operator_test.cpp)
 incns_add_mpi_test(boundary_conditions_test boundary_conditions_test.cpp)
 incns_add_mpi_test(stokes_solver_test stokes_solver_test.cpp)
+
+# Solver-health baselines come from test/baselines.yaml -- the single source of
+# truth for stored numbers (never magic numbers in test source).
+incns_add_mpi_test(schur_quality_test schur_quality_test.cpp
+  INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
+target_link_libraries(schur_quality_test PRIVATE yaml-cpp::yaml-cpp)

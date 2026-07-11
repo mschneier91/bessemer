@@ -23,6 +23,8 @@ struct StokesSolverOptions
 {
    double nu = 1.0;              ///< Kinematic viscosity.
    bool collocated_mass = false; ///< GLL collocated mass option (see 1.4).
+   double mass_coeff =
+      0.0;      ///< Momentum-block mass factor (beta0/dt); 0 = steady.
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -32,7 +34,7 @@ struct StokesSolverOptions
 
 /**
  * @brief Solves the steady Stokes saddle-point system
- *        @c [nu*K  -B^T; B  0] [u; p] = [f; 0]
+ *        @c [A  -B^T; B  0] [u; p] = [f; 0], A = mass_coeff*M + nu*K,
  *        with velocity Dirichlet elimination.
  *
  * Outer solver: FGMRES (right-preconditioned) on the full block system with the

@@ -14,7 +14,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
      nullspace_(bc.PressureNullspaceExists()),
      op_(spaces, rules,
-         StokesOperatorOptions{opts.nu, opts.collocated_mass},
+         StokesOperatorOptions{opts.nu, opts.collocated_mass, opts.mass_coeff},
          &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      schur_(spaces.Pressure(), rules, opts.nu),
@@ -24,12 +24,12 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
 
    // Block system [nu*K, -B^T; B, 0] (non-symmetric sign choice; FGMRES).
    BT_ = std::make_unique<TransposeOperator>(&op_.Divergence());
-   block_op_.SetBlock(0, 0, &op_.Viscous());
+   block_op_.SetBlock(0, 0, &op_.Momentum());
    block_op_.SetBlock(0, 1, BT_.get(), -1.0);
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
    prec_ = std::make_unique<StokesBlockPreconditioner>(
-              spaces_.BlockTrueOffsets(), op_.ViscousDiagonal(),
+              spaces_.BlockTrueOffsets(), op_.MomentumDiagonal(),
               bc_.EssentialTrueDofs(), schur_, nullspace_,
               spaces_.Velocity().GetComm());
 
@@ -77,10 +77,10 @@ void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,
       b.GetBlock(0) = *f_true;
 
       // Dirichlet elimination on both RHS blocks:
-      //   momentum: b_u -= nu*K u_D, then b_u[ess] = u_D[ess];
+      //   momentum: b_u -= A u_D, then b_u[ess] = u_D[ess];
       //   constraint: b_p = -B u_D  (so that B u_0 + B u_D = 0).
-      auto* Ac = dynamic_cast<ConstrainedOperator*>(&op_.Viscous());
-      MFEM_VERIFY(Ac, "stokes_solver: viscous block is not constrained");
+      auto* Ac = dynamic_cast<ConstrainedOperator*>(&op_.Momentum());
+      MFEM_VERIFY(Ac, "stokes_solver: momentum block is not constrained");
       Ac->EliminateRHS(x.GetBlock(0), b.GetBlock(0));
 
       auto* Bc = dynamic_cast<RectangularConstrainedOperator*>(&op_.Divergence());
