@@ -24,7 +24,6 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    const int dim = spaces_.Dim();
    const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
    const int ku = spaces_.OrderU();
-   const int kp = spaces_.OrderP();
 
    // --- velocity mass: GL 2k default, or the collocated GLL (diagonal) rule --
    const IntegrationRule* mass_rule;
@@ -56,12 +55,12 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_form_.AssembleDiagonal(mass_diag_);
    }
 
-   // --- viscous block nu*K: grad(u):grad(v), integrand degree 2(k-1) + metric;
-   // exact on the affine tensor-product meshes we accept ------------------------
+   // --- viscous block nu*K: default exactness order 2k + dim - 1 (covers the
+   // metric factors on deformed elements, not just the affine minimum) ---------
    {
       INCNS_PROFILE("viscous");
       auto* ki = new VectorDiffusionIntegrator(nu_);
-      ki->SetIntRule(&rules.Get(geom, std::max(2 * ku - 2, 0)));
+      ki->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
       viscous_form_.AddDomainIntegrator(ki);
       viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       viscous_form_.Assemble();
@@ -69,11 +68,12 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       viscous_form_.FormSystemMatrix(empty, K_);
    }
 
-   // --- divergence block B = (div u, q): integrand degree (k_u - 1) + k_p ----
+   // --- divergence block B = (div u, q): default exactness order
+   // 2*(trial order) + 2 = 2*k_u + 2 -------------------------------------------
    {
       INCNS_PROFILE("divergence");
       auto* di = new VectorDivergenceIntegrator;
-      di->SetIntRule(&rules.Get(geom, (ku - 1) + kp));
+      di->SetIntRule(&rules.Get(geom, 2 * ku + 2));
       div_form_.AddDomainIntegrator(di);
       div_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       div_form_.Assemble();
