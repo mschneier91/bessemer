@@ -8,6 +8,24 @@ namespace incns
 
 using namespace mfem;
 
+namespace
+{
+// Remove the component along the constant vector: v <- v - mean(v), plain l2
+// over the GLOBAL vector. Used ONCE per solve on the constraint RHS: the
+// operator's range excludes the constant mode, so a constant component in b_p
+// would sit in the residual forever and block convergence to tight tolerances.
+// (The per-apply projection lives in the OrthoSolver wrap of the Schur block;
+// the physical mean-zero output shift is post/pressure_mean.)
+void SubtractGlobalMean(Vector& v, MPI_Comm comm)
+{
+   double local[2] = { v.Sum(), static_cast<double>(v.Size()) };
+   double global[2] = { 0.0, 0.0 };
+   MPI_Allreduce(local, global, 2, MPI_DOUBLE, MPI_SUM, comm);
+   MFEM_VERIFY(global[1] > 0.0, "SubtractGlobalMean: empty global vector");
+   v -= global[0] / global[1];
+}
+} // namespace
+
 StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc,
                            const StokesSolverOptions& opts)
@@ -18,6 +36,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
          &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      schur_(spaces.Pressure(), rules, opts.nu),
+     ortho_schur_(spaces.Velocity().GetComm()),
      fgmres_(spaces.Velocity().GetComm())
 {
    INCNS_PROFILE("stokes_solver::setup");
@@ -28,10 +47,17 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    block_op_.SetBlock(0, 1, BT_.get(), -1.0);
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
+   // With the constant null space, the pressure block is P * S^{-1} * P
+   // (mfem::OrthoSolver): iterates never accumulate the constant mode.
+   Solver* pressure_block = &schur_;
+   if (nullspace_)
+   {
+      ortho_schur_.SetSolver(schur_);
+      pressure_block = &ortho_schur_;
+   }
    prec_ = std::make_unique<StokesBlockPreconditioner>(
               spaces_.BlockTrueOffsets(), op_.MomentumDiagonal(),
-              bc_.EssentialTrueDofs(), schur_, nullspace_,
-              spaces_.Velocity().GetComm());
+              bc_.EssentialTrueDofs(), *pressure_block);
 
    fgmres_.SetOperator(block_op_);
    fgmres_.SetPreconditioner(*prec_);

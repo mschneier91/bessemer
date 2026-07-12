@@ -43,10 +43,11 @@ struct StokesSolverOptions
  * Outer solver: FGMRES (right-preconditioned) on the full block system with the
  * block-diagonal preconditioner diag(Jacobi(nu*K), nu*M_p^{-1}) -- the Sprint-1
  * pressure-mass Schur block. When the BC set implies the constant pressure
- * null space (no outflow -- fully periodic or fully enclosed), the right-hand
- * side and every preconditioned iterate are orthogonalized against the constant
- * mode, and the output pressure is normalized to zero mass-weighted mean by the
- * post-processor. The pressure is never pinned.
+ * null space (no outflow -- fully periodic or fully enclosed), the Schur block
+ * is wrapped in an mfem::OrthoSolver (P * S^{-1} * P with P the zero-sum
+ * projection), the constraint right-hand side is projected once for
+ * compatibility, and the output pressure is normalized to zero mass-weighted
+ * mean by the post-processor. The pressure is never pinned.
  *
  * The unsteady stepper (sub-sprint 1.8) reuses this same implicit solve with
  * the BDF mass term added to the velocity block.
@@ -120,6 +121,9 @@ private:
    std::unique_ptr<mfem::TransposeOperator> BT_; ///< -B^T wrapper (block 0,1).
    mfem::BlockOperator block_op_;                ///< The saddle-point operator.
    PressureMassSchur schur_;                     ///< Pressure Schur block.
+   /// Wraps schur_ as P*S^{-1}*P (P = zero-sum projection) when the constant
+   /// pressure null space exists -- orthogonalization, never pinning.
+   mfem::OrthoSolver ortho_schur_;
    std::unique_ptr<StokesBlockPreconditioner> prec_; ///< Block preconditioner.
    mfem::FGMRESSolver fgmres_;                   ///< Outer Krylov solver.
 
