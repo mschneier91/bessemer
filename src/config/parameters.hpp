@@ -15,6 +15,14 @@
 namespace incns
 {
 
+/// Rolling checkpoint settings (see post/checkpoint).
+struct CheckpointParameters
+{
+   bool enabled = false;     ///< Write a rolling checkpoint during Run().
+   std::string path = "chk"; ///< Checkpoint directory (overwritten each write).
+   int interval = 10;        ///< Write every this many accepted steps.
+};
+
 /// ParaView output settings (see post/output).
 struct OutputParameters
 {
@@ -73,6 +81,11 @@ struct Parameters
    std::string initial_velocity = "zero";
 
    OutputParameters output; ///< ParaView output settings.
+
+   CheckpointParameters checkpoint; ///< Rolling checkpoint settings.
+   /// When non-empty, restore the marching state from this checkpoint
+   /// directory before stepping (same-np restart; see post/checkpoint).
+   std::string restart_from;
 
    /**
     * @brief Apply the convective nondimensionalization in place (idempotent).

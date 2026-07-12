@@ -67,6 +67,42 @@ void StokesTimeIntegrator::SetInitialVelocity(VectorCoefficient& u0)
    hist_times_.push_front(0.0);
 }
 
+void StokesTimeIntegrator::SetHistory(const std::vector<Vector>& states,
+                                      const std::vector<double>& times,
+                                      int completed_steps, double next_dt,
+                                      const Vector* pressure)
+{
+   MFEM_VERIFY(!states.empty() && states.size() == times.size(),
+               "time_integrator: bad history sizes");
+   MFEM_VERIFY(completed_steps >= static_cast<int>(states.size()) - 1,
+               "time_integrator: inconsistent completed_steps");
+   MFEM_VERIFY(next_dt > 0.0, "time_integrator: bad next_dt");
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+
+   hist_.clear();
+   hist_times_.clear();
+   for (std::size_t j = 0; j < states.size(); ++j)
+   {
+      MFEM_VERIFY(states[j].Size() == n_u,
+                  "time_integrator: history size does not match the velocity "
+                  "space (rank/partition mismatch?)");
+      if (j > 0)
+      {
+         MFEM_VERIFY(times[j] < times[j - 1],
+                     "time_integrator: history times must be decreasing");
+      }
+      hist_.push_back(states[j]);
+      hist_times_.push_back(times[j]);
+   }
+
+   t_ = times[0];
+   step_count_ = completed_steps;
+   dt_ = next_dt;
+   u_.SetFromTrueDofs(hist_[0]);
+   if (pressure) { p_.SetFromTrueDofs(*pressure); }
+   else { p_ = 0.0; }
+}
+
 void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
 {
    MFEM_VERIFY(controller_, "time_integrator: dt ceiling requires adaptive mode");

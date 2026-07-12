@@ -18,6 +18,7 @@ add_library(incns STATIC
   config/nondimensionalization.cpp
   config/initial_conditions.cpp
   post/output.cpp
+  post/checkpoint.cpp
   solver/stokes_case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and

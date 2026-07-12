@@ -103,6 +103,17 @@ public:
    /// @return Rejections since the last accepted step.
    int ConsecutiveRejections() const { return consecutive_rejections_; }
 
+   /// @return The scaled error of the last accepted step (PI memory); negative
+   ///         until the first controlled step. For checkpoint/restart.
+   double PrevScaledError() const { return prev_es_; }
+
+   /**
+    * @brief Restore the PI memory (checkpoint/restart): the next accepted step
+    *        uses the PI law exactly as the uninterrupted run would.
+    * @param prev_es Scaled error of the last accepted step before checkpoint.
+    */
+   void RestorePrevScaledError(double prev_es) { prev_es_ = prev_es; }
+
 private:
    AdaptiveControllerOptions opts_;   ///< Options.
    DtCeilingFn ceiling_;              ///< dt cap hook (inert by default).

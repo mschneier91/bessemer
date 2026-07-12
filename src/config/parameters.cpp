@@ -97,11 +97,18 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(output, "name", p.output.name);
    Maybe(output, "interval", p.output.interval);
 
+   const YAML::Node chk = root["checkpoint"];
+   Maybe(chk, "enabled", p.checkpoint.enabled);
+   Maybe(chk, "path", p.checkpoint.path);
+   Maybe(chk, "interval", p.checkpoint.interval);
+   Maybe(root, "restart", p.restart_from);
+
    // Basic validation (module-level invariants are re-checked downstream).
    MFEM_VERIFY(p.nu > 0.0, "parameters: nu must be positive");
    MFEM_VERIFY(p.order_u >= 1 && p.order_p >= 1, "parameters: bad orders");
    MFEM_VERIFY(p.dt > 0.0 && p.t_final > 0.0, "parameters: bad time settings");
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
+   MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.Normalize();
    return p;
 }

@@ -8,6 +8,7 @@
 
 #include "bc/boundary_conditions.hpp"
 #include "config/parameters.hpp"
+#include "post/checkpoint.hpp"
 #include "post/output.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"

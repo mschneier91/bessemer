@@ -113,6 +113,25 @@ public:
    void SetInitialVelocity(mfem::VectorCoefficient& u0);
 
    /**
+    * @brief Restore a marching state (checkpoint/restart): replaces any
+    *        initial condition and SKIPS the startup ramp.
+    *
+    * The BDF weights are recomputed from the restored times each step, so a
+    * history with non-uniform spacing (adaptive runs) continues exactly; the
+    * solver caches rebuild automatically from the leading weight.
+    *
+    * @param states          Velocity true-dof history, NEWEST FIRST (>= 1).
+    * @param times           Matching times, strictly decreasing (t = times[0]).
+    * @param completed_steps Steps completed before the checkpoint (drives the
+    *                        startup-vs-BDF dispatch exactly as live stepping).
+    * @param next_dt         Step size to attempt next (adaptive continuation).
+    * @param pressure        Optional pressure true dofs (Krylov warm start).
+    */
+   void SetHistory(const std::vector<mfem::Vector>& states,
+                   const std::vector<double>& times, int completed_steps,
+                   double next_dt, const mfem::Vector* pressure = nullptr);
+
+   /**
     * @brief Install the adaptive dt ceiling hook (stability, not accuracy).
     *        Inert by default; Sprint 2 wires the convective CFL bound.
     * @param ceiling Callback returning the max admissible dt at a time.
@@ -137,9 +156,22 @@ public:
    /// @return Completed (accepted) steps.
    int StepCount() const { return step_count_; }
 
+   /// @return The current step size (varies in adaptive mode).
+   double CurrentDt() const { return dt_; }
+
+   /// @return Velocity true-dof history, newest first (checkpointing).
+   const std::deque<mfem::Vector>& History() const { return hist_; }
+
+   /// @return Times of the history entries (checkpointing).
+   const std::deque<double>& HistoryTimes() const { return hist_times_; }
+
    /// @return The adaptive controller (step history, rejection counts);
    ///         null in fixed-step mode.
    const AdaptiveController* Controller() const { return controller_.get(); }
+
+   /// @return Mutable adaptive controller (restart restores its PI memory);
+   ///         null in fixed-step mode.
+   AdaptiveController* Controller() { return controller_.get(); }
 
    /// @return The velocity field (updated by Step()).
    mfem::ParGridFunction& Velocity() { return u_; }

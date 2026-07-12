@@ -82,6 +82,14 @@ void StokesCase::EnsureSetup()
       integrator_->SetInitialVelocity(zero_forcing_); // zero start
    }
 
+   // Restart replaces whatever initial state was just set: the restored
+   // history skips the startup ramp and continues the interrupted march.
+   if (!params_.restart_from.empty())
+   {
+      Checkpoint::Read(params_.restart_from, *integrator_);
+      cycle_ = integrator_->StepCount(); // output/checkpoint cycles continue
+   }
+
    if (params_.output.enabled)
    {
       output_ = std::make_unique<OutputWriter>(mesh_, integrator_->Velocity(),
@@ -98,6 +106,11 @@ void StokesCase::Step()
    integrator_->Step();
    ++cycle_;
    if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
+   if (params_.checkpoint.enabled &&
+       cycle_ % params_.checkpoint.interval == 0)
+   {
+      Checkpoint::Write(params_.checkpoint.path, *integrator_, params_);
+   }
 
    // Bad-reference-scale guard (dimensional mode): with a well-chosen U_ref
    // the nondimensional velocity stays O(1); a large drift means the declared
