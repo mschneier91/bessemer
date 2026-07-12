@@ -70,6 +70,7 @@ incns_add_mpi_test(adaptive_tgv_test adaptive_tgv_test.cpp)
 incns_add_mpi_test(grad_div_test grad_div_test.cpp)
 incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
+incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
 incns_add_mpi_test(deck_test deck_test.cpp
   INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml")
 
