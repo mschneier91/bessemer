@@ -6,6 +6,7 @@
 #ifndef INCNS_CONFIG_PARAMETERS_HPP
 #define INCNS_CONFIG_PARAMETERS_HPP
 
+#include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
 #include "time/adaptive_controller.hpp"
 
@@ -35,8 +36,14 @@ struct OutputParameters
 struct Parameters
 {
    // --- physics -------------------------------------------------------------
-   double nu = 1.0;       ///< Kinematic viscosity.
+   /// Kinematic viscosity. In Dimensionless mode this is read as 1/Re (a deck
+   /// may equivalently give `physics: Re`); in Dimensional mode it carries
+   /// units and Normalize() converts it to 1/Re.
+   double nu = 1.0;
    double grad_div = 0.0; ///< Grad-div scale c_gd (gamma = c_gd*h); 0 = off.
+
+   /// Input scaling: mode + reference scales (see nondimensionalization.hpp).
+   Nondimensionalization nondim;
 
    // --- discretization (default Q3/Q2 Taylor-Hood) ---------------------------
    int order_u = 3;              ///< Velocity polynomial order k_u.
@@ -68,9 +75,26 @@ struct Parameters
    OutputParameters output; ///< ParaView output settings.
 
    /**
-    * @brief Load a YAML deck, overriding the defaults field by field.
+    * @brief Apply the convective nondimensionalization in place (idempotent).
+    *
+    * Dimensionless mode: records Re = 1/nu, nothing else changes. Dimensional
+    * mode: rescales mesh lengths (/L_ref), dt and t_final (*U_ref/L_ref),
+    * nu -> 1/Re with Re = U_ref*L_ref/nu, and the adaptive atol (/U_ref --
+    * the LTE is velocity-normed); named initial conditions other than "zero"
+    * are rejected (registry entries are inherently nondimensional -- provide
+    * dimensional data through WrapDimensionalVelocity instead).
+    *
+    * MUST run after the parameters are filled and BEFORE the mesh is built
+    * (StokesCase verifies this). LoadYAML() calls it automatically; in-code
+    * drivers call it themselves.
+    */
+   void Normalize();
+
+   /**
+    * @brief Load a YAML deck, overriding the defaults field by field, and
+    *        Normalize() the result.
     * @param path Path to the YAML file.
-    * @return The populated parameters (validated; throws on malformed input).
+    * @return The populated, normalized parameters (throws on malformed input).
     */
    static Parameters LoadYAML(const std::string& path);
 };

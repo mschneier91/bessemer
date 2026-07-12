@@ -76,8 +76,12 @@ public:
    /// Advance one accepted step (writes output on the configured interval).
    void Step();
 
-   /// @return Current time.
+   /// @return Current time (nondimensional, t*).
    double Time() const;
+
+   /// @return Current time in dimensional units, t* x T_ref (equal to Time()
+   ///         in Dimensionless mode where T_ref = 1).
+   double TimeDimensional() const { return Time() * params_.nondim.TRef(); }
 
    /// @return True once t_final is reached.
    bool Done() const;
@@ -109,6 +113,7 @@ private:
    std::unique_ptr<StokesTimeIntegrator> integrator_; ///< Built lazily.
    std::unique_ptr<OutputWriter> output_;             ///< Built when enabled.
    int cycle_ = 0; ///< Accepted-step counter for output.
+   bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
 };
 
 } // namespace incns

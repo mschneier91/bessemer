@@ -80,6 +80,7 @@ TEST(Deck, YamlReproducesInCodeDriver)
    in_code.t_final = 0.2;
    in_code.initial_velocity = "taylor_green_2d";
    in_code.output.enabled = false;
+   in_code.Normalize(); // in-code drivers normalize explicitly (LoadYAML does it)
 
    Parameters deck = Parameters::LoadYAML(INCNS_TGV_DECK);
    deck.output.enabled = false; // same physics; skip I/O here

@@ -28,6 +28,7 @@ int main(int argc, char* argv[])
    params.t_final = 0.2;
    params.initial_velocity = "taylor_green_2d";
    params.output.enabled = false;
+   params.Normalize(); // dimensionless inputs: records Re, no rescaling
 
    Mesh serial = incns::MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);

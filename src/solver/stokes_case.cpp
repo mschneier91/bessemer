@@ -14,6 +14,11 @@ StokesCase::StokesCase(ParMesh& mesh, const Parameters& params)
      zero_vec_(params.mesh.dim), zero_forcing_((zero_vec_ = 0.0, zero_vec_)),
      forcing_(&zero_forcing_), initial_(nullptr)
 {
+   // The mesh must have been built from NORMALIZED parameters -- the case
+   // cannot detect a dimensional mesh after the fact, only this flag can.
+   MFEM_VERIFY(params_.nondim.normalized,
+               "stokes_case: call Parameters::Normalize() before building the "
+               "mesh and the case (LoadYAML does it automatically)");
 }
 
 void StokesCase::SetBoundaryConditions(BoundaryConditions& bc)
@@ -58,6 +63,19 @@ void StokesCase::EnsureSetup()
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
 
+   if (Mpi::Root() && params_.print_level >= 0)
+   {
+      mfem::out << "[incns] Re = " << params_.nondim.Re
+                << (params_.nondim.mode == ScalingMode::Dimensional
+                    ? "  (dimensional inputs: L_ref = " : "")
+                << (params_.nondim.mode == ScalingMode::Dimensional
+                    ? std::to_string(params_.nondim.L_ref) + ", U_ref = " +
+                    std::to_string(params_.nondim.U_ref) + ", T_ref = " +
+                    std::to_string(params_.nondim.TRef()) + ")"
+                    : "")
+                << std::endl;
+   }
+
    if (initial_) { integrator_->SetInitialVelocity(*initial_); }
    else
    {
@@ -68,7 +86,8 @@ void StokesCase::EnsureSetup()
    {
       output_ = std::make_unique<OutputWriter>(mesh_, integrator_->Velocity(),
                 integrator_->Pressure(),
-                params_.output, params_.order_u);
+                params_.output, params_.order_u,
+                params_.nondim);
       output_->MaybeSave(0, 0.0); // initial state
    }
 }
@@ -79,6 +98,29 @@ void StokesCase::Step()
    integrator_->Step();
    ++cycle_;
    if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
+
+   // Bad-reference-scale guard (dimensional mode): with a well-chosen U_ref
+   // the nondimensional velocity stays O(1); a large drift means the declared
+   // scales do not match the flow and the tolerances/residual balance suffer.
+   if (params_.nondim.mode == ScalingMode::Dimensional && !warned_scaling_)
+   {
+      Vector u_true(spaces_.Velocity().GetTrueVSize());
+      integrator_->Velocity().GetTrueDofs(u_true);
+      double linf = u_true.Normlinf();
+      MPI_Allreduce(MPI_IN_PLACE, &linf, 1, MPI_DOUBLE, MPI_MAX,
+                    spaces_.Velocity().GetComm());
+      if (linf > 50.0)
+      {
+         warned_scaling_ = true;
+         if (Mpi::Root())
+         {
+            mfem::out << "[incns] WARNING: ||u*||_inf = " << linf
+                      << " is far from O(1); U_ref likely does not match the "
+                      "flow -- tolerances and the residual balance degrade."
+                      << std::endl;
+         }
+      }
+   }
 }
 
 void StokesCase::Run()

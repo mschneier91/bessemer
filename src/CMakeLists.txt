@@ -15,6 +15,7 @@ add_library(incns STATIC
   time/time_integrator.cpp
   time/adaptive_controller.cpp
   config/parameters.cpp
+  config/nondimensionalization.cpp
   config/initial_conditions.cpp
   post/output.cpp
   solver/stokes_case.cpp)
