@@ -45,9 +45,10 @@ struct StokesSolverOptions
  * pressure-mass Schur block. When the BC set implies the constant pressure
  * null space (no outflow -- fully periodic or fully enclosed), the Schur block
  * is wrapped in an mfem::OrthoSolver (P * S^{-1} * P with P the zero-sum
- * projection), the constraint right-hand side is projected once for
- * compatibility, and the output pressure is normalized to zero mass-weighted
- * mean by the post-processor. The pressure is never pinned.
+ * projection) and the output pressure is normalized to zero mass-weighted
+ * mean by the post-processor. The pressure is never pinned. (The constraint
+ * RHS needs no projection: it is compatible to roundoff by construction, and
+ * truly incompatible data should fail loudly, not be masked.)
  *
  * The unsteady stepper (sub-sprint 1.8) reuses this same implicit solve with
  * the BDF mass term added to the velocity block.

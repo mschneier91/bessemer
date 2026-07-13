@@ -8,24 +8,6 @@ namespace incns
 
 using namespace mfem;
 
-namespace
-{
-// Remove the component along the constant vector: v <- v - mean(v), plain l2
-// over the GLOBAL vector. Used ONCE per solve on the constraint RHS: the
-// operator's range excludes the constant mode, so a constant component in b_p
-// would sit in the residual forever and block convergence to tight tolerances.
-// (The per-apply projection lives in the OrthoSolver wrap of the Schur block;
-// the physical mean-zero output shift is post/pressure_mean.)
-void SubtractGlobalMean(Vector& v, MPI_Comm comm)
-{
-   double local[2] = { v.Sum(), static_cast<double>(v.Size()) };
-   double global[2] = { 0.0, 0.0 };
-   MPI_Allreduce(local, global, 2, MPI_DOUBLE, MPI_SUM, comm);
-   MFEM_VERIFY(global[1] > 0.0, "SubtractGlobalMean: empty global vector");
-   v -= global[0] / global[1];
-}
-} // namespace
-
 StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc,
                            const StokesSolverOptions& opts)
@@ -127,10 +109,13 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
       // Compatibility: with the constant null space present, the constraint RHS
       // must be orthogonal to the constant mode (any residue is quadrature/
       // roundoff or an incompatible net boundary flux).
-      if (nullspace_)
-      {
-         SubtractGlobalMean(b.GetBlock(1), spaces_.Velocity().GetComm());
-      }
+      // No RHS projection: the constraint RHS b_p = -B u_D is compatible to
+      // machine precision by construction (measured ~1e-17 even for
+      // interpolated non-polynomial data -- the discrete boundary flux of
+      // admissible Dirichlet data telescopes to roundoff). Genuinely
+      // incompatible data (net flux != 0 on an enclosed domain) is an
+      // ill-posed input and SHOULD fail loudly (residual floor,
+      // Converged() = false) rather than be silently projected away.
    }
 
    {
