@@ -133,7 +133,10 @@ apps/
   taylor_green.cpp                  # example in-code driver (analytic IC, periodic)
 cases/*.yaml                        # input decks (params, mesh, BCs, output)
 environments/<machine>/             # per-machine spack.yaml + committed spack.lock
-python/                             # optional pybind11 bindings + example.py
+python/                             # pybind11 bindings (module `incns`) + examples
+  bindings.cpp                      #   the pybind11 translation unit
+  incns/__init__.py                 #   thin Python layer: @field decorator, helpers
+  examples/*.py                     #   driver scripts (run via mpirun -np N python …)
 test/                               # unit tests + the TGV convergence oracles
 ```
 
@@ -393,6 +396,131 @@ in a fresh shell. Git workflow: one branch per sub-sprint (`sprint1.1-spaces`,
 `git status`/`git diff` before and after, **commit when the fast tier is green** with a
 message naming the sub-sprint, and **never push, force-push, or touch `main`** (a human merges).
 This repeats the git guardrail below because it's the operational default, not an afterthought.
+
+## Python interface
+
+**Status: design (pre-implementation).** Built as its own sub-sprint once the desktop env
+carries `py-pybind11`/`py-numpy`/`py-numba` (a supervised env change). This section is the
+target look-and-feel; adjust here first, then implement to match.
+
+**Purpose.** Python is a **job driver**: configure a case — parameters, and the analytic
+initial condition / boundary conditions / forcing — and run it, **with no C++ recompile**.
+That is the entire scope. **All numerics stay in C++**: the solve and every operation on a
+solution (diagnostics, statistics, sampling, spectra) are C++ routines invoked as options
+on `Parameters`; **no bulk solution data is ever marshalled into Python**. The bindings are
+a thin pybind11 layer over the existing `StokesCase`/`Parameters` surface; the solver core
+is never touched to run a Python case, exactly as with a YAML deck.
+
+**Hard principles (do not violate):**
+- **PyMFEM is never used** — not as a dependency, not for interop, not as a reference to
+  link against. These are *our own* bindings. **No MFEM type ever crosses the Python
+  boundary**: the Python `Case` builds the `ParMesh` internally from `Parameters`, and
+  Python exchanges only `Parameters`, analytic field callbacks, and scalar status with C++.
+- **Python is a pure SPMD driver.** You run `mpirun -np N python case.py`; N identical
+  interpreters each steer their rank's C++ work, and **all MPI lives below the binding
+  line**. The module initializes MFEM/MPI on `import` (guarded against double-init) and
+  finalizes at exit. **No mpi4py** — the bindings expose `incns.rank()` / `incns.size()`
+  for rank-aware printing, and every global quantity (norms, errors, iteration counts)
+  is reduced in C++ where it belongs. (mpi4py may be added *user-side* later for custom
+  Python-side reductions; nothing in the bindings depends on it.)
+
+**The surface (target).**
+```python
+import incns
+import numpy as np
+
+# Parameters: programmatic, from a deck, or a mix. Same fields as the C++ struct
+# (physics / mesh / time / solver / output / checkpoint / nondimensionalization).
+p = incns.Parameters()                       # or incns.Parameters.from_yaml("case.yaml")
+p.reynolds = 1600                            # convenience: sets nu = 1/Re (nondim mode)
+p.mesh.box(dim=3, elements=(32, 32, 32),     # Cartesian box factory (BoxSpec)
+           lengths=(2*np.pi,)*3, periodic=(True, True, True))
+p.time.dt = 1e-3
+p.time.t_final = 20.0
+p.time.adaptive = True; p.time.atol = 1e-6
+p.output.enabled = True; p.output.path = "tgv_out"
+# C++ post-processing/diagnostics are opt-in via Parameters options as those
+# routines land (e.g. p.diagnostics.kinetic_energy = True); Python only flips the
+# switch and the C++ routine writes its own output.
+
+case = incns.StokesCase(p)                   # builds the mesh + spaces internally
+
+# Fields are plain callables f(x, t) -> sequence of length dim (Tier 1), or the
+# compiled fast path (Tier 2, below). Same object works for IC / BC / forcing.
+def tgv(x, t):
+    return (np.sin(x[0])*np.cos(x[1]), -np.cos(x[0])*np.sin(x[1]), 0.0)
+case.set_initial_velocity(tgv)
+
+# Boundary conditions attach to mesh boundary ATTRIBUTES (int, or a list of ints)
+# -- the general, mesh-agnostic handle, matching C++ AddVelocityDirichlet(attr,…)
+# and a loaded mesh's physical groups. Attributes are the primitive on ANY mesh:
+case.velocity_dirichlet(3, wall)             # wall: a field, or a constant tuple
+case.outflow(2)                              # do-nothing / natural
+# For the box factory ONLY, a convenience resolves face names to attributes
+# (naming a periodic face errors); this sugar never leaks into the core API:
+case.velocity_dirichlet(case.mesh.faces("ymin", "ymax"), wall)
+case.outflow(case.mesh.face("xmax"))
+# case.set_forcing(f)                        # optional momentum forcing
+
+case.run()                                   # C++ marches and runs all post-processing
+                                             # (or:  while not case.done: case.step())
+
+# Python reads back only SCALAR status for logging/control -- never bulk field
+# data. Any physics number comes from a C++ diagnostic that chooses to surface it.
+if incns.on_root():
+    print(f"done: t={case.time:.3f}  steps={case.step_count}  last_iters={case.iterations}")
+```
+
+**Callback tiers — the performance story.** MFEM evaluates coefficients **per quadrature
+point, every step** (time-dependent BC/forcing are re-eliminated and re-assembled each
+step). A naive Python callable is fine for an IC (evaluated once) but fatal for a
+time-dependent BC/forcing at scale.
+- **Tier 1 — plain callable** `f(x, t) -> (…)`: works everywhere, holds the GIL, one
+  Python call per quad point. Convenient; documented as slow for hot paths.
+- **Tier 2 — compiled (`@incns.field`)**: the decorator wraps the user's function with
+  `numba.cfunc` under the fixed C ABI and hands the C++ side a **raw function pointer**;
+  the coefficient calls it directly in the assembly loop — **no Python, no GIL, full
+  speed**. The user never sees `uintptr_t` or numba signature strings.
+  ```python
+  from numba import njit  # user code stays numba-compatible
+  @incns.field(dim=3)                          # ABI: (const double* x, int dim,
+  def tgv(x, t, out):                          #       double t, double* out)
+      out[0] =  np.sin(x[0])*np.cos(x[1])
+      out[1] = -np.cos(x[0])*np.sin(x[1])
+      out[2] =  0.0
+  case.set_initial_velocity(tgv)               # setters accept Tier 1 or Tier 2
+  ```
+  `run()`/`step()` release the GIL, so a Tier-2 field runs the C++ march with zero Python
+  involvement between snapshots.
+
+**All numerics stay in C++.** Every operation on a solution — diagnostics (kinetic energy,
+dissipation, enstrophy, spectra), sampling, statistics, visualization — is a C++ routine,
+selected via an option on `Parameters` and writing its own output; new such routines are
+added in C++ and merely *exposed as a flag* to Python, never reimplemented on the Python
+side. The bindings surface only **scalar status** (`time`, `step_count`, `iterations`,
+`done`, and any scalar a C++ diagnostic opts to return) for logging and run control.
+`incns.rank()` / `incns.size()` / `incns.on_root()` guard rank-0 printing. Bulk solution
+data (field arrays, node coordinates) is never handed to Python — that was an earlier
+misread of the scope; if it is ever wanted, it is a deliberate future feature, not assumed.
+
+**Nondimensionalization / checkpoint / output / restart** all ride `Parameters` (mode +
+reference scales, `checkpoint`, `restart`, `output`) — no separate Python API; a Python
+case and a YAML case configure them identically. Dimensional analytic data uses a
+`p.nondim` mode plus the field wrappers, matching `WrapDimensionalVelocity`/`Forcing`.
+
+**Build & test.** CMake builds the `incns` pybind11 module only when Python is enabled
+(off by default; the CPU/CUDA numerics build never depends on Python). Tests run as
+`mpirun -np {1,2,4} python test_*.py` registered in CTest (label `fast`), and since no bulk
+data crosses into Python, parity is checked through the **checkpoint dump** (bitwise) or an
+exposed scalar — not field arrays: (a) a Python TGV whose checkpoint matches the C++/deck
+run through the same surface; (b) a Tier-1 callable IC whose result matches the named
+registry IC; (c) a Tier-2 `@incns.field` whose result matches its Tier-1 twin. Wheel
+packaging is out of scope for now — the module is imported from the build/view.
+
+**Out of scope (record, don't silently skip):** bulk solution/field access from Python
+(field arrays, node coordinates, sampling) — numerics stay in C++; exposing raw MFEM
+objects; a Python-side mesh other than the box factory; different-np restart from Python;
+mpi4py-based reductions in the core bindings.
 
 ## Code style
 
