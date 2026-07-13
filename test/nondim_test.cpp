@@ -16,7 +16,7 @@
 #include "config/parameters.hpp"
 #include "exact/tgv2d.hpp"
 #include "mesh/periodic_box.hpp"
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
@@ -26,7 +26,7 @@ using namespace mfem;
 using incns::MakeBoxMesh;
 using incns::Parameters;
 using incns::ScalingMode;
-using incns::StokesCase;
+using incns::Case;
 using incns::WrapDimensionalVelocity;
 
 TEST(Nondim, NormalizeArithmeticDimensional)
@@ -105,7 +105,7 @@ TEST(Nondim, DimensionalTgvMatchesDimensionlessTwin)
 
    Mesh ref_serial = MakeBoxMesh(ref.mesh);
    ParMesh ref_mesh(MPI_COMM_WORLD, ref_serial);
-   StokesCase ref_case(ref_mesh, ref);
+   Case ref_case(ref_mesh, ref);
    auto ref_ic = incns::MakeInitialVelocity(ref);
    ref_case.SetInitialVelocity(*ref_ic);
    ref_case.Run();
@@ -127,7 +127,7 @@ TEST(Nondim, DimensionalTgvMatchesDimensionlessTwin)
 
    Mesh dim_serial = MakeBoxMesh(dim.mesh); // built from NORMALIZED lengths
    ParMesh dim_mesh(MPI_COMM_WORLD, dim_serial);
-   StokesCase dim_case(dim_mesh, dim);
+   Case dim_case(dim_mesh, dim);
 
    // IC as a DIMENSIONAL function of dimensional x: U * tgv(x / L) at t = 0.
    auto u0 = WrapDimensionalVelocity(

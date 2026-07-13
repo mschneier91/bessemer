@@ -29,7 +29,7 @@ enum class ScalingMode
  *
  * The solver core always works in the starred variables (it is form-identical
  * to the nondimensional equations); these scales exist so the
- * Parameters/StokesCase boundary can accept dimensional inputs and rescale
+ * Parameters/Case boundary can accept dimensional inputs and rescale
  * them in ONE place. Beyond exactness, the scaling is what makes the solver's
  * decisions meaningful: the FGMRES stopping test mixes momentum and continuity
  * rows (different units), and absolute tolerances (adaptive atol) carry

@@ -7,9 +7,10 @@ callbacks, and scalar status. See CLAUDE.md "Python interface".
 
 from ._core import (
     Parameters,
-    StokesCase,
+    Case,
     BoxSpec,
     ScalingMode,
+    Equation,
     rank,
     size,
     on_root,
@@ -17,9 +18,10 @@ from ._core import (
 
 __all__ = [
     "Parameters",
-    "StokesCase",
+    "Case",
     "BoxSpec",
     "ScalingMode",
+    "Equation",
     "rank",
     "size",
     "on_root",

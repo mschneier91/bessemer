@@ -1,4 +1,4 @@
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 
 #include "util/profiler.hpp"
 
@@ -7,7 +7,7 @@ namespace incns
 
 using namespace mfem;
 
-StokesCase::StokesCase(ParMesh& mesh, const Parameters& params)
+Case::Case(ParMesh& mesh, const Parameters& params)
    : mesh_(mesh), params_(params),
      spaces_(mesh, params.order_u, params.order_p),
      own_bc_(spaces_.Velocity()), bc_(&own_bc_),
@@ -17,34 +17,41 @@ StokesCase::StokesCase(ParMesh& mesh, const Parameters& params)
    // The mesh must have been built from NORMALIZED parameters -- the case
    // cannot detect a dimensional mesh after the fact, only this flag can.
    MFEM_VERIFY(params_.nondim.normalized,
-               "stokes_case: call Parameters::Normalize() before building the "
+               "case: call Parameters::Normalize() before building the "
                "mesh and the case (LoadYAML does it automatically)");
 }
 
-void StokesCase::SetBoundaryConditions(BoundaryConditions& bc)
+void Case::SetBoundaryConditions(BoundaryConditions& bc)
 {
-   MFEM_VERIFY(!integrator_, "stokes_case: BCs must be set before stepping");
+   MFEM_VERIFY(!integrator_, "case: BCs must be set before stepping");
    bc_ = &bc;
 }
 
-void StokesCase::SetInitialVelocity(VectorCoefficient& u0)
+void Case::SetInitialVelocity(VectorCoefficient& u0)
 {
    MFEM_VERIFY(!integrator_,
-               "stokes_case: the IC must be set before stepping");
+               "case: the IC must be set before stepping");
    initial_ = &u0;
 }
 
-void StokesCase::SetForcing(VectorCoefficient& f)
+void Case::SetForcing(VectorCoefficient& f)
 {
    MFEM_VERIFY(!integrator_,
-               "stokes_case: the forcing must be set before stepping");
+               "case: the forcing must be set before stepping");
    forcing_ = &f;
 }
 
-void StokesCase::EnsureSetup()
+void Case::EnsureSetup()
 {
    if (integrator_) { return; }
-   INCNS_PROFILE("stokes_case::setup");
+   INCNS_PROFILE("case::setup");
+
+   // The Case dispatches on the equation set. Navier-Stokes (convection,
+   // dealiasing, the NSE stepper) is Sprint 2 -- the selector exists now but is
+   // rejected until then, rather than silently solving Stokes.
+   MFEM_VERIFY(params_.equation == Equation::Stokes,
+               "Case: NavierStokes is not available until Sprint 2; set "
+               "the equation to Stokes");
 
    TimeIntegratorOptions opts;
    opts.nu = params_.nu;
@@ -100,7 +107,7 @@ void StokesCase::EnsureSetup()
    }
 }
 
-void StokesCase::Step()
+void Case::Step()
 {
    EnsureSetup();
    integrator_->Step();
@@ -136,36 +143,36 @@ void StokesCase::Step()
    }
 }
 
-void StokesCase::Run()
+void Case::Run()
 {
-   INCNS_PROFILE("stokes_case::run");
+   INCNS_PROFILE("case::run");
    EnsureSetup();
    while (!integrator_->Done()) { Step(); }
 }
 
-double StokesCase::Time() const
+double Case::Time() const
 {
    return integrator_ ? integrator_->Time() : 0.0;
 }
 
-bool StokesCase::Done() const
+bool Case::Done() const
 {
    return integrator_ && integrator_->Done();
 }
 
-ParGridFunction& StokesCase::Velocity()
+ParGridFunction& Case::Velocity()
 {
    EnsureSetup();
    return integrator_->Velocity();
 }
 
-ParGridFunction& StokesCase::Pressure()
+ParGridFunction& Case::Pressure()
 {
    EnsureSetup();
    return integrator_->Pressure();
 }
 
-StokesTimeIntegrator& StokesCase::Integrator()
+StokesTimeIntegrator& Case::Integrator()
 {
    EnsureSetup();
    return *integrator_;

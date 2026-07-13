@@ -45,6 +45,7 @@ def u_exact_callable(x, t):
 
 def main():
     p = incns.Parameters()
+    p.equation = incns.Equation.Stokes   # NavierStokes selectable in Sprint 2
     p.nu = NU
     p.order_u = 3
     p.order_p = 2
@@ -56,7 +57,7 @@ def main():
     p.max_iter = 5000
     p.kdim = 400
 
-    case = incns.StokesCase(p)
+    case = incns.Case(p)
     case.set_initial_velocity(u_exact)
     case.set_forcing(forcing)
     # All-Dirichlet with the exact (time-dependent) velocity on every real face.

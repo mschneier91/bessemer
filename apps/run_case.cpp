@@ -1,12 +1,12 @@
 // Generic YAML-driven driver: `run_case <deck.yaml>` -- no recompilation per
 // case. The deck supplies parameters, mesh, initial condition (by name), and
-// output settings; the case goes through the same StokesCase surface as any
+// output settings; the case goes through the same Case surface as any
 // in-code driver.
 
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 #include "mfem.hpp"
 
 #include <iostream>
@@ -32,7 +32,7 @@ int main(int argc, char* argv[])
    Mesh serial = incns::MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);
 
-   incns::StokesCase flow_case(mesh, params);
+   incns::Case flow_case(mesh, params);
    auto u0 = incns::MakeInitialVelocity(params);
    flow_case.SetInitialVelocity(*u0);
    flow_case.Run();

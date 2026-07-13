@@ -1,10 +1,10 @@
 /**
- * @file stokes_case.hpp
+ * @file case.hpp
  * @brief The public case surface: mesh + Parameters in, unsteady Stokes march
  *        with optional ParaView output out.
  */
-#ifndef INCNS_SOLVER_STOKES_CASE_HPP
-#define INCNS_SOLVER_STOKES_CASE_HPP
+#ifndef INCNS_SOLVER_CASE_HPP
+#define INCNS_SOLVER_CASE_HPP
 
 #include "bc/boundary_conditions.hpp"
 #include "config/parameters.hpp"
@@ -38,7 +38,7 @@ namespace incns
  * In Sprint 2 NavierStokesSolver composes the same machinery and adds the
  * convection term; this surface is what it will slot into.
  */
-class StokesCase
+class Case
 {
 public:
    /**
@@ -46,7 +46,7 @@ public:
     * @param mesh   Partitioned quad/hex mesh (borrowed, must outlive this).
     * @param params Case parameters (copied).
     */
-   StokesCase(mfem::ParMesh& mesh, const Parameters& params);
+   Case(mfem::ParMesh& mesh, const Parameters& params);
 
    /// @return The mixed spaces (e.g. to build a BoundaryConditions over).
    MixedSpaces& Spaces() { return spaces_; }
@@ -119,4 +119,4 @@ private:
 
 } // namespace incns
 
-#endif // INCNS_SOLVER_STOKES_CASE_HPP
+#endif // INCNS_SOLVER_CASE_HPP

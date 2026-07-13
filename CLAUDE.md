@@ -141,10 +141,13 @@ test/                               # unit tests + the TGV convergence oracles
 ```
 
 **Using the library.** The public surface a driver touches:
-- `incns::Parameters` — physics/discretization/time/solver/output settings; `LoadYAML(path)`
-  fills it from a deck. The solver takes `NavierStokesSolver(ParMesh&, const Parameters&)`;
-  lightweight setters (`SetTimeScheme`, `SetFixedTimeStep`) exist for in-code/test use and
-  just override fields of a default `Parameters`.
+- `incns::Parameters` — physics (including the `equation` selector: `Stokes` /
+  `NavierStokes`), discretization/time/solver/output settings; `LoadYAML(path)` fills it
+  from a deck (`equation: stokes|navier_stokes`). The driver builds **one**
+  `incns::Case(ParMesh&, const Parameters&)` that **dispatches on `params.equation`** — a
+  single unified case, never a class per physics (`StokesCase`/`NseCase`). NavierStokes is
+  rejected until Sprint 2 (the selector lands now, the wiring comes with convection).
+  In-code drivers set fields on a default `Parameters` directly.
 - `incns::BoundaryConditions` — `AddVelocityDirichlet(attr, coeff)`, `AddOutflow(attr)`;
   periodicity is mesh-level. Passed via `SetBoundaryConditions`. An empty BC set on a
   periodic mesh means fully periodic.
@@ -408,7 +411,7 @@ initial condition / boundary conditions / forcing — and run it, **with no C++ 
 That is the entire scope. **All numerics stay in C++**: the solve and every operation on a
 solution (diagnostics, statistics, sampling, spectra) are C++ routines invoked as options
 on `Parameters`; **no bulk solution data is ever marshalled into Python**. The bindings are
-a thin pybind11 layer over the existing `StokesCase`/`Parameters` surface; the solver core
+a thin pybind11 layer over the existing `Case`/`Parameters` surface; the solver core
 is never touched to run a Python case, exactly as with a YAML deck.
 
 **Hard principles (do not violate):**
@@ -432,6 +435,7 @@ import numpy as np
 # Parameters: programmatic, from a deck, or a mix. Same fields as the C++ struct
 # (physics / mesh / time / solver / output / checkpoint / nondimensionalization).
 p = incns.Parameters()                       # or incns.Parameters.from_yaml("case.yaml")
+p.equation = incns.Equation.Stokes           # one Case dispatches on the equation set
 p.reynolds = 1600                            # convenience: sets nu = 1/Re (nondim mode)
 p.mesh.box(dim=3, elements=(32, 32, 32),     # Cartesian box factory (BoxSpec)
            lengths=(2*np.pi,)*3, periodic=(True, True, True))
@@ -443,7 +447,7 @@ p.output.enabled = True; p.output.path = "tgv_out"
 # routines land (e.g. p.diagnostics.kinetic_energy = True); Python only flips the
 # switch and the C++ routine writes its own output.
 
-case = incns.StokesCase(p)                   # builds the mesh + spaces internally
+case = incns.Case(p)                         # builds the mesh + spaces internally
 
 # Fields are plain callables f(x, t) -> sequence of length dim (Tier 1), or the
 # compiled fast path (Tier 2, below). Same object works for IC / BC / forcing.

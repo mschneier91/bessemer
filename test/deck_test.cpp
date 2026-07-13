@@ -1,6 +1,6 @@
 // Sprint 1.11 green criterion -- the YAML TGV deck reproduces the in-code
 // driver's results within tolerance THROUGH THE SAME LIBRARY SURFACE
-// (StokesCase), and the written ParaView output exists with the high-order
+// (Case), and the written ParaView output exists with the high-order
 // settings. Also pins the deck loader field by field against the committed
 // cases/tgv2d_stokes.yaml.
 
@@ -9,7 +9,7 @@
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
@@ -20,7 +20,7 @@ using namespace mfem;
 using incns::MakeBoxMesh;
 using incns::MakeInitialVelocity;
 using incns::Parameters;
-using incns::StokesCase;
+using incns::Case;
 
 namespace
 {
@@ -29,7 +29,7 @@ Vector RunCase(const Parameters& params)
 {
    Mesh serial = MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);
-   StokesCase flow_case(mesh, params);
+   Case flow_case(mesh, params);
    auto u0 = MakeInitialVelocity(params);
    flow_case.SetInitialVelocity(*u0);
    flow_case.Run();

@@ -1,5 +1,5 @@
 // pybind11 bindings for the incns unsteady Stokes job driver. Thin layer over
-// StokesCase/Parameters: Python configures a case and supplies analytic
+// Case/Parameters: Python configures a case and supplies analytic
 // IC/BC/forcing, C++ does all numerics. No MFEM type crosses the boundary; the
 // case builds its own ParMesh from Parameters. See CLAUDE.md "Python interface".
 
@@ -10,7 +10,7 @@
 #include "config/nondimensionalization.hpp"
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 #include "mfem.hpp"
 
 #include <cstdint>
@@ -102,16 +102,16 @@ std::unique_ptr<VectorCoefficient> MakeCoefficient(const py::object& f, int dim)
 }
 
 // Owns the mesh + case + boundary conditions built from a Parameters block. The
-// Python-facing StokesCase: the ParMesh is an internal detail.
-class PyStokesCase
+// Python-facing Case: the ParMesh is an internal detail.
+class PyCase
 {
 public:
-   explicit PyStokesCase(Parameters params) : params_(std::move(params))
+   explicit PyCase(Parameters params) : params_(std::move(params))
    {
       params_.Normalize(); // idempotent; the case requires it before the mesh
       serial_ = MakeBoxMesh(params_.mesh);
       pmesh_ = std::make_unique<ParMesh>(MPI_COMM_WORLD, serial_);
-      case_ = std::make_unique<StokesCase>(*pmesh_, params_);
+      case_ = std::make_unique<Case>(*pmesh_, params_);
       bc_ = std::make_unique<BoundaryConditions>(case_->Spaces().Velocity());
    }
 
@@ -225,7 +225,7 @@ private:
    Parameters params_;
    Mesh serial_;
    std::unique_ptr<ParMesh> pmesh_;
-   std::unique_ptr<StokesCase> case_;
+   std::unique_ptr<Case> case_;
    std::unique_ptr<BoundaryConditions> bc_;
    std::unique_ptr<VectorCoefficient> ic_;
    std::unique_ptr<VectorCoefficient> forcing_;
@@ -275,6 +275,10 @@ PYBIND11_MODULE(_core, m)
    py::enum_<ScalingMode>(m, "ScalingMode")
    .value("Dimensionless", ScalingMode::Dimensionless)
    .value("Dimensional", ScalingMode::Dimensional);
+
+   py::enum_<Equation>(m, "Equation")
+   .value("Stokes", Equation::Stokes)
+   .value("NavierStokes", Equation::NavierStokes);
 
    py::class_<Nondimensionalization>(m, "Nondimensionalization")
    .def_readwrite("mode", &Nondimensionalization::mode)
@@ -337,6 +341,7 @@ PYBIND11_MODULE(_core, m)
    .def(py::init<>())
    .def_static("from_yaml", &Parameters::LoadYAML, py::arg("path"))
    .def("normalize", &Parameters::Normalize)
+   .def_readwrite("equation", &Parameters::equation)
    .def_readwrite("nu", &Parameters::nu)
    .def_readwrite("grad_div", &Parameters::grad_div)
    .def_readwrite("order_u", &Parameters::order_u)
@@ -363,22 +368,22 @@ PYBIND11_MODULE(_core, m)
    [](Parameters & p, double re) { p.nu = 1.0 / re; },
    "Convenience: get/set nu = 1/Re (dimensionless mode).");
 
-   py::class_<PyStokesCase>(m, "StokesCase")
+   py::class_<PyCase>(m, "Case")
    .def(py::init<Parameters>(), py::arg("params"))
-   .def("set_initial_velocity", &PyStokesCase::SetInitialVelocity, py::arg("f"))
-   .def("set_forcing", &PyStokesCase::SetForcing, py::arg("f"))
-   .def("velocity_dirichlet", &PyStokesCase::VelocityDirichlet,
+   .def("set_initial_velocity", &PyCase::SetInitialVelocity, py::arg("f"))
+   .def("set_forcing", &PyCase::SetForcing, py::arg("f"))
+   .def("velocity_dirichlet", &PyCase::VelocityDirichlet,
         py::arg("attributes"), py::arg("f"))
-   .def("outflow", &PyStokesCase::Outflow, py::arg("attributes"))
-   .def("run", &PyStokesCase::Run)
-   .def("step", &PyStokesCase::Step)
-   .def("velocity_l2_error", &PyStokesCase::VelocityL2Error, py::arg("f"))
-   .def("face", &PyStokesCase::Face, py::arg("name"))
-   .def("faces", &PyStokesCase::Faces)
-   .def("all_faces", &PyStokesCase::AllFaces)
-   .def_property_readonly("time", &PyStokesCase::Time)
-   .def_property_readonly("time_dimensional", &PyStokesCase::TimeDimensional)
-   .def_property_readonly("done", &PyStokesCase::Done)
-   .def_property_readonly("step_count", &PyStokesCase::StepCount)
-   .def_property_readonly("iterations", &PyStokesCase::Iterations);
+   .def("outflow", &PyCase::Outflow, py::arg("attributes"))
+   .def("run", &PyCase::Run)
+   .def("step", &PyCase::Step)
+   .def("velocity_l2_error", &PyCase::VelocityL2Error, py::arg("f"))
+   .def("face", &PyCase::Face, py::arg("name"))
+   .def("faces", &PyCase::Faces)
+   .def("all_faces", &PyCase::AllFaces)
+   .def_property_readonly("time", &PyCase::Time)
+   .def_property_readonly("time_dimensional", &PyCase::TimeDimensional)
+   .def_property_readonly("done", &PyCase::Done)
+   .def_property_readonly("step_count", &PyCase::StepCount)
+   .def_property_readonly("iterations", &PyCase::Iterations);
 }

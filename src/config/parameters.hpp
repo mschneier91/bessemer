@@ -15,6 +15,14 @@
 namespace incns
 {
 
+/// The equation set a case solves -- a runtime option; the unified Case
+/// dispatches on it (never a class per physics).
+enum class Equation
+{
+   Stokes,      ///< Unsteady Stokes (Sprint 1).
+   NavierStokes ///< Incompressible Navier-Stokes (Sprint 2; not yet available).
+};
+
 /// Rolling checkpoint settings (see post/checkpoint).
 struct CheckpointParameters
 {
@@ -37,13 +45,16 @@ struct OutputParameters
  *        integration, Krylov, initial condition, and output settings.
  *
  * A case is set up by a thin driver -- a .cpp program or a YAML deck via
- * LoadYAML() -- and both go through the same library surface (StokesCase); the
+ * LoadYAML() -- and both go through the same library surface (Case); the
  * solver core is never edited to run a new case. Every field has a sensible
  * default, so a deck only states what differs.
  */
 struct Parameters
 {
    // --- physics -------------------------------------------------------------
+   /// Equation set to solve. NavierStokes is not available until Sprint 2; the
+   /// Case rejects it cleanly for now (interface lands, wiring comes later).
+   Equation equation = Equation::Stokes;
    /// Kinematic viscosity. In Dimensionless mode this is read as 1/Re (a deck
    /// may equivalently give `physics: Re`); in Dimensional mode it carries
    /// units and Normalize() converts it to 1/Re.
@@ -98,7 +109,7 @@ struct Parameters
     * dimensional data through WrapDimensionalVelocity instead).
     *
     * MUST run after the parameters are filled and BEFORE the mesh is built
-    * (StokesCase verifies this). LoadYAML() calls it automatically; in-code
+    * (Case verifies this). LoadYAML() calls it automatically; in-code
     * drivers call it themselves.
     */
    void Normalize();

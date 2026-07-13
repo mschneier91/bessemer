@@ -11,7 +11,7 @@
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
 #include "post/checkpoint.hpp"
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
@@ -19,7 +19,7 @@
 using namespace mfem;
 using incns::MakeBoxMesh;
 using incns::Parameters;
-using incns::StokesCase;
+using incns::Case;
 
 namespace
 {
@@ -55,7 +55,7 @@ FinalState MarchCase(const Parameters& params)
 {
    Mesh serial = MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);
-   StokesCase flow(mesh, params);
+   Case flow(mesh, params);
    auto u0 = incns::MakeInitialVelocity(params);
    flow.SetInitialVelocity(*u0);
    flow.Run();
@@ -93,7 +93,7 @@ void CheckInterruptedMatchesUninterrupted(bool adaptive,
       Parameters first = TgvParams(adaptive);
       Mesh serial = MakeBoxMesh(first.mesh);
       ParMesh mesh(MPI_COMM_WORLD, serial);
-      StokesCase flow(mesh, first);
+      Case flow(mesh, first);
       auto u0 = incns::MakeInitialVelocity(first);
       flow.SetInitialVelocity(*u0);
       while (flow.Time() < 0.1) { flow.Step(); }

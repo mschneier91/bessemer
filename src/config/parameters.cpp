@@ -33,6 +33,17 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Parameters p;
    const YAML::Node root = YAML::LoadFile(path);
 
+   if (root["equation"])
+   {
+      const std::string eq = root["equation"].as<std::string>();
+      if (eq == "stokes") { p.equation = Equation::Stokes; }
+      else if (eq == "navier_stokes" || eq == "nse")
+      {
+         p.equation = Equation::NavierStokes;
+      }
+      else { MFEM_ABORT("parameters: unknown equation '" << eq << "'"); }
+   }
+
    const YAML::Node physics = root["physics"];
    Maybe(physics, "nu", p.nu);
    Maybe(physics, "grad_div", p.grad_div);

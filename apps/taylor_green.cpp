@@ -1,14 +1,14 @@
 // Example IN-CODE driver: the 2D Taylor-Green vortex on a fully periodic box,
 // solved as unsteady Stokes (the TGV velocity solves unforced Stokes exactly;
 // pressure -> 0). Demonstrates the library surface a .cpp case uses --
-// Parameters built programmatically, then the same StokesCase the YAML driver
+// Parameters built programmatically, then the same Case the YAML driver
 // (run_case) goes through. Prints the final-time velocity error against the
 // analytic decay.
 
 #include "config/parameters.hpp"
 #include "exact/tgv2d.hpp"
 #include "mesh/periodic_box.hpp"
-#include "solver/stokes_case.hpp"
+#include "solver/case.hpp"
 #include "mfem.hpp"
 
 #include <iostream>
@@ -33,7 +33,7 @@ int main(int argc, char* argv[])
    Mesh serial = incns::MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);
 
-   incns::StokesCase tgv(mesh, params);
+   incns::Case tgv(mesh, params);
    const double nu = params.nu;
    VectorFunctionCoefficient u0(2, [nu](const Vector & x, double t, Vector & u)
    { incns::tgv2d::Velocity(x, t, nu, u); });
