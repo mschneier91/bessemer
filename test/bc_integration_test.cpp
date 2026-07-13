@@ -318,3 +318,60 @@ TEST(BcIntegration, UnsteadyPeriodicChannel2D)
       }
    }
 }
+
+// --- 5. No-slip walls via the AddNoSlip convenience -------------------------
+// The forced periodic channel above has u = g(t) y(1-y), which is exactly zero
+// on the walls -- i.e. the walls ARE no-slip. Setting them with AddNoSlip
+// (owns the zero field internally) must reproduce the same exact solution,
+// pinning the convenience routine end to end.
+TEST(BcIntegration, NoSlipPeriodicChannel2D)
+{
+   const double nu = 0.7;
+   VectorFunctionCoefficient u_exact(2, [](const Vector & x, double t, Vector & v)
+   {
+      v(0) = G(t) * x[1] * (1.0 - x[1]);
+      v(1) = 0.0;
+   });
+   VectorFunctionCoefficient forcing(2, [nu](const Vector & x, double t,
+                                     Vector & f)
+   {
+      f(0) = Gp(t) * x[1] * (1.0 - x[1]) + 2.0 * nu * G(t);
+      f(1) = 0.0;
+   });
+
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {4, 2, 0};
+   s.lengths = {kLen, 1.0, 1.0};
+   s.periodic = {true, false, false};
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 2, 1);
+   RuleBook rules;
+
+   const int bottom = FindBoundaryAttrAt(mesh, 1, 0.0);
+   const int top = FindBoundaryAttrAt(mesh, 1, 1.0);
+   BoundaryConditions bc(spaces.Velocity());
+   bc.AddNoSlip(bottom);           // <-- the convenience under test
+   bc.AddNoSlip(top);
+   ASSERT_TRUE(bc.PressureNullspaceExists());
+
+   TimeIntegratorOptions opts;
+   opts.nu = nu;
+   opts.dt = 0.02;
+   opts.rtol = 1e-12;
+   opts.max_iter = 5000;
+   opts.kdim = 400;
+   StokesTimeIntegrator stepper(spaces, rules, bc, forcing, opts);
+   stepper.SetInitialVelocity(u_exact);
+
+   const IntegrationRule* irs[Geometry::NumGeom];
+   ElevatedRules(rules, 2, 8, irs);
+   for (int step = 1; step <= 5; ++step)
+   {
+      stepper.Step();
+      u_exact.SetTime(stepper.Time());
+      EXPECT_LE(stepper.Velocity().ComputeL2Error(u_exact, irs), 1e-8)
+            << "step " << step;
+   }
+}

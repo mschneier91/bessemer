@@ -7,6 +7,7 @@
 
 #include "mfem.hpp"
 
+#include <memory>
 #include <vector>
 
 namespace incns
@@ -44,6 +45,17 @@ public:
     * @param coeff Velocity data; may be time-dependent (advanced by SetTime).
     */
    void AddVelocityDirichlet(int attr, mfem::VectorCoefficient& coeff);
+
+   /**
+    * @brief No-slip wall: prescribe zero velocity on a boundary attribute.
+    *
+    * A convenience for the ubiquitous wall condition -- equivalent to
+    * AddVelocityDirichlet with a zero field, but the zero coefficient is owned
+    * internally so the caller supplies nothing.
+    *
+    * @param attr Boundary attribute (1-based, must exist in the mesh).
+    */
+   void AddNoSlip(int attr);
 
    /**
     * @brief Mark a boundary attribute as outflow (do-nothing traction).
@@ -104,6 +116,8 @@ private:
    /// (attribute, coefficient) pairs; coefficients are borrowed.
    std::vector<std::pair<int, mfem::VectorCoefficient*>> dirichlet_;
    mfem::Array<int> ess_tdofs_;        ///< Essential velocity true dofs.
+   /// Zero velocity coefficient owned for no-slip walls (built on first use).
+   std::unique_ptr<mfem::VectorConstantCoefficient> zero_coeff_;
 };
 
 } // namespace incns

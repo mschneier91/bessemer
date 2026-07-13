@@ -28,6 +28,7 @@ enum class Equation
 enum class BcType
 {
    VelocityDirichlet, ///< Prescribed velocity (the field is bound in the driver).
+   NoSlip,            ///< Zero velocity wall (no field needed).
    Outflow            ///< Do-nothing / natural traction (no field).
 };
 

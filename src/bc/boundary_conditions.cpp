@@ -64,6 +64,17 @@ void BoundaryConditions::AddVelocityDirichlet(int attr,
    UpdateEssentialTrueDofs();
 }
 
+void BoundaryConditions::AddNoSlip(int attr)
+{
+   if (!zero_coeff_)
+   {
+      Vector zero(vfes_.GetVDim());
+      zero = 0.0;
+      zero_coeff_ = std::make_unique<VectorConstantCoefficient>(zero);
+   }
+   AddVelocityDirichlet(attr, *zero_coeff_);
+}
+
 void BoundaryConditions::AddOutflow(int attr)
 {
    MFEM_VERIFY(attr >= 1 && attr <= max_attr_,

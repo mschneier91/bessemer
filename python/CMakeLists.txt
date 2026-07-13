@@ -42,4 +42,16 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
     PASS_REGULAR_EXPRESSION "stokes_ex_yaml: PASSED"
     DEPENDS incns_pymodule)
+
+  # No-slip channel from a deck (the `no_slip` boundary type, no field bound).
+  add_test(
+    NAME py_channel_noslip_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+            ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run_channel.py)
+  set_tests_properties(py_channel_noslip_np${np} PROPERTIES
+    LABELS "fast"
+    PROCESSORS ${np}
+    ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
+    PASS_REGULAR_EXPRESSION "channel_noslip: PASSED"
+    DEPENDS incns_pymodule)
 endforeach()

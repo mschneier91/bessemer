@@ -128,6 +128,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
          const std::string ty = e["type"].as<std::string>();
          if (ty == "outflow") { s.type = BcType::Outflow; }
+         else if (ty == "no_slip") { s.type = BcType::NoSlip; }
          else
          {
             MFEM_VERIFY(ty == "velocity_dirichlet",

@@ -1,0 +1,31 @@
+# Forced periodic channel with NO-SLIP walls, driven from YAML. The walls use
+# the `no_slip` boundary type -- zero velocity, no field to bind (unlike
+# velocity_dirichlet). Only the forcing + initial condition stay in Python
+# (examples/python/stokes_ex/run_channel.py).
+
+equation: stokes
+
+physics:
+  nu: 0.7
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 2
+  elements: [4, 2]
+  lengths: [2.0, 1.0]
+  periodic: [true, false]        # streamwise periodic; walls in y
+
+time:
+  dt: 0.02
+  t_final: 0.1
+
+solver:
+  rtol: 1.0e-12
+  max_iter: 5000
+  kdim: 400
+
+boundary_conditions:
+  - {select: [ymin, ymax], type: no_slip}   # walls: u = 0, no field needed

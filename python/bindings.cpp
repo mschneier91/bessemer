@@ -140,6 +140,13 @@ public:
       for (int a : AsAttrs(attrs)) { bc_->AddOutflow(a); }
    }
 
+   // No-slip walls (u = 0) on a flexible selection: attribute ints, box face
+   // names, the string "all", or a list mixing them.
+   void NoSlip(const py::object& selection)
+   {
+      for (int a : ResolveSelection(selection)) { bc_->AddNoSlip(a); }
+   }
+
    // Bind a velocity field to a deck-declared Dirichlet group (by group name).
    // The field is applied to that group's attributes when the case is wired.
    void SetDirichletField(const std::string& group, const py::object& f)
@@ -224,6 +231,10 @@ private:
          {
             for (int a : attrs) { bc_->AddOutflow(a); }
          }
+         else if (s.type == BcType::NoSlip)
+         {
+            for (int a : attrs) { bc_->AddNoSlip(a); }
+         }
          else
          {
             auto it = dirichlet_fields_.find(s.group);
@@ -241,6 +252,33 @@ private:
       if (py::isinstance<py::int_>(a)) { v.push_back(a.cast<int>()); }
       else { for (auto x : a) { v.push_back(x.cast<int>()); } }
       return v;
+   }
+
+   // Resolve a flexible selection (int attr | face-name str | "all" | list of
+   // those) to a concrete attribute list.
+   std::vector<int> ResolveSelection(const py::object& sel)
+   {
+      std::vector<int> out;
+      auto one = [&](const py::handle & x)
+      {
+         if (py::isinstance<py::int_>(x)) { out.push_back(x.cast<int>()); }
+         else
+         {
+            const std::string name = x.cast<std::string>();
+            if (name == "all")
+            {
+               const std::vector<int> af = AllFaces();
+               out.insert(out.end(), af.begin(), af.end());
+            }
+            else { out.push_back(ResolveFace(name)); }
+         }
+      };
+      if (py::isinstance<py::int_>(sel) || py::isinstance<py::str>(sel))
+      {
+         one(sel);
+      }
+      else { for (auto x : sel) { one(x); } }
+      return out;
    }
 
    int ResolveFace(const std::string& name)
@@ -428,6 +466,7 @@ PYBIND11_MODULE(_core, m)
    .def("velocity_dirichlet", &PyCase::VelocityDirichlet,
         py::arg("attributes"), py::arg("f"))
    .def("outflow", &PyCase::Outflow, py::arg("attributes"))
+   .def("no_slip", &PyCase::NoSlip, py::arg("selection"))
    .def("run", &PyCase::Run)
    .def("step", &PyCase::Step)
    .def("velocity_l2_error", &PyCase::VelocityL2Error, py::arg("f"))

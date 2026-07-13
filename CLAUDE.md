@@ -148,7 +148,8 @@ test/                               # unit tests + the TGV convergence oracles
   single unified case, never a class per physics (`StokesCase`/`NseCase`). NavierStokes is
   rejected until Sprint 2 (the selector lands now, the wiring comes with convection).
   In-code drivers set fields on a default `Parameters` directly.
-- `incns::BoundaryConditions` — `AddVelocityDirichlet(attr, coeff)`, `AddOutflow(attr)`;
+- `incns::BoundaryConditions` — `AddVelocityDirichlet(attr, coeff)`, `AddNoSlip(attr)`
+  (zero-velocity wall convenience, owns the zero field), `AddOutflow(attr)`;
   periodicity is mesh-level. Passed via `SetBoundaryConditions`. An empty BC set on a
   periodic mesh means fully periodic.
 - `SetInitialVelocity(coeff)` (pressure is not an independent IC); `Run()` marches to
@@ -462,8 +463,9 @@ case.velocity_dirichlet(3, wall)             # wall: a field, or a constant tupl
 case.outflow(2)                              # do-nothing / natural
 # For the box factory ONLY, a convenience resolves face names to attributes
 # (naming a periodic face errors); this sugar never leaks into the core API:
-case.velocity_dirichlet(case.faces("ymin", "ymax"), wall)  # box helper -> attrs
-case.outflow(case.face("xmax"))                           # (case.all_faces() too)
+case.no_slip(["ymin", "ymax"])               # zero-velocity walls (no field)
+case.velocity_dirichlet(case.face("xmin"), inflow)        # a prescribed field
+case.outflow(case.face("xmax"))                           # do-nothing / natural
 # case.set_forcing(f)                        # optional momentum forcing
 
 case.run()                                   # C++ marches and runs all post-processing
