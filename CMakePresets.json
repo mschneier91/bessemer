@@ -25,16 +25,32 @@
       "cacheVariables": {
         "USE_CUDA": "ON"
       }
+    },
+    {
+      "name": "cpu-python",
+      "inherits": "cpu",
+      "displayName": "CPU + Python bindings",
+      "description": "The cpu build plus the pybind11 module (needs py-pybind11 in the env).",
+      "binaryDir": "${sourceDir}/build/cpu-python",
+      "cacheVariables": {
+        "INCNS_PYTHON": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "cpu", "configurePreset": "cpu" },
-    { "name": "cuda", "configurePreset": "cuda" }
+    { "name": "cuda", "configurePreset": "cuda" },
+    { "name": "cpu-python", "configurePreset": "cpu-python" }
   ],
   "testPresets": [
     {
       "name": "cpu",
       "configurePreset": "cpu",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpu-python",
+      "configurePreset": "cpu-python",
       "output": { "outputOnFailure": true }
     }
   ]

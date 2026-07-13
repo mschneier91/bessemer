@@ -136,7 +136,7 @@ environments/<machine>/             # per-machine spack.yaml + committed spack.l
 python/                             # pybind11 bindings (module `incns`) + examples
   bindings.cpp                      #   the pybind11 translation unit
   incns/__init__.py                 #   thin Python layer: @field decorator, helpers
-  examples/*.py                     #   driver scripts (run via mpirun -np N python …)
+examples/python/<case>/           # example driver scripts (mpirun -np N python …)
 test/                               # unit tests + the TGV convergence oracles
 ```
 
@@ -458,8 +458,8 @@ case.velocity_dirichlet(3, wall)             # wall: a field, or a constant tupl
 case.outflow(2)                              # do-nothing / natural
 # For the box factory ONLY, a convenience resolves face names to attributes
 # (naming a periodic face errors); this sugar never leaks into the core API:
-case.velocity_dirichlet(case.mesh.faces("ymin", "ymax"), wall)
-case.outflow(case.mesh.face("xmax"))
+case.velocity_dirichlet(case.faces("ymin", "ymax"), wall)  # box helper -> attrs
+case.outflow(case.face("xmax"))                           # (case.all_faces() too)
 # case.set_forcing(f)                        # optional momentum forcing
 
 case.run()                                   # C++ marches and runs all post-processing
@@ -478,13 +478,14 @@ time-dependent BC/forcing at scale.
 - **Tier 1 — plain callable** `f(x, t) -> (…)`: works everywhere, holds the GIL, one
   Python call per quad point. Convenient; documented as slow for hot paths.
 - **Tier 2 — compiled (`@incns.field`)**: the decorator wraps the user's function with
-  `numba.cfunc` under the fixed C ABI and hands the C++ side a **raw function pointer**;
+  `numba.cfunc` under the fixed C ABI `void(const double* x, double t, double* out)`
+  and hands the C++ side a **raw function pointer**;
   the coefficient calls it directly in the assembly loop — **no Python, no GIL, full
   speed**. The user never sees `uintptr_t` or numba signature strings.
   ```python
   from numba import njit  # user code stays numba-compatible
-  @incns.field(dim=3)                          # ABI: (const double* x, int dim,
-  def tgv(x, t, out):                          #       double t, double* out)
+  @incns.field(dim=3)                          # ABI: void(const double* x,
+  def tgv(x, t, out):                          #            double t, double* out)
       out[0] =  np.sin(x[0])*np.cos(x[1])
       out[1] = -np.cos(x[0])*np.sin(x[1])
       out[2] =  0.0

@@ -28,6 +28,7 @@ fi
 
 # Collect tracked C++ sources under the code directories.
 _files=$(find "$INCNS_REPO_ROOT/src" "$INCNS_REPO_ROOT/apps" "$INCNS_REPO_ROOT/test" \
+           "$INCNS_REPO_ROOT/python" \
            \( -name '*.hpp' -o -name '*.cpp' \) 2>/dev/null || true)
 if [ -z "$_files" ]; then
   echo "style.sh: no C++ sources to format yet."

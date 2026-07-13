@@ -28,6 +28,9 @@ endif()
 # default). Consumers opt in per target via the INCNS_ENABLE_PROFILING define.
 option(INCNS_PROFILING "Enable INCNS_PROFILE scoped timing in libincns" ON)
 
+# Python bindings (off by default; the numerics build never depends on Python).
+option(INCNS_PYTHON "Build the incns pybind11 Python module" OFF)
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 # Dependencies come exclusively from the activated spack env (see scripts/env.sh).
@@ -38,3 +41,6 @@ enable_testing()
 add_subdirectory(src)    # libincns
 add_subdirectory(apps)
 add_subdirectory(test)
+if(INCNS_PYTHON)
+  add_subdirectory(python)
+endif()

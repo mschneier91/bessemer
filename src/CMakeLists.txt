@@ -26,6 +26,10 @@ add_library(incns STATIC
 target_include_directories(incns PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(incns PUBLIC incns_mfem)
 
+# Position-independent so the static library links into the pybind11 shared
+# module; harmless for the executables.
+set_target_properties(incns PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # The YAML deck loader; PRIVATE -- no yaml-cpp types leak into public headers.
 find_package(yaml-cpp REQUIRED)
 target_link_libraries(incns PRIVATE yaml-cpp::yaml-cpp)
