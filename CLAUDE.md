@@ -284,6 +284,54 @@ before touching Sprint 2.**
   choices, robustness in Δt and ν. **Deliberately under-specified for now**; expect
   detailed direction from the human when this stage opens, and do not design ahead of it.
 
+## Stokes hardening — before GPU and before Sprint 2
+
+The Stokes solver must be **tight and GPU-ready before NSE work begins**. These are
+Stokes-level items (not NSE), agreed as the pre-GPU work. Do each like a sub-sprint —
+green at np ∈ {1, 2, 4}, entire fast tier still green, commit with evidence, stop for human
+review. (Ordered by leverage; the first is time-critical — do it *before* the hardware
+arrives.)
+
+- **H1 — GPU-readiness plumbing (do FIRST).** Wire `mfem::Device`: a runtime backend
+  option on `Parameters` (`cpu` / `cuda` / …) that constructs the `mfem::Device` at case
+  setup, and **audit every host-only `Vector` loop that forces a device→host copy per
+  apply** — `pressure_schur`'s inverse-diagonal build, `block_preconditioner`,
+  `pressure_mean`, and any manual `GetData()[i]` / `for i < Size()` in the solve path —
+  converting them to `mfem::forall` / device-aware ops. The `cuda` preset currently
+  **builds but runs on the host** — it is not actually wired. **Green when:** the CPU
+  result is unchanged, the solve path has no host-side element loops over true-dof
+  vectors, and Device=cpu is the default and green on a CPU-only machine (the real CPU/GPU
+  parity check runs when a GPU exists).
+- **H2 — Wall-normal mesh stretching in the box factory.** DNS of wall-bounded flow
+  (channel) needs near-wall clustering, but `periodic_box` makes only **uniform** Cartesian
+  meshes. Add a per-direction stretching option (tanh / Chebyshev, runtime), preserving
+  quad/hex tensor structure and periodicity. This also finally exercises the
+  deformed-element quadrature the operators were already sized for. **Green when:** a
+  stretched mesh has the expected node distribution, and the steady + unsteady polynomial
+  MMS still reproduce to solver tolerance on it (the operators must stay exact under the
+  metric factors), with ‖∇·u‖ and spatial order intact.
+- **H3 — Sanitizer preset (ASan + UBSan).** Add a `cpu-asan` preset
+  (`-fsanitize=address,undefined -fno-omit-frame-pointer`) and run the fast tier under it.
+  MFEM lifetime traps have bitten twice already (the MakeRef'd ess-dof list, the
+  ConstrainedOperator lifetime); UB is far nastier on GPU. **Green when:** the fast tier is
+  clean under ASan/UBSan at np ∈ {1, 2}.
+- **H4 — Physical diagnostics as C++ routines (opt-in via `Parameters`).** Start with
+  kinetic energy, viscous dissipation rate, and ‖∇·u‖(t) — quadrature + global reduction,
+  written to output and exposed to Python as scalars (per the Python-interface design).
+  **Green when:** the TGV-Stokes kinetic energy decays as the exact `e^{-4νt}` law to
+  measurement tolerance (a sharper temporal-accuracy check than any iteration baseline) and
+  ‖∇·u‖ matches the existing divergence test.
+- **H5 — Wire the BoomerAMG velocity-block option.** Already specified as an option for
+  stiffer regimes, currently unbuilt. Add it as a runtime preconditioner choice (it needs
+  an assembled matrix or LOR — a different assembly route, so gate it clearly). **Green
+  when:** the block preconditioner with AMG solves the steady + unsteady MMS to tolerance,
+  its own iteration baseline is seeded **per-np** (AMG counts are legitimately
+  rank-sensitive), and the Jacobi default is unchanged.
+
+*(Cahouet–Chabard — the Δt-robust pressure Schur block, 2.3 above — is the single biggest
+tightness lever and is pure Stokes, but stays deferred with Sprint 2 by decision; revisit
+that deliberately rather than by default.)*
+
 ## Time integration
 
 - **Written in-repo. Do NOT use any MFEM built-in time steppers** — no `mfem::ODESolver`
