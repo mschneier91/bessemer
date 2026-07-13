@@ -14,6 +14,7 @@
 #include "mfem.hpp"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -139,6 +140,15 @@ public:
       for (int a : AsAttrs(attrs)) { bc_->AddOutflow(a); }
    }
 
+   // Bind a velocity field to a deck-declared Dirichlet group (by group name).
+   // The field is applied to that group's attributes when the case is wired.
+   void SetDirichletField(const std::string& group, const py::object& f)
+   {
+      auto coeff = MakeCoefficient(f, params_.mesh.dim);
+      dirichlet_fields_[group] = coeff.get();
+      coeffs_.push_back(std::move(coeff));
+   }
+
    void Run() { Wire(); py::gil_scoped_release rel; case_->Run(); }
    void Step() { Wire(); py::gil_scoped_release rel; case_->Step(); }
 
@@ -189,8 +199,40 @@ private:
    void Wire()
    {
       if (wired_) { return; }
+      ApplyDeckBcs();
       case_->SetBoundaryConditions(*bc_);
       wired_ = true;
+   }
+
+   // Apply the deck's boundary_conditions groups: resolve each selection to
+   // attributes, and for a Dirichlet group use the field bound by group name.
+   void ApplyDeckBcs()
+   {
+      for (const BcSpec& s : params_.boundary_conditions)
+      {
+         std::vector<int> attrs;
+         if (s.select_all) { attrs = AllFaces(); }
+         else
+         {
+            attrs = s.attributes;
+            for (const auto& name : s.faces)
+            {
+               attrs.push_back(ResolveFace(name));
+            }
+         }
+         if (s.type == BcType::Outflow)
+         {
+            for (int a : attrs) { bc_->AddOutflow(a); }
+         }
+         else
+         {
+            auto it = dirichlet_fields_.find(s.group);
+            MFEM_VERIFY(it != dirichlet_fields_.end(),
+                        "incns: no Dirichlet field bound to boundary group '" +
+                        s.group + "' -- call set_dirichlet_field(group, field)");
+            for (int a : attrs) { bc_->AddVelocityDirichlet(a, *it->second); }
+         }
+      }
    }
 
    std::vector<int> AsAttrs(const py::object& a)
@@ -230,6 +272,7 @@ private:
    std::unique_ptr<VectorCoefficient> ic_;
    std::unique_ptr<VectorCoefficient> forcing_;
    std::vector<std::unique_ptr<VectorCoefficient>> coeffs_;
+   std::map<std::string, VectorCoefficient*> dirichlet_fields_;
    bool wired_ = false;
 };
 
@@ -370,8 +413,18 @@ PYBIND11_MODULE(_core, m)
 
    py::class_<PyCase>(m, "Case")
    .def(py::init<Parameters>(), py::arg("params"))
+   .def_static(
+      "from_yaml",
+      [](const std::string & path)
+   {
+      return std::make_unique<PyCase>(Parameters::LoadYAML(path));
+   },
+   py::arg("path"),
+   "Build a case from a YAML deck (config + boundary-condition topology).")
    .def("set_initial_velocity", &PyCase::SetInitialVelocity, py::arg("f"))
    .def("set_forcing", &PyCase::SetForcing, py::arg("f"))
+   .def("set_dirichlet_field", &PyCase::SetDirichletField,
+        py::arg("group"), py::arg("f"))
    .def("velocity_dirichlet", &PyCase::VelocityDirichlet,
         py::arg("attributes"), py::arg("f"))
    .def("outflow", &PyCase::Outflow, py::arg("attributes"))

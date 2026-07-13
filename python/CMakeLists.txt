@@ -30,4 +30,16 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
     PASS_REGULAR_EXPRESSION "stokes_ex: PASSED"
     DEPENDS incns_pymodule)
+
+  # The same MMS driven from a YAML deck (config + BC topology in YAML).
+  add_test(
+    NAME py_stokes_ex_yaml_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+            ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run_yaml.py)
+  set_tests_properties(py_stokes_ex_yaml_np${np} PROPERTIES
+    LABELS "fast"
+    PROCESSORS ${np}
+    ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
+    PASS_REGULAR_EXPRESSION "stokes_ex_yaml: PASSED"
+    DEPENDS incns_pymodule)
 endforeach()

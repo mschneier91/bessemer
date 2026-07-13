@@ -11,6 +11,7 @@
 #include "time/adaptive_controller.hpp"
 
 #include <string>
+#include <vector>
 
 namespace incns
 {
@@ -21,6 +22,31 @@ enum class Equation
 {
    Stokes,      ///< Unsteady Stokes (Sprint 1).
    NavierStokes ///< Incompressible Navier-Stokes (Sprint 2; not yet available).
+};
+
+/// The kind of boundary condition a deck-declared group carries.
+enum class BcType
+{
+   VelocityDirichlet, ///< Prescribed velocity (the field is bound in the driver).
+   Outflow            ///< Do-nothing / natural traction (no field).
+};
+
+/**
+ * @brief A boundary-condition group declared in the deck: a label, a boundary
+ *        selection, and a type. The field for a Dirichlet group is bound in the
+ *        driver by group name (fields never live in the deck).
+ *
+ * The selection mixes box face names (@c "xmin" ... resolved geometrically),
+ * explicit boundary attribute integers, or @c select_all for every real
+ * boundary -- MFEM attribute-marker style, by name or number.
+ */
+struct BcSpec
+{
+   std::string group;              ///< Label for binding a Dirichlet field.
+   BcType type = BcType::VelocityDirichlet; ///< Dirichlet or outflow.
+   bool select_all = false;        ///< Select every real (non-periodic) face.
+   std::vector<std::string> faces; ///< Face-name selectors (box convenience).
+   std::vector<int> attributes;    ///< Explicit boundary attribute selectors.
 };
 
 /// Rolling checkpoint settings (see post/checkpoint).
@@ -90,6 +116,11 @@ struct Parameters
    /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks
    /// select analytic ICs by name so no recompilation is needed per case.
    std::string initial_velocity = "zero";
+
+   /// Boundary-condition groups (topology only; Dirichlet fields are bound in
+   /// the driver by group name). Empty means the driver sets BCs explicitly (or
+   /// a fully periodic mesh needs none).
+   std::vector<BcSpec> boundary_conditions;
 
    OutputParameters output; ///< ParaView output settings.
 

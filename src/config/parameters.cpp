@@ -102,6 +102,49 @@ Parameters Parameters::LoadYAML(const std::string& path)
 
    Maybe(root, "initial_velocity", p.initial_velocity);
 
+   // Boundary-condition groups: topology + type only (fields are bound in the
+   // driver by group name). A selector token is an attribute integer if it
+   // parses fully as one, otherwise a box face name.
+   const YAML::Node bcs = root["boundary_conditions"];
+   if (bcs)
+   {
+      MFEM_VERIFY(bcs.IsSequence(),
+                  "parameters: 'boundary_conditions' must be a sequence");
+      auto add_token = [](const std::string & tok, BcSpec & s)
+      {
+         try
+         {
+            std::size_t pos = 0;
+            const int a = std::stoi(tok, &pos);
+            if (pos == tok.size()) { s.attributes.push_back(a); return; }
+         }
+         catch (...) { /* not an int -> a face name */ }
+         if (tok == "all") { s.select_all = true; }
+         else { s.faces.push_back(tok); }
+      };
+      for (const auto& e : bcs)
+      {
+         BcSpec s;
+         if (e["group"]) { s.group = e["group"].as<std::string>(); }
+         const std::string ty = e["type"].as<std::string>();
+         if (ty == "outflow") { s.type = BcType::Outflow; }
+         else
+         {
+            MFEM_VERIFY(ty == "velocity_dirichlet",
+                        "parameters: unknown boundary type '" << ty << "'");
+            s.type = BcType::VelocityDirichlet;
+         }
+         const YAML::Node sel = e["select"];
+         MFEM_VERIFY(sel, "parameters: a boundary_conditions entry needs 'select'");
+         if (sel.IsSequence())
+         {
+            for (const auto& x : sel) { add_token(x.as<std::string>(), s); }
+         }
+         else { add_token(sel.as<std::string>(), s); }
+         p.boundary_conditions.push_back(std::move(s));
+      }
+   }
+
    const YAML::Node output = root["output"];
    Maybe(output, "enabled", p.output.enabled);
    Maybe(output, "path", p.output.path);
