@@ -9,6 +9,7 @@
 #include "bc/boundary_conditions.hpp"
 #include "config/parameters.hpp"
 #include "post/checkpoint.hpp"
+#include "post/diagnostics.hpp"
 #include "post/output.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -96,9 +97,21 @@ public:
    /// @return The underlying integrator (iterations, adaptive controller).
    StokesTimeIntegrator& Integrator();
 
+   /// @return Kinetic energy 0.5*int|u|^2 of the current velocity (global).
+   double KineticEnergy();
+
+   /// @return Viscous dissipation nu*int|grad u|^2 of the current velocity.
+   double DissipationRate();
+
+   /// @return Divergence norm ||div u||_L2 of the current velocity (global).
+   double DivergenceNorm();
+
 private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
+
+   /// Append a diagnostics row on the output interval (no-op if disabled).
+   void MaybeLogDiagnostics(int cycle, double time);
 
    mfem::ParMesh& mesh_;      ///< Mesh (borrowed).
    Parameters params_;        ///< Case parameters (copied).
@@ -113,6 +126,7 @@ private:
 
    std::unique_ptr<StokesTimeIntegrator> integrator_; ///< Built lazily.
    std::unique_ptr<OutputWriter> output_;             ///< Built when enabled.
+   std::unique_ptr<DiagnosticsLog> diag_log_;         ///< Built when enabled.
    int cycle_ = 0; ///< Accepted-step counter for output.
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
 };

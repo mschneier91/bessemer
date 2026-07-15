@@ -181,6 +181,12 @@ public:
       return case_->Velocity().ComputeL2Error(*coeff, irs);
    }
 
+   // Physical diagnostics of the current velocity (global scalars). Wire()
+   // first so querying before run() does not finalize setup ahead of the BCs.
+   double KineticEnergy() { Wire(); return case_->KineticEnergy(); }
+   double DissipationRate() { Wire(); return case_->DissipationRate(); }
+   double DivergenceNorm() { Wire(); return case_->DivergenceNorm(); }
+
    // Box-face name -> boundary attribute (geometric; robust to MFEM numbering).
    int Face(const std::string& name) { return ResolveFace(name); }
 
@@ -378,7 +384,8 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("enabled", &OutputParameters::enabled)
    .def_readwrite("path", &OutputParameters::path)
    .def_readwrite("name", &OutputParameters::name)
-   .def_readwrite("interval", &OutputParameters::interval);
+   .def_readwrite("interval", &OutputParameters::interval)
+   .def_readwrite("diagnostics", &OutputParameters::diagnostics);
 
    py::class_<CheckpointParameters>(m, "CheckpointParameters")
    .def_readwrite("enabled", &CheckpointParameters::enabled)
@@ -500,6 +507,9 @@ PYBIND11_MODULE(_core, m)
    .def("run", &PyCase::Run)
    .def("step", &PyCase::Step)
    .def("velocity_l2_error", &PyCase::VelocityL2Error, py::arg("f"))
+   .def("kinetic_energy", &PyCase::KineticEnergy)
+   .def("dissipation_rate", &PyCase::DissipationRate)
+   .def("divergence_norm", &PyCase::DivergenceNorm)
    .def("face", &PyCase::Face, py::arg("name"))
    .def("faces", &PyCase::Faces)
    .def("all_faces", &PyCase::AllFaces)

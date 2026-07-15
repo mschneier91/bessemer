@@ -169,6 +169,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(output, "path", p.output.path);
    Maybe(output, "name", p.output.name);
    Maybe(output, "interval", p.output.interval);
+   Maybe(output, "diagnostics", p.output.diagnostics);
 
    const YAML::Node chk = root["checkpoint"];
    Maybe(chk, "enabled", p.checkpoint.enabled);

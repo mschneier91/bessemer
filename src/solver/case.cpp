@@ -104,7 +104,21 @@ void Case::EnsureSetup()
                 params_.output, params_.order_u,
                 params_.nondim);
       output_->MaybeSave(0, 0.0); // initial state
+
+      if (params_.output.diagnostics)
+      {
+         const std::string csv =
+            params_.output.path + "/" + params_.output.name + "_diagnostics.csv";
+         diag_log_ = std::make_unique<DiagnosticsLog>(csv, mesh_.GetComm());
+         MaybeLogDiagnostics(0, 0.0); // initial state
+      }
    }
+}
+
+void Case::MaybeLogDiagnostics(int cycle, double time)
+{
+   if (!diag_log_ || cycle % params_.output.interval != 0) { return; }
+   diag_log_->Write(time, KineticEnergy(), DissipationRate(), DivergenceNorm());
 }
 
 void Case::Step()
@@ -113,6 +127,7 @@ void Case::Step()
    integrator_->Step();
    ++cycle_;
    if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
+   MaybeLogDiagnostics(cycle_, integrator_->Time());
    if (params_.checkpoint.enabled &&
        cycle_ % params_.checkpoint.interval == 0)
    {
@@ -176,6 +191,24 @@ StokesTimeIntegrator& Case::Integrator()
 {
    EnsureSetup();
    return *integrator_;
+}
+
+double Case::KineticEnergy()
+{
+   EnsureSetup();
+   return incns::KineticEnergy(integrator_->Velocity(), rules_);
+}
+
+double Case::DissipationRate()
+{
+   EnsureSetup();
+   return incns::DissipationRate(integrator_->Velocity(), params_.nu, rules_);
+}
+
+double Case::DivergenceNorm()
+{
+   EnsureSetup();
+   return incns::DivergenceNorm(integrator_->Velocity(), rules_);
 }
 
 } // namespace incns

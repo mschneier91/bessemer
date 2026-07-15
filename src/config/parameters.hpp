@@ -65,6 +65,7 @@ struct OutputParameters
    std::string path = ".";    ///< Prefix directory for the collection.
    std::string name = "case"; ///< Collection name.
    int interval = 1;          ///< Save every this many accepted steps.
+   bool diagnostics = false;  ///< Also log KE/dissipation/||div u|| to a CSV.
 };
 
 /**

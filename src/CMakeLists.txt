@@ -20,6 +20,7 @@ add_library(incns STATIC
   config/initial_conditions.cpp
   post/output.cpp
   post/checkpoint.cpp
+  post/diagnostics.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
