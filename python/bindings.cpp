@@ -11,6 +11,7 @@
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
 #include "solver/case.hpp"
+#include "util/device.hpp"
 #include "mfem.hpp"
 
 #include <cstdint>
@@ -109,6 +110,7 @@ class PyCase
 public:
    explicit PyCase(Parameters params) : params_(std::move(params))
    {
+      ConfigureDevice(params_.device); // before any mesh/space allocation
       params_.Normalize(); // idempotent; the case requires it before the mesh
       serial_ = MakeBoxMesh(params_.mesh);
       pmesh_ = std::make_unique<ParMesh>(MPI_COMM_WORLD, serial_);
@@ -422,6 +424,7 @@ PYBIND11_MODULE(_core, m)
    .def(py::init<>())
    .def_static("from_yaml", &Parameters::LoadYAML, py::arg("path"))
    .def("normalize", &Parameters::Normalize)
+   .def_readwrite("device", &Parameters::device)
    .def_readwrite("equation", &Parameters::equation)
    .def_readwrite("nu", &Parameters::nu)
    .def_readwrite("grad_div", &Parameters::grad_div)

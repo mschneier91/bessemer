@@ -5,6 +5,7 @@ add_library(incns STATIC
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp
+  util/device.cpp
   post/pressure_mean.cpp
   bc/boundary_conditions.cpp
   operators/stokes_operator.cpp

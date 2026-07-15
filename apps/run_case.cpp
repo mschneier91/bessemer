@@ -7,6 +7,7 @@
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
 #include "solver/case.hpp"
+#include "util/device.hpp"
 #include "mfem.hpp"
 
 #include <iostream>
@@ -28,6 +29,7 @@ int main(int argc, char* argv[])
    }
 
    const incns::Parameters params = incns::Parameters::LoadYAML(argv[1]);
+   incns::ConfigureDevice(params.device);
 
    Mesh serial = incns::MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);

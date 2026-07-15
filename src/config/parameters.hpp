@@ -78,6 +78,11 @@ struct OutputParameters
  */
 struct Parameters
 {
+   // --- backend -------------------------------------------------------------
+   /// MFEM device backend ("cpu", "cuda", "hip", ...); configured once at case
+   /// setup before any mesh/space is built. Default CPU.
+   std::string device = "cpu";
+
    // --- physics -------------------------------------------------------------
    /// Equation set to solve. NavierStokes is not available until Sprint 2; the
    /// Case rejects it cleanly for now (interface lands, wiring comes later).

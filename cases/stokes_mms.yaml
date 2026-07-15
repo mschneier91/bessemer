@@ -5,6 +5,7 @@
 # `all`); the driver binds a velocity field to each Dirichlet group by name.
 
 equation: stokes
+device: cpu        # MFEM backend (cpu/cuda/...); default cpu
 
 physics:
   nu: 0.7

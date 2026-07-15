@@ -23,12 +23,15 @@ PressureMassSchur::PressureMassSchur(ParFiniteElementSpace& pfes,
 
    Vector diag(pfes.GetTrueVSize());
    mass_.AssembleDiagonal(diag);
+   MFEM_VERIFY(diag.Min() > 0.0, "pressure_schur: non-positive mass diagonal");
+
+   // inv_diag = scale / diag, built on the device so it never leaves it (the
+   // per-apply Mult, y = x .* inv_diag, is device-aware Vector arithmetic).
    inv_diag_.SetSize(diag.Size());
-   for (int i = 0; i < diag.Size(); ++i)
-   {
-      MFEM_VERIFY(diag(i) > 0.0, "pressure_schur: non-positive mass diagonal");
-      inv_diag_(i) = scale_ / diag(i);
-   }
+   const double sc = scale_;
+   const double* d = diag.Read();
+   double* id = inv_diag_.Write();
+   mfem::forall(diag.Size(), [ = ] MFEM_HOST_DEVICE(int i) { id[i] = sc / d[i]; });
 }
 
 void PressureMassSchur::Mult(const Vector& x, Vector& y) const

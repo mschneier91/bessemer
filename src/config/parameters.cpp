@@ -44,6 +44,8 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else { MFEM_ABORT("parameters: unknown equation '" << eq << "'"); }
    }
 
+   Maybe(root, "device", p.device);
+
    const YAML::Node physics = root["physics"];
    Maybe(physics, "nu", p.nu);
    Maybe(physics, "grad_div", p.grad_div);

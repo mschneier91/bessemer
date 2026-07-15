@@ -9,6 +9,7 @@
 #include "exact/tgv2d.hpp"
 #include "mesh/periodic_box.hpp"
 #include "solver/case.hpp"
+#include "util/device.hpp"
 #include "mfem.hpp"
 
 #include <iostream>
@@ -29,6 +30,7 @@ int main(int argc, char* argv[])
    params.initial_velocity = "taylor_green_2d";
    params.output.enabled = false;
    params.Normalize(); // dimensionless inputs: records Re, no rescaling
+   incns::ConfigureDevice(params.device);
 
    Mesh serial = incns::MakeBoxMesh(params.mesh);
    ParMesh mesh(MPI_COMM_WORLD, serial);
