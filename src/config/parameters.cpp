@@ -117,6 +117,16 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(solver, "max_iter", p.max_iter);
    Maybe(solver, "kdim", p.kdim);
    Maybe(solver, "print_level", p.print_level);
+   if (solver && solver["preconditioner"])
+   {
+      const std::string pc = solver["preconditioner"].as<std::string>();
+      if (pc == "jacobi") { p.velocity_prec = VelocityPreconditioner::Jacobi; }
+      else if (pc == "amg" || pc == "boomer_amg")
+      {
+         p.velocity_prec = VelocityPreconditioner::BoomerAMG;
+      }
+      else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
+   }
 
    Maybe(root, "initial_velocity", p.initial_velocity);
 

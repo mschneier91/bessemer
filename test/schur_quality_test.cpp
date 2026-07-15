@@ -31,13 +31,16 @@ using incns::MixedSpaces;
 using incns::RuleBook;
 using incns::StokesSolver;
 using incns::StokesSolverOptions;
+using incns::VelocityPreconditioner;
 
 namespace
 {
 
 // One implicit solve on the fully periodic [0,2pi]^2 box at fixed dt.
 int SolveAndCountIterations(int n, double nu, double mass_coeff, double rtol,
-                            double grad_div)
+                            double grad_div,
+                            VelocityPreconditioner prec =
+                               VelocityPreconditioner::Jacobi)
 {
    BoxSpec s;
    s.dim = 2;
@@ -55,6 +58,7 @@ int SolveAndCountIterations(int n, double nu, double mass_coeff, double rtol,
    opts.rtol = rtol;
    opts.max_iter = 2000;
    opts.kdim = 300;
+   opts.velocity_prec = prec;
    StokesSolver solver(spaces, rules, bc, opts);
 
    // TGV-shaped periodic forcing (divergence-free, zero mean).
@@ -123,5 +127,42 @@ TEST(SchurQuality, MeshRobustIterationsAtFixedDt)
       // Mesh robustness: the count may not grow materially with refinement.
       EXPECT_LE(iters_max - iters_min, flat_band)
             << cfg.key << ": iteration count is not mesh-robust";
+   }
+}
+
+// H5: BoomerAMG velocity block on the same periodic problem. AMG counts are
+// legitimately rank-sensitive (CLAUDE.md), so the baseline is stored PER-NP.
+TEST(SchurQuality, BoomerAmgIterationBaselinePerNp)
+{
+   const YAML::Node root = YAML::LoadFile(INCNS_BASELINES_FILE);
+   const YAML::Node node = root["solver_iterations"]["schur_quality_2d_periodic"];
+   ASSERT_TRUE(node);
+   const YAML::Node amg = node["amg"];
+   ASSERT_TRUE(amg) << "amg baseline block missing from baselines.yaml";
+
+   const double nu = node["nu"].as<double>();
+   const double mass_coeff = node["mass_coeff"].as<double>();
+   const double rtol = node["rtol"].as<double>();
+   const int band = amg["band"].as<int>();
+
+   const std::string npkey = "np" + std::to_string(Mpi::WorldSize());
+   const YAML::Node base = amg[npkey];
+   ASSERT_TRUE(base) << "amg baseline missing for " << npkey;
+
+   for (const auto& entry : base)
+   {
+      const std::string key = entry.first.as<std::string>(); // "n4", ...
+      const int n = std::stoi(key.substr(1));
+      const int expected = entry.second.as<int>();
+      const int iters = SolveAndCountIterations(n, nu, mass_coeff, rtol, 0.0,
+                        VelocityPreconditioner::BoomerAMG);
+      if (Mpi::Root())
+      {
+         mfem::out << "[schur:amg " << npkey << "] n=" << n << " iters="
+                   << iters << " baseline=" << expected << std::endl;
+      }
+      EXPECT_LE(std::abs(iters - expected), band)
+            << "amg " << npkey << " n=" << n
+            << ": iteration count drifted from baseline";
    }
 }

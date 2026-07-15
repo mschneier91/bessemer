@@ -8,6 +8,7 @@
 
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
+#include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
 
 #include <string>
@@ -118,6 +119,8 @@ struct Parameters
    int max_iter = 2000;        ///< FGMRES iteration cap.
    int kdim = 200;             ///< FGMRES restart size.
    int print_level = -1;       ///< Solver print level.
+   /// Velocity-block preconditioner (deck `solver.preconditioner: jacobi|amg`).
+   VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
 
    // --- case data ---------------------------------------------------------------
    /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks

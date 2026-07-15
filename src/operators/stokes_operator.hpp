@@ -33,6 +33,11 @@ struct StokesOperatorOptions
    /// gamma never enters the Schur complement or the preconditioner -- the
    /// Schur block is nu * M_p^{-1} with gamma on or off.
    double grad_div = 0.0;
+   /// Also FULL-assemble the momentum block into a HypreParMatrix (see
+   /// MomentumMatrix()). Off by default -- the matrix-free Jacobi path needs no
+   /// assembled matrix; BoomerAMG does, so the solver sets this when AMG is the
+   /// velocity preconditioner. The matrix-free Momentum() operator is unchanged.
+   bool assemble_momentum = false;
 };
 
 /**
@@ -116,6 +121,14 @@ public:
     */
    const mfem::Vector& MomentumDiagonal() const { return momentum_diag_; }
 
+   /**
+    * @brief The FULL-assembled momentum block as a parallel matrix (essential
+    *        dofs eliminated with identity rows), for BoomerAMG.
+    * @return The assembled A = mass_coeff*M + nu*K (+ grad-div).
+    * @pre StokesOperatorOptions::assemble_momentum was set at construction.
+    */
+   mfem::HypreParMatrix& MomentumMatrix() const;
+
    /// @return The options this operator was assembled with.
    const StokesOperatorOptions& Options() const { return opts_; }
 
@@ -138,11 +151,14 @@ private:
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
    /// Momentum block form (mass + diffusion integrators).
    mfem::ParBilinearForm momentum_form_;
+   /// Full-assembly copy of the momentum form (built only for AMG).
+   std::unique_ptr<mfem::ParBilinearForm> momentum_matrix_form_;
    mfem::ParBilinearForm viscous_form_;   ///< Pure viscous form (unconstrained).
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.
    mfem::OperatorPtr K_; ///< True-dof momentum operator.
+   mfem::OperatorPtr Kmat_; ///< Assembled momentum matrix (AMG; else empty).
    mfem::OperatorPtr Kunc_; ///< True-dof unconstrained viscous operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).

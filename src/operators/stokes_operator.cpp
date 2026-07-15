@@ -68,40 +68,65 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_form_.AssembleDiagonal(mass_diag_);
    }
 
-   // --- momentum block A = mass_coeff*M + nu*K. Diffusion at the default
+   // grad-div coefficient gamma(x) = c_gd * h_K (shared by every momentum form).
+   if (opts_.grad_div > 0.0)
+   {
+      gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+   }
+
+   // Add the momentum integrators A = mass_coeff*M + nu*K (+ grad-div) to a
+   // form. Fresh integrator objects per form (each form owns its own); the
+   // coefficients and rules are shared members. Diffusion at the default
    // exactness order 2k + dim - 1 (covers the metric factors on deformed
    // elements, not just the affine minimum); the mass term reuses the mass rule
    // (incl. the collocated-GLL option -- the SEM payoff is exactly a diagonal
-   // mass contribution in this block at small dt) ------------------------------
+   // mass contribution in this block at small dt).
+   auto add_momentum_integrators = [&](ParBilinearForm & form)
    {
-      INCNS_PROFILE("momentum");
       auto* ki = new VectorDiffusionIntegrator(nu_);
       ki->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
-      momentum_form_.AddDomainIntegrator(ki);
+      form.AddDomainIntegrator(ki);
       if (opts_.mass_coeff > 0.0)
       {
          auto* mmi = new VectorMassIntegrator(mass_coeff_);
          mmi->SetIntRule(mass_rule);
-         momentum_form_.AddDomainIntegrator(mmi);
+         form.AddDomainIntegrator(mmi);
       }
       if (opts_.grad_div > 0.0)
       {
-         // gamma (div u, div v) with gamma(x) = c_gd * h_K, via
-         // ElasticityIntegrator(lambda = gamma, mu = 0): the elasticity form is
-         // lambda (div u, div v) + 2 mu (eps(u), eps(v)), so mu = 0 leaves pure
-         // grad-div (no native H1 grad-div integrator exists). Stiffness-type
-         // integrand -> the 2k + dim - 1 default rule. gamma never enters the
-         // Schur block (see pressure_schur -- it stays nu * M_p^{-1}).
-         gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+         // gamma (div u, div v) via ElasticityIntegrator(lambda = gamma, mu = 0):
+         // the elasticity form is lambda (div u, div v) + 2 mu (eps(u), eps(v)),
+         // so mu = 0 leaves pure grad-div (no native H1 grad-div integrator
+         // exists). Stiffness-type integrand -> the 2k + dim - 1 default rule.
+         // gamma never enters the Schur block (pressure_schur stays nu*M_p^{-1}).
          auto* gdi = new ElasticityIntegrator(*gamma_, zero_mu_);
          gdi->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
-         momentum_form_.AddDomainIntegrator(gdi);
+         form.AddDomainIntegrator(gdi);
       }
+   };
+
+   // --- momentum block, matrix-free (partial assembly) ------------------------
+   {
+      INCNS_PROFILE("momentum");
+      add_momentum_integrators(momentum_form_);
       momentum_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       momentum_form_.Assemble();
       momentum_form_.FormSystemMatrix(ess_tdofs_, K_);
       momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
       momentum_form_.AssembleDiagonal(momentum_diag_);
+   }
+
+   // --- momentum block, FULL assembly into a HypreParMatrix (BoomerAMG only).
+   // A different assembly route, gated by the option; the matrix-free operator
+   // above is what the Krylov apply still uses.
+   if (opts_.assemble_momentum)
+   {
+      INCNS_PROFILE("momentum_matrix");
+      momentum_matrix_form_ =
+         std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      add_momentum_integrators(*momentum_matrix_form_);
+      momentum_matrix_form_->Assemble();
+      momentum_matrix_form_->FormSystemMatrix(ess_tdofs_, Kmat_);
    }
 
    // --- pure viscous nu*K, UNCONSTRAINED: explicit RHS terms in time steppers -
@@ -127,6 +152,15 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       div_form_.Assemble();
       div_form_.FormRectangularSystemMatrix(ess_tdofs_, ess_p_tdofs_, B_);
    }
+}
+
+HypreParMatrix& StokesOperator::MomentumMatrix() const
+{
+   MFEM_VERIFY(Kmat_.Ptr(), "stokes_operator: MomentumMatrix() requires "
+               "assemble_momentum = true at construction");
+   HypreParMatrix* A = Kmat_.As<HypreParMatrix>();
+   MFEM_VERIFY(A, "stokes_operator: momentum matrix is not a HypreParMatrix");
+   return *A;
 }
 
 } // namespace incns

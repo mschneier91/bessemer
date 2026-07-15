@@ -43,6 +43,18 @@ solver_iterations:
       n4: 10
       n8: 10
       n16: 10
+    # BoomerAMG velocity block (H5). AMG coarsening is rank-dependent, so counts
+    # are stored PER-NP (not a single cross-np value like jacobi). `band` is the
+    # per-entry tolerance. Seeded 2026-07-15 (desktop, MFEM dev). Counts run
+    # HIGHER than jacobi here: this fixed-dt problem is mass-dominated
+    # (mass_coeff = 150), where Jacobi is near-optimal; AMG earns its keep in
+    # stiffer (viscous-dominated) regimes. The baseline is a regression guard,
+    # not a claim that AMG wins here.
+    amg:
+      band: 3
+      np1: { n4: 18, n8: 11 }
+      np2: { n4: 27, n8: 24 }
+      np4: { n4: 32, n8: 34 }
 
 # Convergence-oracle rates (filled in 1.5/1.8). Targets derive from the configured
 # (k_u, k_p) pair; defaults are Q3/Q2 => velocity order 4, pressure order 3.

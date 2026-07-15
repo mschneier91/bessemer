@@ -51,7 +51,9 @@ BoxSpec UnitBox(int dim, int n)
 void RunUnsteadyMms(int dim, int n, int ku, double nu,
                     VectorFunctionCoefficient& u_exact,
                     FunctionCoefficient& p_exact,
-                    VectorFunctionCoefficient& forcing)
+                    VectorFunctionCoefficient& forcing,
+                    incns::VelocityPreconditioner prec =
+                       incns::VelocityPreconditioner::Jacobi)
 {
    Mesh serial = MakeBoxMesh(UnitBox(dim, n));
    ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -70,6 +72,7 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
    opts.rtol = 1e-12;
    opts.max_iter = 5000;
    opts.kdim = 400;
+   opts.velocity_prec = prec;
    StokesTimeIntegrator stepper(spaces, rules, bc, forcing, opts);
    stepper.SetInitialVelocity(u_exact);
 
@@ -92,9 +95,10 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
       }
    }
 }
-} // namespace
 
-TEST(UnsteadyMms, QuadraticInTime2D)
+// Build the 2D/3D coefficients and run, parametrized by the velocity-block
+// preconditioner so Jacobi (default) and BoomerAMG share the exact same MMS.
+void Unsteady2D(incns::VelocityPreconditioner prec)
 {
    const double nu = 0.7;
    VectorFunctionCoefficient u_exact(2, [](const Vector & x, double t, Vector & v)
@@ -118,10 +122,10 @@ TEST(UnsteadyMms, QuadraticInTime2D)
       f(1) = Gp(t) * us1 + G(t) * (-nu * lap1 + 2.0 * x[1]);
    });
 
-   RunUnsteadyMms(2, 3, 3, nu, u_exact, p_exact, forcing);
+   RunUnsteadyMms(2, 3, 3, nu, u_exact, p_exact, forcing, prec);
 }
 
-TEST(UnsteadyMms, QuadraticInTime3D)
+void Unsteady3D(incns::VelocityPreconditioner prec)
 {
    const double nu = 1.3;
    VectorFunctionCoefficient u_exact(3, [](const Vector & x, double t, Vector & v)
@@ -142,5 +146,28 @@ TEST(UnsteadyMms, QuadraticInTime3D)
       f(2) = Gp(t) * x[0] * x[0] + G(t) * (1.0 - 2.0 * nu);
    });
 
-   RunUnsteadyMms(3, 2, 2, nu, u_exact, p_exact, forcing);
+   RunUnsteadyMms(3, 2, 2, nu, u_exact, p_exact, forcing, prec);
+}
+} // namespace
+
+TEST(UnsteadyMms, QuadraticInTime2D)
+{
+   Unsteady2D(incns::VelocityPreconditioner::Jacobi);
+}
+
+TEST(UnsteadyMms, QuadraticInTime3D)
+{
+   Unsteady3D(incns::VelocityPreconditioner::Jacobi);
+}
+
+// H5: the same unsteady MMS must reproduce exactly with BoomerAMG on the
+// velocity block (a different assembly route -- the assembled momentum matrix).
+TEST(UnsteadyMms, QuadraticInTime2D_BoomerAMG)
+{
+   Unsteady2D(incns::VelocityPreconditioner::BoomerAMG);
+}
+
+TEST(UnsteadyMms, QuadraticInTime3D_BoomerAMG)
+{
+   Unsteady3D(incns::VelocityPreconditioner::BoomerAMG);
 }

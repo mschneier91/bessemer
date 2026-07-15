@@ -369,6 +369,10 @@ PYBIND11_MODULE(_core, m)
    .value("Stokes", Equation::Stokes)
    .value("NavierStokes", Equation::NavierStokes);
 
+   py::enum_<VelocityPreconditioner>(m, "VelocityPreconditioner")
+   .value("Jacobi", VelocityPreconditioner::Jacobi)
+   .value("BoomerAMG", VelocityPreconditioner::BoomerAMG);
+
    py::class_<Nondimensionalization>(m, "Nondimensionalization")
    .def_readwrite("mode", &Nondimensionalization::mode)
    .def_readwrite("L_ref", &Nondimensionalization::L_ref)
@@ -473,6 +477,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("krylov_atol", &Parameters::krylov_atol)
    .def_readwrite("max_iter", &Parameters::max_iter)
    .def_readwrite("kdim", &Parameters::kdim)
+   .def_readwrite("velocity_prec", &Parameters::velocity_prec)
    .def_readwrite("print_level", &Parameters::print_level)
    .def_readwrite("initial_velocity", &Parameters::initial_velocity)
    .def_readwrite("restart_from", &Parameters::restart_from)

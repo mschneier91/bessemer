@@ -14,7 +14,9 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
      nullspace_(bc.PressureNullspaceExists()),
      op_(spaces, rules,
-         StokesOperatorOptions{opts.nu, opts.collocated_mass, opts.mass_coeff, opts.grad_div},
+         StokesOperatorOptions{opts.nu, opts.collocated_mass, opts.mass_coeff,
+                               opts.grad_div,
+                               opts.velocity_prec == VelocityPreconditioner::BoomerAMG},
          &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      schur_(spaces.Pressure(), rules, opts.nu),
@@ -37,9 +39,26 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
       ortho_schur_.SetSolver(schur_);
       pressure_block = &ortho_schur_;
    }
+
+   // Velocity block: matrix-free Jacobi (default) or BoomerAMG on the assembled
+   // momentum matrix. The block system FGMRES applies is the same either way;
+   // only this preconditioner block changes.
+   if (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG)
+   {
+      auto amg = std::make_unique<HypreBoomerAMG>(op_.MomentumMatrix());
+      amg->SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
+      amg->SetPrintLevel(0);
+      amg->iterative_mode = false;
+      vel_prec_ = std::move(amg);
+   }
+   else
+   {
+      vel_prec_ = std::make_unique<OperatorJacobiSmoother>(
+                     op_.MomentumDiagonal(), bc_.EssentialTrueDofs());
+   }
+
    prec_ = std::make_unique<StokesBlockPreconditioner>(
-              spaces_.BlockTrueOffsets(), op_.MomentumDiagonal(),
-              bc_.EssentialTrueDofs(), *pressure_block);
+              spaces_.BlockTrueOffsets(), *vel_prec_, *pressure_block);
 
    fgmres_.SetOperator(block_op_);
    fgmres_.SetPreconditioner(*prec_);

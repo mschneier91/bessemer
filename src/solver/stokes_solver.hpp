@@ -10,6 +10,7 @@
 #include "operators/pressure_schur.hpp"
 #include "operators/stokes_operator.hpp"
 #include "quadrature/rule_book.hpp"
+#include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
 
@@ -28,6 +29,9 @@ struct StokesSolverOptions
    /// Grad-div scale c_gd (gamma(x) = c_gd * h_K); 0 = off. Never enters the
    /// Schur block -- it stays nu * M_p^{-1} with gamma on or off.
    double grad_div = 0.0;
+   /// Velocity-block preconditioner (default Jacobi; BoomerAMG for stiffer
+   /// regimes -- it triggers a full assembly of the momentum block).
+   VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -125,6 +129,9 @@ private:
    /// Wraps schur_ as P*S^{-1}*P (P = zero-sum projection) when the constant
    /// pressure null space exists -- orthogonalization, never pinning.
    mfem::OrthoSolver ortho_schur_;
+   /// Velocity block preconditioner (Jacobi smoother or BoomerAMG). Declared
+   /// after op_ so it is destroyed before the momentum matrix it may reference.
+   std::unique_ptr<mfem::Solver> vel_prec_;
    std::unique_ptr<StokesBlockPreconditioner> prec_; ///< Block preconditioner.
    mfem::FGMRESSolver fgmres_;                   ///< Outer Krylov solver.
 

@@ -62,6 +62,7 @@ void Case::EnsureSetup()
    opts.controller = params_.controller;
    opts.collocated_mass = params_.collocated_mass;
    opts.grad_div = params_.grad_div;
+   opts.velocity_prec = params_.velocity_prec;
    opts.rtol = params_.krylov_rtol;
    opts.atol = params_.krylov_atol;
    opts.max_iter = params_.max_iter;

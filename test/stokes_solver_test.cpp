@@ -34,6 +34,7 @@ using incns::MixedSpaces;
 using incns::RuleBook;
 using incns::StokesSolver;
 using incns::StokesSolverOptions;
+using incns::VelocityPreconditioner;
 
 namespace
 {
@@ -74,7 +75,9 @@ MmsResult SolveMms(int dim, int n, int ku, double nu,
                    VectorFunctionCoefficient& u_exact,
                    FunctionCoefficient& p_exact,
                    VectorFunctionCoefficient& forcing,
-                   double rtol, bool stretch = false)
+                   double rtol, bool stretch = false,
+                   incns::VelocityPreconditioner prec =
+                      incns::VelocityPreconditioner::Jacobi)
 {
    BoxSpec box = UnitBox(dim, n);
    if (stretch)
@@ -103,6 +106,7 @@ MmsResult SolveMms(int dim, int n, int ku, double nu,
    opts.rtol = rtol;
    opts.max_iter = 5000;
    opts.kdim = 400;
+   opts.velocity_prec = prec;
    StokesSolver solver(spaces, rules, bc, opts);
 
    ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
@@ -235,6 +239,62 @@ TEST(StokesSolver, PolynomialExactness3DStretched)
    const MmsResult r =
       SolveMms(3, 2, 2, nu, u_exact, p_exact, forcing, 1e-12, /*stretch=*/true);
    EXPECT_TRUE(r.converged) << "FGMRES did not converge (" << r.iterations
+                            << " iterations)";
+   EXPECT_LE(r.u_err, 1e-8);
+   EXPECT_LE(r.p_err, 1e-7);
+}
+
+// H5: the steady polynomial MMS must reproduce exactly with BoomerAMG on the
+// velocity block (needs the assembled momentum matrix, a different route).
+TEST(StokesSolver, PolynomialExactness2DBoomerAMG)
+{
+   const double nu = 0.7;
+   VectorFunctionCoefficient u_exact(2, [](const Vector & x, Vector & v)
+   {
+      v(0) = 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+      v(1) = -3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+   });
+   FunctionCoefficient p_exact([](const Vector & x)
+   {
+      return x[0] * x[0] + x[1] * x[1] - 2.0 / 3.0;
+   });
+   VectorFunctionCoefficient forcing(2, [nu](const Vector & x, Vector & f)
+   {
+      const double lap_u0 = 18.0 * x[0] * x[1] * x[1] + 6.0 * x[0] * x[0] * x[0];
+      const double lap_u1 = -6.0 * x[1] * x[1] * x[1] - 18.0 * x[0] * x[0] * x[1];
+      f(0) = -nu * lap_u0 + 2.0 * x[0];
+      f(1) = -nu * lap_u1 + 2.0 * x[1];
+   });
+
+   const MmsResult r = SolveMms(2, 3, 3, nu, u_exact, p_exact, forcing, 1e-12,
+                                /*stretch=*/false, VelocityPreconditioner::BoomerAMG);
+   EXPECT_TRUE(r.converged) << "FGMRES(AMG) did not converge (" << r.iterations
+                            << " iterations)";
+   EXPECT_LE(r.u_err, 1e-8);
+   EXPECT_LE(r.p_err, 1e-7);
+}
+
+TEST(StokesSolver, PolynomialExactness3DBoomerAMG)
+{
+   const double nu = 1.3;
+   VectorFunctionCoefficient u_exact(3, [](const Vector & x, Vector & v)
+   {
+      v(0) = x[1] * x[1];
+      v(1) = x[2] * x[2];
+      v(2) = x[0] * x[0];
+   });
+   FunctionCoefficient p_exact([](const Vector & x)
+   {
+      return x[0] + x[1] + x[2] - 1.5;
+   });
+   VectorFunctionCoefficient forcing(3, [nu](const Vector&, Vector & f)
+   {
+      f = 1.0 - 2.0 * nu;
+   });
+
+   const MmsResult r = SolveMms(3, 2, 2, nu, u_exact, p_exact, forcing, 1e-12,
+                                /*stretch=*/false, VelocityPreconditioner::BoomerAMG);
+   EXPECT_TRUE(r.converged) << "FGMRES(AMG) did not converge (" << r.iterations
                             << " iterations)";
    EXPECT_LE(r.u_err, 1e-8);
    EXPECT_LE(r.p_err, 1e-7);
