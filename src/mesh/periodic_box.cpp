@@ -1,11 +1,55 @@
 #include "mesh/periodic_box.hpp"
 
+#include <cmath>
 #include <vector>
 
 namespace incns
 {
 
 using namespace mfem;
+
+/// Map a normalized coordinate xi in [0,1] to a clustered coordinate in [0,1].
+/// Symmetric tanh clustering: nodes pull toward both ends. The endpoints are
+/// fixed (0 -> 0, 1 -> 1), so a stretched direction can still be made periodic.
+static double TwoSidedTanhMap(double xi, double beta)
+{
+   return 0.5 * (1.0 + std::tanh(beta * (xi - 0.5)) / std::tanh(0.5 * beta));
+}
+
+/// Remap vertex coordinates in place for the stretched directions. Runs on the
+/// serial base mesh before periodic identification; leaves uniform directions
+/// untouched, so a fully-uniform spec is bitwise unchanged.
+static void ApplyStretching(Mesh& mesh, const BoxSpec& s)
+{
+   bool any = false;
+   for (int d = 0; d < s.dim; ++d)
+   {
+      if (s.stretch[d] != Stretch::None) { any = true; }
+   }
+   if (!any) { return; }
+
+   for (int d = 0; d < s.dim; ++d)
+   {
+      if (s.stretch[d] != Stretch::None)
+      {
+         MFEM_VERIFY(s.stretch_beta[d] > 0.0,
+                     "periodic_box: stretch_beta must be > 0 on a stretched "
+                     "direction");
+      }
+   }
+
+   for (int v = 0; v < mesh.GetNV(); ++v)
+   {
+      double* x = mesh.GetVertex(v);
+      for (int d = 0; d < s.dim; ++d)
+      {
+         if (s.stretch[d] == Stretch::None) { continue; }
+         const double L = s.lengths[d];
+         const double xi = x[d] / L;   // uniform mesh: xi in [0,1]
+         x[d] = L * TwoSidedTanhMap(xi, s.stretch_beta[d]);
+      }
+   }
+}
 
 void AssertTensorProductGeometry(const Mesh& mesh)
 {
@@ -52,6 +96,7 @@ Mesh MakeBoxMesh(const BoxSpec& s)
    }
 
    Mesh base = MakeCartesian(s);
+   ApplyStretching(base, s);
    AssertTensorProductGeometry(base);
 
    // One translation vector per periodic direction: length along that axis.

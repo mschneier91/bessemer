@@ -16,6 +16,20 @@ namespace incns
 inline constexpr double kBoxDefaultLength = 6.283185307179586;
 
 /**
+ * @brief Per-direction node clustering for wall-normal mesh stretching.
+ *
+ * The mesh stays axis-aligned tensor-product (rectangular cells), so every
+ * element is still affine -- only the element *sizes* vary, clustering near the
+ * walls. Polynomial fields remain exactly representable, so the manufactured-
+ * solution checks stay exact on a stretched mesh.
+ */
+enum class Stretch
+{
+   None,          ///< Uniform spacing (default).
+   TwoSidedTanh   ///< Symmetric tanh clustering toward both ends of the axis.
+};
+
+/**
  * @brief Specification for a Cartesian box of tensor-product cells (quads in 2D,
  *        hexes in 3D) with optional per-direction periodicity.
  *
@@ -33,6 +47,12 @@ struct BoxSpec
    {kBoxDefaultLength, kBoxDefaultLength, kBoxDefaultLength};
    /// Whether each direction is periodic.
    std::array<bool, 3> periodic = {true, true, true};
+   /// Per-direction node clustering (Stretch::None = uniform).
+   std::array<Stretch, 3> stretch =
+   {Stretch::None, Stretch::None, Stretch::None};
+   /// Clustering strength per direction (used when @ref stretch is not None).
+   /// Larger values pull more nodes toward the walls; must be > 0.
+   std::array<double, 3> stretch_beta = {2.0, 2.0, 2.0};
 };
 
 /**

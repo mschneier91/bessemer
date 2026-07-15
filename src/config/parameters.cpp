@@ -86,6 +86,22 @@ Parameters Parameters::LoadYAML(const std::string& path)
    MaybeArray(mesh, "elements", p.mesh.num_elems, p.mesh.dim);
    MaybeArray(mesh, "lengths", p.mesh.lengths, p.mesh.dim);
    MaybeArray(mesh, "periodic", p.mesh.periodic, p.mesh.dim);
+   if (mesh && mesh["stretch"])
+   {
+      const YAML::Node seq = mesh["stretch"];
+      MFEM_VERIFY(seq.IsSequence()
+                  && static_cast<int>(seq.size()) == p.mesh.dim,
+                  "parameters: mesh.stretch must be a sequence of "
+                  << p.mesh.dim);
+      for (int d = 0; d < p.mesh.dim; ++d)
+      {
+         const std::string kind = seq[d].as<std::string>();
+         if (kind == "none") { p.mesh.stretch[d] = Stretch::None; }
+         else if (kind == "tanh") { p.mesh.stretch[d] = Stretch::TwoSidedTanh; }
+         else { MFEM_ABORT("parameters: unknown mesh.stretch '" << kind << "'"); }
+      }
+   }
+   MaybeArray(mesh, "stretch_beta", p.mesh.stretch_beta, p.mesh.dim);
 
    const YAML::Node time = root["time"];
    Maybe(time, "dt", p.dt);

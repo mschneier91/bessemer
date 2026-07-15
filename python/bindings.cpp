@@ -399,6 +399,33 @@ PYBIND11_MODULE(_core, m)
       "periodic",
    [](const BoxSpec & s) { return ArrayToTuple(s.periodic, s.dim); },
    [](BoxSpec & s, const py::sequence & v) { SeqToArray(v, s.periodic); })
+   .def_property(
+      "stretch",
+      [](const BoxSpec & s)
+   {
+      py::list out;
+      for (int d = 0; d < s.dim; ++d)
+      {
+         out.append(s.stretch[d] == Stretch::TwoSidedTanh ? "tanh" : "none");
+      }
+      return py::tuple(out);
+   },
+   [](BoxSpec & s, const py::sequence & v)
+   {
+      int d = 0;
+      for (const auto& item : v)
+      {
+         const std::string kind = item.cast<std::string>();
+         if (kind == "none") { s.stretch[d] = Stretch::None; }
+         else if (kind == "tanh") { s.stretch[d] = Stretch::TwoSidedTanh; }
+         else { throw std::invalid_argument("stretch must be 'none' or 'tanh'"); }
+         ++d;
+      }
+   })
+   .def_property(
+      "stretch_beta",
+   [](const BoxSpec & s) { return ArrayToTuple(s.stretch_beta, s.dim); },
+   [](BoxSpec & s, const py::sequence & v) { SeqToArray(v, s.stretch_beta); })
    .def("box",
         [](BoxSpec & s, int dim, const py::sequence & elements,
            const py::object & lengths, const py::object & periodic)

@@ -66,13 +66,26 @@ struct MmsResult
 };
 
 // Solve steady Stokes with exact-velocity Dirichlet data on the whole box.
+// With stretch=true the box gets wall-normal tanh clustering in every
+// direction; the exact polynomial solution still lies in the discrete space, so
+// the solve must reproduce it -- this is what verifies the operators stay exact
+// under the per-element metric factors of a non-uniform mesh.
 MmsResult SolveMms(int dim, int n, int ku, double nu,
                    VectorFunctionCoefficient& u_exact,
                    FunctionCoefficient& p_exact,
                    VectorFunctionCoefficient& forcing,
-                   double rtol)
+                   double rtol, bool stretch = false)
 {
-   Mesh serial = MakeBoxMesh(UnitBox(dim, n));
+   BoxSpec box = UnitBox(dim, n);
+   if (stretch)
+   {
+      for (int d = 0; d < dim; ++d)
+      {
+         box.stretch[d] = incns::Stretch::TwoSidedTanh;
+         box.stretch_beta[d] = 2.0;
+      }
+   }
+   Mesh serial = MakeBoxMesh(box);
    ParMesh mesh(MPI_COMM_WORLD, serial);
    MixedSpaces spaces(mesh, ku, ku - 1);
    RuleBook rules;
@@ -163,6 +176,64 @@ TEST(StokesSolver, PolynomialExactness3D)
    });
 
    const MmsResult r = SolveMms(3, 2, 2, nu, u_exact, p_exact, forcing, 1e-12);
+   EXPECT_TRUE(r.converged) << "FGMRES did not converge (" << r.iterations
+                            << " iterations)";
+   EXPECT_LE(r.u_err, 1e-8);
+   EXPECT_LE(r.p_err, 1e-7);
+}
+
+// Same 2D polynomial MMS on a wall-normal-STRETCHED box (H2). The elements are
+// non-uniform in size; a polynomial-exact reproduction proves the mass /
+// viscous / divergence operators stay exact under the per-element metric.
+TEST(StokesSolver, PolynomialExactness2DStretched)
+{
+   const double nu = 0.7;
+   VectorFunctionCoefficient u_exact(2, [](const Vector & x, Vector & v)
+   {
+      v(0) = 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+      v(1) = -3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+   });
+   FunctionCoefficient p_exact([](const Vector & x)
+   {
+      return x[0] * x[0] + x[1] * x[1] - 2.0 / 3.0;
+   });
+   VectorFunctionCoefficient forcing(2, [nu](const Vector & x, Vector & f)
+   {
+      const double lap_u0 = 18.0 * x[0] * x[1] * x[1] + 6.0 * x[0] * x[0] * x[0];
+      const double lap_u1 = -6.0 * x[1] * x[1] * x[1] - 18.0 * x[0] * x[0] * x[1];
+      f(0) = -nu * lap_u0 + 2.0 * x[0];
+      f(1) = -nu * lap_u1 + 2.0 * x[1];
+   });
+
+   const MmsResult r =
+      SolveMms(2, 3, 3, nu, u_exact, p_exact, forcing, 1e-12, /*stretch=*/true);
+   EXPECT_TRUE(r.converged) << "FGMRES did not converge (" << r.iterations
+                            << " iterations)";
+   EXPECT_LE(r.u_err, 1e-8);
+   EXPECT_LE(r.p_err, 1e-7);
+}
+
+// Same 3D polynomial MMS on a stretched hex box (H2, Sprint 1's only 3D cover).
+TEST(StokesSolver, PolynomialExactness3DStretched)
+{
+   const double nu = 1.3;
+   VectorFunctionCoefficient u_exact(3, [](const Vector & x, Vector & v)
+   {
+      v(0) = x[1] * x[1];
+      v(1) = x[2] * x[2];
+      v(2) = x[0] * x[0];
+   });
+   FunctionCoefficient p_exact([](const Vector & x)
+   {
+      return x[0] + x[1] + x[2] - 1.5;
+   });
+   VectorFunctionCoefficient forcing(3, [nu](const Vector&, Vector & f)
+   {
+      f = 1.0 - 2.0 * nu;
+   });
+
+   const MmsResult r =
+      SolveMms(3, 2, 2, nu, u_exact, p_exact, forcing, 1e-12, /*stretch=*/true);
    EXPECT_TRUE(r.converged) << "FGMRES did not converge (" << r.iterations
                             << " iterations)";
    EXPECT_LE(r.u_err, 1e-8);

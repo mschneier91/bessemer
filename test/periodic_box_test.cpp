@@ -8,6 +8,9 @@
 #include "mesh/periodic_box.hpp"
 #include "mfem.hpp"
 
+#include <set>
+#include <vector>
+
 using namespace mfem;
 using incns::BoxSpec;
 using incns::MakeBoxMesh;
@@ -81,4 +84,41 @@ TEST(PeriodicBox, PartialPeriodicityVertexCount2D)
    s.periodic = {true, false, false};
    Mesh m = MakeBoxMesh(s);
    EXPECT_EQ(m.GetNV(), 20);
+}
+
+// Wall-normal tanh stretching (H2): the endpoints are preserved, the near-wall
+// element is the smallest, and the spacing grows monotonically toward the
+// centre then shrinks again (symmetric). Structural, np-robust.
+TEST(PeriodicBox, TwoSidedTanhStretchClustersAtWalls)
+{
+   const int n = 8;
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {3, n, 0};       // stretch only the y (wall-normal) direction
+   s.lengths = {1.0, 1.0};
+   s.periodic = {true, false, false};
+   s.stretch = {incns::Stretch::None, incns::Stretch::TwoSidedTanh,
+                incns::Stretch::None
+               };
+   s.stretch_beta = {2.0, 2.0, 2.0};
+   Mesh m = MakeBoxMesh(s);
+
+   // Collect the distinct y-node coordinates (one column suffices; the mesh is
+   // tensor-product). Gather from all vertices and de-duplicate.
+   std::set<double> yset;
+   for (int v = 0; v < m.GetNV(); ++v) { yset.insert(m.GetVertex(v)[1]); }
+   std::vector<double> y(yset.begin(), yset.end());
+   ASSERT_EQ(static_cast<int>(y.size()), n + 1);
+
+   // Endpoints preserved (so periodicity in a stretched direction would work).
+   EXPECT_NEAR(y.front(), 0.0, 1e-14);
+   EXPECT_NEAR(y.back(), 1.0, 1e-14);
+
+   // Symmetric clustering: near-wall spacing is smallest, mid-channel largest.
+   const double h_wall = y[1] - y[0];
+   const double h_mid = y[n / 2] - y[n / 2 - 1];
+   const double h_uniform = 1.0 / n;
+   EXPECT_LT(h_wall, 0.75 * h_uniform);   // genuinely clustered at the wall
+   EXPECT_GT(h_mid, 1.25 * h_uniform);    // coarsened in the middle
+   EXPECT_NEAR(h_wall, y[n] - y[n - 1], 1e-13); // symmetric about the centre
 }
