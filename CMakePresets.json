@@ -35,12 +35,26 @@
       "cacheVariables": {
         "INCNS_PYTHON": "ON"
       }
+    },
+    {
+      "name": "cpu-asan",
+      "inherits": "cpu",
+      "displayName": "CPU + ASan/UBSan",
+      "description": "The C++ suite instrumented with AddressSanitizer + UndefinedBehaviorSanitizer (no Python). Run via scripts/asan.sh.",
+      "binaryDir": "${sourceDir}/build/cpu-asan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O1 -g -DNDEBUG",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
     }
   ],
   "buildPresets": [
     { "name": "cpu", "configurePreset": "cpu" },
     { "name": "cuda", "configurePreset": "cuda" },
-    { "name": "cpu-python", "configurePreset": "cpu-python" }
+    { "name": "cpu-python", "configurePreset": "cpu-python" },
+    { "name": "cpu-asan", "configurePreset": "cpu-asan" }
   ],
   "testPresets": [
     {
