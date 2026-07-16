@@ -126,7 +126,9 @@ TEST(MassInverse, GaussLegendreResolvesChebyshev)
    minv.Mult(y, my);
    const double a = InnerProduct(MPI_COMM_WORLD, mx, y);
    const double b = InnerProduct(MPI_COMM_WORLD, x, my);
-   EXPECT_NEAR(a, b, 1e-12 * std::abs(a));
+   const double scale = std::sqrt(InnerProduct(MPI_COMM_WORLD, mx, mx) *
+                                  InnerProduct(MPI_COMM_WORLD, y, y));
+   EXPECT_NEAR(a, b, 1e-12 * scale);
 
    // Genuine approximate inverse: ||M(Minv x) - x|| well below ||x||, and the
    // order-5 application strictly beats order-2 (fixed-order polynomial; MFEM
