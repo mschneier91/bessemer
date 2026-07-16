@@ -81,7 +81,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // elements, not just the affine minimum); the mass term reuses the mass rule
    // (incl. the collocated-GLL option -- the SEM payoff is exactly a diagonal
    // mass contribution in this block at small dt).
-   auto add_momentum_integrators = [&](ParBilinearForm & form)
+   auto add_momentum_integrators = [&](ParBilinearForm & form,
+                                       bool include_grad_div)
    {
       auto* ki = new VectorDiffusionIntegrator(nu_);
       ki->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
@@ -92,7 +93,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
          mmi->SetIntRule(mass_rule);
          form.AddDomainIntegrator(mmi);
       }
-      if (opts_.grad_div > 0.0)
+      if (opts_.grad_div > 0.0 && include_grad_div)
       {
          // gamma (div u, div v) via ElasticityIntegrator(lambda = gamma, mu = 0):
          // the elasticity form is lambda (div u, div v) + 2 mu (eps(u), eps(v)),
@@ -108,7 +109,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // --- momentum block, matrix-free (partial assembly) ------------------------
    {
       INCNS_PROFILE("momentum");
-      add_momentum_integrators(momentum_form_);
+      add_momentum_integrators(momentum_form_, /*include_grad_div=*/true);
       momentum_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       momentum_form_.Assemble();
       momentum_form_.FormSystemMatrix(ess_tdofs_, K_);
@@ -116,17 +117,19 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       momentum_form_.AssembleDiagonal(momentum_diag_);
    }
 
-   // --- momentum block, FULL assembly into a HypreParMatrix (BoomerAMG only).
-   // A different assembly route, gated by the option; the matrix-free operator
-   // above is what the Krylov apply still uses.
-   if (opts_.assemble_momentum)
+   // --- LOR source form for the BoomerAMG velocity block (option-gated) --------
+   // BoomerAMG on the dense high-order operator coarsens poorly; instead AMG
+   // runs on a low-order-refined (Q1-on-GLL-nodes) rediscretization that is
+   // spectrally equivalent. Here we only build the HO source form (mass +
+   // diffusion); the LOR discretization + AMG are assembled by the solver.
+   // Grad-div is DELIBERATELY omitted from this preconditioner: gamma ~ h is
+   // negligible (same reason it stays out of the Schur block), and the
+   // MeshSizeCoefficient would in any case see the refined LOR element size, not
+   // h_K -- so including it would be both pointless and inconsistent.
+   if (opts_.lor_momentum)
    {
-      INCNS_PROFILE("momentum_matrix");
-      momentum_matrix_form_ =
-         std::make_unique<ParBilinearForm>(&spaces_.Velocity());
-      add_momentum_integrators(*momentum_matrix_form_);
-      momentum_matrix_form_->Assemble();
-      momentum_matrix_form_->FormSystemMatrix(ess_tdofs_, Kmat_);
+      lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      add_momentum_integrators(*lor_form_, /*include_grad_div=*/false);
    }
 
    // --- pure viscous nu*K, UNCONSTRAINED: explicit RHS terms in time steppers -
@@ -154,13 +157,11 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    }
 }
 
-HypreParMatrix& StokesOperator::MomentumMatrix() const
+ParBilinearForm& StokesOperator::MomentumLORForm() const
 {
-   MFEM_VERIFY(Kmat_.Ptr(), "stokes_operator: MomentumMatrix() requires "
-               "assemble_momentum = true at construction");
-   HypreParMatrix* A = Kmat_.As<HypreParMatrix>();
-   MFEM_VERIFY(A, "stokes_operator: momentum matrix is not a HypreParMatrix");
-   return *A;
+   MFEM_VERIFY(lor_form_, "stokes_operator: MomentumLORForm() requires "
+               "lor_momentum = true at construction");
+   return *lor_form_;
 }
 
 } // namespace incns

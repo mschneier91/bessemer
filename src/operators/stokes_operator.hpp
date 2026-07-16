@@ -33,11 +33,11 @@ struct StokesOperatorOptions
    /// gamma never enters the Schur complement or the preconditioner -- the
    /// Schur block is nu * M_p^{-1} with gamma on or off.
    double grad_div = 0.0;
-   /// Also FULL-assemble the momentum block into a HypreParMatrix (see
-   /// MomentumMatrix()). Off by default -- the matrix-free Jacobi path needs no
-   /// assembled matrix; BoomerAMG does, so the solver sets this when AMG is the
-   /// velocity preconditioner. The matrix-free Momentum() operator is unchanged.
-   bool assemble_momentum = false;
+   /// Build the low-order-refined (LOR) source form for the BoomerAMG velocity
+   /// preconditioner (see MomentumLORForm()). Off by default -- the matrix-free
+   /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
+   /// matrix-free Momentum() operator (what the Krylov apply uses) is unchanged.
+   bool lor_momentum = false;
 };
 
 /**
@@ -122,12 +122,17 @@ public:
    const mfem::Vector& MomentumDiagonal() const { return momentum_diag_; }
 
    /**
-    * @brief The FULL-assembled momentum block as a parallel matrix (essential
-    *        dofs eliminated with identity rows), for BoomerAMG.
-    * @return The assembled A = mass_coeff*M + nu*K (+ grad-div).
-    * @pre StokesOperatorOptions::assemble_momentum was set at construction.
+    * @brief High-order source form for the LOR BoomerAMG velocity block
+    *        (mass + diffusion; grad-div omitted -- see the cpp for why).
+    *
+    * The caller (StokesSolver) hands this to mfem::ParLORDiscretization /
+    * LORSolver, which rediscretizes it at low order on the GLL-node LOR mesh and
+    * builds AMG on that spectrally-equivalent operator.
+    *
+    * @return The momentum bilinear form (not assembled here).
+    * @pre StokesOperatorOptions::lor_momentum was set at construction.
     */
-   mfem::HypreParMatrix& MomentumMatrix() const;
+   mfem::ParBilinearForm& MomentumLORForm() const;
 
    /// @return The options this operator was assembled with.
    const StokesOperatorOptions& Options() const { return opts_; }
@@ -151,14 +156,14 @@ private:
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
    /// Momentum block form (mass + diffusion integrators).
    mfem::ParBilinearForm momentum_form_;
-   /// Full-assembly copy of the momentum form (built only for AMG).
-   std::unique_ptr<mfem::ParBilinearForm> momentum_matrix_form_;
+   /// HO source form for the LOR AMG velocity block (built only for AMG;
+   /// mass + diffusion, no grad-div). Handed to LORSolver by the solver.
+   std::unique_ptr<mfem::ParBilinearForm> lor_form_;
    mfem::ParBilinearForm viscous_form_;   ///< Pure viscous form (unconstrained).
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.
    mfem::OperatorPtr K_; ///< True-dof momentum operator.
-   mfem::OperatorPtr Kmat_; ///< Assembled momentum matrix (AMG; else empty).
    mfem::OperatorPtr Kunc_; ///< True-dof unconstrained viscous operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).

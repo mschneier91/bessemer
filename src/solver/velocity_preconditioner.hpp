@@ -21,9 +21,12 @@ enum class VelocityPreconditioner
    /// momentum diagonal. The default -- the block stays mass-dominated at DNS
    /// time steps, and it needs no assembled matrix.
    Jacobi,
-   /// hypre BoomerAMG on the assembled momentum matrix (for stiffer regimes).
-   /// Requires a full assembly of the momentum block (a different assembly
-   /// route than the matrix-free default) and a heavier per-refresh setup.
+   /// hypre BoomerAMG on a LOW-ORDER-REFINED rediscretization of the momentum
+   /// block (for stiffer regimes). AMG coarsens the dense high-order operator
+   /// poorly, so it is built on a spectrally-equivalent Q1-on-GLL-nodes LOR
+   /// operator instead. A different assembly route than the matrix-free default,
+   /// with a heavier per-refresh setup. (grad-div is omitted from the LOR
+   /// operator -- gamma ~ h is negligible in the preconditioner.)
    BoomerAMG
 };
 

@@ -18,6 +18,8 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                                opts.grad_div,
                                opts.velocity_prec == VelocityPreconditioner::BoomerAMG},
          &bc.EssentialTrueDofs()),
+     // ^ the last StokesOperatorOptions field (lor_momentum) is set to true
+     //   exactly when the velocity preconditioner is BoomerAMG.
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      schur_(spaces.Pressure(), rules, opts.nu),
      ortho_schur_(spaces.Velocity().GetComm()),
@@ -40,16 +42,20 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
       pressure_block = &ortho_schur_;
    }
 
-   // Velocity block: matrix-free Jacobi (default) or BoomerAMG on the assembled
-   // momentum matrix. The block system FGMRES applies is the same either way;
-   // only this preconditioner block changes.
+   // Velocity block: matrix-free Jacobi (default) or LOR-BoomerAMG. AMG on the
+   // dense high-order operator coarsens poorly, so we build it on a low-order-
+   // refined (Q1-on-GLL-nodes) rediscretization that is spectrally equivalent --
+   // LOR tdofs match the HO velocity tdofs, so the same ess-dof list applies and
+   // the solver plugs straight into the block. The block system FGMRES applies
+   // is the same either way; only this preconditioner block changes.
    if (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG)
    {
-      auto amg = std::make_unique<HypreBoomerAMG>(op_.MomentumMatrix());
-      amg->SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
-      amg->SetPrintLevel(0);
-      amg->iterative_mode = false;
-      vel_prec_ = std::move(amg);
+      auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
+                    op_.MomentumLORForm(), bc_.EssentialTrueDofs());
+      lor->GetSolver().SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
+      lor->GetSolver().SetPrintLevel(0);
+      lor->GetSolver().iterative_mode = false;
+      vel_prec_ = std::move(lor);
    }
    else
    {

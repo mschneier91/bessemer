@@ -43,18 +43,22 @@ solver_iterations:
       n4: 10
       n8: 10
       n16: 10
-    # BoomerAMG velocity block (H5). AMG coarsening is rank-dependent, so counts
-    # are stored PER-NP (not a single cross-np value like jacobi). `band` is the
-    # per-entry tolerance. Seeded 2026-07-15 (desktop, MFEM dev). Counts run
-    # HIGHER than jacobi here: this fixed-dt problem is mass-dominated
-    # (mass_coeff = 150), where Jacobi is near-optimal; AMG earns its keep in
-    # stiffer (viscous-dominated) regimes. The baseline is a regression guard,
-    # not a claim that AMG wins here.
-    amg:
-      band: 3
-      np1: { n4: 18, n8: 11 }
-      np2: { n4: 27, n8: 24 }
-      np4: { n4: 32, n8: 34 }
+
+  # LOR-BoomerAMG velocity block (H5), VISCOUS-DOMINATED steady Stokes on the
+  # unit box (homogeneous velocity Dirichlet, mass_coeff = 0, Q3/Q2). This is
+  # the regime AMG is for: BoomerAMG runs on a low-order-refined (Q1-on-GLL-
+  # nodes) rediscretization that is spectrally equivalent to the high-order
+  # momentum block, so the iteration count is ~mesh-INDEPENDENT while Jacobi
+  # grows ~quadratically (63 -> 160 -> 594 at n = 4,8,16). AMG counts are
+  # rank-sensitive -> per-np. Seeded 2026-07-15 (desktop, MFEM dev).
+  lor_amg_viscous_dirichlet:
+    rtol: 1.0e-8
+    band: 4                 # per-entry tolerance on the LOR-AMG count
+    mesh_robust_band: 25    # max-min across n must stay under this (LOR: ~16)
+    jacobi_finest_ratio: 3  # jacobi[n16] must exceed this * lor_amg[n16]
+    np1: { n4: 53, n8: 62, n16: 69 }
+    np2: { n4: 56, n8: 62, n16: 69 }
+    np4: { n4: 57, n8: 63, n16: 69 }
 
 # Convergence-oracle rates (filled in 1.5/1.8). Targets derive from the configured
 # (k_u, k_p) pair; defaults are Q3/Q2 => velocity order 4, pressure order 3.

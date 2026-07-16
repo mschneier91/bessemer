@@ -74,6 +74,46 @@ int SolveAndCountIterations(int n, double nu, double mass_coeff, double rtol,
    return solver.Iterations();
 }
 
+// Steady, VISCOUS-DOMINATED (mass_coeff = 0) Stokes on the unit box with
+// homogeneous velocity Dirichlet on every side and a smooth forcing -- the
+// regime where the velocity block is Laplacian-like and the preconditioner
+// choice actually matters. Returns the FGMRES iteration count.
+int SolveViscousDirichletCount(int n, VelocityPreconditioner prec)
+{
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {n, n, 0};
+   s.lengths = {1.0, 1.0};
+   s.periodic = {false, false, false};
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+
+   BoundaryConditions bc(spaces.Velocity());
+   for (int attr = 1; attr <= 4; ++attr) { bc.AddNoSlip(attr); }
+
+   StokesSolverOptions opts;
+   opts.nu = 1.0;
+   opts.mass_coeff = 0.0; // steady: pure viscous velocity block
+   opts.rtol = 1e-8;
+   opts.max_iter = 2000;
+   opts.kdim = 300;
+   opts.velocity_prec = prec;
+   StokesSolver solver(spaces, rules, bc, opts);
+
+   VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)
+   {
+      f(0) = std::sin(M_PI * x[0]) * std::sin(M_PI * x[1]);
+      f(1) = std::cos(M_PI * x[0]) * std::cos(M_PI * x[1]);
+   });
+
+   ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
+   solver.Solve(forcing, u, p);
+   EXPECT_TRUE(solver.Converged()) << "n=" << n;
+   return solver.Iterations();
+}
+
 } // namespace
 
 TEST(SchurQuality, MeshRobustIterationsAtFixedDt)
@@ -130,39 +170,62 @@ TEST(SchurQuality, MeshRobustIterationsAtFixedDt)
    }
 }
 
-// H5: BoomerAMG velocity block on the same periodic problem. AMG counts are
-// legitimately rank-sensitive (CLAUDE.md), so the baseline is stored PER-NP.
-TEST(SchurQuality, BoomerAmgIterationBaselinePerNp)
+// H5: LOR-BoomerAMG velocity block in the VISCOUS-DOMINATED regime, where the
+// preconditioner choice actually matters. Asserts three things:
+//   (1) per-np LOR-AMG counts match the seeded baseline (regression guard);
+//   (2) MESH ROBUSTNESS -- the count barely grows n=4..16 (the whole point of
+//       the spectrally-equivalent LOR rediscretization);
+//   (3) LOR-AMG beats Jacobi decisively at the finest mesh (Jacobi grows
+//       ~quadratically here: 63 -> 160 -> 594). Counts are rank-sensitive, so
+//       the baseline is stored PER-NP.
+TEST(SchurQuality, LorAmgViscousMeshRobust)
 {
    const YAML::Node root = YAML::LoadFile(INCNS_BASELINES_FILE);
-   const YAML::Node node = root["solver_iterations"]["schur_quality_2d_periodic"];
-   ASSERT_TRUE(node);
-   const YAML::Node amg = node["amg"];
-   ASSERT_TRUE(amg) << "amg baseline block missing from baselines.yaml";
+   const YAML::Node node =
+      root["solver_iterations"]["lor_amg_viscous_dirichlet"];
+   ASSERT_TRUE(node) << "lor_amg_viscous_dirichlet baseline missing";
 
-   const double nu = node["nu"].as<double>();
-   const double mass_coeff = node["mass_coeff"].as<double>();
-   const double rtol = node["rtol"].as<double>();
-   const int band = amg["band"].as<int>();
+   const int band = node["band"].as<int>();
+   const int mesh_robust_band = node["mesh_robust_band"].as<int>();
+   const int jacobi_ratio = node["jacobi_finest_ratio"].as<int>();
 
    const std::string npkey = "np" + std::to_string(Mpi::WorldSize());
-   const YAML::Node base = amg[npkey];
-   ASSERT_TRUE(base) << "amg baseline missing for " << npkey;
+   const YAML::Node base = node[npkey];
+   ASSERT_TRUE(base) << "lor_amg baseline missing for " << npkey;
 
+   int amg_min = 1 << 30, amg_max = 0, amg_finest = 0, n_finest = 0;
    for (const auto& entry : base)
    {
       const std::string key = entry.first.as<std::string>(); // "n4", ...
       const int n = std::stoi(key.substr(1));
       const int expected = entry.second.as<int>();
-      const int iters = SolveAndCountIterations(n, nu, mass_coeff, rtol, 0.0,
-                        VelocityPreconditioner::BoomerAMG);
+      const int iters =
+         SolveViscousDirichletCount(n, VelocityPreconditioner::BoomerAMG);
       if (Mpi::Root())
       {
-         mfem::out << "[schur:amg " << npkey << "] n=" << n << " iters="
-                   << iters << " baseline=" << expected << std::endl;
+         mfem::out << "[lor_amg " << npkey << "] n=" << n << " iters=" << iters
+                   << " baseline=" << expected << std::endl;
       }
       EXPECT_LE(std::abs(iters - expected), band)
-            << "amg " << npkey << " n=" << n
-            << ": iteration count drifted from baseline";
+            << "lor_amg " << npkey << " n=" << n << ": drifted from baseline";
+      amg_min = std::min(amg_min, iters);
+      amg_max = std::max(amg_max, iters);
+      if (n > n_finest) { n_finest = n; amg_finest = iters; }
    }
+
+   // (2) Mesh robustness -- spectrally-equivalent LOR keeps the count flat.
+   EXPECT_LE(amg_max - amg_min, mesh_robust_band)
+         << "lor_amg is not mesh-robust (max-min too large)";
+
+   // (3) Decisively better than Jacobi at the finest mesh.
+   const int jac_finest =
+      SolveViscousDirichletCount(n_finest, VelocityPreconditioner::Jacobi);
+   if (Mpi::Root())
+   {
+      mfem::out << "[lor_amg " << npkey << "] finest n=" << n_finest
+                << ": jacobi=" << jac_finest << " lor_amg=" << amg_finest
+                << std::endl;
+   }
+   EXPECT_GT(jac_finest, jacobi_ratio * amg_finest)
+         << "lor_amg should decisively beat Jacobi in the viscous regime";
 }
