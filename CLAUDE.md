@@ -112,8 +112,15 @@ src/
   operators/
     stokes_operator.{hpp,cpp}       # block [A Bᵀ; B 0], PA; optional grad–div on A
     convection.{hpp,cpp}            # nonlinear term, dealiased rule (Sprint 2)
-    pressure_schur.{hpp,cpp}        # Schur approx — Sprint 1: (1/ν)M_p; Cahouet–Chabard here (Sprint 2)
+    pressure_schur.{hpp,cpp}        # mass Schur block (1/ν)M_p — the default until CC is blessed
     block_preconditioner.{hpp,cpp}  # velocity smoother (Jacobi/AMG) + pressure Schur block
+  precond/                          # Cahouet–Chabard (SPEC_cahouet_chabard_mfem.md; docs/precond_cc.md)
+    cahouet_chabard.{hpp,cpp}       # CahouetChabardSchurPC + CahouetChabardConfig + validation
+    mixed_poisson_op.hpp            # B∘M_v⁻¹∘Bᵀ matrix-free composition (NEVER assembled)
+    mass_inverse.hpp                # DiagDirect / Chebyshev(k) mass-inverse strategies + Auto rule
+    block_stokes_pc.hpp             # block Diag/Tri shapes on [A Bᵀ; B 0] (p̃ = −p convention)
+    nullspace.hpp                   # l2 𝟙-projector, k_reproj wrapper (detection stays in bc/)
+    lp_surrogate.hpp                # LOR-AMG L_p inner PC + BC logic (symmetric relaxation)
   time/
     multistep_coeffs.{hpp,cpp}      # BDF + AB/EXT coefficients, variable-step aware
     time_integrator.{hpp,cpp}       # in-repo stepper (NOT mfem::ODESolver)
@@ -279,10 +286,22 @@ before touching Sprint 2.**
 - **2.2 — NSE solver.** AB/EXT extrapolation of the nonlinear term; `NavierStokesSolver`
   composes the Stokes step. **Green when:** the full 2D TGV oracle passes (velocity +
   NSE pressure rates).
-- **2.3 — Preconditioner deep-dive.** Cahouet–Chabard (ν M_p⁻¹ + (β0/Δt) L_p⁻¹) replaces
-  the mass-only Schur block — the L_p operator, its BCs and null-space handling, solver
-  choices, robustness in Δt and ν. **Deliberately under-specified for now**; expect
-  detailed direction from the human when this stage opens, and do not design ahead of it.
+- **2.3 — Preconditioner deep-dive → PULLED FORWARD (human decision, 2026-07-16).**
+  The detailed direction arrived as **`SPEC_cahouet_chabard_mfem.md`** (repo root):
+  Cahouet–Chabard with the **consistent `B M_v⁻¹ Bᵀ`** operator (Creff–Guermond), NOT the
+  assembled L_p form — `P_S⁻¹ = ν M_p⁻¹ + (γ₀/Δt)(B M_v⁻¹ Bᵀ)⁻¹`. Implemented as the
+  **CC.0–CC.9 sub-sprint sequence** ahead of the GPU port; conventions + normative solver
+  hierarchy live in `docs/precond_cc.md`, the config struct in
+  `src/precond/cahouet_chabard.hpp`. Approved v1 adaptations: Â-block default is LOR-AMG
+  (p-MG deferred to the GPU stage); CC is a pluggable `schur_model` inside the existing
+  `StokesSolver` (one solve path); quad/hex only; T6c runs TGV-Stokes (convection still
+  gated). **CC invariants (hard rules):** no ε-shift regularization; `BM_v⁻¹Bᵀ` is
+  matrix-free composition — no code path may assemble it; the outer solver is FGMRES on
+  the monolithic system, always (no MINRES, no Schur-only Krylov production mode);
+  diagonal mass inverses are direct fused multiplies, never wrapped in solver objects;
+  internal pressure is `p̃ = −p_physical` with exactly one sign flip at output; the inner
+  CG's operator must be a fixed linear op (no tolerance-based solves inside it) and its
+  L_p-AMG relaxation symmetric.
 
 ## Stokes hardening — before GPU and before Sprint 2
 
@@ -740,11 +759,12 @@ Launched by a human via the batch scheduler. See Guardrails.
   is enabled) do not launch GPU runs without approval. If verifying seems to need a big
   run, say so and stop — do not "just try it."
 - **Sprint gate:** no NSE-specific code (convection, dealiasing, AB/EXT *extrapolation of
-  convection*, `NavierStokesSolver`, the NSE oracle) **and no Cahouet–Chabard / L_p
-  preconditioner code** until Sprint 1 (Stokes) is complete and
-  signed off — the Sprint-1 Schur block is (1/ν) M_p (with γ when grad–div is on), full
-  stop. Grad–div, adaptive stepping, and the BDF/AB coefficient module are Sprint 1.
-  When unsure whether something is Sprint 2, stop and ask — don't stub it.
+  convection*, `NavierStokesSolver`, the NSE oracle) until the human signs off on Sprint 2.
+  **Cahouet–Chabard is un-gated** (human decision, 2026-07-16 — Sprint 1 complete +
+  hardened): implement it per `SPEC_cahouet_chabard_mfem.md` / sub-sprint 2.3, pure Stokes,
+  with the CC invariants listed there. The `mass` Schur block ((1/ν) M_p) remains the
+  default until CC is validated and the human flips it.
+  When unsure whether something is NSE-gated, stop and ask — don't stub it.
 - Do not edit `third_party/` or the vendored/spack MFEM install.
 - **Never build or run project code with the system toolchain** (gcc, cmake, MPI). If
   `scripts/env.sh`'s toolchain assert fails, fix the environment or stop — do not work
