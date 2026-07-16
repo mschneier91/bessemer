@@ -77,7 +77,9 @@ MmsResult SolveMms(int dim, int n, int ku, double nu,
                    VectorFunctionCoefficient& forcing,
                    double rtol, bool stretch = false,
                    incns::VelocityPreconditioner prec =
-                      incns::VelocityPreconditioner::Jacobi)
+                      incns::VelocityPreconditioner::Jacobi,
+                   incns::SchurBlockType schur = incns::SchurBlockType::Mass,
+                   incns::BlockPCShape shape = incns::BlockPCShape::UpperTri)
 {
    BoxSpec box = UnitBox(dim, n);
    if (stretch)
@@ -107,6 +109,8 @@ MmsResult SolveMms(int dim, int n, int ku, double nu,
    opts.max_iter = 5000;
    opts.kdim = 400;
    opts.velocity_prec = prec;
+   opts.schur = schur;
+   opts.cc.block_shape = shape;
    StokesSolver solver(spaces, rules, bc, opts);
 
    ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
@@ -296,6 +300,75 @@ TEST(StokesSolver, PolynomialExactness3DBoomerAMG)
                                 /*stretch=*/false, VelocityPreconditioner::BoomerAMG);
    EXPECT_TRUE(r.converged) << "FGMRES(AMG) did not converge (" << r.iterations
                             << " iterations)";
+   EXPECT_LE(r.u_err, 1e-8);
+   EXPECT_LE(r.p_err, 1e-7);
+}
+
+// CC.6 (T4b/T4c): the steady polynomial MMS through the CahouetChabard path --
+// the canonical SYMMETRIC system on p~ = -p with the block-tri PC. At sigma = 0
+// the Schur block short-circuits to the pure mass PC (the steady limit).
+// Reproducing the exact (signed!) analytic pressure IS the sign-convention
+// test: a missed p~ -> p flip fails with p_err ~ 2||p||, not 1e-7. All three
+// block shapes are exercised.
+TEST(StokesSolver, PolynomialExactnessCahouetChabardShapes2D)
+{
+   const double nu = 0.7;
+   VectorFunctionCoefficient u_exact(2, [](const Vector & x, Vector & v)
+   {
+      v(0) = 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+      v(1) = -3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+   });
+   FunctionCoefficient p_exact([](const Vector & x)
+   {
+      return x[0] * x[0] + x[1] * x[1] - 2.0 / 3.0;
+   });
+   VectorFunctionCoefficient forcing(2, [nu](const Vector & x, Vector & f)
+   {
+      const double lap_u0 = 18.0 * x[0] * x[1] * x[1] + 6.0 * x[0] * x[0] * x[0];
+      const double lap_u1 = -6.0 * x[1] * x[1] * x[1] - 18.0 * x[0] * x[0] * x[1];
+      f(0) = -nu * lap_u0 + 2.0 * x[0];
+      f(1) = -nu * lap_u1 + 2.0 * x[1];
+   });
+
+   for (auto shape :
+        {
+           incns::BlockPCShape::UpperTri, incns::BlockPCShape::Diag,
+           incns::BlockPCShape::LowerTri
+        })
+   {
+      const MmsResult r =
+         SolveMms(2, 3, 3, nu, u_exact, p_exact, forcing, 1e-12,
+                  /*stretch=*/false, VelocityPreconditioner::Jacobi,
+                  incns::SchurBlockType::CahouetChabard, shape);
+      EXPECT_TRUE(r.converged) << "shape " << static_cast<int>(shape);
+      EXPECT_LE(r.u_err, 1e-8) << "shape " << static_cast<int>(shape);
+      EXPECT_LE(r.p_err, 1e-7) << "shape " << static_cast<int>(shape);
+   }
+}
+
+TEST(StokesSolver, PolynomialExactnessCahouetChabard3D)
+{
+   const double nu = 1.3;
+   VectorFunctionCoefficient u_exact(3, [](const Vector & x, Vector & v)
+   {
+      v(0) = x[1] * x[1];
+      v(1) = x[2] * x[2];
+      v(2) = x[0] * x[0];
+   });
+   FunctionCoefficient p_exact([](const Vector & x)
+   {
+      return x[0] + x[1] + x[2] - 1.5;
+   });
+   VectorFunctionCoefficient forcing(3, [nu](const Vector&, Vector & f)
+   {
+      f = 1.0 - 2.0 * nu;
+   });
+
+   const MmsResult r =
+      SolveMms(3, 2, 2, nu, u_exact, p_exact, forcing, 1e-12,
+               /*stretch=*/false, VelocityPreconditioner::Jacobi,
+               incns::SchurBlockType::CahouetChabard);
+   EXPECT_TRUE(r.converged);
    EXPECT_LE(r.u_err, 1e-8);
    EXPECT_LE(r.p_err, 1e-7);
 }

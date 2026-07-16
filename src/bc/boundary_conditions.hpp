@@ -86,6 +86,20 @@ public:
    bool HasOutflow() const { return has_outflow_; }
 
    /**
+    * @brief The boundary attributes registered as outflow (1-based).
+    * @return Attribute list (empty when none) -- e.g. for the CC L_p BC policy.
+    */
+   mfem::Array<int> OutflowAttributes() const
+   {
+      mfem::Array<int> attrs;
+      for (int a = 1; a <= outflow_marker_.Size(); ++a)
+      {
+         if (outflow_marker_[a - 1]) { attrs.Append(a); }
+      }
+      return attrs;
+   }
+
+   /**
     * @brief Does the pressure constant null space exist for this BC set?
     *
     * It exists exactly when no boundary carries an outflow/natural condition:

@@ -8,8 +8,9 @@ namespace incns
 
 using namespace mfem;
 
-// Map the solver options to the operator's assembly options. AMG => build the
-// LOR source; amg_reuse => freeze it at nu*K so its hierarchy survives Delta-t.
+// Map the solver options to the operator's assembly options. A LOR source is
+// built when the velocity block PC is (LOR-)AMG on either Schur path;
+// amg_reuse freezes it so its hierarchy survives Delta-t.
 static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
 {
    StokesOperatorOptions so;
@@ -17,7 +18,10 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.collocated_mass = o.collocated_mass;
    so.mass_coeff = o.mass_coeff;
    so.grad_div = o.grad_div;
-   so.lor_momentum = (o.velocity_prec == VelocityPreconditioner::BoomerAMG);
+   const bool cc = (o.schur == SchurBlockType::CahouetChabard);
+   so.lor_momentum =
+      cc ? (o.cc.a_pc == APC::LORAMG)
+      : (o.velocity_prec == VelocityPreconditioner::BoomerAMG);
    so.lor_frozen = so.lor_momentum && o.amg_reuse;
    return so;
 }
@@ -27,6 +31,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            const StokesSolverOptions& opts)
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
      nullspace_(bc.PressureNullspaceExists()),
+     cc_mode_(opts.schur == SchurBlockType::CahouetChabard),
      op_(spaces, rules, MakeOpOptions(opts), &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      schur_(spaces.Pressure(), rules, opts.nu),
@@ -35,21 +40,38 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
 {
    INCNS_PROFILE("stokes_solver::setup");
 
-   // Block system [nu*K, -B^T; B, 0] (non-symmetric sign choice; FGMRES). B and
-   // B^T are Delta-t independent, so they are wired once and never refreshed.
+   // Block system. Mass path (Sprint-1 default): [A, -B^T; B, 0] on physical p
+   // (non-symmetric sign choice) -- numerically untouched, baselines intact.
+   // CC path: the canonical SYMMETRIC [A, +B^T; B, 0] on the internal pressure
+   // p~ = -p_physical (SPEC par.2.2); same equations (substitute p~ = -p), the
+   // sign flip to physical pressure happens exactly once at output. B and B^T
+   // are Delta-t independent, so they are wired once and never refreshed.
    BT_ = std::make_unique<TransposeOperator>(&op_.Divergence());
    block_op_.SetBlock(0, 0, &op_.Momentum());
-   block_op_.SetBlock(0, 1, BT_.get(), -1.0);
+   block_op_.SetBlock(0, 1, BT_.get(), cc_mode_ ? 1.0 : -1.0);
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
    // With the constant null space, the pressure block is P * S^{-1} * P
    // (mfem::OrthoSolver): iterates never accumulate the constant mode. The
    // Sprint-1 Schur block is Delta-t independent, so it too is built once.
+   // (Mass path only; the CC PC owns its own nullspace treatment.)
    pressure_block_ = &schur_;
    if (nullspace_)
    {
       ortho_schur_.SetSolver(schur_);
       pressure_block_ = &ortho_schur_;
+   }
+
+   if (cc_mode_)
+   {
+      // Single source of truth: sigma and nu come from THIS solver's options
+      // (mass_coeff IS gamma0/dt). Validation happens in the PC constructor.
+      CahouetChabardConfig cc = opts_.cc;
+      cc.sigma = opts_.mass_coeff;
+      cc.nu = opts_.nu;
+      cc_pc_ = std::make_unique<CahouetChabardSchurPC>(
+                  cc, spaces_.Pressure(), rules_, op_.Divergence(), op_.Mass(),
+                  op_.MassDiagonal(), bc_.OutflowAttributes(), nullspace_);
    }
 
    BuildVelocityPreconditioner();
@@ -66,20 +88,34 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
 
 void StokesSolver::BuildVelocityPreconditioner()
 {
-   // Velocity block: matrix-free Jacobi (default) or LOR-BoomerAMG. AMG on the
-   // dense high-order operator coarsens poorly, so we build it on a low-order-
-   // refined (Q1-on-GLL-nodes) rediscretization that is spectrally equivalent --
-   // LOR tdofs match the HO velocity tdofs, so the same ess-dof list applies and
-   // the solver plugs straight into the block. The block system FGMRES applies
-   // is the same either way; only this preconditioner block changes.
-   if (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG)
+   // Velocity block A-hat^-1. Mass path: matrix-free Jacobi (default) or
+   // LOR-BoomerAMG via velocity_prec. CC path: cc.a_pc -- LORAMG (default) or
+   // JacobiChebyshev. AMG on the dense high-order operator coarsens poorly, so
+   // it is built on a low-order-refined (Q1-on-GLL-nodes) rediscretization that
+   // is spectrally equivalent -- LOR tdofs match the HO velocity tdofs, so the
+   // same ess-dof list applies. The block system FGMRES applies is the same
+   // either way; only this preconditioner block changes.
+   const bool want_lor_amg =
+      cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
+      : (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG);
+   if (want_lor_amg)
    {
       auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
                     op_.MomentumLORForm(), bc_.EssentialTrueDofs());
       lor->GetSolver().SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
       lor->GetSolver().SetPrintLevel(0);
       lor->GetSolver().iterative_mode = false;
+      if (cc_mode_) { lor->GetSolver().SetMaxIter(opts_.cc.a_vcycles); }
       vel_prec_ = std::move(lor);
+   }
+   else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiChebyshev)
+   {
+      // Fixed-order Chebyshev with the momentum diagonal: cheap, for
+      // sigma-dominated regimes (SPEC par.6.3).
+      vel_prec_ = std::make_unique<OperatorChebyshevSmoother>(
+                     op_.Momentum(), op_.MomentumDiagonal(),
+                     bc_.EssentialTrueDofs(), 4,
+                     spaces_.Velocity().GetComm());
    }
    else
    {
@@ -87,8 +123,19 @@ void StokesSolver::BuildVelocityPreconditioner()
                      op_.MomentumDiagonal(), bc_.EssentialTrueDofs());
    }
 
-   prec_ = std::make_unique<StokesBlockPreconditioner>(
-              spaces_.BlockTrueOffsets(), *vel_prec_, *pressure_block_);
+   if (cc_mode_)
+   {
+      // Block Diag/LowerTri/UpperTri on the symmetric system; the minus of the
+      // pressure row lives inside BlockStokesPC (exactly once).
+      prec_ = std::make_unique<BlockStokesPC>(
+                 spaces_.BlockTrueOffsets(), *vel_prec_, *cc_pc_,
+                 op_.Divergence(), opts_.cc.block_shape);
+   }
+   else
+   {
+      prec_ = std::make_unique<StokesBlockPreconditioner>(
+                 spaces_.BlockTrueOffsets(), *vel_prec_, *pressure_block_);
+   }
    fgmres_.SetPreconditioner(*prec_);
 }
 
@@ -98,16 +145,24 @@ void StokesSolver::Refresh(double c0)
 
    // Only the Delta-t-dependent momentum block changes: reassemble it (cheap --
    // geometric factors are cached) and re-point the block operator (its
-   // underlying pointer moved). B, B^T, the Schur block, and the FGMRES object
-   // all persist untouched.
+   // underlying pointer moved). B, B^T, the Schur block structure, and the
+   // FGMRES object all persist untouched.
    op_.SetMassCoeff(c0);
    block_op_.SetBlock(0, 0, &op_.Momentum());
 
+   // CC Schur block: sigma tracks the BDF factor; everything structural inside
+   // (masses, B, the L_p AMG hierarchy) is reused always (SPEC par.9).
+   if (cc_pc_) { cc_pc_->Reset(c0, opts_.nu); }
+
    // Refresh the velocity preconditioner unless it is a FROZEN AMG hierarchy
-   // (lor_frozen: built once on nu*K, reused across Delta-t). For Jacobi the
-   // new diagonal is near-free; for non-frozen AMG the LOR hierarchy rebuilds.
-   const bool frozen_amg =
-      opts_.velocity_prec == VelocityPreconditioner::BoomerAMG && opts_.amg_reuse;
+   // (lor_frozen: built once at the reference operator, reused across Delta-t).
+   // For Jacobi/Chebyshev the new diagonal is near-free; for non-frozen AMG the
+   // LOR hierarchy rebuilds. Rebuilding vel_prec_ re-wires the block PC (it
+   // borrows the velocity solver), which BuildVelocityPreconditioner does.
+   const bool lor_vel =
+      cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
+      : (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG);
+   const bool frozen_amg = lor_vel && opts_.amg_reuse;
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
 }
 
@@ -158,6 +213,9 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    bc_.ProjectDirichlet(u);
    u.GetTrueDofs(x.GetBlock(0));
    p.GetTrueDofs(x.GetBlock(1));
+   // CC path iterates on the internal pressure p~ = -p_physical (the canonical
+   // symmetric convention): flip the warm start in, flip the answer out.
+   if (cc_mode_) { x.GetBlock(1).Neg(); }
 
    {
       INCNS_PROFILE("rhs");
@@ -194,6 +252,7 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    converged_ = fgmres_.GetConverged();
 
    u.SetFromTrueDofs(x.GetBlock(0));
+   if (cc_mode_) { x.GetBlock(1).Neg(); } // p = -p~: the ONE output sign flip
    p.SetFromTrueDofs(x.GetBlock(1));
 
    // Output normalization (mass-weighted mean-zero) -- only meaningful when the

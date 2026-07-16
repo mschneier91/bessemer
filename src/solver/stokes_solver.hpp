@@ -9,6 +9,8 @@
 #include "operators/block_preconditioner.hpp"
 #include "operators/pressure_schur.hpp"
 #include "operators/stokes_operator.hpp"
+#include "precond/block_stokes_pc.hpp"
+#include "precond/cahouet_chabard.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -18,6 +20,14 @@
 
 namespace incns
 {
+
+/// Which pressure Schur block the solver uses.
+enum class SchurBlockType
+{
+   Mass,          ///< Sprint-1 default: S_hat^-1 = nu M_p^-1, block-diag PC.
+   CahouetChabard ///< CC per SPEC_cahouet_chabard_mfem.md (block-tri default);
+   ///<              cc.schur_model picks ConsistentBMB vs LaplacianLegacy.
+};
 
 /// Options for the Stokes solve.
 struct StokesSolverOptions
@@ -37,6 +47,18 @@ struct StokesSolverOptions
    /// lor_frozen). Cheap adaptive stepping; valid in the viscous-dominated
    /// regime AMG is chosen for.
    bool amg_reuse = false;
+   /// Pressure Schur block: Mass (Sprint-1 default) or CahouetChabard. With
+   /// CC the system is assembled in the canonical SYMMETRIC convention
+   /// [A B^T; B 0] on the internal pressure p~ = -p_physical (one sign flip
+   /// at output), the block PC shape comes from cc.block_shape (UpperTri
+   /// default), and the velocity block PC from cc.a_pc (velocity_prec above
+   /// applies to the Mass path only).
+   SchurBlockType schur = SchurBlockType::Mass;
+   /// CC configuration (consulted when schur == CahouetChabard). sigma and nu
+   /// are OVERWRITTEN from mass_coeff and nu above -- single source of truth;
+   /// likewise the outer-solver knobs (rtol/atol/max_iter/kdim) come from this
+   /// struct, and cc.outer_* exist only for spec parity.
+   CahouetChabardConfig cc;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -144,6 +166,7 @@ private:
    BoundaryConditions& bc_;     ///< Boundary conditions (borrowed).
    StokesSolverOptions opts_;   ///< Options.
    bool nullspace_;             ///< Constant pressure mode present?
+   bool cc_mode_;               ///< CahouetChabard Schur path active?
 
    StokesOperator op_;          ///< Constrained blocks.
    std::unique_ptr<mfem::TransposeOperator> BT_; ///< -B^T wrapper (block 0,1).
@@ -157,7 +180,12 @@ private:
    /// Velocity block preconditioner (Jacobi smoother or BoomerAMG). Declared
    /// after op_ so it is destroyed before the momentum matrix it may reference.
    std::unique_ptr<mfem::Solver> vel_prec_;
-   std::unique_ptr<StokesBlockPreconditioner> prec_; ///< Block preconditioner.
+   /// CC Schur PC (CahouetChabard mode only; null on the Mass path). Declared
+   /// before prec_ (the block wrapper borrows it).
+   std::unique_ptr<CahouetChabardSchurPC> cc_pc_;
+   /// Block preconditioner: StokesBlockPreconditioner (Mass) or BlockStokesPC
+   /// (CC shapes) behind the common Solver interface.
+   std::unique_ptr<mfem::Solver> prec_;
    mfem::FGMRESSolver fgmres_;                   ///< Outer Krylov solver.
 
    int iterations_ = 0;      ///< Iterations of the last solve.
