@@ -23,7 +23,9 @@ endforeach()
 # --- module unit tests (googletest), label `fast` --------------------------
 # Shared MPI-aware entry point linked into every gtest binary.
 add_library(incns_test_main STATIC mpi_gtest_main.cpp)
-target_link_libraries(incns_test_main PUBLIC GTest::gtest incns_mfem)
+# incns (not just incns_mfem) so the shared main can call incns::ConfigureDevice
+# and see the src/ headers.
+target_link_libraries(incns_test_main PUBLIC GTest::gtest incns)
 
 # Register a gtest module test at np in {1, 2, 4}. Any extra arguments are added
 # as PRIVATE compile definitions (used to toggle INCNS_ENABLE_PROFILING).

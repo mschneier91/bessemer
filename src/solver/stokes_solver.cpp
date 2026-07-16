@@ -104,9 +104,17 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
 {
    INCNS_PROFILE("stokes_solver::solve_true");
 
+   // Allocate the saddle-point block vectors in the device memory space (no-op
+   // on CPU: Device::GetMemoryType() is HOST there) and mark them device-aware,
+   // so BlockOperator::Mult and the Krylov work vectors it spawns stay resident
+   // on the device instead of triggering per-apply host<->device copies. Found
+   // via the debug device (scripts/debug_device.sh), which faulted here.
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
-   BlockVector x(const_cast<Array<int>&>(offsets));
-   BlockVector b(const_cast<Array<int>&>(offsets));
+   const MemoryType mt = Device::GetMemoryType();
+   BlockVector x(const_cast<Array<int>&>(offsets), mt);
+   BlockVector b(const_cast<Array<int>&>(offsets), mt);
+   x.UseDevice(true);
+   b.UseDevice(true);
    b = 0.0;
 
    // Dirichlet data (at the BC's current time) -> u's boundary; the incoming

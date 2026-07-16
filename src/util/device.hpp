@@ -20,7 +20,12 @@ namespace incns
  * any mesh / finite element space / true-dof vector is allocated, so all
  * partial-assembly operators and their vectors live in the right memory space.
  *
- * @param backend The mfem::Device configuration string.
+ * The environment variable @c INCNS_DEVICE, when set, overrides @p backend for
+ * the whole process -- used to re-run the suite on MFEM's mprotect-guarded
+ * @c "debug" device (catches silent host fallbacks) without editing callers.
+ *
+ * @param backend The mfem::Device configuration string (default when
+ *                @c INCNS_DEVICE is unset).
  */
 void ConfigureDevice(const std::string& backend);
 

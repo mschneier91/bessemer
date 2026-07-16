@@ -769,6 +769,18 @@ Launched by a human via the batch scheduler. See Guardrails.
   across ranks to expose imbalance.
 - **Prefer device-portable kernels** (`mfem::forall` / PA) so a future CUDA build needs no
   rewrite — but CPU is the only required target today.
+- **Device-resident vectors in the solve path.** Any `Vector`/`BlockVector` an operator
+  applies to (or that a device kernel writes) must live in the **device memory space**, or
+  every apply forces a silent host↔device copy (a fallback that stays correct but kills GPU
+  performance, invisible to the normal fast tier). The rule: if it *can* be device-resident,
+  make it so — `vec.UseDevice(true)` for a plain `Vector`, and allocate a `BlockVector` with
+  `Device::GetMemoryType()` so its block views are device-contiguous (see
+  `stokes_solver`/`pressure_schur`). Both are **no-ops on CPU** (`GetMemoryType()` is HOST
+  there), so there is no cost to doing it always. The fitness function that catches misses is
+  the **debug device** (`scripts/debug_device.sh`, `INCNS_DEVICE=debug`): MFEM's mprotect-
+  guarded backend that *faults* on un-annotated host access of device memory instead of
+  copying — run it (no GPU needed) and fix what it flags. It is not yet green (the solve path
+  is being hardened incrementally); getting it there is part of the GPU port.
 - Parallel-correct by construction: every reduction is global; never assume rank 0 holds
   the whole field. Prefer `ParGridFunction` accessors over manual indexing.
 - Diagnostics print on **rank 0 only** (guard with `mfem::Mpi::Root()`); per-rank
