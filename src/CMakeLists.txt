@@ -21,6 +21,7 @@ add_library(incns STATIC
   post/output.cpp
   post/checkpoint.cpp
   post/diagnostics.cpp
+  precond/cahouet_chabard.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and

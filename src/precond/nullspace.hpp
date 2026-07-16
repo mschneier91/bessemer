@@ -83,6 +83,43 @@ private:
    double ones_norm2_;    ///< Global @f$ 1^T 1 @f$ (cached).
 };
 
+/**
+ * @brief Wraps an SPD operator as @f$ P \circ S @f$ (project the output onto
+ *        the constant-mode complement).
+ *
+ * Used as the inner-CG operator on singular domains: projecting every
+ * application controls the floating-point drift of the constant mode more
+ * strongly than the spec's every-k_reproj iterate re-orthogonalization (mfem's
+ * CG exposes no iterate hook; the projection costs one dot + axpy against an
+ * application containing B, B^T, and an AMG V-cycle -- negligible).
+ */
+class ProjectedOperator : public mfem::Operator
+{
+public:
+   /**
+    * @brief Compose the projected operator (both borrowed).
+    * @param S Underlying SPD operator.
+    * @param P Constant-mode projector.
+    */
+   ProjectedOperator(const mfem::Operator& S, const ConstantPressureProjector& P)
+      : mfem::Operator(S.Height()), S_(S), P_(P) {}
+
+   /**
+    * @brief Apply @f$ y = P(Sx) @f$.
+    * @param x Input true-dof vector.
+    * @param y Projected output.
+    */
+   void Mult(const mfem::Vector& x, mfem::Vector& y) const override
+   {
+      S_.Mult(x, y);
+      P_.Project(y);
+   }
+
+private:
+   const mfem::Operator& S_;               ///< Underlying operator (borrowed).
+   const ConstantPressureProjector& P_;    ///< Projector (borrowed).
+};
+
 } // namespace incns
 
 #endif // INCNS_PRECOND_NULLSPACE_HPP
