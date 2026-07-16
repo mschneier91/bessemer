@@ -42,6 +42,8 @@ struct TimeIntegratorOptions
       0.0;        ///< Grad-div scale c_gd (gamma = c_gd*h); 0 = off.
    /// Velocity-block preconditioner (Jacobi default; BoomerAMG option).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
+   /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes.
+   bool amg_reuse = false;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -214,6 +216,7 @@ private:
    TimeIntegratorOptions opts_;       ///< Options.
 
    std::unique_ptr<StokesSolver> trap_; ///< Trapezoidal starter solver.
+   double trap_c0_ = 0.0;               ///< Mass factor trap_ is built for (1/dt).
    SolverCache bdf2_;                   ///< BDF2 solver cache.
    SolverCache bdf3_;                   ///< BDF3 solver cache.
 

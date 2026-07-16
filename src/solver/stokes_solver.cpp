@@ -8,18 +8,26 @@ namespace incns
 
 using namespace mfem;
 
+// Map the solver options to the operator's assembly options. AMG => build the
+// LOR source; amg_reuse => freeze it at nu*K so its hierarchy survives Delta-t.
+static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
+{
+   StokesOperatorOptions so;
+   so.nu = o.nu;
+   so.collocated_mass = o.collocated_mass;
+   so.mass_coeff = o.mass_coeff;
+   so.grad_div = o.grad_div;
+   so.lor_momentum = (o.velocity_prec == VelocityPreconditioner::BoomerAMG);
+   so.lor_frozen = so.lor_momentum && o.amg_reuse;
+   return so;
+}
+
 StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc,
                            const StokesSolverOptions& opts)
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
      nullspace_(bc.PressureNullspaceExists()),
-     op_(spaces, rules,
-         StokesOperatorOptions{opts.nu, opts.collocated_mass, opts.mass_coeff,
-                               opts.grad_div,
-                               opts.velocity_prec == VelocityPreconditioner::BoomerAMG},
-         &bc.EssentialTrueDofs()),
-     // ^ the last StokesOperatorOptions field (lor_momentum) is set to true
-     //   exactly when the velocity preconditioner is BoomerAMG.
+     op_(spaces, rules, MakeOpOptions(opts), &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      schur_(spaces.Pressure(), rules, opts.nu),
      ortho_schur_(spaces.Velocity().GetComm()),
@@ -27,21 +35,37 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
 {
    INCNS_PROFILE("stokes_solver::setup");
 
-   // Block system [nu*K, -B^T; B, 0] (non-symmetric sign choice; FGMRES).
+   // Block system [nu*K, -B^T; B, 0] (non-symmetric sign choice; FGMRES). B and
+   // B^T are Delta-t independent, so they are wired once and never refreshed.
    BT_ = std::make_unique<TransposeOperator>(&op_.Divergence());
    block_op_.SetBlock(0, 0, &op_.Momentum());
    block_op_.SetBlock(0, 1, BT_.get(), -1.0);
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
    // With the constant null space, the pressure block is P * S^{-1} * P
-   // (mfem::OrthoSolver): iterates never accumulate the constant mode.
-   Solver* pressure_block = &schur_;
+   // (mfem::OrthoSolver): iterates never accumulate the constant mode. The
+   // Sprint-1 Schur block is Delta-t independent, so it too is built once.
+   pressure_block_ = &schur_;
    if (nullspace_)
    {
       ortho_schur_.SetSolver(schur_);
-      pressure_block = &ortho_schur_;
+      pressure_block_ = &ortho_schur_;
    }
 
+   BuildVelocityPreconditioner();
+
+   fgmres_.SetOperator(block_op_);
+   fgmres_.SetPreconditioner(*prec_);
+   fgmres_.SetRelTol(opts_.rtol);
+   fgmres_.SetAbsTol(opts_.atol);
+   fgmres_.SetMaxIter(opts_.max_iter);
+   fgmres_.SetKDim(opts_.kdim);
+   fgmres_.SetPrintLevel(opts_.print_level);
+   fgmres_.iterative_mode = true; // start from the Dirichlet-seeded guess
+}
+
+void StokesSolver::BuildVelocityPreconditioner()
+{
    // Velocity block: matrix-free Jacobi (default) or LOR-BoomerAMG. AMG on the
    // dense high-order operator coarsens poorly, so we build it on a low-order-
    // refined (Q1-on-GLL-nodes) rediscretization that is spectrally equivalent --
@@ -64,16 +88,27 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    }
 
    prec_ = std::make_unique<StokesBlockPreconditioner>(
-              spaces_.BlockTrueOffsets(), *vel_prec_, *pressure_block);
-
-   fgmres_.SetOperator(block_op_);
+              spaces_.BlockTrueOffsets(), *vel_prec_, *pressure_block_);
    fgmres_.SetPreconditioner(*prec_);
-   fgmres_.SetRelTol(opts_.rtol);
-   fgmres_.SetAbsTol(opts_.atol);
-   fgmres_.SetMaxIter(opts_.max_iter);
-   fgmres_.SetKDim(opts_.kdim);
-   fgmres_.SetPrintLevel(opts_.print_level);
-   fgmres_.iterative_mode = true; // start from the Dirichlet-seeded guess
+}
+
+void StokesSolver::Refresh(double c0)
+{
+   INCNS_PROFILE("stokes_solver::refresh");
+
+   // Only the Delta-t-dependent momentum block changes: reassemble it (cheap --
+   // geometric factors are cached) and re-point the block operator (its
+   // underlying pointer moved). B, B^T, the Schur block, and the FGMRES object
+   // all persist untouched.
+   op_.SetMassCoeff(c0);
+   block_op_.SetBlock(0, 0, &op_.Momentum());
+
+   // Refresh the velocity preconditioner unless it is a FROZEN AMG hierarchy
+   // (lor_frozen: built once on nu*K, reused across Delta-t). For Jacobi the
+   // new diagonal is near-free; for non-frozen AMG the LOR hierarchy rebuilds.
+   const bool frozen_amg =
+      opts_.velocity_prec == VelocityPreconditioner::BoomerAMG && opts_.amg_reuse;
+   if (!frozen_amg) { BuildVelocityPreconditioner(); }
 }
 
 void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,

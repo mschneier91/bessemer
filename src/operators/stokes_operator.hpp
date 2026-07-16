@@ -38,6 +38,15 @@ struct StokesOperatorOptions
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
    /// matrix-free Momentum() operator (what the Krylov apply uses) is unchanged.
    bool lor_momentum = false;
+   /// Freeze the LOR source at the REFERENCE operator c0_ref*M + nu*K (c0_ref =
+   /// the construction-time mass_coeff), so its BoomerAMG hierarchy is built once
+   /// and NEVER rebuilt on a Delta-t refresh. The mass term is kept: it keeps the
+   /// frozen operator SPD (nu*K alone is singular on a fully periodic domain) and
+   /// bounds the preconditioned condition number ~ max(c0/c0_ref, c0_ref/c0), so
+   /// it stays tight while the adaptive dt hovers near its reference. Off =
+   /// rebuild the LOR hierarchy on each mass-factor change. Only meaningful with
+   /// @ref lor_momentum.
+   bool lor_frozen = false;
 };
 
 /**
@@ -80,6 +89,20 @@ public:
    StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                   const StokesOperatorOptions& opts = StokesOperatorOptions(),
                   const mfem::Array<int>* ess_tdofs = nullptr);
+
+   /**
+    * @brief Reassemble the momentum block for a new BDF mass factor @p c0.
+    *
+    * Rebuilds ONLY the Delta-t-dependent momentum block A = c0*M + nu*K
+    * (+ grad-div) and its diagonal (and, for the non-frozen AMG path, the LOR
+    * source) -- the Delta-t-independent M, nu*K, B are left untouched. Cheap:
+    * the mesh geometric factors are cached, so only the coefficient*geometry PA
+    * data is recomputed. Note Momentum()'s underlying pointer changes, so any
+    * BlockOperator referencing it must re-point (StokesSolver::Refresh does).
+    *
+    * @param c0 New leading BDF weight beta0/dt (>= 0).
+    */
+   void SetMassCoeff(double c0);
 
    /// @return The velocity mass operator @c M on true dofs (unconstrained;
    ///         used for the BDF history right-hand side in the unsteady solve).
@@ -138,13 +161,26 @@ public:
    const StokesOperatorOptions& Options() const { return opts_; }
 
 private:
+   /// Add the momentum integrators (diffusion, optional c0*mass, optional
+   /// grad-div) to @p form, using the current mass_coeff_.
+   void AddMomentumIntegrators(mfem::ParBilinearForm& form, bool include_mass,
+                               bool include_grad_div);
+   /// (Re)build the momentum block A = c0*M + nu*K (+ grad-div), its diagonal,
+   /// and the non-frozen LOR source, from the current mass_coeff_.
+   void BuildMomentum();
+
    MixedSpaces& spaces_;             ///< Mixed spaces (borrowed).
-   StokesOperatorOptions opts_;      ///< Assembly options.
+   const RuleBook& rules_;           ///< Quadrature source (borrowed).
+   StokesOperatorOptions opts_;      ///< Assembly options (mass_coeff mutable).
    mfem::ConstantCoefficient nu_;    ///< Viscosity coefficient (owned).
    mfem::ConstantCoefficient mass_coeff_; ///< Momentum-block mass coefficient.
    /// Grad-div coefficient gamma(x) = c_gd * h_K (owned; null when disabled).
    std::unique_ptr<mfem::Coefficient> gamma_;
    mfem::ConstantCoefficient zero_mu_;    ///< mu = 0 for ElasticityIntegrator.
+   const mfem::IntegrationRule* mass_rule_ = nullptr; ///< Mass quadrature rule.
+   int dim_ = 0;                     ///< Spatial dimension.
+   int ku_ = 0;                      ///< Velocity order.
+   mfem::Geometry::Type geom_ = mfem::Geometry::INVALID; ///< Element geometry.
    /// Essential velocity true dofs. Must outlive the constrained operators:
    /// MFEM's (Rectangular)ConstrainedOperator MakeRef's the list, it does not
    /// copy it, so this is a member rather than a constructor local.
@@ -154,10 +190,12 @@ private:
    mfem::Array<int> ess_p_tdofs_;
 
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
-   /// Momentum block form (mass + diffusion integrators).
-   mfem::ParBilinearForm momentum_form_;
-   /// HO source form for the LOR AMG velocity block (built only for AMG;
-   /// mass + diffusion, no grad-div). Handed to LORSolver by the solver.
+   /// Momentum block form (mass + diffusion [+ grad-div]); rebuilt by
+   /// BuildMomentum on each mass-factor change, hence held by pointer.
+   std::unique_ptr<mfem::ParBilinearForm> momentum_form_;
+   /// HO source form for the LOR AMG velocity block (built only for AMG).
+   /// Frozen: nu*K only, built once. Non-frozen: c0*M + nu*K, rebuilt with the
+   /// momentum block. Grad-div is always omitted (see the cpp).
    std::unique_ptr<mfem::ParBilinearForm> lor_form_;
    mfem::ParBilinearForm viscous_form_;   ///< Pure viscous form (unconstrained).
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.

@@ -326,7 +326,24 @@ arrives.)
   an assembled matrix or LOR — a different assembly route, so gate it clearly). **Green
   when:** the block preconditioner with AMG solves the steady + unsteady MMS to tolerance,
   its own iteration baseline is seeded **per-np** (AMG counts are legitimately
-  rank-sensitive), and the Jacobi default is unchanged.
+  rank-sensitive), and the Jacobi default is unchanged. **DONE** — built as **LOR-AMG**
+  (BoomerAMG on a Q1-on-GLL-nodes rediscretization; plain high-order AMG coarsens poorly),
+  grad-div omitted from the LOR operator.
+- **H6 — Δt-refresh without a full solver rebuild.** A Δt change only changes the scalar
+  `c0 = β0/Δt` in the momentum block `A = c0·M + ν·K`; `M`, `ν·K`, `B`, and the Sprint-1
+  Schur block are Δt-independent. So the stepper **refreshes** the solver
+  (`StokesSolver::Refresh(c0)` → `StokesOperator::SetMassCoeff`) instead of reconstructing
+  it: only the fused momentum block is reassembled (cheap — mesh geometric factors are
+  cached, and it hands back the new diagonal), then the block operator re-points and the
+  velocity preconditioner refreshes; everything else persists. This matters because
+  **adaptive stepping is the primary mode**, so the per-step refresh is hot. **Option
+  `amg_reuse`** (deck `solver.amg_reuse`) freezes the LOR-AMG hierarchy at the reference
+  operator `c0_ref·M + ν·K` (SPD — `ν·K` alone is singular on a periodic box) and reuses it
+  across Δt, so AMG + adaptive pays **no** setup per step; κ ~ max(c0/c0_ref, c0_ref/c0)
+  stays bounded while Δt hovers near its reference. **Green when:** the unsteady MMS
+  (Jacobi + AMG + frozen AMG) still reproduces exactly through the startup ramp's c0
+  changes, and a frozen-AMG c0-sweep stays bounded (tightest at c0_ref) on both no-slip and
+  periodic boxes. **DONE.**
 
 *(Cahouet–Chabard — the Δt-robust pressure Schur block, 2.3 above — is the single biggest
 tightness lever and is pure Stokes, but stays deferred with Sprint 2 by decision; revisit
@@ -378,10 +395,12 @@ that deliberately rather than by default.)*
     ratios. **Never reuse the uniform-step coefficients when Δt varies**; that silently
     drops order and can destabilize. This is the single most common adaptive-BDF bug.
   - **Δt-dependent operator.** The implicit block depends on Δt, so the operator and its
-    preconditioner must be refreshed whenever Δt changes. Cheap with the Jacobi default —
-    another reason AMG isn't default, since its setup cost penalizes frequent step changes.
-    (The Sprint-1 Schur block, (1/ν) M_p, is Δt-independent — only the velocity side
-    refreshes.)
+    preconditioner must be refreshed whenever Δt changes. This is a **refresh, not a
+    rebuild** (H6): only the fused momentum block reassembles (`StokesSolver::Refresh`);
+    `M`, `ν·K`, `B`, and the Schur block persist. Cheap with the Jacobi default; AMG's
+    per-step setup cost is why it isn't the default, but the **`amg_reuse`** option removes
+    it by freezing the LOR hierarchy across Δt. (The Sprint-1 Schur block, (1/ν) M_p, is
+    Δt-independent — only the velocity side refreshes.)
   - **Δt ceiling hook (stability, not accuracy).** The LTE controller sees accuracy only.
     Once explicit convection exists (Sprint 2) it imposes a convective-CFL stability
     ceiling the estimator cannot detect — a pure-LTE controller will push Δt past it and

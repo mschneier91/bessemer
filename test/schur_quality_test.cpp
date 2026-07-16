@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 using namespace mfem;
 using incns::BoundaryConditions;
@@ -114,7 +115,94 @@ int SolveViscousDirichletCount(int n, VelocityPreconditioner prec)
    return solver.Iterations();
 }
 
+// Build a solver ONCE at the reference mass factor c0_ref (freezing the AMG
+// hierarchy there when amg_reuse is on), then Refresh it across a sweep of mass
+// factors c0, returning the FGMRES count at each. Exercises the refresh
+// mechanism and the frozen c0_ref*M + nu*K hierarchy across Delta-t. `periodic`
+// selects a fully periodic box (no walls -- nu*K is singular, so the SPD frozen
+// operator matters) vs a no-slip box.
+std::vector<int> RefreshSweepIterations(int n, VelocityPreconditioner prec,
+                                        bool amg_reuse, bool periodic,
+                                        double c0_ref,
+                                        const std::vector<double>& c0s)
+{
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {n, n, 0};
+   if (!periodic) { s.lengths = {1.0, 1.0}; s.periodic = {false, false, false}; }
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+   BoundaryConditions bc(spaces.Velocity());
+   if (!periodic) { for (int a = 1; a <= 4; ++a) { bc.AddNoSlip(a); } }
+
+   StokesSolverOptions opts;
+   opts.nu = 1.0;
+   opts.mass_coeff = c0_ref; // AMG hierarchy is frozen HERE when amg_reuse
+   opts.rtol = 1e-8;
+   opts.max_iter = 2000;
+   opts.kdim = 300;
+   opts.velocity_prec = prec;
+   opts.amg_reuse = amg_reuse;
+   StokesSolver solver(spaces, rules, bc, opts);
+
+   VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)
+   {
+      f(0) = std::sin(2.0 * M_PI * x[0]) * std::cos(2.0 * M_PI * x[1]);
+      f(1) = -std::cos(2.0 * M_PI * x[0]) * std::sin(2.0 * M_PI * x[1]);
+   });
+
+   std::vector<int> iters;
+   ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
+   for (double c0 : c0s)
+   {
+      solver.Refresh(c0);
+      solver.Solve(forcing, u, p);
+      EXPECT_TRUE(solver.Converged()) << "c0=" << c0;
+      iters.push_back(solver.Iterations());
+   }
+   return iters;
+}
+
 } // namespace
+
+// H6 Tier 3: one FROZEN c0_ref*M + nu*K LOR-AMG hierarchy, reused across a
+// Delta-t band via Refresh (never rebuilt). Frozen at c0_ref = 100; swept over a
+// factor-10 band each way. The preconditioned condition number is bounded by
+// ~max(c0/c0_ref, c0_ref/c0), so FGMRES stays bounded while dt hovers near its
+// reference -- the empirical proof that freezing is sound AND that the refresh
+// mechanism is correct.
+TEST(SchurQuality, FrozenAmgRefreshSweepStaysBounded)
+{
+   const double c0_ref = 100.0;
+   const std::vector<double> c0s = {10.0, 30.0, 100.0, 300.0, 1000.0};
+   const std::vector<int> amg =
+      RefreshSweepIterations(8, VelocityPreconditioner::BoomerAMG,
+                             /*amg_reuse=*/true, /*periodic=*/false, c0_ref, c0s);
+   if (Mpi::Root())
+   {
+      for (std::size_t i = 0; i < c0s.size(); ++i)
+      {
+         mfem::out << "[frozen_amg] c0=" << c0s[i] << " iters=" << amg[i]
+                   << std::endl;
+      }
+   }
+   for (int it : amg) { EXPECT_LE(it, 90) << "frozen AMG not bounded over band"; }
+}
+
+// H6 Tier 3, periodic guard: a fully periodic box has NO walls, so nu*K is
+// singular and only the SPD frozen operator c0_ref*M + nu*K yields a usable
+// hierarchy. The refresh + frozen path must still converge across a Delta-t band.
+TEST(SchurQuality, FrozenAmgPeriodicConverges)
+{
+   const std::vector<double> c0s = {100.0, 50.0, 200.0};
+   const std::vector<int> amg =
+      RefreshSweepIterations(8, VelocityPreconditioner::BoomerAMG,
+                             /*amg_reuse=*/true, /*periodic=*/true,
+                             /*c0_ref=*/100.0, c0s);
+   for (int it : amg) { EXPECT_LE(it, 90) << "frozen AMG failed on periodic"; }
+}
 
 TEST(SchurQuality, MeshRobustIterationsAtFixedDt)
 {

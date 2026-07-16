@@ -36,6 +36,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.collocated_mass = opts_.collocated_mass;
       so.grad_div = opts_.grad_div;
       so.velocity_prec = opts_.velocity_prec;
+      so.amg_reuse = opts_.amg_reuse;
       so.mass_coeff = 1.0 / dt_;
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
@@ -43,6 +44,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;
       trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
+      trap_c0_ = 1.0 / dt_;
    }
 
    if (opts_.adaptive)
@@ -122,14 +124,15 @@ bool StokesTimeIntegrator::Done() const
 StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       double c0)
 {
-   if (!cache.solver || std::abs(c0 - cache.c0) > 1e-12 * std::abs(c0))
+   if (!cache.solver)
    {
-      INCNS_PROFILE("time_integrator::rebuild_solver");
+      INCNS_PROFILE("time_integrator::build_solver");
       StokesSolverOptions so;
       so.nu = opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
       so.grad_div = opts_.grad_div;
       so.velocity_prec = opts_.velocity_prec;
+      so.amg_reuse = opts_.amg_reuse;
       so.mass_coeff = c0; // the leading BDF weight beta0/dt -- exact match
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
@@ -137,6 +140,12 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;
       cache.solver = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
+      cache.c0 = c0;
+   }
+   else if (std::abs(c0 - cache.c0) > 1e-12 * std::abs(c0))
+   {
+      // Delta-t changed: refresh only the momentum block, not the whole solver.
+      cache.solver->Refresh(c0);
       cache.c0 = c0;
    }
    return *cache.solver;
@@ -220,6 +229,13 @@ void StokesTimeIntegrator::StepStartup()
       b.Add(1.0 / dt_, tmp);
       trap_->Blocks().ViscousUnconstrained().Mult(hist_[0], tmp); // (nu/2) K u^0
       b -= tmp;
+      // The starter's momentum block is (1/dt) M + (nu/2) K; refresh it if the
+      // first step is (re)tried at a different dt (adaptive rejection).
+      if (std::abs(trap_c0_ - 1.0 / dt_) > 1e-12 / dt_)
+      {
+         trap_->Refresh(1.0 / dt_);
+         trap_c0_ = 1.0 / dt_;
+      }
       solver = trap_.get();
    }
    else

@@ -53,7 +53,8 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
                     FunctionCoefficient& p_exact,
                     VectorFunctionCoefficient& forcing,
                     incns::VelocityPreconditioner prec =
-                       incns::VelocityPreconditioner::Jacobi)
+                       incns::VelocityPreconditioner::Jacobi,
+                    bool amg_reuse = false)
 {
    Mesh serial = MakeBoxMesh(UnitBox(dim, n));
    ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -73,6 +74,7 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
    opts.max_iter = 5000;
    opts.kdim = 400;
    opts.velocity_prec = prec;
+   opts.amg_reuse = amg_reuse;
    StokesTimeIntegrator stepper(spaces, rules, bc, forcing, opts);
    stepper.SetInitialVelocity(u_exact);
 
@@ -98,7 +100,7 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
 
 // Build the 2D/3D coefficients and run, parametrized by the velocity-block
 // preconditioner so Jacobi (default) and BoomerAMG share the exact same MMS.
-void Unsteady2D(incns::VelocityPreconditioner prec)
+void Unsteady2D(incns::VelocityPreconditioner prec, bool amg_reuse = false)
 {
    const double nu = 0.7;
    VectorFunctionCoefficient u_exact(2, [](const Vector & x, double t, Vector & v)
@@ -122,10 +124,10 @@ void Unsteady2D(incns::VelocityPreconditioner prec)
       f(1) = Gp(t) * us1 + G(t) * (-nu * lap1 + 2.0 * x[1]);
    });
 
-   RunUnsteadyMms(2, 3, 3, nu, u_exact, p_exact, forcing, prec);
+   RunUnsteadyMms(2, 3, 3, nu, u_exact, p_exact, forcing, prec, amg_reuse);
 }
 
-void Unsteady3D(incns::VelocityPreconditioner prec)
+void Unsteady3D(incns::VelocityPreconditioner prec, bool amg_reuse = false)
 {
    const double nu = 1.3;
    VectorFunctionCoefficient u_exact(3, [](const Vector & x, double t, Vector & v)
@@ -146,7 +148,7 @@ void Unsteady3D(incns::VelocityPreconditioner prec)
       f(2) = Gp(t) * x[0] * x[0] + G(t) * (1.0 - 2.0 * nu);
    });
 
-   RunUnsteadyMms(3, 2, 2, nu, u_exact, p_exact, forcing, prec);
+   RunUnsteadyMms(3, 2, 2, nu, u_exact, p_exact, forcing, prec, amg_reuse);
 }
 } // namespace
 
@@ -170,4 +172,18 @@ TEST(UnsteadyMms, QuadraticInTime2D_BoomerAMG)
 TEST(UnsteadyMms, QuadraticInTime3D_BoomerAMG)
 {
    Unsteady3D(incns::VelocityPreconditioner::BoomerAMG);
+}
+
+// H6 Tier 3: with amg_reuse the LOR hierarchy is frozen at nu*K and reused
+// across the startup ramp's Delta-t / order changes (c0 varies) -- the solve
+// must still reproduce the exact MMS to tolerance, proving the frozen
+// hierarchy preconditions c0*M + nu*K correctly.
+TEST(UnsteadyMms, QuadraticInTime2D_BoomerAMG_Reuse)
+{
+   Unsteady2D(incns::VelocityPreconditioner::BoomerAMG, /*amg_reuse=*/true);
+}
+
+TEST(UnsteadyMms, QuadraticInTime3D_BoomerAMG_Reuse)
+{
+   Unsteady3D(incns::VelocityPreconditioner::BoomerAMG, /*amg_reuse=*/true);
 }

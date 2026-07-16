@@ -12,10 +12,9 @@ using namespace mfem;
 StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                                const StokesOperatorOptions& opts,
                                const Array<int>* ess_tdofs)
-   : spaces_(spaces), opts_(opts), nu_(opts.nu), mass_coeff_(opts.mass_coeff),
-     zero_mu_(0.0),
+   : spaces_(spaces), rules_(rules), opts_(opts), nu_(opts.nu),
+     mass_coeff_(opts.mass_coeff), zero_mu_(0.0),
      mass_form_(&spaces.Velocity()),
-     momentum_form_(&spaces.Velocity()),
      viscous_form_(&spaces.Velocity()),
      div_form_(&spaces.Velocity(), &spaces.Pressure())
 {
@@ -29,9 +28,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    ParMesh& mesh = *spaces_.Velocity().GetParMesh();
    AssertTensorProductGeometry(mesh);
 
-   const int dim = spaces_.Dim();
-   const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-   const int ku = spaces_.OrderU();
+   dim_ = spaces_.Dim();
+   geom_ = (dim_ == 3) ? Geometry::CUBE : Geometry::SQUARE;
+   ku_ = spaces_.OrderU();
 
    // Essential velocity dofs eliminated from the viscous block and the
    // divergence trial columns; empty when no Dirichlet BCs are given. Stored as
@@ -39,7 +38,6 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    if (ess_tdofs) { ess_tdofs_ = *ess_tdofs; }
 
    // --- velocity mass: GL 2k default, or the collocated GLL (diagonal) rule --
-   const IntegrationRule* mass_rule;
    if (opts_.collocated_mass)
    {
       // Diagonality requires the GLL *nodal basis*: GLL points against a
@@ -49,16 +47,28 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       MFEM_VERIFY(h1 && h1->GetBasisType() == BasisType::GaussLobatto,
                   "stokes_operator: collocated_mass requires the GLL nodal "
                   "H1 basis (BasisType::GaussLobatto)");
-      mass_rule = &rules.CollocatedMass(geom, ku);
+      mass_rule_ = &rules.CollocatedMass(geom_, ku_);
    }
    else
    {
-      mass_rule = &rules.Get(geom, 2 * ku);
+      mass_rule_ = &rules.Get(geom_, 2 * ku_);
    }
+
+   // grad-div coefficient gamma(x) = c_gd * h_K (shared by every momentum form).
+   if (opts_.grad_div > 0.0)
+   {
+      gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+   }
+
+   // ==== Delta-t INDEPENDENT blocks: assembled ONCE (a refresh never touches
+   // these -- M, nu*K, B are pure mesh/space, only their COMBINATION scales with
+   // the BDF factor via the momentum block below) ============================
+
+   // --- velocity mass M ------------------------------------------------------
    {
       INCNS_PROFILE("mass");
       auto* mi = new VectorMassIntegrator;
-      mi->SetIntRule(mass_rule);
+      mi->SetIntRule(mass_rule_);
       mass_form_.AddDomainIntegrator(mi);
       mass_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       mass_form_.Assemble();
@@ -68,75 +78,11 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_form_.AssembleDiagonal(mass_diag_);
    }
 
-   // grad-div coefficient gamma(x) = c_gd * h_K (shared by every momentum form).
-   if (opts_.grad_div > 0.0)
-   {
-      gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
-   }
-
-   // Add the momentum integrators A = mass_coeff*M + nu*K (+ grad-div) to a
-   // form. Fresh integrator objects per form (each form owns its own); the
-   // coefficients and rules are shared members. Diffusion at the default
-   // exactness order 2k + dim - 1 (covers the metric factors on deformed
-   // elements, not just the affine minimum); the mass term reuses the mass rule
-   // (incl. the collocated-GLL option -- the SEM payoff is exactly a diagonal
-   // mass contribution in this block at small dt).
-   auto add_momentum_integrators = [&](ParBilinearForm & form,
-                                       bool include_grad_div)
-   {
-      auto* ki = new VectorDiffusionIntegrator(nu_);
-      ki->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
-      form.AddDomainIntegrator(ki);
-      if (opts_.mass_coeff > 0.0)
-      {
-         auto* mmi = new VectorMassIntegrator(mass_coeff_);
-         mmi->SetIntRule(mass_rule);
-         form.AddDomainIntegrator(mmi);
-      }
-      if (opts_.grad_div > 0.0 && include_grad_div)
-      {
-         // gamma (div u, div v) via ElasticityIntegrator(lambda = gamma, mu = 0):
-         // the elasticity form is lambda (div u, div v) + 2 mu (eps(u), eps(v)),
-         // so mu = 0 leaves pure grad-div (no native H1 grad-div integrator
-         // exists). Stiffness-type integrand -> the 2k + dim - 1 default rule.
-         // gamma never enters the Schur block (pressure_schur stays nu*M_p^{-1}).
-         auto* gdi = new ElasticityIntegrator(*gamma_, zero_mu_);
-         gdi->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
-         form.AddDomainIntegrator(gdi);
-      }
-   };
-
-   // --- momentum block, matrix-free (partial assembly) ------------------------
-   {
-      INCNS_PROFILE("momentum");
-      add_momentum_integrators(momentum_form_, /*include_grad_div=*/true);
-      momentum_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      momentum_form_.Assemble();
-      momentum_form_.FormSystemMatrix(ess_tdofs_, K_);
-      momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-      momentum_form_.AssembleDiagonal(momentum_diag_);
-   }
-
-   // --- LOR source form for the BoomerAMG velocity block (option-gated) --------
-   // BoomerAMG on the dense high-order operator coarsens poorly; instead AMG
-   // runs on a low-order-refined (Q1-on-GLL-nodes) rediscretization that is
-   // spectrally equivalent. Here we only build the HO source form (mass +
-   // diffusion); the LOR discretization + AMG are assembled by the solver.
-   // Grad-div is DELIBERATELY omitted from this preconditioner: gamma ~ h is
-   // negligible (same reason it stays out of the Schur block), and the
-   // MeshSizeCoefficient would in any case see the refined LOR element size, not
-   // h_K -- so including it would be both pointless and inconsistent.
-   if (opts_.lor_momentum)
-   {
-      lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
-      add_momentum_integrators(*lor_form_, /*include_grad_div=*/false);
-   }
-
    // --- pure viscous nu*K, UNCONSTRAINED: explicit RHS terms in time steppers -
    {
       INCNS_PROFILE("viscous_unconstrained");
       auto* kui = new VectorDiffusionIntegrator(nu_);
-      kui->SetIntRule(&rules.Get(geom, 2 * ku + dim - 1));
+      kui->SetIntRule(&rules.Get(geom_, 2 * ku_ + dim_ - 1));
       viscous_form_.AddDomainIntegrator(kui);
       viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       viscous_form_.Assemble();
@@ -149,12 +95,95 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    {
       INCNS_PROFILE("divergence");
       auto* di = new VectorDivergenceIntegrator;
-      di->SetIntRule(&rules.Get(geom, 2 * ku + 2));
+      di->SetIntRule(&rules.Get(geom_, 2 * ku_ + 2));
       div_form_.AddDomainIntegrator(di);
       div_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       div_form_.Assemble();
       div_form_.FormRectangularSystemMatrix(ess_tdofs_, ess_p_tdofs_, B_);
    }
+
+   // --- FROZEN LOR source, built ONCE at the reference mass factor c0_ref*M +
+   // nu*K (c0_ref = the construction-time mass_coeff) so its BoomerAMG hierarchy
+   // is never rebuilt on a Delta-t refresh. The mass term is KEPT so the frozen
+   // operator is SPD even on a fully periodic domain (nu*K alone is singular
+   // there -- the constant velocity mode); it also bounds the preconditioned
+   // condition number ~ max(c0/c0_ref, c0_ref/c0), i.e. tight while the adaptive
+   // dt stays near its reference (see the header note).
+   if (opts_.lor_momentum && opts_.lor_frozen)
+   {
+      lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
+                             /*include_grad_div=*/false);
+   }
+
+   // ==== Delta-t DEPENDENT momentum block A = c0*M + nu*K (+ grad-div) and, for
+   // the non-frozen AMG path, its LOR source -- (re)built by SetMassCoeff ======
+   BuildMomentum();
+}
+
+void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
+      bool include_mass, bool include_grad_div)
+{
+   // Diffusion at the default exactness order 2k + dim - 1 (covers the metric
+   // factors on deformed elements). The mass term reuses the mass rule (incl.
+   // the collocated-GLL option). Fresh integrator objects -- each form owns
+   // its own; the coefficients and rules are shared members.
+   auto* ki = new VectorDiffusionIntegrator(nu_);
+   ki->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
+   form.AddDomainIntegrator(ki);
+   if (include_mass && opts_.mass_coeff > 0.0)
+   {
+      auto* mmi = new VectorMassIntegrator(mass_coeff_);
+      mmi->SetIntRule(mass_rule_);
+      form.AddDomainIntegrator(mmi);
+   }
+   if (include_grad_div && opts_.grad_div > 0.0)
+   {
+      // gamma (div u, div v) via ElasticityIntegrator(lambda = gamma, mu = 0):
+      // the elasticity form is lambda (div u, div v) + 2 mu (eps(u), eps(v)),
+      // so mu = 0 leaves pure grad-div (no native H1 grad-div integrator
+      // exists). Stiffness-type integrand -> the 2k + dim - 1 default rule.
+      // gamma never enters the Schur block (pressure_schur stays nu*M_p^{-1}).
+      auto* gdi = new ElasticityIntegrator(*gamma_, zero_mu_);
+      gdi->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
+      form.AddDomainIntegrator(gdi);
+   }
+}
+
+void StokesOperator::BuildMomentum()
+{
+   INCNS_PROFILE("stokes_operator::momentum");
+
+   // Fused matrix-free momentum block A = c0*M + nu*K (+ grad-div). Rebuilding
+   // recomputes only the coefficient*geometry PA data (mesh geometric factors
+   // are cached), so it is cheap -- much cheaper than a full solver rebuild --
+   // and it hands us the new diagonal for free.
+   momentum_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+   AddMomentumIntegrators(*momentum_form_, /*include_mass=*/true,
+                          /*include_grad_div=*/true);
+   momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   momentum_form_->Assemble();
+   momentum_form_->FormSystemMatrix(ess_tdofs_, K_);
+   momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+   momentum_form_->AssembleDiagonal(momentum_diag_);
+
+   // Non-frozen LOR source (c0*M + nu*K) tracks the current mass factor, so the
+   // BoomerAMG hierarchy is rebuilt to match on each refresh (see lor_frozen for
+   // the alternative that reuses a single nu*K hierarchy).
+   if (opts_.lor_momentum && !opts_.lor_frozen)
+   {
+      lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
+                             /*include_grad_div=*/false);
+   }
+}
+
+void StokesOperator::SetMassCoeff(double c0)
+{
+   MFEM_VERIFY(c0 >= 0.0, "stokes_operator: mass_coeff must be non-negative");
+   mass_coeff_.constant = c0;
+   opts_.mass_coeff = c0;
+   BuildMomentum();
 }
 
 ParBilinearForm& StokesOperator::MomentumLORForm() const

@@ -32,6 +32,11 @@ struct StokesSolverOptions
    /// Velocity-block preconditioner (default Jacobi; BoomerAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
+   /// AMG only: freeze the LOR hierarchy at nu*K and reuse it across Delta-t
+   /// changes instead of rebuilding it each refresh (see StokesOperatorOptions::
+   /// lor_frozen). Cheap adaptive stepping; valid in the viscous-dominated
+   /// regime AMG is chosen for.
+   bool amg_reuse = false;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -106,6 +111,20 @@ public:
    void SolveTrue(const mfem::Vector& b_mom, mfem::ParGridFunction& u,
                   mfem::ParGridFunction& p);
 
+   /**
+    * @brief Refresh the solver for a new BDF mass factor @p c0 (= beta0/dt),
+    *        reusing all Delta-t-independent state.
+    *
+    * Reassembles only the momentum block A = c0*M + nu*K (+ grad-div) and
+    * refreshes the velocity preconditioner; B, B^T, the pressure Schur block,
+    * and the FGMRES object are untouched. Far cheaper than reconstructing the
+    * solver -- the time integrator calls this on every Delta-t change instead
+    * of rebuilding. With amg_reuse the frozen AMG hierarchy is not rebuilt.
+    *
+    * @param c0 New leading BDF weight beta0/dt (>= 0).
+    */
+   void Refresh(double c0);
+
    /// @return FGMRES iterations of the last Solve().
    int Iterations() const { return iterations_; }
 
@@ -116,6 +135,10 @@ public:
    StokesOperator& Blocks() { return op_; }
 
 private:
+   /// (Re)build the velocity preconditioner + block preconditioner and hand it
+   /// to FGMRES. Called at construction and on a non-frozen Refresh.
+   void BuildVelocityPreconditioner();
+
    MixedSpaces& spaces_;        ///< Mixed spaces (borrowed).
    const RuleBook& rules_;      ///< Quadrature source (borrowed).
    BoundaryConditions& bc_;     ///< Boundary conditions (borrowed).
@@ -129,6 +152,8 @@ private:
    /// Wraps schur_ as P*S^{-1}*P (P = zero-sum projection) when the constant
    /// pressure null space exists -- orthogonalization, never pinning.
    mfem::OrthoSolver ortho_schur_;
+   /// Active pressure block (schur_ or ortho_schur_); set once at construction.
+   mfem::Solver* pressure_block_ = nullptr;
    /// Velocity block preconditioner (Jacobi smoother or BoomerAMG). Declared
    /// after op_ so it is destroyed before the momentum matrix it may reference.
    std::unique_ptr<mfem::Solver> vel_prec_;

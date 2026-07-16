@@ -127,6 +127,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
       }
       else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
    }
+   Maybe(solver, "amg_reuse", p.amg_reuse);
 
    Maybe(root, "initial_velocity", p.initial_velocity);
 

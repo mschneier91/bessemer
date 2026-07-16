@@ -121,6 +121,9 @@ struct Parameters
    int print_level = -1;       ///< Solver print level.
    /// Velocity-block preconditioner (deck `solver.preconditioner: jacobi|amg`).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
+   /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes for
+   /// cheap adaptive stepping (deck `solver.amg_reuse: true`).
+   bool amg_reuse = false;
 
    // --- case data ---------------------------------------------------------------
    /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks
