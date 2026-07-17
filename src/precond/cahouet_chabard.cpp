@@ -75,6 +75,14 @@ void CahouetChabardConfig::Validate(bool root) const
    {
       throw std::invalid_argument("cc config: k_reproj must be >= 1");
    }
+   if (pc_quadrature == PcQuadrature::GllCollocated &&
+       (mv_inv == MassInvType::Chebyshev || mp_inv == MassInvType::Chebyshev ||
+        mv_inv == MassInvType::AbsLumped || mp_inv == MassInvType::AbsLumped))
+   {
+      throw std::invalid_argument(
+         "cc config: pc_quadrature = gll_collocated makes the PC masses "
+         "exactly diagonal; mv_inv/mp_inv must be Auto or DiagDirect");
+   }
 
    // Loud warnings (rank 0), not errors.
    if (root && schur_model == SchurModel::LaplacianLegacy)
@@ -86,7 +94,8 @@ void CahouetChabardConfig::Validate(bool root) const
 }
 
 CahouetChabardSchurPC::CahouetChabardSchurPC(
-   const CahouetChabardConfig& cfg, ParFiniteElementSpace& pfes,
+   const CahouetChabardConfig& cfg, ParFiniteElementSpace& vfes,
+   ParFiniteElementSpace& pfes,
    const RuleBook& rules, const Operator& B, const Operator& Mv,
    const Vector& mv_diag, const Array<int>& outflow_attrs, bool singular_auto)
    : Solver(pfes.GetTrueVSize()), cfg_(cfg), mp_form_(&pfes)
@@ -115,13 +124,19 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    sigma_ = cfg_.sigma;
    nu_pc_ = cfg_.nu_pc < 0.0 ? cfg_.nu : cfg_.nu_pc;
 
+   const bool colloc = (cfg_.pc_quadrature == PcQuadrature::GllCollocated);
+
    // --- pressure mass + its fixed inverse ------------------------------------
+   // Inherit: the standard GL rule (matches the system's M_p). GllCollocated:
+   // the collocated GLL rule -> exactly diagonal -> DiagDirect is REQUIRED
+   // (a non-collocated basis fails loudly instead of silently degrading).
    {
       const int kp = pfes.FEColl()->GetOrder();
       const Geometry::Type geom = (pfes.GetParMesh()->Dimension() == 3)
                                   ? Geometry::CUBE : Geometry::SQUARE;
       auto* mi = new MassIntegrator;
-      mi->SetIntRule(&rules.Get(geom, 2 * kp));
+      mi->SetIntRule(colloc ? &rules.CollocatedMass(geom, kp)
+                     : &rules.Get(geom, 2 * kp));
       mp_form_.AddDomainIntegrator(mi);
       mp_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       mp_form_.Assemble();
@@ -129,14 +144,41 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
       mp_form_.FormSystemMatrix(empty, Mp_);
       mp_diag_.SetSize(pfes.GetTrueVSize());
       mp_form_.AssembleDiagonal(mp_diag_);
-      mp_inv_ = std::make_unique<MassInverse>(*Mp_.Ptr(), mp_diag_,
-                                              pfes.GetComm(), cfg_.mp_inv,
-                                              cfg_.k_mp_chebyshev);
+      mp_inv_ = std::make_unique<MassInverse>(
+                   *Mp_.Ptr(), mp_diag_, pfes.GetComm(),
+                   colloc ? MassInvType::DiagDirect : cfg_.mp_inv,
+                   cfg_.k_mp_chebyshev);
    }
 
    // --- the consistent mixed Poisson stack ------------------------------------
-   mv_inv_ = std::make_unique<MassInverse>(Mv, mv_diag, pfes.GetComm(),
-                                           cfg_.mv_inv, cfg_.k_mv_chebyshev);
+   // Inherit: the SYSTEM's velocity mass (spectrally faithful to A; Chebyshev
+   // when consistent). GllCollocated: the PC builds its OWN collocated-GLL
+   // vector mass (diagonal -> one fused multiply per inner-CG iteration); the
+   // system operator is untouched -- only the preconditioner cheapens.
+   if (colloc)
+   {
+      const int ku = vfes.FEColl()->GetOrder();
+      const Geometry::Type geom = (vfes.GetParMesh()->Dimension() == 3)
+                                  ? Geometry::CUBE : Geometry::SQUARE;
+      mv_form_pc_ = std::make_unique<ParBilinearForm>(&vfes);
+      auto* mvi = new VectorMassIntegrator;
+      mvi->SetIntRule(&rules.CollocatedMass(geom, ku));
+      mv_form_pc_->AddDomainIntegrator(mvi);
+      mv_form_pc_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      mv_form_pc_->Assemble();
+      Array<int> empty;
+      mv_form_pc_->FormSystemMatrix(empty, Mv_pc_);
+      mv_diag_pc_.SetSize(vfes.GetTrueVSize());
+      mv_form_pc_->AssembleDiagonal(mv_diag_pc_);
+      mv_inv_ = std::make_unique<MassInverse>(*Mv_pc_.Ptr(), mv_diag_pc_,
+                                              pfes.GetComm(),
+                                              MassInvType::DiagDirect);
+   }
+   else
+   {
+      mv_inv_ = std::make_unique<MassInverse>(Mv, mv_diag, pfes.GetComm(),
+                                              cfg_.mv_inv, cfg_.k_mv_chebyshev);
+   }
    bmb_ = std::make_unique<MixedPoissonOperator>(B, *mv_inv_);
    proj_ = std::make_unique<ConstantPressureProjector>(pfes);
    if (singular_)

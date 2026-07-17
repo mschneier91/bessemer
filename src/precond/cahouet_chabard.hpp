@@ -53,6 +53,16 @@ enum class APC { PMGChebyshev, LORAMG, JacobiChebyshev };
 enum class NullspaceMode { Auto, ForceOn, ForceOff };
 /// Preconditioner arithmetic precision (v2 hook; v1: FP64 only).
 enum class PcPrecision { FP64, FP32PC };
+/// Quadrature of the PRECONDITIONER's internal mass matrices (SPEC par.3).
+enum class PcQuadrature
+{
+   Inherit,      ///< Use the system's mass operators (default -- calibration
+   ///<             matches the operator actually being solved).
+   GllCollocated ///< The PC builds its OWN collocated-GLL velocity/pressure
+   ///<             masses (exactly diagonal -> bare multiplies inside
+   ///<             BM_v^-1B^T). The SYSTEM mass is untouched -- this cheapens
+   ///<             only the preconditioner; requires the GLL nodal H1 basis.
+};
 
 /**
  * @brief Configuration of the CC preconditioner stage (SPEC par.7).
@@ -77,6 +87,9 @@ struct CahouetChabardConfig
    ViscousForm visc_form = ViscousForm::Laplacian;   ///< System viscous form.
    PcMassCoeff pc_mass_coeff = PcMassCoeff::ConstNu; ///< v1: ConstNu only.
    // --- inner components ----------------------------------------------------
+   /// PC-internal mass quadrature: Inherit the system mass (default) or build
+   /// collocated-GLL (diagonal) masses for the PC only.
+   PcQuadrature pc_quadrature = PcQuadrature::Inherit;
    MassInvType mv_inv = MassInvType::Auto; ///< Velocity mass-inverse strategy.
    int k_mv_chebyshev = 4;                 ///< Chebyshev order for M_v^-1.
    MassInvType mp_inv = MassInvType::Auto; ///< Pressure mass-inverse strategy.
@@ -142,6 +155,8 @@ public:
     * @brief Build the Schur PC from the assembled (eliminated) pieces.
     * @param cfg           Validated configuration (copied; Validate() is
     *                      called again here -- construction is fail-fast).
+    * @param vfes          Velocity space (borrowed; used to build the PC's own
+    *                      collocated mass when pc_quadrature = GllCollocated).
     * @param pfes          Pressure space (borrowed).
     * @param rules         Quadrature source (borrowed; M_p rule).
     * @param B             ELIMINATED divergence operator (borrowed).
@@ -153,6 +168,7 @@ public:
     *                      cfg.nullspace == Auto.
     */
    CahouetChabardSchurPC(const CahouetChabardConfig& cfg,
+                         mfem::ParFiniteElementSpace& vfes,
                          mfem::ParFiniteElementSpace& pfes,
                          const RuleBook& rules, const mfem::Operator& B,
                          const mfem::Operator& Mv, const mfem::Vector& mv_diag,
@@ -190,6 +206,10 @@ private:
    double sigma_;               ///< gamma0/dt (Reset updates).
    double nu_pc_;               ///< Resolved mass-term scaling (Reset updates).
 
+   /// PC-own collocated velocity mass (GllCollocated only; owned).
+   std::unique_ptr<mfem::ParBilinearForm> mv_form_pc_;
+   mfem::OperatorPtr Mv_pc_;            ///< Its true-dof operator.
+   mfem::Vector mv_diag_pc_;            ///< Its (exact) diagonal.
    mfem::ParBilinearForm mp_form_;      ///< Pressure mass form (owned).
    mfem::OperatorPtr Mp_;               ///< Pressure mass on true dofs.
    mfem::Vector mp_diag_;               ///< Its assembled diagonal.

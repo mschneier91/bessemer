@@ -36,7 +36,9 @@ using incns::StokesSolverOptions;
 namespace
 {
 
-int SolveCount(int dim, int n, int ku, double nu, double sigma)
+int SolveCount(int dim, int n, int ku, double nu, double sigma,
+               incns::PcQuadrature pcq = incns::PcQuadrature::Inherit,
+               double* wall = nullptr)
 {
    BoxSpec s;
    s.dim = dim;
@@ -57,6 +59,7 @@ int SolveCount(int dim, int n, int ku, double nu, double sigma)
    opts.max_iter = 1500;
    opts.kdim = 400;
    opts.schur = SchurBlockType::CahouetChabard;
+   opts.cc.pc_quadrature = pcq;
    StokesSolver solver(spaces, rules, bc, opts);
 
    VectorFunctionCoefficient forcing(dim, [dim](const Vector & x, Vector & f)
@@ -66,7 +69,9 @@ int SolveCount(int dim, int n, int ku, double nu, double sigma)
       if (dim == 3) { f(2) = 0.0; }
    });
    ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
+   const double t0 = MPI_Wtime();
    solver.Solve(forcing, u, p);
+   if (wall) { *wall = MPI_Wtime() - t0; }
    EXPECT_TRUE(solver.Converged())
          << "dim=" << dim << " n=" << n << " ku=" << ku << " nu=" << nu
          << " sigma=" << sigma;
@@ -131,4 +136,30 @@ TEST(CcSweepSlow, Subset3D)
       mfem::out << "[sweep3d] worst outer count over the grid: " << worst
                 << " (cap " << cap << ")" << std::endl;
    }
+}
+
+// pc_quadrature comparison: Inherit (Chebyshev on the consistent mass) vs
+// GllCollocated (PC-own diagonal masses) -- outer iterations AND wall time,
+// at Q3 and Q5 (the production order ceiling). Measurement + convergence
+// assertions; the default choice is a human decision informed by this table.
+TEST(CcSweepSlow, PcQuadratureCompare)
+{
+   for (int ku : {3, 5})
+      for (double sigma : {10.0, 1e3, 1e5})
+         for (int n : {8, 16})
+         {
+            double t_inh = 0.0, t_col = 0.0;
+            const int it_inh = SolveCount(2, n, ku, 1e-3, sigma,
+                                          incns::PcQuadrature::Inherit, &t_inh);
+            const int it_col = SolveCount(2, n, ku, 1e-3, sigma,
+                                          incns::PcQuadrature::GllCollocated,
+                                          &t_col);
+            if (Mpi::Root())
+            {
+               mfem::out << "[pcq] Q" << ku << " n=" << n << " sigma=" << sigma
+                         << "  inherit: " << it_inh << " it, "
+                         << 1e3 * t_inh << " ms   gll_colloc: " << it_col
+                         << " it, " << 1e3 * t_col << " ms" << std::endl;
+            }
+         }
 }

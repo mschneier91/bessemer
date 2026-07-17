@@ -381,6 +381,10 @@ PYBIND11_MODULE(_core, m)
    .value("ConsistentBMB", SchurModel::ConsistentBMB)
    .value("LaplacianLegacy", SchurModel::LaplacianLegacy);
 
+   py::enum_<PcQuadrature>(m, "PcQuadrature")
+   .value("Inherit", PcQuadrature::Inherit)
+   .value("GllCollocated", PcQuadrature::GllCollocated);
+
    py::enum_<BlockPCShape>(m, "BlockPCShape")
    .value("Diag", BlockPCShape::Diag)
    .value("LowerTri", BlockPCShape::LowerTri)
@@ -392,7 +396,8 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("n_inner", &CahouetChabardConfig::n_inner)
    .def_readwrite("lp_vcycles", &CahouetChabardConfig::lp_vcycles)
    .def_readwrite("a_vcycles", &CahouetChabardConfig::a_vcycles)
-   .def_readwrite("nu_pc", &CahouetChabardConfig::nu_pc);
+   .def_readwrite("nu_pc", &CahouetChabardConfig::nu_pc)
+   .def_readwrite("pc_quadrature", &CahouetChabardConfig::pc_quadrature);
 
    py::class_<Nondimensionalization>(m, "Nondimensionalization")
    .def_readwrite("mode", &Nondimensionalization::mode)

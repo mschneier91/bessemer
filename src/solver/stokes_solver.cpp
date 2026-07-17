@@ -70,8 +70,9 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
       cc.sigma = opts_.mass_coeff;
       cc.nu = opts_.nu;
       cc_pc_ = std::make_unique<CahouetChabardSchurPC>(
-                  cc, spaces_.Pressure(), rules_, op_.Divergence(), op_.Mass(),
-                  op_.MassDiagonal(), bc_.OutflowAttributes(), nullspace_);
+                  cc, spaces_.Velocity(), spaces_.Pressure(), rules_,
+                  op_.Divergence(), op_.Mass(), op_.MassDiagonal(),
+                  bc_.OutflowAttributes(), nullspace_);
    }
 
    BuildVelocityPreconditioner();

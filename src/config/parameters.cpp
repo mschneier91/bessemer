@@ -145,6 +145,16 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else { MFEM_ABORT("parameters: unknown solver.schur '" << sm << "'"); }
    }
    Maybe(solver, "n_inner", p.cc.n_inner);
+   if (solver && solver["pc_quadrature"])
+   {
+      const std::string q = solver["pc_quadrature"].as<std::string>();
+      if (q == "inherit") { p.cc.pc_quadrature = PcQuadrature::Inherit; }
+      else if (q == "gll_collocated")
+      {
+         p.cc.pc_quadrature = PcQuadrature::GllCollocated;
+      }
+      else { MFEM_ABORT("parameters: unknown solver.pc_quadrature '" << q << "'"); }
+   }
    Maybe(solver, "lp_vcycles", p.cc.lp_vcycles);
    if (solver && solver["block_shape"])
    {

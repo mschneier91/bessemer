@@ -77,9 +77,9 @@ struct SettingCase
    std::unique_ptr<CahouetChabardSchurPC> MakePC(const CahouetChabardConfig& c)
    {
       return std::make_unique<CahouetChabardSchurPC>(
-                c, spaces->Pressure(), rules, op->Divergence(), op->Mass(),
-                op->MassDiagonal(), outflow_attrs,
-                bc->PressureNullspaceExists());
+                c, spaces->Velocity(), spaces->Pressure(), rules,
+                op->Divergence(), op->Mass(), op->MassDiagonal(),
+                outflow_attrs, bc->PressureNullspaceExists());
    }
 };
 
@@ -128,7 +128,8 @@ TEST(CahouetChabard, DgPressureRejected)
    ParFiniteElementSpace l2fes(&sc.mesh, &l2);
    CahouetChabardConfig c;
    c.sigma = 1.0;
-   EXPECT_THROW(CahouetChabardSchurPC(c, l2fes, sc.rules, sc.op->Divergence(),
+   EXPECT_THROW(CahouetChabardSchurPC(c, sc.spaces->Velocity(), l2fes,
+                                      sc.rules, sc.op->Divergence(),
                                       sc.op->Mass(), sc.op->MassDiagonal(),
                                       sc.outflow_attrs, true),
                 std::invalid_argument);
@@ -338,4 +339,61 @@ TEST(CahouetChabard, LaplacianLegacyDiffers)
    pc_leg->Mult(r, zl);
    zl -= zc;
    EXPECT_GT(Norm(zl), 1e-3 * Norm(zc)); // genuinely different operators
+}
+
+// pc_quadrature = GllCollocated: the PC builds its OWN diagonal masses; the
+// scaling-guard algebra must hold against the COLLOCATED reference operator
+// S~ = B M~^-1 B^T (not the consistent one), and contradictory mass-inverse
+// requests throw. The system operator is untouched by construction.
+TEST(CahouetChabard, GllCollocatedPcQuadrature)
+{
+   SettingCase sc;
+   const double sigma = 150.0;
+   CahouetChabardConfig c;
+   c.sigma = sigma;
+   c.nu = 0.7;
+   c.n_inner = 60;
+   c.pc_quadrature = incns::PcQuadrature::GllCollocated;
+   auto pc = sc.MakePC(c);
+
+   const int np = sc.spaces->Pressure().GetTrueVSize();
+   ConstantPressureProjector proj(sc.spaces->Pressure());
+   Vector r(np);
+   r.Randomize(5);
+   proj.Project(r);
+
+   Vector z(np), t(np), w(np);
+   pc->Mult(r, z);
+   CahouetChabardConfig c0 = c;
+   c0.sigma = 0.0;
+   sc.MakePC(c0)->Mult(r, t);
+   w = z;
+   w -= t;
+   w *= 1.0 / sigma;
+
+   // Collocated reference S~: BM~^-1B^T with the PC's own GLL-diagonal mass.
+   ParBilinearForm mv(&sc.spaces->Velocity());
+   auto* mvi = new VectorMassIntegrator;
+   mvi->SetIntRule(&sc.rules.CollocatedMass(Geometry::SQUARE, 3));
+   mv.AddDomainIntegrator(mvi);
+   mv.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   mv.Assemble();
+   Array<int> empty;
+   OperatorPtr Mv;
+   mv.FormSystemMatrix(empty, Mv);
+   Vector diag(sc.spaces->Velocity().GetTrueVSize());
+   mv.AssembleDiagonal(diag);
+   MassInverse mv_inv(*Mv.Ptr(), diag, MPI_COMM_WORLD, MassInvType::DiagDirect);
+   // NOTE: the reference must use the ELIMINATED B, like the PC does.
+   MixedPoissonOperator S(sc.op->Divergence(), mv_inv);
+   Vector Sw(np);
+   S.Mult(w, Sw);
+   Sw -= r;
+   proj.Project(Sw);
+   EXPECT_LE(Norm(Sw), 1e-5 * Norm(r));
+
+   // Contradictory request: collocated PC masses + Chebyshev inverse.
+   CahouetChabardConfig bad = c;
+   bad.mv_inv = incns::MassInvType::Chebyshev;
+   EXPECT_THROW(bad.Validate(false), std::invalid_argument);
 }
