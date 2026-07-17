@@ -76,6 +76,21 @@ incns_add_mpi_test(nullspace_test nullspace_test.cpp)
 incns_add_mpi_test(mixed_poisson_test mixed_poisson_test.cpp)
 incns_add_mpi_test(lp_surrogate_test lp_surrogate_test.cpp)
 incns_add_mpi_test(cahouet_chabard_test cahouet_chabard_test.cpp)
+incns_add_mpi_test(cc_robustness_test cc_robustness_test.cpp
+  INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
+target_link_libraries(cc_robustness_test PRIVATE yaml-cpp::yaml-cpp)
+
+# The FULL CC robustness grid: `slow` label, np = 4 only, run on demand via
+# `scripts/test.sh cpu -L slow` -- never in the agentic loop (~10-20 min).
+add_executable(cc_sweep_slow_test cc_sweep_slow_test.cpp)
+target_link_libraries(cc_sweep_slow_test PRIVATE incns incns_test_main
+  yaml-cpp::yaml-cpp)
+target_compile_definitions(cc_sweep_slow_test PRIVATE
+  INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
+add_test(NAME cc_sweep_slow_np4
+  COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:cc_sweep_slow_test>)
+set_tests_properties(cc_sweep_slow_np4 PROPERTIES
+  LABELS "slow" PROCESSORS 4 TIMEOUT 3600)
 incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)

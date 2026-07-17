@@ -60,6 +60,27 @@ solver_iterations:
     np2: { n4: 56, n8: 62, n16: 69 }
     np4: { n4: 57, n8: 63, n16: 69 }
 
+  # Cahouet-Chabard robustness caps (CC.8 / SPEC T3+T5). Property caps, not
+  # exact per-np counts: the inner CG + AMG make CC counts mildly np-sensitive,
+  # so we pin the PROPERTIES (bounded, flat, mass-degrades, legacy-degrades).
+  # Placeholder zeros -- seeded from measurement below.
+  # Seeded 2026-07-17 (desktop). Measured: sigma sweep {0,10,1e3,1e5} cc
+  # 19-32 flat, mass (same LOR-AMG velocity block) 45-104 with the degradation
+  # at sigma=1e5 (104 vs 32 -- the Delta-t limitation CC removes); nu sweep
+  # {1..1e-6} cc 20-34; T5 (outflow domain, rtol 1e-10) consistent 54/52/49 vs
+  # legacy 57/57/55 at n=8/16/32 -- gap grows under refinement. Counts np-stable
+  # to +-2 at np {1,2,4}.
+  cc_robustness:
+    sigma_sweep_cc_cap: 45
+    sigma_mass_degradation_ratio: 2.0
+    nu_sweep_cc_cap: 45
+    t5_consistent_cap: 65
+    t5_legacy_min_ratio: 1.04
+    # Cap for the full slow-tier (nu, sigma, h, p) grid. Measured 2026-07-17:
+    # worst 63 (2D grid: nu {1..1e-6} x sigma {0..1e6} x n {4,8,16} x Q2..Q5)
+    # and 59 (3D subset) -- bounded over the whole grid, ~17 s wall at np=4.
+    slow_sweep_cc_cap: 85
+
 # Convergence-oracle rates (filled in 1.5/1.8). Targets derive from the configured
 # (k_u, k_p) pair; defaults are Q3/Q2 => velocity order 4, pressure order 3.
 #   tgv2d:
