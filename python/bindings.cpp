@@ -369,6 +369,10 @@ PYBIND11_MODULE(_core, m)
    .value("Stokes", Equation::Stokes)
    .value("NavierStokes", Equation::NavierStokes);
 
+   py::enum_<GradDivScale>(m, "GradDivScale")
+   .value("OrderH", GradDivScale::OrderH)
+   .value("OrderNu", GradDivScale::OrderNu);
+
    py::enum_<VelocityPreconditioner>(m, "VelocityPreconditioner")
    .value("Jacobi", VelocityPreconditioner::Jacobi)
    .value("BoomerAMG", VelocityPreconditioner::BoomerAMG);
@@ -492,6 +496,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("equation", &Parameters::equation)
    .def_readwrite("nu", &Parameters::nu)
    .def_readwrite("grad_div", &Parameters::grad_div)
+   .def_readwrite("grad_div_scale", &Parameters::grad_div_scale)
    .def_readwrite("order_u", &Parameters::order_u)
    .def_readwrite("order_p", &Parameters::order_p)
    .def_readwrite("collocated_mass", &Parameters::collocated_mass)

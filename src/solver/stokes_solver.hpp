@@ -28,9 +28,10 @@ struct StokesSolverOptions
    bool collocated_mass = false; ///< GLL collocated mass option (see 1.4).
    /// Momentum-block mass factor (beta0/dt); 0 = steady.
    double mass_coeff = 0.0;
-   /// Grad-div scale c_gd (gamma(x) = c_gd * h_K); 0 = off. Never enters the
-   /// Schur block -- it stays nu * M_p^{-1} with gamma on or off.
+   /// Grad-div scale c_gd; 0 = off. Never enters the Schur block.
    double grad_div = 0.0;
+   /// Grad-div scaling: OrderH (gamma = c_gd*h) or OrderNu (gamma = c_gd*nu).
+   GradDivScale grad_div_scale = GradDivScale::OrderH;
    /// Velocity-block preconditioner (default Jacobi; BoomerAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;

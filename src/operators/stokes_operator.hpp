@@ -6,6 +6,7 @@
 #ifndef INCNS_OPERATORS_STOKES_OPERATOR_HPP
 #define INCNS_OPERATORS_STOKES_OPERATOR_HPP
 
+#include "operators/grad_div_scale.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -28,11 +29,13 @@ struct StokesOperatorOptions
    /// block; the unsteady stepper passes the BDF factor @c beta0/dt.
    double mass_coeff = 0.0;
    /// Grad-div augmentation scale @c c_gd: adds gamma (div u, div v) to the
-   /// momentum block with the ORDER-H, spatially varying coefficient
-   /// gamma(x) = c_gd * h_K per element. Zero (the default) disables it.
-   /// gamma never enters the Schur complement or the preconditioner -- the
-   /// Schur block is nu * M_p^{-1} with gamma on or off.
+   /// momentum block. Zero (the default) disables it. gamma never enters the
+   /// Schur complement or the preconditioner (see grad_div_scale for the
+   /// caveat when scaling by nu).
    double grad_div = 0.0;
+   /// How @c grad_div is scaled: OrderH -> gamma = c_gd * h_K per element
+   /// (default); OrderNu -> gamma = c_gd * nu (constant). See GradDivScale.
+   GradDivScale grad_div_scale = GradDivScale::OrderH;
    /// Build the low-order-refined (LOR) source form for the BoomerAMG velocity
    /// preconditioner (see MomentumLORForm()). Off by default -- the matrix-free
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The

@@ -49,6 +49,13 @@ Parameters Parameters::LoadYAML(const std::string& path)
    const YAML::Node physics = root["physics"];
    Maybe(physics, "nu", p.nu);
    Maybe(physics, "grad_div", p.grad_div);
+   if (physics && physics["grad_div_scale"])
+   {
+      const std::string gs = physics["grad_div_scale"].as<std::string>();
+      if (gs == "h") { p.grad_div_scale = GradDivScale::OrderH; }
+      else if (gs == "nu") { p.grad_div_scale = GradDivScale::OrderNu; }
+      else { MFEM_ABORT("parameters: unknown physics.grad_div_scale '" << gs << "'"); }
+   }
 
    const YAML::Node nd = root["nondimensionalization"];
    if (nd && nd["mode"])

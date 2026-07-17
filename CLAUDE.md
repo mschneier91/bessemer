@@ -69,6 +69,14 @@ per-case edit.
   negligible there, especially in the DNS/LES regime. Ŝ⁻¹ is ν M_p⁻¹ with γ on or off,
   and the later Cahouet–Chabard block is likewise unmodified. The γ>0 path keeps its
   **own iteration-count baseline** (see Fast tier) purely as a regression guard.
+  **Scaling mode (human decision, 2026-07-17):** γ's scale is a runtime option
+  `grad_div_scale` — `OrderH` (γ = c_gd·h_K, the default above) or `OrderNu`
+  (γ = c_gd·ν, constant). **Caveat for `OrderNu`:** γ ~ ν is *not* negligible in
+  the Schur block, so the "γ never enters the Schur" rationale (which assumed
+  γ ~ h) no longer strictly holds — the CC mass term arguably wants ν+γ = ν(1+c_gd).
+  The code still keeps γ out of the Schur automatically; if it matters for an
+  `OrderNu` run, set `cc.nu_pc = ν(1+c_gd)` explicitly (the dial exists for this).
+  Whether to make that automatic is a Sprint-2 re-baselining decision.
 - **Assembly:** partial assembly (`AssemblyLevel::PARTIAL`) on the tensor-product elements
   — affordable high order on CPU (sum factorization), GPU path open for later. Prefer
   `mfem::forall` for new kernels.

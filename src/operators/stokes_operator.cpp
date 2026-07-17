@@ -56,10 +56,20 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_rule_ = &rules.Get(geom_, 2 * ku_);
    }
 
-   // grad-div coefficient gamma(x) = c_gd * h_K (shared by every momentum form).
+   // grad-div coefficient (shared by every momentum form). OrderH: c_gd * h_K
+   // per element (spatially varying). OrderNu: c_gd * nu (constant) -- note
+   // this is NOT negligible in the Schur block; gamma still does not enter it
+   // automatically (see the header), set cc.nu_pc to compensate if wanted.
    if (opts_.grad_div > 0.0)
    {
-      gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+      if (opts_.grad_div_scale == GradDivScale::OrderNu)
+      {
+         gamma_ = std::make_unique<ConstantCoefficient>(opts_.grad_div * opts_.nu);
+      }
+      else
+      {
+         gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+      }
    }
 
    // ==== Delta-t INDEPENDENT blocks: assembled ONCE (a refresh never touches

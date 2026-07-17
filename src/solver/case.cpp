@@ -62,6 +62,7 @@ void Case::EnsureSetup()
    opts.controller = params_.controller;
    opts.collocated_mass = params_.collocated_mass;
    opts.grad_div = params_.grad_div;
+   opts.grad_div_scale = params_.grad_div_scale;
    opts.velocity_prec = params_.velocity_prec;
    opts.amg_reuse = params_.amg_reuse;
    opts.schur = params_.schur;

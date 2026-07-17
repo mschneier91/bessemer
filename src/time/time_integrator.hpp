@@ -38,8 +38,9 @@ struct TimeIntegratorOptions
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    bool collocated_mass = false; ///< GLL collocated mass option.
-   double grad_div =
-      0.0;        ///< Grad-div scale c_gd (gamma = c_gd*h); 0 = off.
+   double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
+   /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
+   GradDivScale grad_div_scale = GradDivScale::OrderH;
    /// Velocity-block preconditioner (Jacobi default; BoomerAMG option).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
    /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes.

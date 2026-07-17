@@ -18,6 +18,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.collocated_mass = o.collocated_mass;
    so.mass_coeff = o.mass_coeff;
    so.grad_div = o.grad_div;
+   so.grad_div_scale = o.grad_div_scale;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lor_momentum =
       cc ? (o.cc.a_pc == APC::LORAMG)

@@ -25,6 +25,8 @@
 #include "mesh/mesh_size_coefficient.hpp"
 #include "mesh/periodic_box.hpp"
 #include "quadrature/rule_book.hpp"
+#include "operators/grad_div_scale.hpp"
+#include "operators/stokes_operator.hpp"
 #include "solver/stokes_solver.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -40,6 +42,9 @@ using incns::MixedSpaces;
 using incns::RuleBook;
 using incns::StokesSolver;
 using incns::StokesSolverOptions;
+using incns::GradDivScale;
+using incns::StokesOperator;
+using incns::StokesOperatorOptions;
 
 namespace
 {
@@ -284,4 +289,82 @@ TEST(GradDiv, ConsistencyAndDivergenceDrop)
    EXPECT_LT(div_norm[2], div_norm[1]);
    EXPECT_LE(u_err[1], 1.5 * u_err[0]);
    EXPECT_LE(u_err[2], 1.5 * u_err[0]);
+}
+
+// OrderNu grad-div scaling (gamma = c_gd * nu, constant in space).
+//  (a) the div-free polynomial MMS is still reproduced exactly -- grad-div
+//      vanishes on a divergence-free exact solution regardless of scaling;
+//  (b) on a UNIFORM mesh (h_K = h0 for every element), OrderNu with scale c
+//      produces the SAME constant gamma = c*nu as OrderH with scale c*nu/h0,
+//      so the two momentum operators are identical -- pinning that OrderNu
+//      genuinely computes c*nu, not c*h.
+TEST(GradDiv, OrderNuScaling)
+{
+   const double nu = 0.7, c_gd = 2.0;
+
+   // (a) polynomial MMS, OrderNu, all-Dirichlet Q3/Q2.
+   {
+      VectorFunctionCoefficient u_exact(2, [](const Vector & x, Vector & v)
+      {
+         v(0) = 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+         v(1) = -3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+      });
+      VectorFunctionCoefficient forcing(2, [nu](const Vector & x, Vector & f)
+      {
+         const double lap0 = 18.0 * x[0] * x[1] * x[1] + 6.0 * x[0] * x[0] * x[0];
+         const double lap1 = -6.0 * x[1] * x[1] * x[1] - 18.0 * x[0] * x[0] * x[1];
+         f(0) = -nu * lap0 + 2.0 * x[0];
+         f(1) = -nu * lap1 + 2.0 * x[1];
+      });
+      Mesh serial = MakeBoxMesh(UnitBox(2, 3));
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      MixedSpaces spaces(mesh, 3, 2);
+      RuleBook rules;
+      BoundaryConditions bc(spaces.Velocity());
+      for (int a = 1; a <= 4; ++a) { bc.AddVelocityDirichlet(a, u_exact); }
+      StokesSolverOptions opts;
+      opts.nu = nu;
+      opts.grad_div = c_gd;
+      opts.grad_div_scale = GradDivScale::OrderNu;
+      opts.rtol = 1e-12;
+      opts.max_iter = 5000;
+      opts.kdim = 400;
+      StokesSolver solver(spaces, rules, bc, opts);
+      ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
+      solver.Solve(forcing, u, p);
+      const IntegrationRule* irs[Geometry::NumGeom] = {nullptr};
+      irs[Geometry::SQUARE] = &rules.Get(Geometry::SQUARE, 10);
+      EXPECT_LE(u.ComputeL2Error(u_exact, irs), 1e-8);
+   }
+
+   // (b) OrderNu(c) == OrderH(c*nu/h0) on a uniform mesh.
+   {
+      Mesh serial = MakeBoxMesh(UnitBox(2, 4)); // uniform: every h_K = h0
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      const double h0 = mesh.GetElementSize(0);
+      MixedSpaces spaces(mesh, 3, 2);
+      RuleBook rules;
+
+      StokesOperatorOptions on;
+      on.nu = nu;
+      on.grad_div = c_gd;
+      on.grad_div_scale = GradDivScale::OrderNu;   // gamma = c_gd * nu
+      StokesOperator op_nu(spaces, rules, on);
+
+      StokesOperatorOptions oh;
+      oh.nu = nu;
+      oh.grad_div = c_gd * nu / h0;                // gamma = (c_gd*nu/h0)*h0
+      oh.grad_div_scale = GradDivScale::OrderH;
+      StokesOperator op_h(spaces, rules, oh);
+
+      Vector x(spaces.Velocity().GetTrueVSize());
+      x.Randomize(19);
+      Vector ynu(x.Size()), yh(x.Size());
+      op_nu.Momentum().Mult(x, ynu);
+      op_h.Momentum().Mult(x, yh);
+      yh -= ynu;
+      const double rel = std::sqrt(InnerProduct(MPI_COMM_WORLD, yh, yh) /
+                                   InnerProduct(MPI_COMM_WORLD, ynu, ynu));
+      EXPECT_LE(rel, 1e-12) << "OrderNu(c) should equal OrderH(c*nu/h0)";
+   }
 }

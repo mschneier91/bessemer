@@ -8,6 +8,7 @@
 
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
+#include "operators/grad_div_scale.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
@@ -94,7 +95,9 @@ struct Parameters
    /// may equivalently give `physics: Re`); in Dimensional mode it carries
    /// units and Normalize() converts it to 1/Re.
    double nu = 1.0;
-   double grad_div = 0.0; ///< Grad-div scale c_gd (gamma = c_gd*h); 0 = off.
+   double grad_div = 0.0; ///< Grad-div scale c_gd; 0 = off.
+   /// Grad-div scaling (deck `physics.grad_div_scale: h|nu`).
+   GradDivScale grad_div_scale = GradDivScale::OrderH;
 
    /// Input scaling: mode + reference scales (see nondimensionalization.hpp).
    Nondimensionalization nondim;

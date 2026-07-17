@@ -35,6 +35,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.nu = 0.5 * opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
       so.grad_div = opts_.grad_div;
+      so.grad_div_scale = opts_.grad_div_scale;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
@@ -133,6 +134,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.nu = opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
       so.grad_div = opts_.grad_div;
+      so.grad_div_scale = opts_.grad_div_scale;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
