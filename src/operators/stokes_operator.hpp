@@ -176,7 +176,6 @@ private:
    mfem::ConstantCoefficient mass_coeff_; ///< Momentum-block mass coefficient.
    /// Grad-div coefficient gamma(x) = c_gd * h_K (owned; null when disabled).
    std::unique_ptr<mfem::Coefficient> gamma_;
-   mfem::ConstantCoefficient zero_mu_;    ///< mu = 0 for ElasticityIntegrator.
    const mfem::IntegrationRule* mass_rule_ = nullptr; ///< Mass quadrature rule.
    int dim_ = 0;                     ///< Spatial dimension.
    int ku_ = 0;                      ///< Velocity order.

@@ -1,5 +1,7 @@
 #include "operators/stokes_operator.hpp"
 
+#include "operators/vecdivdiv_integrator.hpp"
+
 #include "mesh/mesh_size_coefficient.hpp"
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
 #include "util/profiler.hpp"
@@ -13,7 +15,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                                const StokesOperatorOptions& opts,
                                const Array<int>* ess_tdofs)
    : spaces_(spaces), rules_(rules), opts_(opts), nu_(opts.nu),
-     mass_coeff_(opts.mass_coeff), zero_mu_(0.0),
+     mass_coeff_(opts.mass_coeff),
      mass_form_(&spaces.Velocity()),
      viscous_form_(&spaces.Velocity()),
      div_form_(&spaces.Velocity(), &spaces.Pressure())
@@ -139,12 +141,13 @@ void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
    }
    if (include_grad_div && opts_.grad_div > 0.0)
    {
-      // gamma (div u, div v) via ElasticityIntegrator(lambda = gamma, mu = 0):
-      // the elasticity form is lambda (div u, div v) + 2 mu (eps(u), eps(v)),
-      // so mu = 0 leaves pure grad-div (no native H1 grad-div integrator
-      // exists). Stiffness-type integrand -> the 2k + dim - 1 default rule.
-      // gamma never enters the Schur block (pressure_schur stays nu*M_p^{-1}).
-      auto* gdi = new ElasticityIntegrator(*gamma_, zero_mu_);
+      // gamma (div u, div v) via the in-repo sum-factorized
+      // VectorDivDivIntegrator -- replaces ElasticityIntegrator(lambda, mu=0),
+      // elmat-identical (pinned by vecdivdiv_test) but with fused O(p^4)
+      // tensor PA kernels instead of elasticity's dense non-tensor path.
+      // Stiffness-type integrand -> the 2k + dim - 1 default rule. gamma never
+      // enters the Schur block (pressure_schur stays nu*M_p^{-1}).
+      auto* gdi = new VectorDivDivIntegrator(*gamma_);
       gdi->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
       form.AddDomainIntegrator(gdi);
    }

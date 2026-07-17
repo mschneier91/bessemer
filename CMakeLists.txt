@@ -40,6 +40,7 @@ enable_testing()
 
 add_subdirectory(src)    # libincns
 add_subdirectory(apps)
+add_subdirectory(bench)
 add_subdirectory(test)
 if(INCNS_PYTHON)
   add_subdirectory(python)
