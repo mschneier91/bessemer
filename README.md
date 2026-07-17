@@ -128,6 +128,21 @@ time-dependent-BC path.
 
 ## Running a case
 
+> **New here? Read [`examples/python/start_here.py`](examples/python/start_here.py)
+> first.** It is a single, heavily-commented manufactured-solution case —
+> every parameter, field, boundary condition, and API call is explained inline,
+> and it ends by verifying the solver reproduced a known-exact answer to machine
+> precision. It is the fastest way to understand both *how you drive the code*
+> and *how the code is checked*.
+>
+> ```sh
+> scripts/build.sh cpu-python
+> . scripts/env.sh
+> export PYTHONPATH=build/cpu-python/python
+> mpirun -np 4 python examples/python/start_here.py
+> # -> start_here: ||u - u_exact||_L2 = 2.7e-14 ... PASSED
+> ```
+
 ### 1. YAML deck (no recompile)
 
 ```sh
