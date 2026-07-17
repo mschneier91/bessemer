@@ -19,6 +19,15 @@
 namespace incns
 {
 
+/// Which pressure Schur block the Stokes solver uses (declared here so the
+/// Parameters layer can reference it without pulling in the solver headers).
+enum class SchurBlockType
+{
+   Mass,          ///< Sprint-1 default: S_hat^-1 = nu M_p^-1, block-diag PC.
+   CahouetChabard ///< CC per SPEC_cahouet_chabard_mfem.md (block-tri default);
+   ///<              cc.schur_model picks ConsistentBMB vs LaplacianLegacy.
+};
+
 /// Shape of the block preconditioner on [A B^T; B 0] (CC.6).
 enum class BlockPCShape { Diag, LowerTri, UpperTri };
 /// Schur approximate-inverse model.

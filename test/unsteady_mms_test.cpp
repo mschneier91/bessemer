@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include "bc/boundary_conditions.hpp"
+#include "exact/tgv2d.hpp"
 #include "mesh/periodic_box.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -54,7 +55,8 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
                     VectorFunctionCoefficient& forcing,
                     incns::VelocityPreconditioner prec =
                        incns::VelocityPreconditioner::Jacobi,
-                    bool amg_reuse = false)
+                    bool amg_reuse = false,
+                    incns::SchurBlockType schur = incns::SchurBlockType::Mass)
 {
    Mesh serial = MakeBoxMesh(UnitBox(dim, n));
    ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -75,6 +77,7 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
    opts.kdim = 400;
    opts.velocity_prec = prec;
    opts.amg_reuse = amg_reuse;
+   opts.schur = schur;
    StokesTimeIntegrator stepper(spaces, rules, bc, forcing, opts);
    stepper.SetInitialVelocity(u_exact);
 
@@ -100,7 +103,8 @@ void RunUnsteadyMms(int dim, int n, int ku, double nu,
 
 // Build the 2D/3D coefficients and run, parametrized by the velocity-block
 // preconditioner so Jacobi (default) and BoomerAMG share the exact same MMS.
-void Unsteady2D(incns::VelocityPreconditioner prec, bool amg_reuse = false)
+void Unsteady2D(incns::VelocityPreconditioner prec, bool amg_reuse = false,
+                incns::SchurBlockType schur = incns::SchurBlockType::Mass)
 {
    const double nu = 0.7;
    VectorFunctionCoefficient u_exact(2, [](const Vector & x, double t, Vector & v)
@@ -124,10 +128,11 @@ void Unsteady2D(incns::VelocityPreconditioner prec, bool amg_reuse = false)
       f(1) = Gp(t) * us1 + G(t) * (-nu * lap1 + 2.0 * x[1]);
    });
 
-   RunUnsteadyMms(2, 3, 3, nu, u_exact, p_exact, forcing, prec, amg_reuse);
+   RunUnsteadyMms(2, 3, 3, nu, u_exact, p_exact, forcing, prec, amg_reuse, schur);
 }
 
-void Unsteady3D(incns::VelocityPreconditioner prec, bool amg_reuse = false)
+void Unsteady3D(incns::VelocityPreconditioner prec, bool amg_reuse = false,
+                incns::SchurBlockType schur = incns::SchurBlockType::Mass)
 {
    const double nu = 1.3;
    VectorFunctionCoefficient u_exact(3, [](const Vector & x, double t, Vector & v)
@@ -148,7 +153,7 @@ void Unsteady3D(incns::VelocityPreconditioner prec, bool amg_reuse = false)
       f(2) = Gp(t) * x[0] * x[0] + G(t) * (1.0 - 2.0 * nu);
    });
 
-   RunUnsteadyMms(3, 2, 2, nu, u_exact, p_exact, forcing, prec, amg_reuse);
+   RunUnsteadyMms(3, 2, 2, nu, u_exact, p_exact, forcing, prec, amg_reuse, schur);
 }
 } // namespace
 
@@ -186,4 +191,79 @@ TEST(UnsteadyMms, QuadraticInTime2D_BoomerAMG_Reuse)
 TEST(UnsteadyMms, QuadraticInTime3D_BoomerAMG_Reuse)
 {
    Unsteady3D(incns::VelocityPreconditioner::BoomerAMG, /*amg_reuse=*/true);
+}
+
+// CC.7 (T4a via CC): the unsteady quadratic-in-time MMS -- BDF startup ramp,
+// per-step time-dependent Dirichlet re-elimination, and H6 Refresh (c0 changes
+// -> CahouetChabardSchurPC::Reset) -- must reproduce the exact solution to
+// solver tolerance through the CC-preconditioned monolithic solve.
+TEST(UnsteadyMms, QuadraticInTime2D_CahouetChabard)
+{
+   Unsteady2D(incns::VelocityPreconditioner::Jacobi, false,
+              incns::SchurBlockType::CahouetChabard);
+}
+
+TEST(UnsteadyMms, QuadraticInTime3D_CahouetChabard)
+{
+   Unsteady3D(incns::VelocityPreconditioner::Jacobi, false,
+              incns::SchurBlockType::CahouetChabard);
+}
+
+// CC.7 (T6c-Stokes): the fully periodic TGV box -- EMPTY boundary-element set,
+// so this is the empty-boundary singular-detection path end-to-end. The CC
+// preconditioner must change the ITERATION, never the ANSWER: marching the
+// same TGV with the mass path and the CC path (both to tight Krylov tolerance)
+// must give the same velocity to well below the discretization error.
+TEST(UnsteadyMms, TgvStokesCcMatchesMassPath)
+{
+   const double nu = 1.0, dt = 0.02;
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {8, 8, 0}; // [0,2pi]^2 fully periodic (defaults)
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+   BoundaryConditions bc(spaces.Velocity()); // empty: fully periodic
+   ASSERT_TRUE(bc.PressureNullspaceExists()); // empty-boundary => singular
+
+   Vector zero(2);
+   zero = 0.0;
+   VectorConstantCoefficient zero_forcing(zero);
+   VectorFunctionCoefficient u0(2, [nu](const Vector & x, double t, Vector & u)
+   { incns::tgv2d::Velocity(x, t, nu, u); });
+
+   auto march = [&](incns::SchurBlockType schur, Vector & u_true, int& iters)
+   {
+      TimeIntegratorOptions opts;
+      opts.nu = nu;
+      opts.dt = dt;
+      opts.t_final = 5 * dt;
+      opts.rtol = 1e-11;
+      opts.max_iter = 3000;
+      opts.kdim = 300;
+      opts.schur = schur;
+      StokesTimeIntegrator stepper(spaces, rules, bc, zero_forcing, opts);
+      stepper.SetInitialVelocity(u0);
+      stepper.Run();
+      u_true.SetSize(spaces.Velocity().GetTrueVSize());
+      stepper.Velocity().GetTrueDofs(u_true);
+      iters = stepper.LastIterations();
+   };
+
+   Vector u_mass, u_cc;
+   int it_mass = 0, it_cc = 0;
+   march(incns::SchurBlockType::Mass, u_mass, it_mass);
+   march(incns::SchurBlockType::CahouetChabard, u_cc, it_cc);
+
+   Vector diff = u_cc;
+   diff -= u_mass;
+   const double rel = std::sqrt(InnerProduct(MPI_COMM_WORLD, diff, diff) /
+                                InnerProduct(MPI_COMM_WORLD, u_mass, u_mass));
+   if (Mpi::Root())
+   {
+      mfem::out << "[tgv-cc] rel diff vs mass path = " << rel
+                << "  iters mass=" << it_mass << " cc=" << it_cc << std::endl;
+   }
+   EXPECT_LE(rel, 1e-8); // same answer; only the preconditioner differs
 }

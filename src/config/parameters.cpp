@@ -128,6 +128,32 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
    }
    Maybe(solver, "amg_reuse", p.amg_reuse);
+   if (solver && solver["schur"])
+   {
+      const std::string sm = solver["schur"].as<std::string>();
+      if (sm == "mass") { p.schur = SchurBlockType::Mass; }
+      else if (sm == "cc")
+      {
+         p.schur = SchurBlockType::CahouetChabard;
+         p.cc.schur_model = SchurModel::ConsistentBMB;
+      }
+      else if (sm == "laplacian_legacy")
+      {
+         p.schur = SchurBlockType::CahouetChabard;
+         p.cc.schur_model = SchurModel::LaplacianLegacy;
+      }
+      else { MFEM_ABORT("parameters: unknown solver.schur '" << sm << "'"); }
+   }
+   Maybe(solver, "n_inner", p.cc.n_inner);
+   Maybe(solver, "lp_vcycles", p.cc.lp_vcycles);
+   if (solver && solver["block_shape"])
+   {
+      const std::string bs = solver["block_shape"].as<std::string>();
+      if (bs == "diag") { p.cc.block_shape = BlockPCShape::Diag; }
+      else if (bs == "lower") { p.cc.block_shape = BlockPCShape::LowerTri; }
+      else if (bs == "upper") { p.cc.block_shape = BlockPCShape::UpperTri; }
+      else { MFEM_ABORT("parameters: unknown solver.block_shape '" << bs << "'"); }
+   }
 
    Maybe(root, "initial_velocity", p.initial_velocity);
 

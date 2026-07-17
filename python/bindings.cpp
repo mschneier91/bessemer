@@ -373,6 +373,27 @@ PYBIND11_MODULE(_core, m)
    .value("Jacobi", VelocityPreconditioner::Jacobi)
    .value("BoomerAMG", VelocityPreconditioner::BoomerAMG);
 
+   py::enum_<SchurBlockType>(m, "SchurBlockType")
+   .value("Mass", SchurBlockType::Mass)
+   .value("CahouetChabard", SchurBlockType::CahouetChabard);
+
+   py::enum_<SchurModel>(m, "SchurModel")
+   .value("ConsistentBMB", SchurModel::ConsistentBMB)
+   .value("LaplacianLegacy", SchurModel::LaplacianLegacy);
+
+   py::enum_<BlockPCShape>(m, "BlockPCShape")
+   .value("Diag", BlockPCShape::Diag)
+   .value("LowerTri", BlockPCShape::LowerTri)
+   .value("UpperTri", BlockPCShape::UpperTri);
+
+   py::class_<CahouetChabardConfig>(m, "CahouetChabardConfig")
+   .def_readwrite("schur_model", &CahouetChabardConfig::schur_model)
+   .def_readwrite("block_shape", &CahouetChabardConfig::block_shape)
+   .def_readwrite("n_inner", &CahouetChabardConfig::n_inner)
+   .def_readwrite("lp_vcycles", &CahouetChabardConfig::lp_vcycles)
+   .def_readwrite("a_vcycles", &CahouetChabardConfig::a_vcycles)
+   .def_readwrite("nu_pc", &CahouetChabardConfig::nu_pc);
+
    py::class_<Nondimensionalization>(m, "Nondimensionalization")
    .def_readwrite("mode", &Nondimensionalization::mode)
    .def_readwrite("L_ref", &Nondimensionalization::L_ref)
@@ -479,6 +500,8 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("kdim", &Parameters::kdim)
    .def_readwrite("velocity_prec", &Parameters::velocity_prec)
    .def_readwrite("amg_reuse", &Parameters::amg_reuse)
+   .def_readwrite("schur", &Parameters::schur)
+   .def_readwrite("cc", &Parameters::cc)
    .def_readwrite("print_level", &Parameters::print_level)
    .def_readwrite("initial_velocity", &Parameters::initial_velocity)
    .def_readwrite("restart_from", &Parameters::restart_from)

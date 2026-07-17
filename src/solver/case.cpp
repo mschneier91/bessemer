@@ -64,6 +64,8 @@ void Case::EnsureSetup()
    opts.grad_div = params_.grad_div;
    opts.velocity_prec = params_.velocity_prec;
    opts.amg_reuse = params_.amg_reuse;
+   opts.schur = params_.schur;
+   opts.cc = params_.cc;
    opts.rtol = params_.krylov_rtol;
    opts.atol = params_.krylov_atol;
    opts.max_iter = params_.max_iter;

@@ -44,6 +44,10 @@ struct TimeIntegratorOptions
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
    /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes.
    bool amg_reuse = false;
+   /// Pressure Schur block: Mass (default) or CahouetChabard.
+   SchurBlockType schur = SchurBlockType::Mass;
+   /// CC configuration (sigma/nu auto-filled by the solver each build/refresh).
+   CahouetChabardConfig cc;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.

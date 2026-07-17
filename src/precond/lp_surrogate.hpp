@@ -38,10 +38,19 @@ enum class LpBC
  * machinery as the H5 velocity block). CG legality of the inner solve demands
  * a symmetric application, so the relaxation is SET explicitly (l1 hybrid
  * symmetric Gauss-Seidel, matched single pre/post sweeps) rather than trusting
- * library defaults; on singular (all-Neumann) operators the coarsest-level
- * solve is also forced to a smoother (hypre's direct coarse solve is not
- * meaningful on a singular coarse matrix), and the application is wrapped in
- * mfem::OrthoSolver so iterates never accumulate the constant mode.
+ * library defaults. On singular (all-Neumann) operators the application is
+ * wrapped in mfem::OrthoSolver so iterates never accumulate the constant mode.
+ *
+ * MEASURED DECISION (deviation from the spec's par.4 suggestion): the spec
+ * proposes forcing a smoother-only coarsest solve on the singular operator.
+ * Any HYPRE_BoomerAMGSetCycleRelaxType override (types 8 and 18 both tried)
+ * makes hypre's setup fail with an argument error on degenerate tiny 3D
+ * hierarchies (e.g. a 27-dof Q1 LOR L_p, where coarsening collapses), while
+ * hypre's DEFAULT coarse solve is harmless in practice: as a preconditioner
+ * its output rides inside the Ortho wrap with projected RHS/iterates, which
+ * is what actually protects the solve (T2b demonstrates projections are the
+ * load-bearing part -- removing THEM breaks the solve outright). So the
+ * coarse solve is left at hypre's default, deliberately.
  *
  * The application is @c lp_vcycles V-cycles from a zero initial guess -- a
  * fixed linear operator per application, never a tolerance-based solve.
@@ -135,12 +144,6 @@ public:
       HYPRE_BoomerAMGSetNumSweeps(h, 1);
       // Strength-of-connection starting points per the spec (2D/3D).
       HYPRE_BoomerAMGSetStrongThreshold(h, mesh.Dimension() == 3 ? 0.25 : 0.1);
-      if (singular)
-      {
-         // Smoother-only coarsest solve: hypre's default direct coarse solve
-         // is not meaningful on the (deliberately) singular Neumann operator.
-         HYPRE_BoomerAMGSetCycleRelaxType(h, 8, 3);
-      }
 
       singular_ = singular;
       if (singular_) { ortho_.SetSolver(*lor_); }

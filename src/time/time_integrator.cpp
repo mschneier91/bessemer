@@ -37,6 +37,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.grad_div = opts_.grad_div;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
+      so.schur = opts_.schur;
+      so.cc = opts_.cc;
       so.mass_coeff = 1.0 / dt_;
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
@@ -133,6 +135,8 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.grad_div = opts_.grad_div;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
+      so.schur = opts_.schur;
+      so.cc = opts_.cc;
       so.mass_coeff = c0; // the leading BDF weight beta0/dt -- exact match
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;

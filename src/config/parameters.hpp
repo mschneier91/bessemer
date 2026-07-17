@@ -8,6 +8,7 @@
 
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
+#include "precond/cahouet_chabard.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
 
@@ -124,6 +125,11 @@ struct Parameters
    /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes for
    /// cheap adaptive stepping (deck `solver.amg_reuse: true`).
    bool amg_reuse = false;
+   /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
+   SchurBlockType schur = SchurBlockType::Mass;
+   /// CC knobs (deck `solver.n_inner`, `solver.lp_vcycles`,
+   /// `solver.block_shape: diag|lower|upper`); sigma/nu are auto-filled.
+   CahouetChabardConfig cc;
 
    // --- case data ---------------------------------------------------------------
    /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks

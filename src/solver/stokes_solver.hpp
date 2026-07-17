@@ -21,14 +21,6 @@
 namespace incns
 {
 
-/// Which pressure Schur block the solver uses.
-enum class SchurBlockType
-{
-   Mass,          ///< Sprint-1 default: S_hat^-1 = nu M_p^-1, block-diag PC.
-   CahouetChabard ///< CC per SPEC_cahouet_chabard_mfem.md (block-tri default);
-   ///<              cc.schur_model picks ConsistentBMB vs LaplacianLegacy.
-};
-
 /// Options for the Stokes solve.
 struct StokesSolverOptions
 {
