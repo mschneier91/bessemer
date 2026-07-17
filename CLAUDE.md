@@ -112,7 +112,7 @@ src/
   operators/
     stokes_operator.{hpp,cpp}       # block [A Bᵀ; B 0], PA; optional grad–div on A
     convection.{hpp,cpp}            # nonlinear term, dealiased rule (Sprint 2)
-    pressure_schur.{hpp,cpp}        # mass Schur block (1/ν)M_p — the default until CC is blessed
+    pressure_schur.{hpp,cpp}        # mass Schur block (1/ν)M_p — low-level/test option; CC is the case-level default
     block_preconditioner.{hpp,cpp}  # velocity smoother (Jacobi/AMG) + pressure Schur block
   precond/                          # Cahouet–Chabard (SPEC_cahouet_chabard_mfem.md; docs/precond_cc.md)
     cahouet_chabard.{hpp,cpp}       # CahouetChabardSchurPC + CahouetChabardConfig + validation
@@ -762,8 +762,11 @@ Launched by a human via the batch scheduler. See Guardrails.
   convection*, `NavierStokesSolver`, the NSE oracle) until the human signs off on Sprint 2.
   **Cahouet–Chabard is un-gated** (human decision, 2026-07-16 — Sprint 1 complete +
   hardened): implement it per `SPEC_cahouet_chabard_mfem.md` / sub-sprint 2.3, pure Stokes,
-  with the CC invariants listed there. The `mass` Schur block ((1/ν) M_p) remains the
-  default until CC is validated and the human flips it.
+  with the CC invariants listed there. **CC is the case-level default**
+  (`Parameters.schur = CahouetChabard`; human decision, 2026-07-17 — validated by the
+  T3/T5 sweeps): decks/Python/Case run CC unless `solver.schur: mass` is set. The
+  low-level `StokesSolverOptions` default stays `Mass` so solver unit tests and the
+  mass-path iteration baselines pin what they test explicitly.
   When unsure whether something is NSE-gated, stop and ask — don't stub it.
 - Do not edit `third_party/` or the vendored/spack MFEM install.
 - **Never build or run project code with the system toolchain** (gcc, cmake, MPI). If

@@ -126,7 +126,10 @@ struct Parameters
    /// cheap adaptive stepping (deck `solver.amg_reuse: true`).
    bool amg_reuse = false;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
-   SchurBlockType schur = SchurBlockType::Mass;
+   /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
+   /// the right default for the adaptive-primary workflow. `mass` remains
+   /// available (and is what the low-level solver unit tests pin explicitly).
+   SchurBlockType schur = SchurBlockType::CahouetChabard;
    /// CC knobs (deck `solver.n_inner`, `solver.lp_vcycles`,
    /// `solver.block_shape: diag|lower|upper`); sigma/nu are auto-filled.
    CahouetChabardConfig cc;

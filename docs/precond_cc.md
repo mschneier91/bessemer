@@ -186,7 +186,7 @@ The config struct lives in `src/precond/cahouet_chabard.hpp`.
 - **Where the mass block still wins:** moderate σ/ν (e.g. σ ≈ 75, ν = 1:
   mass 10 vs CC 27 outers, each CC outer ~n_inner× heavier). CC pays off at
   small Δt / small ν — DNS time steps — and for adaptive runs where its
-  counts do not move. The `mass` default stays until the human flips it.
+  counts do not move. FLIPPED 2026-07-17: CC is now the case-level default (`Parameters.schur`); `solver.schur: mass` selects the old block.
 - **LaplacianLegacy:** indistinguishable on enclosed domains at these sizes;
   measurably worse (and worsening under refinement) with an outflow boundary
   — the boundary treatment is exactly its structural error (the T5 guard).
