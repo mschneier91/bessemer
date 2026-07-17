@@ -195,6 +195,12 @@ The config struct lives in `src/precond/cahouet_chabard.hpp`.
 - **LaplacianLegacy:** indistinguishable on enclosed domains at these sizes;
   measurably worse (and worsening under refinement) with an outflow boundary
   — the boundary treatment is exactly its structural error (the T5 guard).
+- **pc_quadrature (measured Q3+Q5, Stokes):** `gll_collocated` gives outer
+  counts identical to ±1 and wall time uniformly 20–31% lower than `inherit`
+  through Q5. **Default stays `inherit` by decision (2026-07-17): re-measure
+  under NSE before flipping** — production DNS lives at large σ/small ν where
+  the Poisson term dominates the PC, exactly where the lumping misfit would
+  show if ever. Instrument: `PcQuadratureCompare` in the slow tier.
 - **Singular L_p coarse solve:** hypre's DEFAULT, deliberately — any
   CycleRelaxType override breaks setup on degenerate tiny 3D hierarchies, and
   the Ortho wrap + projections are the actual protection (lp_surrogate.hpp).
