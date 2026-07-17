@@ -281,6 +281,18 @@ before touching Sprint 2.**
 
 **Sprint 2 — Navier–Stokes + preconditioner stage (only after sign-off):**
 
+- **2.0 — NSE re-baselining of ALL solver options (standing directive, human,
+  2026-07-17).** Every solver/preconditioner default in this codebase was chosen on
+  *Stokes-era* evidence and is provisional until re-measured under actual NSE stepping
+  (turbulent residual spectra, CFL-limited Δt, small ν). When the NSE oracle exists,
+  sweep and re-decide — do not carry Stokes conclusions forward silently:
+  `schur` (mass vs cc), `block_shape`, `pc_quadrature` (inherit vs gll_collocated — the
+  measured 20–31% win is Stokes data; instrument: `PcQuadratureCompare`, slow tier),
+  `n_inner`/`inner_stop`, `lp_vcycles`/`a_vcycles`, `a_pc` (LOR-AMG vs JacobiChebyshev,
+  and p-MG once built), Chebyshev orders, `velocity_prec`+`amg_reuse` (mass path),
+  system `collocated_mass`, grad–div `c_gd`, `nu_pc` (ν vs 2ν for sym-gradient),
+  adaptive tolerances and the CFL ceiling. Each re-decision gets measured evidence in
+  the slow tier and re-blessed baselines — same protocol as the CC.8 sweeps.
 - **2.1 — Convection operator + dealiasing.** Operator level first, no solver changes.
   **Green when:** the *Dealiasing / nonlinear-term exactness* flagship test passes.
 - **2.2 — NSE solver.** AB/EXT extrapolation of the nonlinear term; `NavierStokesSolver`
