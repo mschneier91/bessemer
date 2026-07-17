@@ -94,12 +94,11 @@ struct CahouetChabardConfig
    // --- nullspace ------------------------------------------------------------
    NullspaceMode nullspace = NullspaceMode::Auto; ///< Detection override.
    int k_reproj = 5; ///< Spec parity; the implementation projects every apply.
-   bool allow_pin_dof = false; ///< Debug-only; warns loudly; NO-OP in v1.
-   // --- outer solver ---------------------------------------------------------
-   double outer_rtol = 1e-8; ///< FGMRES relative tolerance.
-   double outer_atol = 0.0;  ///< FGMRES absolute tolerance.
-   int outer_maxit = 200;    ///< FGMRES iteration cap.
-   int fgmres_restart = 100; ///< FGMRES restart (Krylov subspace) size.
+   // NOTE (deliberate deletions vs SPEC par.7, human decision 2026-07-17):
+   //  - no outer_* / fgmres_restart fields: the outer FGMRES knobs are
+   //    StokesSolverOptions' (rtol/atol/max_iter/kdim) -- one source of truth;
+   //  - no allow_pin_dof: pressure pinning is forbidden in this codebase and
+   //    was never implemented, so the flag had nothing to enable.
    // --- execution ------------------------------------------------------------
    PcPrecision pc_precision = PcPrecision::FP64; ///< v1: FP64 only.
    int verbosity = 1;             ///< 0 silent .. 3 inner traces.
@@ -107,8 +106,7 @@ struct CahouetChabardConfig
 
    /**
     * @brief Fail-fast validation (SPEC par.7). Throws std::invalid_argument
-    *        with a clear message; warns (rank 0) on LaplacianLegacy and
-    *        allow_pin_dof.
+    *        with a clear message; warns (rank 0) on LaplacianLegacy.
     * @param root True on the printing rank (for warnings).
     */
    void Validate(bool root) const;

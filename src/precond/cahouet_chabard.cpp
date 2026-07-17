@@ -83,13 +83,6 @@ void CahouetChabardConfig::Validate(bool root) const
                 "mode, known non-robust on fine meshes (SPEC T5); never "
                 "the production default." << std::endl;
    }
-   if (root && allow_pin_dof)
-   {
-      mfem::out << "[cc] WARNING: allow_pin_dof set -- pinning is NOT "
-                "implemented in v1 (and wrecks h-independence locally); "
-                "the flag is a no-op accepted for spec parity."
-                << std::endl;
-   }
 }
 
 CahouetChabardSchurPC::CahouetChabardSchurPC(

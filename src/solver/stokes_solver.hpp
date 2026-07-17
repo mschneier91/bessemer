@@ -48,8 +48,8 @@ struct StokesSolverOptions
    SchurBlockType schur = SchurBlockType::Mass;
    /// CC configuration (consulted when schur == CahouetChabard). sigma and nu
    /// are OVERWRITTEN from mass_coeff and nu above -- single source of truth;
-   /// likewise the outer-solver knobs (rtol/atol/max_iter/kdim) come from this
-   /// struct, and cc.outer_* exist only for spec parity.
+   /// the outer-solver knobs (rtol/atol/max_iter/kdim) likewise live on THIS
+   /// struct (the CC config deliberately carries none).
    CahouetChabardConfig cc;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.

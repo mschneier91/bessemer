@@ -165,7 +165,12 @@ in A): construction throws with a clear message.
    solver/smoother object (debug asserts + T1f enforce).
 5. Internal pressure is `p̃ = −p_physical`; one sign flip at output.
 6. Pressure nullspace by projection/orthogonalization only — never pinned
-   (pre-existing repo law; `allow_pin_dof` is debug-only and warns loudly).
+   (pre-existing repo law; the spec's `allow_pin_dof` debug flag is
+   deliberately NOT carried -- pinning was never implemented, so there is
+   nothing for it to enable).
+7. The spec's `outer_*`/`fgmres_restart` config fields are deliberately NOT
+   carried: the outer FGMRES knobs are `StokesSolverOptions`' (deck
+   `solver.rtol/atol/max_iter/kdim`) -- one source of truth.
 
 ## Usage (lands with CC.7)
 
