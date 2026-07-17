@@ -173,8 +173,23 @@ in A): construction throws with a clear message.
 `CahouetChabardConfig` fields (`n_inner`, `lp_vcycles`, `block_shape`, …).
 The config struct lives in `src/precond/cahouet_chabard.hpp`.
 
-## Tuning notes (grow as T3 evidence lands)
+## Tuning notes (T3 evidence, desktop, 2026-07-17)
 
 - First knob: `n_inner` (inner CG iterations, default 10) vs outer FGMRES
   count — the inner CG dominates preconditioner cost (spec §6.5 table).
 - `nu_pc`: O(1) calibration around ν only; see the scaling guard above.
+- **Measured robustness** (enclosed box, Q3/Q2, defaults): outer FGMRES 19–34
+  flat over σ ∈ [0, 1e5] AND ν ∈ [1e-6, 1]; the Sprint-1 mass block (same
+  LOR-AMG velocity block) hits 104 at σ = 1e5 vs CC's 32. Full slow-tier grid
+  (ν × σ × h × Q2..Q5, 2D+3D): worst 63. Caps in `test/baselines.yaml`
+  (`cc_robustness`).
+- **Where the mass block still wins:** moderate σ/ν (e.g. σ ≈ 75, ν = 1:
+  mass 10 vs CC 27 outers, each CC outer ~n_inner× heavier). CC pays off at
+  small Δt / small ν — DNS time steps — and for adaptive runs where its
+  counts do not move. The `mass` default stays until the human flips it.
+- **LaplacianLegacy:** indistinguishable on enclosed domains at these sizes;
+  measurably worse (and worsening under refinement) with an outflow boundary
+  — the boundary treatment is exactly its structural error (the T5 guard).
+- **Singular L_p coarse solve:** hypre's DEFAULT, deliberately — any
+  CycleRelaxType override breaks setup on degenerate tiny 3D hierarchies, and
+  the Ortho wrap + projections are the actual protection (lp_surrogate.hpp).
