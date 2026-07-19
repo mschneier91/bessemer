@@ -1,0 +1,77 @@
+spack:
+  specs:
+    - mfem@develop+cuda cuda_arch=90 +gslib+lapack+libceed+mpi+shared+suite-sparse
+      ^gslib@1.0.9 cflags="-fPIC"
+      ^hypre+cuda cuda_arch=90 ldflags="-ldl"
+      ^libceed+cuda cuda_arch=90
+      ^suite-sparse~cuda
+
+    - cmake
+    - ninja
+    - openmpi+cuda fabrics=ucx schedulers=slurm
+      ^ucx+cuda~gdrcopy+verbs+rc+ud+dc+mlx5_dv cuda_arch=90
+
+    - googletest
+    - astyle
+    - yaml-cpp
+
+    # Python interface: our own pybind11 bindings over the incns Case surface
+    # (PyMFEM is never used). numba provides the @cfunc fast path for
+    # user-defined ICs/BCs/forcing -- a raw C function pointer the bindings wrap
+    # as an mfem::Coefficient, avoiding per-quad-point Python-callback overhead.
+    # No mpi4py: Python is a pure SPMD driver; MPI lives below the binding line.
+    # numba lags Python releases, so the interpreter is pinned to a
+    # numba-supported version, and numba likewise constrains the numpy version.
+    - python@3.12
+    - py-pybind11
+    - py-numpy
+    #- py-numba
+
+  packages:
+    all:
+      require:
+      - target=x86_64_v3
+      providers:
+        mpi: [openmpi]
+    # Spack v1.x: compilers are dependencies. Do NOT put "%gcc" under
+    # all:require (breaks externals like slurm). Use language virtuals:
+    c:
+      require:
+      - gcc@13.3.1
+    cxx:
+      require:
+      - gcc@13.3.1
+    fortran:
+      require:
+      - gcc@13.3.1
+    gcc:
+      externals:
+      - spec: gcc@13.3.1 languages:='c,c++,fortran'
+        prefix: /opt/packages/gcc/v13.3.1-p20240614/b2gpu
+        modules:
+        - gcc/13.3.1-p20240614
+        extra_attributes:
+          compilers:
+            c: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gcc
+            cxx: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/g++
+            fortran: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gfortran
+          environment:
+            prepend_path:
+              LD_LIBRARY_PATH: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/lib64
+      buildable: false
+    cuda:
+      buildable: false
+      externals:
+      - spec: cuda@12.6.1
+        prefix: /opt/packages/cuda/v12.6.1
+    slurm:
+      buildable: false
+      externals:
+      - spec: slurm@22.05.11
+        prefix: /usr
+
+  concretizer:
+    unify: when_possible
+    reuse: true
+
+  view: true
