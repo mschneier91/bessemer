@@ -24,6 +24,11 @@ if [ -z "${INCNS_MACHINE:-}" ]; then
   case "$_host" in
     # Add hostname patterns here as machines are brought up, e.g.:
     #   frontier* ) INCNS_MACHINE=frontier ;;
+    # Bridges-2: br0xx login nodes + w0xx H100 nodes. psc_gpu is pinned to
+    # cuda_arch=90 (H100 only, see spack_install_directions.md) -- v0xx (V100)
+    # and gl0xx (L40S) are deliberately NOT matched here, since a cuda_arch=90
+    # binary is wrong-SM-arch on them.
+    br0* | w0* ) INCNS_MACHINE=psc_gpu ;;
     * ) INCNS_MACHINE=desktop ;;
   esac
 fi
@@ -68,18 +73,41 @@ fi
 # Export MFEM_DIR so FindMFEM.cmake need not re-query spack.
 MFEM_DIR=$(spack location -i mfem 2>/dev/null) && export MFEM_DIR
 
+# --- gather compiler/MPI/cmake prefixes THIS env's own spack.yaml declares
+# as externals (buildable:false) -- e.g. a cluster's vetted per-node-class
+# compiler module (environments/psc_gpu pins gcc to /opt/packages/.../b2gpu).
+# These are legitimate, not a system-toolchain leak: the exception already
+# carved out for vendor MPI (see CLAUDE.md, Environment & build) generalizes
+# to any declared external for the packages that actually provide these
+# tools. Scoped to THIS file (not the merged/site Spack config, which can
+# carry its own unrelated system-compiler fallbacks) and to a fixed whitelist
+# of provider package names, so an unrelated external (e.g. slurm) can never
+# widen what's accepted here. No cluster-specific path is hardcoded below.
+_spack_ext_prefixes=$(awk '
+  /^    [a-zA-Z0-9_-]+:[[:space:]]*$/ { key=$1; sub(":", "", key); next }
+  /^[[:space:]]+prefix:/ {
+    if (key ~ /^(gcc|llvm|intel-oneapi-compilers|openmpi|mpich|cmake)$/) print $2
+  }
+' "$_env_dir/spack.yaml" 2>/dev/null)
+
 # --- assert: no system-toolchain leak (CLAUDE.md guardrail) ----------------
-# "Inside spack" == the install tree ($SPACK_ROOT/...) or the activated view.
+# "Inside spack" == the install tree ($SPACK_ROOT/...), the activated view,
+# or one of the declared-external prefixes gathered just above.
 _incns_assert_spack() {
   _tool=$1
   _path=$(command -v "$_tool" 2>/dev/null || true)
   case "$_path" in
     "$SPACK_ROOT"/*|"$_spack_view"/*) return 0 ;;
-    *)
-      echo "env.sh: '$_tool' -> '${_path:-MISSING}' is NOT inside spack" \
-           "($SPACK_ROOT or the env view). System-toolchain leak -- aborting." >&2
-      return 1 ;;
   esac
+  for _p in $_spack_ext_prefixes; do
+    case "$_path" in
+      "$_p"/*) return 0 ;;
+    esac
+  done
+  echo "env.sh: '$_tool' -> '${_path:-MISSING}' is NOT inside spack" \
+       "($SPACK_ROOT, the env view, or a declared external prefix in" \
+       "$_env_dir/spack.yaml). System-toolchain leak -- aborting." >&2
+  return 1
 }
 
 _leak=0
