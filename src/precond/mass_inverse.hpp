@@ -31,8 +31,8 @@ enum class MassInvType
  *
  * Two live strategies:
  *  - @b DiagDirect (collocated GLL mass, exactly diagonal): the reciprocal
- *    diagonal is precomputed once at setup and applied as a single fused
- *    device multiply @c y_i = d_inv_i * x_i. This path constructs NO solver,
+ *    diagonal is precomputed once at setup and applied as a device-aware
+ *    elementwise multiply @c y = x .* d_inv. This path constructs NO solver,
  *    smoother, or iteration object of any kind (asserted by T1f via
  *    HasSolverObject()) -- it is a vector multiply, nothing more.
  *  - @b Chebyshev(k): fixed-order Chebyshev iteration with the Jacobi
@@ -88,14 +88,21 @@ public:
                   "not diagonal (needs the collocated GLL basis/rule); use "
                   "Chebyshev or Auto");
             }
-            // Reciprocal diagonal, device-resident: the application is one
-            // fused elementwise multiply -- no solver object on this path.
+            // Reciprocal diagonal, device-resident: the application is an
+            // elementwise multiply -- no solver object on this path.
+            //
+            // Spelled with mfem::Vector operators rather than a hand-written
+            // forall on purpose: bessemer is compiled by mpicxx, never nvcc, so
+            // MFEM_HOST_DEVICE expands to nothing here and forall's CUDA
+            // dispatch is preprocessed out (general/forall.hpp, guarded on
+            // __CUDACC__). The lambda would then run on the HOST over the device
+            // pointers Read()/Write() hand back -- a segfault with "Invalid
+            // permissions" on a real GPU. These operators live inside libmfem,
+            // which IS nvcc-built, so they hit genuine device kernels.
             d_inv_.SetSize(diag.Size());
             d_inv_.UseDevice(true);
-            const double* d = diag.Read();
-            double* dinv = d_inv_.Write();
-            mfem::forall(diag.Size(), [ = ] MFEM_HOST_DEVICE(int i)
-            { dinv[i] = 1.0 / d[i]; });
+            d_inv_ = 1.0;
+            d_inv_ /= diag;
             break;
          }
          case MassInvType::Chebyshev:
@@ -133,11 +140,10 @@ public:
    {
       if (resolved_ == MassInvType::DiagDirect)
       {
-         const double* dinv = d_inv_.Read();
-         const double* xd = x.Read();
-         double* yd = y.Write();
-         mfem::forall(d_inv_.Size(), [ = ] MFEM_HOST_DEVICE(int i)
-         { yd[i] = dinv[i] * xd[i]; });
+         // Two device-aware mfem::Vector kernels (see the setup comment above
+         // for why this is not a hand-written forall).
+         y = x;
+         y *= d_inv_;
          return;
       }
       cheb_->Mult(x, y);

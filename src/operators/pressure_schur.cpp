@@ -30,12 +30,18 @@ PressureMassSchur::PressureMassSchur(ParFiniteElementSpace& pfes,
 
    // inv_diag = scale / diag, built on the device so it never leaves it (the
    // per-apply Mult, y = x .* inv_diag, is device-aware Vector arithmetic).
+   //
+   // Spelled with mfem::Vector operators rather than a hand-written forall on
+   // purpose: bessemer is compiled by mpicxx, never nvcc, so MFEM_HOST_DEVICE
+   // expands to nothing here and forall's CUDA dispatch is preprocessed out
+   // (general/forall.hpp, guarded on __CUDACC__). The lambda would then run on
+   // the HOST over the device pointers Read()/Write() hand back -- a segfault
+   // with "Invalid permissions" on a real GPU. These operators live inside
+   // libmfem, which IS nvcc-built, so they dispatch to genuine device kernels.
    inv_diag_.SetSize(diag.Size());
    inv_diag_.UseDevice(true);
-   const double sc = scale_;
-   const double* d = diag.Read();
-   double* id = inv_diag_.Write();
-   mfem::forall(diag.Size(), [ = ] MFEM_HOST_DEVICE(int i) { id[i] = sc / d[i]; });
+   inv_diag_ = scale_;
+   inv_diag_ /= diag;
 }
 
 void PressureMassSchur::Mult(const Vector& x, Vector& y) const
