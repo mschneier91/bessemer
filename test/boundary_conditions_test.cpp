@@ -93,10 +93,14 @@ TEST(BoundaryConditions, TimeDependentDirichletProjection)
       Vector u_true(spaces.Velocity().GetTrueVSize());
       u.GetTrueDofs(u_true);
 
+      // Host-read the true-dof result (GetTrueDofs runs on the device) before
+      // indexing it; Vector::operator() takes the host pointer without syncing.
+      const double* uh = u_true.HostRead();
+      const mfem::Array<int>& ess = bc.EssentialTrueDofs();
       std::set<int> seen; // which components appeared on this rank
-      for (int i = 0; i < bc.EssentialTrueDofs().Size(); ++i)
+      for (int i = 0; i < ess.Size(); ++i)
       {
-         const double val = u_true(bc.EssentialTrueDofs()[i]);
+         const double val = uh[ess[i]];
          const bool is_c0 = std::abs(val - t) < 1e-13 * t;
          const bool is_c1 = std::abs(val - 2.0 * t) < 1e-13 * t;
          EXPECT_TRUE(is_c0 || is_c1) << "unexpected boundary value " << val;
