@@ -778,6 +778,12 @@ Launched by a human via the batch scheduler. See Guardrails.
 - **NEVER run above 4 MPI ranks or a 32³ mesh** without explicit approval, and (once CUDA
   is enabled) do not launch GPU runs without approval. If verifying seems to need a big
   run, say so and stop — do not "just try it."
+- **Reap orphaned test/MPI processes.** `mpirun`/`prterun` children survive a killed
+  `ctest` and can spin at 100% CPU (a stuck `deck_test`) or sit for *days* (a 5.7-day
+  `nondim_test` was found once). After killing/interrupting ANY test or benchmark run,
+  and **at the end of every session**, run `scripts/reap.sh` (it kills stray
+  `build/*/{test,apps,bench}/*` and their launchers; `--dry` to list first). Never leave
+  a background run un-reaped.
 - **Sprint gate:** no NSE-specific code (convection, dealiasing, AB/EXT *extrapolation of
   convection*, `NavierStokesSolver`, the NSE oracle) until the human signs off on Sprint 2.
   **Cahouet–Chabard is un-gated** (human decision, 2026-07-16 — Sprint 1 complete +
