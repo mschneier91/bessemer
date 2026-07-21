@@ -24,6 +24,14 @@ namespace incns
  * the whole process -- used to re-run the suite on MFEM's mprotect-guarded
  * @c "debug" device (catches silent host fallbacks) without editing callers.
  *
+ * On a GPU backend each rank is bound to its **own** device
+ * (@c node_local_rank @c % @c device_count). mfem::Device would otherwise put
+ * every rank on device 0, so a multi-rank job would serialize on a single GPU
+ * (and can exhaust its memory) however many GPUs were allocated. The node-local
+ * rank comes from the launcher (@c OMPI_COMM_WORLD_LOCAL_RANK, @c SLURM_LOCALID,
+ * ...), falling back to the MPI_COMM_WORLD rank. Allocate at least as many GPUs
+ * as there are ranks per node, or ranks will double up on a device.
+ *
  * @param backend The mfem::Device configuration string (default when
  *                @c INCNS_DEVICE is unset).
  */
