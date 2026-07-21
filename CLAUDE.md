@@ -78,8 +78,10 @@ per-case edit.
   `OrderNu` run, set `cc.nu_pc = ν(1+c_gd)` explicitly (the dial exists for this).
   Whether to make that automatic is a Sprint-2 re-baselining decision.
 - **Assembly:** partial assembly (`AssemblyLevel::PARTIAL`) on the tensor-product elements
-  — affordable high order on CPU (sum factorization), GPU path open for later. Prefer
-  `mfem::forall` for new kernels.
+  — affordable high order on CPU (sum factorization), GPU path open for later. Build new
+  kernels from PA integrators and device-aware `mfem::Vector` ops; do **not** hand-write an
+  `mfem::forall` in bessemer source (see Coding conventions — it silently becomes a host
+  loop over device pointers and segfaults on GPU).
 - **Quadrature policy:** **Gauss–Legendre everywhere by default.** The RuleBook hands out
   rules **per operator, selecting both order and 1D rule type** (it owns separate
   `IntegrationRules` containers per family — e.g.
@@ -336,7 +338,9 @@ arrives.)
   setup, and **audit every host-only `Vector` loop that forces a device→host copy per
   apply** — `pressure_schur`'s inverse-diagonal build, `block_preconditioner`,
   `pressure_mean`, and any manual `GetData()[i]` / `for i < Size()` in the solve path —
-  converting them to `mfem::forall` / device-aware ops. The `cuda` preset currently
+  converting them to **device-aware `mfem::Vector`/PA ops, NOT to a hand-written
+  `mfem::forall`** (that reintroduces the host-loop-over-device-pointer segfault; see
+  Coding conventions). The `cuda` preset currently
   **builds but runs on the host** — it is not actually wired. **Green when:** the CPU
   result is unchanged, the solve path has no host-side element loops over true-dof
   vectors, and Device=cpu is the default and green on a CPU-only machine (the real CPU/GPU
@@ -493,6 +497,15 @@ cmake --build --preset cpu
 
 A **CUDA build is optional and off by default** (`-DUSE_CUDA=ON`, or the `cuda` preset) —
 enable only on a machine with a GPU + CUDA toolkit. Do not assume it is available.
+
+**Allocate at least one GPU per MPI rank.** `ConfigureDevice` binds each rank to its own
+device (node-local rank % device count), but it can only spread across the GPUs the job
+actually holds. Ranks that double up on one card serialize on its contexts and can
+exhaust its memory — on an H100 that showed up as a ~11x slowdown at np2 and a
+`CUDA error: out of memory` at np4, both while the other 7 GPUs on the node sat idle.
+The fast tier runs at np ∈ {1,2,4}, so a GPU sweep wants **4 GPUs**, e.g.
+`interact -p GPU-shared --gres=gpu:h100-80:4 -t 4:00:00` (Bridges-2 GPU-shared gives 12
+cores per H100; H100 nodes are 8 GPUs / 96 cores).
 
 - `ccache` is on. Never `rm -rf build/` — it dumps the warm cache and turns a 30 s
   rebuild into 15 min. If a build misbehaves, ask before wiping anything.
@@ -835,8 +848,35 @@ Launched by a human via the batch scheduler. See Guardrails.
   New expensive paths get a scope. Lightweight — wraps `MPI_Wtime`, no external dependency;
   the report is a nested tree with inclusive/exclusive time, % of parent, and MPI max/min
   across ranks to expose imbalance.
-- **Prefer device-portable kernels** (`mfem::forall` / PA) so a future CUDA build needs no
-  rewrite — but CPU is the only required target today.
+- **NEVER hand-write an `mfem::forall` in bessemer source.** This is the single most
+  expensive GPU bug found so far (2026-07-21: 38 of 62 tests segfaulting on an H100, one
+  root cause). bessemer has **no `.cu` files** — `USE_CUDA=ON` only calls
+  `enable_language(CUDA)`, so every TU is compiled by `mpicxx`/g++ and `__CUDACC__` is
+  never defined. Two consequences, both silent:
+  - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
+    host-only.
+  - `forall`'s CUDA dispatch is `#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)`
+    (`general/forall.hpp`), so it is **preprocessed out** and control falls through to the
+    plain host loop.
+
+  Meanwhile MFEM's memory manager does not care which compiler built the caller:
+  `vec.Read()`/`.Write()` on a `UseDevice(true)` vector still return **real device
+  pointers**. Host loop + device pointer = `SIGSEGV, Signal code: Invalid permissions (2)`.
+  It compiles clean, passes every CPU test, and passes the debug device (see below).
+
+  **Instead, express kernels as device-aware `mfem::Vector`/`Operator` operations** —
+  `operator=`, `*=`, `/=`, `+=`, `Min`, `Max`, `Reciprocal`, `Set`, `Add`, `InnerProduct`,
+  PA integrators. Those live inside `libmfem`, which *is* nvcc-built, so they dispatch to
+  genuine CUDA kernels (verify with `nm -C libmfem.a | grep CuKernel`). Example:
+  `inv = scale; inv /= diag;` replaces a reciprocal-diagonal `forall`
+  (`pressure_schur.cpp`, `precond/mass_inverse.hpp`).
+
+  **If a kernel genuinely cannot be expressed that way** (sum factorization, `MFEM_SHARED`
+  tiles — e.g. `vecdivdiv_integrator.cpp`), that TU must be compiled by nvcc:
+  `set_source_files_properties(... PROPERTIES LANGUAGE CUDA)` + `--expt-extended-lambda` +
+  `CMAKE_CUDA_ARCHITECTURES`. Any file defining device kernels must open with
+  `#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)` / `#error` so this failure becomes a
+  compile error instead of a runtime segfault.
 - **Device-resident vectors in the solve path.** Any `Vector`/`BlockVector` an operator
   applies to (or that a device kernel writes) must live in the **device memory space**, or
   every apply forces a silent host↔device copy (a fallback that stays correct but kills GPU
@@ -847,8 +887,16 @@ Launched by a human via the batch scheduler. See Guardrails.
   there), so there is no cost to doing it always. The fitness function that catches misses is
   the **debug device** (`scripts/debug_device.sh`, `INCNS_DEVICE=debug`): MFEM's mprotect-
   guarded backend that *faults* on un-annotated host access of device memory instead of
-  copying — run it (no GPU needed) and fix what it flags. It is not yet green (the solve path
-  is being hardened incrementally); getting it there is part of the GPU port.
+  copying — run it (no GPU needed) and fix what it flags.
+- **A green debug device does NOT mean GPU-ready.** It has a structural blind spot: at
+  `forall.hpp`, `if (Device::Allows(Backend::DEBUG_DEVICE)) { goto backend_cpu; }` — running
+  a forall on the host over "device" memory is the *intended, working* path there, since the
+  mprotected host mirror is unprotected by `Read(on_dev=true)`. So the debug device can only
+  catch the **opposite** error (unsynced host access to device-resident data, i.e. raw
+  `Vector::operator()` / `GetData()` without `HostRead()`/`HostReadWrite()`). It can **never**
+  catch a host-compiled `forall`. In 2026-07 the fast tier went fully green under the debug
+  device while 38 of 62 tests segfaulted on real hardware. Only an actual GPU run proves the
+  GPU path.
 - Parallel-correct by construction: every reduction is global; never assume rank 0 holds
   the whole field. Prefer `ParGridFunction` accessors over manual indexing.
 - Diagnostics print on **rank 0 only** (guard with `mfem::Mpi::Root()`); per-rank
