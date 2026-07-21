@@ -266,15 +266,43 @@ fully describes the environment."
 ### Step 5 — build bessemer and smoke test [H100 NODE]
 
 ```bash
-interact -p GPU-shared --gres=gpu:h100-80:1 -t 1:00:00
+interact -p GPU-shared --gres=gpu:h100-80:1 -t 2:00:00
 # module loads + setup-env + env activate, then:
-nvidia-smi                                   # confirm H100-SXM5-80GB
-cmake -DMFEM_DIR=$SPACK_ENV/.spack-env/view ...
-./bessemer <case> -d cuda
+nvidia-smi --query-gpu=name,compute_cap --format=csv   # must report 9.0
+cd $PROJECT/bessemer
+./scripts/build.sh cuda                                # Gotcha #14 re: ccache
+INCNS_PRESET=cuda ./scripts/test.sh -L 'smoke|fast'    # CPU backend
 ```
 
-First validation: reduced Re_tau=180 channel; confirm the pressure Poisson
-solve converges under GPU BoomerAMG before re-tuning Cahouet–Chabard.
+`scripts/build.sh` and `scripts/test.sh` source `scripts/env.sh`, which resolves
+the machine and activates the env — no manual `cmake -DMFEM_DIR=...` needed.
+
+**Verified 2026-07-20:** builds clean on `w001`, and the fast tier passes 91/93
+on the **CPU** backend from the cuda build.
+
+**The `cuda` backend does not work yet — do not plan around it.** The runtime
+backend knob is the `INCNS_DEVICE` env var (there is no `-d` flag);
+`INCNS_DEVICE=cuda` currently segfaults across the solve path with
+`Signal code: Invalid permissions (2)`, i.e. host code dereferencing device
+memory. This is expected: the device port has not landed, and
+`scripts/debug_device.sh` says so explicitly and is the fitness function gating
+that work. **Hunt those violations with `scripts/debug_device.sh` on any
+machine** — it mprotects the host mirror and faults with a stack trace at the
+exact line, so a GPU allocation adds nothing.
+
+Known-open on this env as of 2026-07-20:
+
+- `unsteady_mms_test` np1/np2 fail inside hypre (`HypreSolver::Mult`, error code
+  1) on the 3D Cahouet–Chabard subtest; it passes at np4 and passes against a
+  desktop CPU hypre, so `hypre@2.33.0 +cuda` is the isolated variable.
+- `StokesOperator.CollocatedMassDiagonal2D/3D` fail *numerically* on `cuda`
+  (offdiag ~1.7e-3 against a 4.3e-16 tolerance): the collocated quadrature rule
+  does not survive the device partial-assembly kernels. Not a memory bug, so
+  device-annotation work will not fix it.
+- np4 against a single GPU hits `CUDA error: out of memory` — one rank per GPU.
+
+First GPU validation target is a Stokes case (e.g. TGV-Stokes), **not** the
+Re_tau=180 channel — that is gated Sprint-2 NSE work.
 
 ### Production job template
 
@@ -290,8 +318,12 @@ module load gcc/13.3.1-p20240614 cuda/12.6.1
 cd $PROJECT/bessemer/environments/psc_gpu
 spack env activate .
 
-mpirun -np 8 ./bessemer <case> -d cuda    # one rank per GPU; device by local rank
+cd $PROJECT/bessemer
+INCNS_DEVICE=cuda mpirun -np 8 ./build/cuda/apps/run_case <case>   # one rank per GPU
 ```
+
+(`INCNS_DEVICE` is the backend knob; there is no `-d` flag. This template is
+aspirational until the device port lands — see Step 5.)
 
 GPU partition = whole nodes, GPU counts in multiples of 8, 16 SU/node-hr on
 H100. `srun --mpi=pmix -n 8` also works.
@@ -403,6 +435,31 @@ occur.
   short sessions free.
 - Running on V100s would require a separate `cuda_arch=70` environment
   (including hypre). Compiling on them produces identical x86_64_v3 binaries.
+
+### 13. A CUDA-enabled MFEM emits nvcc-syntax linker flags
+
+Every link fails with `g++: error: unrecognized command-line option
+'-Xlinker=-rpath,...'`. MFEM built with CUDA records `MFEM_CXX = .../nvcc` in
+`share/mfem/config.mk`, and therefore sets `MFEM_XLINKER = -Xlinker=`, spelling
+every rpath flag in nvcc syntax. `cmake/FindMFEM.cmake` reads config.mk and
+passed those tokens through verbatim onto a link line driven by `mpicxx` (g++),
+which rejects that form. Fixed in `6f8fca6`: FindMFEM.cmake now translates
+`-Xlinker=ARG` → `-Wl,ARG`. A CPU MFEM already emits `-Wl,`, so the old verbatim
+passthrough was correct only by accident — which is why this never reproduced on
+the desktop, and why it will resurface on the next CUDA cluster if that
+translation is ever removed.
+
+### 14. `ccache` is absent from the env, but the CMake presets require it
+
+The first build dies instantly: every compile line exits `code=127` with
+`/bin/sh: ccache: command not found`. The `cpu` preset (which `cuda` inherits)
+hardcodes `CMAKE_CXX_COMPILER_LAUNCHER=ccache`, and psc_gpu's spack.yaml does
+not include ccache. Workaround:
+`cmake --preset cuda -DCMAKE_CXX_COMPILER_LAUNCHER=`. Proper fix (**not yet
+done**): add `ccache` to `environments/psc_gpu` — that is a source fetch, so it
+belongs in Step 1 on the login node. Until then every rebuild on Bridges-2 is a
+cold full build, which makes iterating inside a walltime-limited allocation
+needlessly slow.
 
 ---
 
