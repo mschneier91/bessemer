@@ -67,8 +67,20 @@ foreach(_tok IN LISTS _inc_tokens)
   endif()
 endforeach()
 
-# 4. Link flags (rpath / -L / -l ...) pass through verbatim, order preserved.
+# 4. Link flags (rpath / -L / -l ...) pass through, order preserved.
 separate_arguments(_lib_tokens UNIX_COMMAND "${_libflags}")
+
+# A CUDA-enabled MFEM is built with MFEM_CXX=nvcc, so its config.mk spells the
+# linker flags in nvcc syntax (MFEM_XLINKER = "-Xlinker="). We drive the link
+# with the MPI C++ wrapper (g++), which rejects that form -- translate it to the
+# host-compiler spelling. A CPU MFEM already emits "-Wl," and passes through
+# unchanged, so this is a no-op there.
+set(_lib_tokens_host "")
+foreach(_tok IN LISTS _lib_tokens)
+  string(REGEX REPLACE "^-Xlinker=" "-Wl," _tok "${_tok}")
+  list(APPEND _lib_tokens_host "${_tok}")
+endforeach()
+set(_lib_tokens ${_lib_tokens_host})
 
 add_library(incns_mfem INTERFACE)
 target_include_directories(incns_mfem SYSTEM INTERFACE ${_inc_dirs})
