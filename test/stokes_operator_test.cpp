@@ -58,21 +58,34 @@ void ProbeMassDiagonality(StokesOperator& op, ParFiniteElementSpace& vfes,
    const int n_local = vfes.GetTrueVSize();
 
    Vector e(n_local), y(n_local);
+   e.UseDevice(true);
+   y.UseDevice(true);
    max_offdiag = 0.0;
    max_diag_err = 0.0;
    for (HYPRE_BigInt j = 0; j < n_global; ++j)
    {
       e = 0.0;
       const bool mine = (j >= offset && j < offset + n_local);
-      if (mine) { e(static_cast<int>(j - offset)) = 1.0; }
+      // Host-index only through HostRead/HostWrite so the memory manager syncs
+      // and unprotects -- Vector::operator() touches the host pointer directly,
+      // which reads STALE data (or faults on the debug device) after a device
+      // apply. This is exactly the "works on CPU, fails on GPU" trap.
+      if (mine) { e.HostReadWrite()[static_cast<int>(j - offset)] = 1.0; }
       M.Mult(e, y);
+      const double* yh = y.HostRead();
       if (mine)
       {
          const int jl = static_cast<int>(j - offset);
-         max_diag_err = std::max(max_diag_err, std::abs(y(jl) - diag(jl)));
-         y(jl) = 0.0; // remove the diagonal entry; the rest must vanish
+         const double* dh = diag.HostRead();
+         max_diag_err = std::max(max_diag_err, std::abs(yh[jl] - dh[jl]));
       }
-      max_offdiag = std::max(max_offdiag, y.Normlinf());
+      // Max |off-diagonal| = max |y_i| over i != j (the diagonal column j is
+      // skipped rather than zeroed in place).
+      for (int i = 0; i < n_local; ++i)
+      {
+         if (mine && i == static_cast<int>(j - offset)) { continue; }
+         max_offdiag = std::max(max_offdiag, std::abs(yh[i]));
+      }
    }
    MPI_Allreduce(MPI_IN_PLACE, &max_offdiag, 1, MPI_DOUBLE, MPI_MAX,
                  MPI_COMM_WORLD);
