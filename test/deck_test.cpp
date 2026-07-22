@@ -10,6 +10,7 @@
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
 #include "solver/case.hpp"
+#include "repro_tolerance.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
@@ -68,7 +69,8 @@ TEST(Deck, LoadYamlFields)
 
 // The deck-driven case and the equivalent in-code case produce the same
 // solution through the same surface (identical code path, so the difference
-// is pure roundoff).
+// is pure roundoff). NOTE: on a real GPU backend two identical runs are not
+// bitwise reproducible, so this doubles as a determinism probe -- ReproTol().
 TEST(Deck, YamlReproducesInCodeDriver)
 {
    // In-code: state the same case programmatically (output off for speed).
@@ -92,7 +94,7 @@ TEST(Deck, YamlReproducesInCodeDriver)
    diff -= u_deck;
    const double d = std::sqrt(InnerProduct(MPI_COMM_WORLD, diff, diff));
    const double ref = std::sqrt(InnerProduct(MPI_COMM_WORLD, u_code, u_code));
-   EXPECT_LE(d, 1e-12 * ref);
+   EXPECT_LE(d, incns_test::ReproTol(1e-12) * ref);
 }
 
 // Output pipeline: running with output enabled writes a ParaView collection

@@ -12,6 +12,7 @@
 #include "mesh/periodic_box.hpp"
 #include "post/checkpoint.hpp"
 #include "solver/case.hpp"
+#include "repro_tolerance.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
@@ -115,9 +116,10 @@ void CheckInterruptedMatchesUninterrupted(bool adaptive,
                 << ", restarted -> reldiff vs uninterrupted = " << rd
                 << std::endl;
    }
-   // Bitwise-identical arithmetic path after restore + binary-exact I/O; the
-   // bound is pure-roundoff headroom.
-   EXPECT_LE(rd, 1e-13);
+   // Bitwise-identical arithmetic path after restore + binary-exact I/O, so on
+   // a host backend the bound is pure-roundoff headroom. A real GPU backend is
+   // not run-to-run reproducible at all -- see ReproTol().
+   EXPECT_LE(rd, incns_test::ReproTol(1e-13));
 }
 
 } // namespace
@@ -152,5 +154,5 @@ TEST(Checkpoint, DeckDrivenRollingCheckpoint)
    const FinalState restarted = MarchCase(second);
 
    EXPECT_EQ(restarted.steps, ref.steps);
-   EXPECT_LE(RelDiff(ref.u, restarted.u), 1e-13);
+   EXPECT_LE(RelDiff(ref.u, restarted.u), incns_test::ReproTol(1e-13));
 }
