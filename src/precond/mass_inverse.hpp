@@ -92,7 +92,8 @@ public:
             // elementwise multiply -- no solver object on this path.
             //
             // Spelled with mfem::Vector operators rather than a hand-written
-            // forall on purpose: bessemer is compiled by mpicxx, never nvcc, so
+            // forall on purpose: this TU is compiled by mpicxx, not nvcc (only
+            // the short nvcc list in src/CMakeLists.txt gets nvcc), so
             // MFEM_HOST_DEVICE expands to nothing here and forall's CUDA
             // dispatch is preprocessed out (general/forall.hpp, guarded on
             // __CUDACC__). The lambda would then run on the HOST over the device

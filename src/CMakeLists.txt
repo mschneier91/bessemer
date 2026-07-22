@@ -30,6 +30,24 @@ add_library(incns STATIC
 target_include_directories(incns PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(incns PUBLIC incns_mfem)
 
+# --- The nvcc TUs -------------------------------------------------------------
+# Keep this list minimal: a file belongs here only if it *defines* device
+# kernels that cannot be expressed as device-aware mfem::Vector operations.
+# vecdivdiv_integrator.cpp is the sole entry -- sum-factorized grad-div built on
+# forall_2D with MFEM_SHARED tiles.
+#
+# Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
+# guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
+# by a host compiler the kernels do not fail to build -- they quietly become
+# host loops iterating over device pointers, which segfaults with "Invalid
+# permissions" at run time. The file carries a matching #error so that stops
+# being a silent failure mode.
+if(USE_CUDA)
+  set_source_files_properties(operators/vecdivdiv_integrator.cpp
+                              PROPERTIES LANGUAGE CUDA)
+  target_link_libraries(incns PUBLIC CUDA::cudart)
+endif()
+
 # Position-independent so the static library links into the pybind11 shared
 # module; harmless for the executables.
 set_target_properties(incns PROPERTIES POSITION_INDEPENDENT_CODE ON)

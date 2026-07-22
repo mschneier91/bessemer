@@ -340,8 +340,8 @@ arrives.)
   `pressure_mean`, and any manual `GetData()[i]` / `for i < Size()` in the solve path —
   converting them to **device-aware `mfem::Vector`/PA ops, NOT to a hand-written
   `mfem::forall`** (that reintroduces the host-loop-over-device-pointer segfault; see
-  Coding conventions). The `cuda` preset currently
-  **builds but runs on the host** — it is not actually wired. **Green when:** the CPU
+  Coding conventions). The `cuda` preset now genuinely
+  runs on the device (`INCNS_DEVICE=cuda`). **Green when:** the CPU
   result is unchanged, the solve path has no host-side element loops over true-dof
   vectors, and Device=cpu is the default and green on a CPU-only machine (the real CPU/GPU
   parity check runs when a GPU exists).
@@ -850,9 +850,9 @@ Launched by a human via the batch scheduler. See Guardrails.
   across ranks to expose imbalance.
 - **NEVER hand-write an `mfem::forall` in bessemer source.** This is the single most
   expensive GPU bug found so far (2026-07-21: 38 of 62 tests segfaulting on an H100, one
-  root cause). bessemer has **no `.cu` files** — `USE_CUDA=ON` only calls
-  `enable_language(CUDA)`, so every TU is compiled by `mpicxx`/g++ and `__CUDACC__` is
-  never defined. Two consequences, both silent:
+  root cause). Every TU is compiled by `mpicxx`/g++ — leaving `__CUDACC__` undefined —
+  **except** the short, explicit nvcc list in `src/CMakeLists.txt` (currently
+  `vecdivdiv_integrator.cpp` alone). Outside that list, two consequences, both silent:
   - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
     host-only.
   - `forall`'s CUDA dispatch is `#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)`
