@@ -31,7 +31,10 @@ void WriteVector(const std::string& path, const Vector& v)
    MFEM_VERIFY(f.good(), "checkpoint: cannot open " << path << " for writing");
    const std::int64_t n = v.Size();
    f.write(reinterpret_cast<const char*>(&n), sizeof(n));
-   f.write(reinterpret_cast<const char*>(v.GetData()),
+   // HostRead(), not GetData(): on a device backend the state lives in device
+   // memory and the host buffer is never populated, so GetData() would dump
+   // zeros to the file.
+   f.write(reinterpret_cast<const char*>(v.HostRead()),
            static_cast<std::streamsize>(n * sizeof(double)));
    MFEM_VERIFY(f.good(), "checkpoint: write failed for " << path);
 }
@@ -48,7 +51,11 @@ void ReadVector(const std::string& path, int expected_size, Vector& v)
                "rank owns " << expected_size
                << " -- rank count or partition mismatch");
    v.SetSize(static_cast<int>(n));
-   f.read(reinterpret_cast<char*>(v.GetData()),
+   // The restored vector is handed to the integrator and prolongated on the
+   // device, so it must be device-aware; HostWrite() then declares the host
+   // copy authoritative, and the host->device copy happens on first use.
+   v.UseDevice(true);
+   f.read(reinterpret_cast<char*>(v.HostWrite()),
           static_cast<std::streamsize>(n * sizeof(double)));
    MFEM_VERIFY(f.good(), "checkpoint: short read from " << path);
 }
