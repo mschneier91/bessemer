@@ -75,10 +75,13 @@ solver_iterations:
     # {60/69/76} & {62/71/76} -- drift ~+/-2 (three back-to-back runs agreed, but
     # a later run did not). Values below are CENTERED over that observed range so
     # band 4 keeps >=3 counts of headroom; seeding from one run would be flaky.
-    # np4 pending a 4-GPU allocation (the sweep currently excludes it, -E '_np4$').
+    # np4 seeded 2026-07-22 from an np4 run on a 2-GPU allocation (4 ranks / 2
+    # cards): LOR-AMG counts are np-dependent, NOT GPU-placement-dependent, so
+    # these equal the 4-GPU one-rank-per-card config; 3 runs, spread 0, no OOM.
     cuda:
       np1: { n4: 61, n8: 69, n16: 77 }
       np2: { n4: 61, n8: 70, n16: 76 }
+      np4: { n4: 60, n8: 70, n16: 77 }
 
   # Cahouet-Chabard robustness caps (CC.8 / SPEC T3+T5). Property caps, not
   # exact per-np counts: the inner CG + AMG make CC counts mildly np-sensitive,

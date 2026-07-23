@@ -280,18 +280,21 @@ TEST(SchurQuality, LorAmgViscousMeshRobust)
    // On a real CUDA/HIP backend, hypre's BoomerAMG smoother drops from
    // l1-Gauss-Seidel to l1-Jacobi (mfem linalg/hypre.hpp:1161 -- GS is
    // sequential and cannot run on device), which raises the LOR-AMG count by a
-   // small constant. Take the per-np counts from the device-seeded `cuda` block
-   // when present, else the host block. Mirrors incns_test::ReproTol;
+   // small constant. Override the host count with the device-seeded `cuda` value
+   // FOR THIS np when present; fall back to the host baseline for any np not yet
+   // device-calibrated (e.g. np4 before it is seeded), so the test still runs and
+   // prints its counts instead of aborting. Mirrors incns_test::ReproTol;
    // DEBUG_DEVICE runs forall bodies on the host and is bitwise-reproducible, so
    // it is deliberately excluded from the mask and keeps the strict host counts.
    const bool real_gpu = mfem::Device::Allows(mfem::Backend::CUDA_MASK |
                                               mfem::Backend::HIP_MASK);
-   const YAML::Node counts = (real_gpu && node["cuda"]) ? node["cuda"] : node;
-
    const std::string npkey = "np" + std::to_string(Mpi::WorldSize());
-   const YAML::Node base = counts[npkey];
-   ASSERT_TRUE(base) << "lor_amg baseline missing for " << npkey
-                     << (real_gpu ? " (cuda)" : "");
+   YAML::Node base = node[npkey];
+   if (real_gpu && node["cuda"] && node["cuda"][npkey])
+   {
+      base = node["cuda"][npkey];
+   }
+   ASSERT_TRUE(base) << "lor_amg baseline missing for " << npkey;
 
    int amg_min = 1 << 30, amg_max = 0, amg_finest = 0, n_finest = 0;
    for (const auto& entry : base)
