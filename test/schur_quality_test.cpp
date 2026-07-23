@@ -277,9 +277,21 @@ TEST(SchurQuality, LorAmgViscousMeshRobust)
    const int mesh_robust_band = node["mesh_robust_band"].as<int>();
    const int jacobi_ratio = node["jacobi_finest_ratio"].as<int>();
 
+   // On a real CUDA/HIP backend, hypre's BoomerAMG smoother drops from
+   // l1-Gauss-Seidel to l1-Jacobi (mfem linalg/hypre.hpp:1161 -- GS is
+   // sequential and cannot run on device), which raises the LOR-AMG count by a
+   // small constant. Take the per-np counts from the device-seeded `cuda` block
+   // when present, else the host block. Mirrors incns_test::ReproTol;
+   // DEBUG_DEVICE runs forall bodies on the host and is bitwise-reproducible, so
+   // it is deliberately excluded from the mask and keeps the strict host counts.
+   const bool real_gpu = mfem::Device::Allows(mfem::Backend::CUDA_MASK |
+                                              mfem::Backend::HIP_MASK);
+   const YAML::Node counts = (real_gpu && node["cuda"]) ? node["cuda"] : node;
+
    const std::string npkey = "np" + std::to_string(Mpi::WorldSize());
-   const YAML::Node base = node[npkey];
-   ASSERT_TRUE(base) << "lor_amg baseline missing for " << npkey;
+   const YAML::Node base = counts[npkey];
+   ASSERT_TRUE(base) << "lor_amg baseline missing for " << npkey
+                     << (real_gpu ? " (cuda)" : "");
 
    int amg_min = 1 << 30, amg_max = 0, amg_finest = 0, n_finest = 0;
    for (const auto& entry : base)

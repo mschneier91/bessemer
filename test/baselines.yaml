@@ -59,6 +59,26 @@ solver_iterations:
     np1: { n4: 53, n8: 62, n16: 69 }
     np2: { n4: 56, n8: 62, n16: 69 }
     np4: { n4: 57, n8: 63, n16: 69 }
+    # Real-GPU (CUDA/HIP) counts. hypre picks the BoomerAMG smoother at RUNTIME
+    # -- mfem linalg/hypre.hpp:1161 returns HypreUsingGPU() ? l1Jacobi : l1GS.
+    # l1-Gauss-Seidel is sequential and cannot run on a device, so under
+    # INCNS_DEVICE=cuda the smoother drops to the weaker l1-Jacobi and the
+    # viscous LOR-AMG count sits a small CONSTANT above the desktop (l1-GS)
+    # baseline above. Spectral equivalence is intact -- the mesh-robust spread
+    # stays ~14 (max-min), same order as on CPU; only the additive constant
+    # moves, so a per-device baseline is correct where widening `band` would
+    # blind the guard on both platforms. Selected in-code via
+    # Device::Allows(CUDA_MASK|HIP_MASK), mirroring incns_test::ReproTol; the
+    # host block stays strict. These counts are NOT run-to-run reproducible here
+    # (same PMIS/atomics non-determinism repro_tolerance.hpp documents): separate
+    # runs on H100 w001 (2026-07-22) gave np1 {61/69/77} & {62/68/76} and np2
+    # {60/69/76} & {62/71/76} -- drift ~+/-2 (three back-to-back runs agreed, but
+    # a later run did not). Values below are CENTERED over that observed range so
+    # band 4 keeps >=3 counts of headroom; seeding from one run would be flaky.
+    # np4 pending a 4-GPU allocation (the sweep currently excludes it, -E '_np4$').
+    cuda:
+      np1: { n4: 61, n8: 69, n16: 77 }
+      np2: { n4: 61, n8: 70, n16: 76 }
 
   # Cahouet-Chabard robustness caps (CC.8 / SPEC T3+T5). Property caps, not
   # exact per-np counts: the inner CG + AMG make CC counts mildly np-sensitive,
