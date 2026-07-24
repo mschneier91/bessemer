@@ -31,6 +31,7 @@
 #include "mfem.hpp"
 
 #include <cmath>
+#include <iostream>
 #include <memory>
 #include <vector>
 
@@ -161,6 +162,28 @@ double Rate(double e_coarse, double e_fine, double refine)
    return std::log(e_coarse / e_fine) / std::log(refine);
 }
 
+// Print the errors and rates on EVERY run, not just on failure. A rate test is
+// easy to read as green when it is actually vacuous, so the numbers behind the
+// assertion should be visible in the log without editing the test.
+void ReportRates(const char* label, double e1, double e2, double e3)
+{
+   if (mfem::Mpi::Root())
+   {
+      std::cout << "[ NSE MMS  ] " << label
+                << ": e(0.02)=" << e1
+                << "  e(0.01)=" << e2
+                << "  e(0.005)=" << e3
+                << "  rate(1->2)=" << Rate(e1, e2, 2.0)
+                << "  rate(2->3)=" << Rate(e2, e3, 2.0) << std::endl;
+   }
+}
+
+// A splitting error this small would mean the convective term is not actually
+// being exercised (or is being cancelled), in which case the RATE is measuring
+// solver noise and proves nothing. The 2D/3D fields here produce an O(dt^2)
+// error comfortably above this.
+constexpr double kNoiseFloor = 1e-11;
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -178,8 +201,14 @@ TEST(NseMms, TemporalOrder2D)
    const double e2 = NseMmsError(2, 3, 3, nu, 0.01,  t_final, *u_exact, *forcing);
    const double e3 = NseMmsError(2, 3, 3, nu, 0.005, t_final, *u_exact, *forcing);
 
+   ReportRates("2D", e1, e2, e3);
    const double r1 = Rate(e1, e2, 2.0);
    const double r2 = Rate(e2, e3, 2.0);
+   // Guard against a VACUOUS pass: if the coarsest error were already at solver
+   // noise, the rates below would be measuring nothing.
+   ASSERT_GT(e1, kNoiseFloor)
+         << "coarse-dt error is at noise level (" << e1 << ") -- the rate "
+         << "assertions would be vacuous; is convection actually on?";
    // BDF2 + EXT2 is formally 2nd order. Allow the usual slack for a short
    // march; the point is that it is clearly 2, not 1 (which is what a wrong
    // extrapolation order or a missed startup term would give).
@@ -201,8 +230,12 @@ TEST(NseMms, TemporalOrder3D)
    const double e2 = NseMmsError(3, 2, 2, nu, 0.01,  t_final, *u_exact, *forcing);
    const double e3 = NseMmsError(3, 2, 2, nu, 0.005, t_final, *u_exact, *forcing);
 
+   ReportRates("3D", e1, e2, e3);
    const double r1 = Rate(e1, e2, 2.0);
    const double r2 = Rate(e2, e3, 2.0);
+   ASSERT_GT(e1, kNoiseFloor)
+         << "coarse-dt error is at noise level (" << e1 << ") -- the rate "
+         << "assertions would be vacuous; is convection actually on?";
    EXPECT_GT(r1, 1.7) << "e(0.02)=" << e1 << " e(0.01)=" << e2;
    EXPECT_GT(r2, 1.7) << "e(0.01)=" << e2 << " e(0.005)=" << e3;
    EXPECT_LT(e3, e1) << "refinement did not reduce the error";
