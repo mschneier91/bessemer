@@ -121,7 +121,7 @@ src/
   spaces/mixed_spaces.{hpp,cpp}     # velocity/pressure ParFESpaces, block offsets
   operators/
     stokes_operator.{hpp,cpp}       # block [A Bᵀ; B 0], PA; optional grad–div on A
-    convection.{hpp,cpp}            # nonlinear term, dealiased rule (Sprint 2)
+    convection.{hpp,cpp}            # nonlinear term, dealiased rule (EXISTS, 2.1)
     pressure_schur.{hpp,cpp}        # mass Schur block (1/ν)M_p — low-level/test option; CC is the case-level default
     block_preconditioner.{hpp,cpp}  # velocity smoother (Jacobi/AMG) + pressure Schur block
   precond/                          # Cahouet–Chabard (SPEC_cahouet_chabard_mfem.md; docs/precond_cc.md)
@@ -143,7 +143,9 @@ src/
   config/parameters.{hpp,cpp}       # Parameters struct + YAML load (yaml-cpp)
   solver/
     stokes_solver.{hpp,cpp}         # one implicit saddle-point solve
-    navier_stokes_solver.{hpp,cpp}  # reuses the Stokes step; adds convection (Sprint 2)
+    # navier_stokes_solver.*        # NOT BUILT: 2.2 instead made convection an
+                                    # additive RHS term inside StokesTimeIntegrator
+                                    # (opts.convection). No separate class exists.
   exact/tgv2d.hpp                   # shared analytic TGV (also used by tests)
 apps/
   run_case.cpp                      # generic YAML-driven driver (no recompile per case)
@@ -186,10 +188,18 @@ for Stokes, convection for NSE. Composition is preferred for testability.)
 **Two sprints, with a hard gate between them.** Sprint 1 delivers a complete, validated
 **unsteady Stokes** library. Sprint 2 is **NSE plus the preconditioner stage** — convection
 and everything that depends on it, and the Schur deep-dive (Cahouet–Chabard, the L_p solve,
-its BC/null-space handling). **Do not write, scaffold, or even stub any of it — convection,
+its BC/null-space handling).
+
+> **GATE PASSED — the human signed off on Sprint 1 on 2026-07-24, and Sprint 2 is
+> underway.** The prohibition below is therefore HISTORICAL and no longer in force; it is
+> kept because it explains why the codebase looked the way it did before that date. As of
+> 2026-07-24 `src/operators/convection.*` and the NSE stepping path EXIST and are green
+> (2.1 and 2.2 — see "Sprint 2" above). Do not "restore" the pre-gate state.
+
+*(Historical, pre-2026-07-24:)* Do not write, scaffold, or even stub any of it — convection,
 AB/EXT extrapolation, dealiasing, `NavierStokesSolver`, the NSE oracle, Cahouet–Chabard or
 any pressure-Laplacian (L_p) machinery — until Sprint 1 is finished
-AND the human has explicitly signed off.** During Sprint 1 the `navier_stokes_*` and
+AND the human has explicitly signed off. During Sprint 1 the `navier_stokes_*` and
 `convection.*` files stay *absent*, not empty-stubbed, and `pressure_schur` contains the
 mass block only. If a Sprint-1 task appears to need
 convection, it is mis-scoped — stop and ask.
@@ -303,11 +313,37 @@ before touching Sprint 2.**
   system `collocated_mass`, grad–div `c_gd`, `nu_pc` (ν vs 2ν for sym-gradient),
   adaptive tolerances and the CFL ceiling. Each re-decision gets measured evidence in
   the slow tier and re-blessed baselines — same protocol as the CC.8 sweeps.
-- **2.1 — Convection operator + dealiasing.** Operator level first, no solver changes.
-  **Green when:** the *Dealiasing / nonlinear-term exactness* flagship test passes.
-- **2.2 — NSE solver.** AB/EXT extrapolation of the nonlinear term; `NavierStokesSolver`
-  composes the Stokes step. **Green when:** the full 2D TGV oracle passes (velocity +
-  NSE pressure rates).
+- **2.1 — Convection operator + dealiasing. DONE 2026-07-24 (`2da62a8`).**
+  `src/operators/convection.{hpp,cpp}` — `incns::Convection`, `ParNonlinearForm` +
+  `VectorConvectionNLFIntegrator`, over-integrated at `3k` from the RuleBook. **Green:**
+  `convection_test` passes 7/7 on GPU — the flagship asserts BOTH that over-integration
+  reproduces a `3k+6` reference to <1e-12 AND that the collocated GLL(`2k-1`) rule does
+  NOT (>1e-10), over dim × k ∈ {2,3} × {2,3,4}. That second half is load-bearing: without
+  it the test passes trivially if someone raises every rule in the RuleBook.
+  **NOTE for anyone consulting MFEM's `miniapps/fluids/navier` as a guide:** it collocates
+  the nonlinear form on GLL at `2k-1` (`navier_solver.cpp:121-130`) — the aliasing-prone
+  choice this project rejects — and it combines its AB history with a hand-written
+  `mfem::forall` (`:423-428`), which is banned here. Use it for structure only.
+- **2.2 — NSE solver. DONE 2026-07-24 (`9607c62`, `a5335c6`).** IMEX: `N(u)` is evaluated
+  on the velocity history, extrapolated to `t^{n+1}` via the repo's variable-step
+  `ExtrapolationWeights`, and subtracted from the RHS — the implicit block solve is
+  untouched. Enabled by `TimeIntegratorOptions::convection` / `Equation::NavierStokes`.
+  Rather than a separate `NavierStokesSolver` class, the term is additive inside
+  `StokesTimeIntegrator`, which is the same composition-over-inheritance intent.
+  **Green:** `nse_mms_test` — 2D **and 3D** manufactured solutions converge at the design
+  rate (3D: e = 2.56e-6 / 6.48e-7 / 1.63e-7 at dt = 0.02/0.01/0.005, rates **1.980 →
+  1.990**), plus a convection-off control that still hits the Stokes exactness bound.
+  **These are ORDER tests, not exactness tests, and that is correct:** the convective term
+  is quadratic in `G(t)` (degree 4 in t) and treated explicitly, so EXT2 commits a genuine
+  O(dt²) splitting error — asserting machine-precision exactness would assert something
+  false. A `1e-11` noise floor guards against a vacuous pass.
+  **Landmine:** the trapezoidal starter builds its RHS *inline*, not through
+  `AssembleBdfRhs`, so it needs its own `SubtractConvection` call — without it step 1
+  silently solves Stokes and the march quietly loses temporal order.
+  **Still open:** the full 2D TGV oracle (velocity + NSE pressure rates) named as this
+  item's original green condition was NOT built — the human accepted the 3D MMS instead
+  on 2026-07-24. Close it later if the oracle is wanted. Also: NSE tests have run at np1
+  only; convection does shared-face assembly, so np2/np4 is the real parallel check.
 - **2.3 — Preconditioner deep-dive → PULLED FORWARD (human decision, 2026-07-16).**
   The detailed direction arrived as **`SPEC_cahouet_chabard_mfem.md`** (repo root):
   Cahouet–Chabard with the **consistent `B M_v⁻¹ Bᵀ`** operator (Creff–Guermond), NOT the
