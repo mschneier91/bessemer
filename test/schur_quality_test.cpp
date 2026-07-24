@@ -178,7 +178,7 @@ TEST(SchurQuality, FrozenAmgRefreshSweepStaysBounded)
    const double c0_ref = 100.0;
    const std::vector<double> c0s = {10.0, 30.0, 100.0, 300.0, 1000.0};
    const std::vector<int> amg =
-      RefreshSweepIterations(8, VelocityPreconditioner::BoomerAMG,
+      RefreshSweepIterations(8, VelocityPreconditioner::LORAMG,
                              /*amg_reuse=*/true, /*periodic=*/false, c0_ref, c0s);
    if (Mpi::Root())
    {
@@ -198,7 +198,7 @@ TEST(SchurQuality, FrozenAmgPeriodicConverges)
 {
    const std::vector<double> c0s = {100.0, 50.0, 200.0};
    const std::vector<int> amg =
-      RefreshSweepIterations(8, VelocityPreconditioner::BoomerAMG,
+      RefreshSweepIterations(8, VelocityPreconditioner::LORAMG,
                              /*amg_reuse=*/true, /*periodic=*/true,
                              /*c0_ref=*/100.0, c0s);
    for (int it : amg) { EXPECT_LE(it, 90) << "frozen AMG failed on periodic"; }
@@ -303,7 +303,7 @@ TEST(SchurQuality, LorAmgViscousMeshRobust)
       const int n = std::stoi(key.substr(1));
       const int expected = entry.second.as<int>();
       const int iters =
-         SolveViscousDirichletCount(n, VelocityPreconditioner::BoomerAMG);
+         SolveViscousDirichletCount(n, VelocityPreconditioner::LORAMG);
       if (Mpi::Root())
       {
          mfem::out << "[lor_amg " << npkey << "] n=" << n << " iters=" << iters

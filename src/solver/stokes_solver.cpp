@@ -22,7 +22,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lor_momentum =
       cc ? (o.cc.a_pc == APC::LORAMG)
-      : (o.velocity_prec == VelocityPreconditioner::BoomerAMG);
+      : (o.velocity_prec == VelocityPreconditioner::LORAMG);
    so.lor_frozen = so.lor_momentum && o.amg_reuse;
    return so;
 }
@@ -99,7 +99,7 @@ void StokesSolver::BuildVelocityPreconditioner()
    // either way; only this preconditioner block changes.
    const bool want_lor_amg =
       cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
-      : (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG);
+      : (opts_.velocity_prec == VelocityPreconditioner::LORAMG);
    if (want_lor_amg)
    {
       auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
@@ -163,7 +163,7 @@ void StokesSolver::Refresh(double c0)
    // borrows the velocity solver), which BuildVelocityPreconditioner does.
    const bool lor_vel =
       cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
-      : (opts_.velocity_prec == VelocityPreconditioner::BoomerAMG);
+      : (opts_.velocity_prec == VelocityPreconditioner::LORAMG);
    const bool frozen_amg = lor_vel && opts_.amg_reuse;
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
 }

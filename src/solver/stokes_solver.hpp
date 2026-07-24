@@ -32,7 +32,7 @@ struct StokesSolverOptions
    double grad_div = 0.0;
    /// Grad-div scaling: OrderH (gamma = c_gd*h) or OrderNu (gamma = c_gd*nu).
    GradDivScale grad_div_scale = GradDivScale::OrderH;
-   /// Velocity-block preconditioner (default Jacobi; BoomerAMG for stiffer
+   /// Velocity-block preconditioner (default Jacobi; LORAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
    /// AMG only: freeze the LOR hierarchy at nu*K and reuse it across Delta-t
@@ -170,7 +170,7 @@ private:
    mfem::OrthoSolver ortho_schur_;
    /// Active pressure block (schur_ or ortho_schur_); set once at construction.
    mfem::Solver* pressure_block_ = nullptr;
-   /// Velocity block preconditioner (Jacobi smoother or BoomerAMG). Declared
+   /// Velocity block preconditioner (Jacobi smoother or LOR-AMG). Declared
    /// after op_ so it is destroyed before the momentum matrix it may reference.
    std::unique_ptr<mfem::Solver> vel_prec_;
    /// CC Schur PC (CahouetChabard mode only; null on the Mass path). Declared

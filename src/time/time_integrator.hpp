@@ -41,7 +41,7 @@ struct TimeIntegratorOptions
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
    GradDivScale grad_div_scale = GradDivScale::OrderH;
-   /// Velocity-block preconditioner (Jacobi default; BoomerAMG option).
+   /// Velocity-block preconditioner (Jacobi default; LORAMG option).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
    /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes.
    bool amg_reuse = false;

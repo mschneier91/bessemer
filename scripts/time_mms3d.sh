@@ -24,7 +24,7 @@
 #   INCNS_NS         -n sweep, space-separated       (default "16 24 32")
 #   INCNS_DEVICES    backends to time                (default "cpu cuda")
 #   INCNS_NP         MPI ranks                       (default 1)
-#   INCNS_PREC       velocity preconditioner         (default amg)
+#   INCNS_PREC       velocity preconditioner         (default loramg)
 #   INCNS_OU         velocity order k_u              (default 3)
 #   INCNS_DT         time step                       (default 0.02)
 #   INCNS_TF         end time                        (default 0.2)
@@ -46,7 +46,7 @@ run() {
   NS=${INCNS_NS:-"16 24 32"}
   DEVICES=${INCNS_DEVICES:-"cpu cuda"}
   NP=${INCNS_NP:-1}
-  PREC=${INCNS_PREC:-amg}
+  PREC=${INCNS_PREC:-loramg}
   OU=${INCNS_OU:-3}
   DT=${INCNS_DT:-0.02}
   TF=${INCNS_TF:-0.2}

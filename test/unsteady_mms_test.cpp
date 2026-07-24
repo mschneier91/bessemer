@@ -169,28 +169,28 @@ TEST(UnsteadyMms, QuadraticInTime3D)
 
 // H5: the same unsteady MMS must reproduce exactly with BoomerAMG on the
 // velocity block (a different assembly route -- the assembled momentum matrix).
-TEST(UnsteadyMms, QuadraticInTime2D_BoomerAMG)
+TEST(UnsteadyMms, QuadraticInTime2D_LORAMG)
 {
-   Unsteady2D(incns::VelocityPreconditioner::BoomerAMG);
+   Unsteady2D(incns::VelocityPreconditioner::LORAMG);
 }
 
-TEST(UnsteadyMms, QuadraticInTime3D_BoomerAMG)
+TEST(UnsteadyMms, QuadraticInTime3D_LORAMG)
 {
-   Unsteady3D(incns::VelocityPreconditioner::BoomerAMG);
+   Unsteady3D(incns::VelocityPreconditioner::LORAMG);
 }
 
 // H6 Tier 3: with amg_reuse the LOR hierarchy is frozen at nu*K and reused
 // across the startup ramp's Delta-t / order changes (c0 varies) -- the solve
 // must still reproduce the exact MMS to tolerance, proving the frozen
 // hierarchy preconditions c0*M + nu*K correctly.
-TEST(UnsteadyMms, QuadraticInTime2D_BoomerAMG_Reuse)
+TEST(UnsteadyMms, QuadraticInTime2D_LORAMG_Reuse)
 {
-   Unsteady2D(incns::VelocityPreconditioner::BoomerAMG, /*amg_reuse=*/true);
+   Unsteady2D(incns::VelocityPreconditioner::LORAMG, /*amg_reuse=*/true);
 }
 
-TEST(UnsteadyMms, QuadraticInTime3D_BoomerAMG_Reuse)
+TEST(UnsteadyMms, QuadraticInTime3D_LORAMG_Reuse)
 {
-   Unsteady3D(incns::VelocityPreconditioner::BoomerAMG, /*amg_reuse=*/true);
+   Unsteady3D(incns::VelocityPreconditioner::LORAMG, /*amg_reuse=*/true);
 }
 
 // CC.7 (T4a via CC): the unsteady quadratic-in-time MMS -- BDF startup ramp,

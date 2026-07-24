@@ -128,9 +128,13 @@ Parameters Parameters::LoadYAML(const std::string& path)
    {
       const std::string pc = solver["preconditioner"].as<std::string>();
       if (pc == "jacobi") { p.velocity_prec = VelocityPreconditioner::Jacobi; }
-      else if (pc == "amg" || pc == "boomer_amg")
+      // "loramg" is the accurate spelling -- the AMG always runs on the
+      // low-order-refined rediscretization, never on the HO operator.
+      // "amg"/"boomer_amg" stay accepted so existing decks keep parsing.
+      else if (pc == "loramg" || pc == "lor_amg" || pc == "amg"
+               || pc == "boomer_amg")
       {
-         p.velocity_prec = VelocityPreconditioner::BoomerAMG;
+         p.velocity_prec = VelocityPreconditioner::LORAMG;
       }
       else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
    }

@@ -19,7 +19,7 @@
 //
 // Examples (time the march, CPU vs one H100):
 //   mpirun -n 1 build/cpu/apps/unsteady_mms_3d  -d cpu  -n 24 -tf 0.2
-//   mpirun -n 1 build/cuda/apps/unsteady_mms_3d -d cuda -n 24 -tf 0.2 -prec amg
+//   mpirun -n 1 build/cuda/apps/unsteady_mms_3d -d cuda -n 24 -tf 0.2 -prec loramg
 // Scale -n up until the device wins; small (8^3-class) problems are too little
 // work to show a GPU off.
 
@@ -54,7 +54,8 @@ int main(int argc, char* argv[])
    double dt = 0.02;
    double t_final = 0.2;
    const char* device = "cpu"; // MFEM backend: cpu | cuda | ...
-   const char* prec = "jacobi"; // velocity-block preconditioner: jacobi | amg
+   // velocity-block PC: jacobi | loramg ("amg" kept as a back-compat alias)
+   const char* prec = "jacobi";
 
    OptionsParser args(argc, argv);
    args.AddOption(&n, "-n", "--num-elems", "Elements per direction (n^3 hexes).");
@@ -63,7 +64,9 @@ int main(int argc, char* argv[])
    args.AddOption(&t_final, "-tf", "--t-final", "End time.");
    args.AddOption(&device, "-d", "--device", "MFEM backend: cpu, cuda, ...");
    args.AddOption(&prec, "-prec", "--preconditioner",
-                  "Velocity-block preconditioner: jacobi or amg.");
+                  "Velocity-block preconditioner: jacobi or loramg "
+                  "(alias: amg). loramg = BoomerAMG on the low-order-refined "
+                  "rediscretization -- never plain AMG on the HO operator.");
    args.ParseCheck(); // prints options on the root; exits on a bad parse
 
    incns::Parameters params;
@@ -77,9 +80,21 @@ int main(int argc, char* argv[])
    params.order_p = order_u - 1;
    params.dt = dt;
    params.t_final = t_final;
-   params.velocity_prec = (std::string(prec) == "amg")
-                          ? incns::VelocityPreconditioner::BoomerAMG
-                          : incns::VelocityPreconditioner::Jacobi;
+   const std::string prec_s(prec);
+   if (prec_s == "loramg" || prec_s == "lor_amg" || prec_s == "amg")
+   {
+      params.velocity_prec = incns::VelocityPreconditioner::LORAMG;
+   }
+   else if (prec_s == "jacobi")
+   {
+      params.velocity_prec = incns::VelocityPreconditioner::Jacobi;
+   }
+   else
+   {
+      // Fail loudly: silently falling back to Jacobi would mis-label a timing.
+      MFEM_ABORT("unsteady_mms_3d: unknown -prec '"
+                 << prec_s << "' (expected jacobi or loramg)");
+   }
    params.output.enabled = false;
    params.Normalize();  // dimensionless inputs: records Re, no rescaling
    incns::ConfigureDevice(params.device);

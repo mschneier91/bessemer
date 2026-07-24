@@ -76,7 +76,7 @@ int SolveCount(int n, double nu, double sigma, double rtol,
    opts.kdim = 400;
    opts.schur = schur;
    opts.cc.schur_model = model;
-   opts.velocity_prec = incns::VelocityPreconditioner::BoomerAMG;
+   opts.velocity_prec = incns::VelocityPreconditioner::LORAMG;
    StokesSolver solver(spaces, rules, bc, opts);
 
    VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)

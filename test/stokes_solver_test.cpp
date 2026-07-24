@@ -250,7 +250,7 @@ TEST(StokesSolver, PolynomialExactness3DStretched)
 
 // H5: the steady polynomial MMS must reproduce exactly with BoomerAMG on the
 // velocity block (needs the assembled momentum matrix, a different route).
-TEST(StokesSolver, PolynomialExactness2DBoomerAMG)
+TEST(StokesSolver, PolynomialExactness2DLORAMG)
 {
    const double nu = 0.7;
    VectorFunctionCoefficient u_exact(2, [](const Vector & x, Vector & v)
@@ -271,14 +271,14 @@ TEST(StokesSolver, PolynomialExactness2DBoomerAMG)
    });
 
    const MmsResult r = SolveMms(2, 3, 3, nu, u_exact, p_exact, forcing, 1e-12,
-                                /*stretch=*/false, VelocityPreconditioner::BoomerAMG);
+                                /*stretch=*/false, VelocityPreconditioner::LORAMG);
    EXPECT_TRUE(r.converged) << "FGMRES(AMG) did not converge (" << r.iterations
                             << " iterations)";
    EXPECT_LE(r.u_err, 1e-8);
    EXPECT_LE(r.p_err, 1e-7);
 }
 
-TEST(StokesSolver, PolynomialExactness3DBoomerAMG)
+TEST(StokesSolver, PolynomialExactness3DLORAMG)
 {
    const double nu = 1.3;
    VectorFunctionCoefficient u_exact(3, [](const Vector & x, Vector & v)
@@ -297,7 +297,7 @@ TEST(StokesSolver, PolynomialExactness3DBoomerAMG)
    });
 
    const MmsResult r = SolveMms(3, 2, 2, nu, u_exact, p_exact, forcing, 1e-12,
-                                /*stretch=*/false, VelocityPreconditioner::BoomerAMG);
+                                /*stretch=*/false, VelocityPreconditioner::LORAMG);
    EXPECT_TRUE(r.converged) << "FGMRES(AMG) did not converge (" << r.iterations
                             << " iterations)";
    EXPECT_LE(r.u_err, 1e-8);

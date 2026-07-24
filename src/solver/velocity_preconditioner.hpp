@@ -27,7 +27,11 @@ enum class VelocityPreconditioner
    /// operator instead. A different assembly route than the matrix-free default,
    /// with a heavier per-refresh setup. (grad-div is omitted from the LOR
    /// operator -- gamma ~ h is negligible in the preconditioner.)
-   BoomerAMG
+   ///
+   /// NOTE the name: this is ALWAYS LOR-AMG, never plain BoomerAMG on the
+   /// high-order operator -- there is no such path in this codebase. Mirrors
+   /// APC::LORAMG on the Cahouet-Chabard side, which names the same scheme.
+   LORAMG
 };
 
 } // namespace incns

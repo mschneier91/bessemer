@@ -373,9 +373,12 @@ PYBIND11_MODULE(_core, m)
    .value("OrderH", GradDivScale::OrderH)
    .value("OrderNu", GradDivScale::OrderNu);
 
+   // LORAMG is canonical; BoomerAMG is a deprecated alias for the same value
+   // (the AMG always runs on the LOR rediscretization, never the HO operator).
    py::enum_<VelocityPreconditioner>(m, "VelocityPreconditioner")
    .value("Jacobi", VelocityPreconditioner::Jacobi)
-   .value("BoomerAMG", VelocityPreconditioner::BoomerAMG);
+   .value("LORAMG", VelocityPreconditioner::LORAMG)
+   .value("BoomerAMG", VelocityPreconditioner::LORAMG);
 
    py::enum_<SchurBlockType>(m, "SchurBlockType")
    .value("Mass", SchurBlockType::Mass)
