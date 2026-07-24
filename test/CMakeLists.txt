@@ -80,6 +80,7 @@ incns_add_mpi_test(profiler_test profiler_test.cpp INCNS_ENABLE_PROFILING)
 incns_add_mpi_test(profiler_off_test profiler_off_test.cpp)
 incns_add_mpi_test(pressure_mean_test pressure_mean_test.cpp)
 incns_add_mpi_test(stokes_operator_test stokes_operator_test.cpp)
+incns_add_mpi_test(convection_test convection_test.cpp)
 incns_add_mpi_test(boundary_conditions_test boundary_conditions_test.cpp)
 incns_add_mpi_test(stokes_solver_test stokes_solver_test.cpp)
 

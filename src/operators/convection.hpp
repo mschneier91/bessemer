@@ -1,0 +1,93 @@
+/**
+ * @file convection.hpp
+ * @brief Dealiased nonlinear convection operator N(u) = (u . grad)u (Sprint 2.1).
+ */
+#ifndef INCNS_OPERATORS_CONVECTION_HPP
+#define INCNS_OPERATORS_CONVECTION_HPP
+
+#include "quadrature/rule_book.hpp"
+#include "spaces/mixed_spaces.hpp"
+#include "mfem.hpp"
+
+namespace incns
+{
+
+/**
+ * @brief The nonlinear convective term @c N(u) = (u . grad)u, evaluated with a
+ *        DEALIASED (over-integrated) quadrature rule.
+ *
+ * Sprint 2.1 is deliberately OPERATOR LEVEL ONLY: this class evaluates N(u) on
+ * true dofs and nothing more. The AB/EXT extrapolation, the BDF right-hand side
+ * and @c NavierStokesSolver are 2.2 -- do not add them here.
+ *
+ * ### Why over-integration (the whole point of this class)
+ *
+ * The integrand @c (u.grad)u . v is a product of THREE degree-@c k factors (two
+ * from the quadratic nonlinearity, one from the test function), so on an affine
+ * element it is a polynomial of degree ~@c 3k-1. The default rule used by the
+ * linear blocks is exact only to ~@c 2k, so it commits an aliasing error: energy
+ * from unresolved high modes folds back onto resolved ones, which in DNS drives
+ * the classic aliasing blow-up. Integrating exactly to degree @c 3k removes it.
+ *
+ * The rule comes from the RuleBook at order @c 3*k_u (see @ref DealiasedOrder),
+ * i.e. ~@c ceil(3k/2) points per direction, per CLAUDE.md's dealiasing rule.
+ * Linear terms keep their standard rule -- only this operator is elevated.
+ *
+ * @warning Do NOT "simplify" this back to the default (or a GLL-collocated)
+ * rule. MFEM's own `miniapps/fluids/navier` solver collocates the nonlinear form
+ * on a GLL rule at @c 2k-1, which is the aliasing-prone choice this project
+ * explicitly rejects; the flagship exactness test asserts that the collocation
+ * rule FAILS where the over-integrated rule succeeds.
+ *
+ * ### Ownership
+ * Quadrature comes from the RuleBook, which must outlive this object (MFEM
+ * integrators hold non-owning rule pointers) -- same contract as StokesOperator.
+ */
+class Convection
+{
+public:
+   /**
+    * @brief Build the dealiased convection form on the velocity space.
+    * @param spaces Mixed velocity/pressure spaces (borrowed, must outlive this).
+    * @param rules  Quadrature source (borrowed, must outlive this).
+    */
+   Convection(MixedSpaces& spaces, const RuleBook& rules);
+
+   /**
+    * @brief Apply @c y = N(u) = (u . grad)u on true dofs.
+    *
+    * Sign convention: this returns the convective term as it appears on the
+    * LEFT-hand side of the momentum equation (@c du/dt + N(u) - nu*lap(u) +
+    * grad p = f). The caller subtracts it when building an explicit right-hand
+    * side. MFEM's navier miniapp instead folds a @c -1 into the integrator's
+    * coefficient; keeping the sign OUT of the operator makes this testable
+    * against the analytic @c (u.grad)u without a sign convention to remember.
+    *
+    * @param u True-dof velocity (input).
+    * @param y True-dof result (output, resized as needed).
+    */
+   void Mult(const mfem::Vector& u, mfem::Vector& y) const;
+
+   /**
+    * @brief Polynomial degree the dealiasing rule is exact for, given order @p k.
+    *
+    * @c 3k: the (u.grad)u . v integrand is degree @c 3k-1 on an affine element,
+    * and one extra degree costs nothing while covering the mildly-curved case.
+    */
+   static int DealiasedOrder(int k) { return 3 * k; }
+
+   /// @return The quadrature rule this operator integrates with (for tests).
+   const mfem::IntegrationRule& Rule() const { return *rule_; }
+
+private:
+   MixedSpaces& spaces_;
+   const RuleBook& rules_;
+   /// Non-owning; owned by the RuleBook, which outlives this object.
+   const mfem::IntegrationRule* rule_ = nullptr;
+   /// The nonlinear form carrying VectorConvectionNLFIntegrator.
+   std::unique_ptr<mfem::ParNonlinearForm> form_;
+};
+
+} // namespace incns
+
+#endif // INCNS_OPERATORS_CONVECTION_HPP

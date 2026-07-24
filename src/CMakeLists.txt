@@ -9,6 +9,7 @@ add_library(incns STATIC
   post/pressure_mean.cpp
   bc/boundary_conditions.cpp
   operators/stokes_operator.cpp
+  operators/convection.cpp
   operators/vecdivdiv_integrator.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
