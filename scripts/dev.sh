@@ -24,12 +24,14 @@
 _script_dir=$(cd "$(dirname "$0")" && pwd)
 export INCNS_REPO_ROOT=$(cd "$_script_dir/.." && pwd)
 
-PRESET=${INCNS_PRESET:-cuda}
-export INCNS_PRESET
+# Assign INTO the exported names -- `PRESET=${INCNS_PRESET:-cuda}` followed by a
+# bare `export INCNS_PRESET` would export an UNSET variable, and test.sh would
+# fall back to its own `cpu` default and look for build/cpu.
+export INCNS_PRESET=${INCNS_PRESET:-cuda}
 export INCNS_DEVICE=${INCNS_DEVICE:-cuda}
 export INCNS_JOBS=${INCNS_JOBS:-8}
 
-BUILD_DIR="$INCNS_REPO_ROOT/build/$PRESET"
+BUILD_DIR="$INCNS_REPO_ROOT/build/$INCNS_PRESET"
 [ -d "$BUILD_DIR" ] || {
   echo "dev.sh: no build at $BUILD_DIR" >&2; exit 1; }
 
