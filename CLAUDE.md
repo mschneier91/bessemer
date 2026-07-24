@@ -344,6 +344,11 @@ before touching Sprint 2.**
   item's original green condition was NOT built — the human accepted the 3D MMS instead
   on 2026-07-24. Close it later if the oracle is wanted. Also: NSE tests have run at np1
   only; convection does shared-face assembly, so np2/np4 is the real parallel check.
+- **2.2b — PLANNED (human, 2026-07-24; NOT started, gated on upstream MFEM PRs).
+  Selectable convective form: convective / skew-symmetric / rotational.** Expected within
+  a few weeks, once the relevant PRs land in the main MFEM repo. Design and rationale in
+  **"Convective form" below** — read that before starting; it records what is already in
+  MFEM, the trap in today's classes, and the decisions already made.
 - **2.3 — Preconditioner deep-dive → PULLED FORWARD (human decision, 2026-07-16).**
   The detailed direction arrived as **`SPEC_cahouet_chabard_mfem.md`** (repo root):
   Cahouet–Chabard with the **consistent `B M_v⁻¹ Bᵀ`** operator (Creff–Guermond), NOT the
@@ -445,6 +450,7 @@ that deliberately rather than by default.)*
   default rule. Prevents aliasing-driven blow-up in DNS. The convection integrator carries
   its higher-order rule from the **rule book**; linear terms keep the standard rule. Do not
   "simplify" the convection term back to the default quadrature.
+- **Convective form — PLANNED (2.2b), not yet built.** See the dedicated section below.
 - **Higher-order pair: BDF3 / AB3.** Implemented alongside BDF2/AB2 **solely to drive the
   adaptive error estimator below** — it is *not* a production time scheme and is never the
   advancing solution outside of tests. (Tests do march it directly to verify 3rd order,
@@ -492,6 +498,104 @@ that deliberately rather than by default.)*
     (t, Δt, accepted/rejected, ‖LTE‖) for every attempted step and exposes it
     programmatically. The adaptive-mode check consumes this record to assert bounded
     rejections and a sane step sequence — it is never reconstructed by parsing logs.
+
+## Convective form — PLANNED (2.2b), gated on upstream MFEM
+
+**Status: NOT started.** Human decision 2026-07-24: add the **skew-symmetric** and
+**rotational** forms of the nonlinear term alongside today's convective form, once the
+relevant PRs land in the main MFEM repo. Expected within a few weeks; explicitly *not* the
+next thing worked on. Everything here is design intent recorded ahead of time — nothing
+below has been built or tested.
+
+### Why this matters (the motivation, so it is not re-derived)
+
+The three forms are **algebraically identical for exactly divergence-free `u`** and differ
+once `u` is only discretely divergence-free — which is always, in a mixed FEM. They differ
+in what they conserve:
+
+| Form | Term | Property |
+|---|---|---|
+| **Convective** (today) | `(u·∇)u` | Cheapest; no discrete energy guarantee |
+| **Skew-symmetric** | `½(u·∇)u + ½∇·(u⊗u)` | Discretely energy-conserving; the standard DNS choice |
+| **Rotational** | `(∇×u)×u + ∇(½\|u\|²)` | Conserves energy; folds `½\|u\|²` into pressure — **the recovered `p` is then the Bernoulli head, not static pressure** |
+
+For the Re_τ=180 channel and any long DNS run, the convective form can drift energy and go
+unstable at marginal resolution where skew-symmetric stays stable. That is the point of the
+work — it is a *stability/conservation* change, not a performance one.
+
+### What is ALREADY in MFEM (checked 2026-07-24 against the installed tree)
+
+`fem/nonlininteg.hpp` already ships:
+- `VectorConvectionNLFIntegrator` — the base; what bessemer uses today.
+- `ConvectiveVectorConvectionNLFIntegrator` (`:434`)
+- `SkewSymmetricVectorConvectionNLFIntegrator` (`:457`) — documented as
+  `.5*(u·∇v, w) - .5*(u·∇w, v)`
+
+> **TRAP — do not "just switch the integrator".** Both subclasses override **only**
+> `AssembleElementGrad` (the Jacobian). Verified in `fem/nonlininteg.cpp`: the only symbols
+> defined for them are `ConvectiveVectorConvectionNLFIntegrator::AssembleElementGrad` (:853)
+> and `SkewSymmetricVectorConvectionNLFIntegrator::AssembleElementGrad` (:902). Neither
+> overrides `AssembleElementVector`, `AssemblePA`, or `AddMultPA` — all of which are defined
+> only on the base (`nonlininteg.cpp:744`, `nonlininteg_vecconvection_pa.cpp:19,807`). So
+> dropping the skew class into bessemer's `Convection` **today** would silently apply the
+> **convective-form residual** with a skew Jacobian. Since bessemer is IMEX and only ever
+> calls the residual (`Mult`), the Jacobian is never used — meaning the swap would change
+> *nothing at all*, silently. **That missing skew residual/PA apply is precisely what the
+> pending PRs are expected to supply. Re-check these overrides when they land; that check is
+> the gate for this work.**
+
+There is no rotational-form integrator in the installed tree, so that one is either a new
+upstream class or a bessemer-side composition (`(∇×u)×u` plus a gradient absorbed into
+pressure).
+
+### Planned design
+
+1. **A runtime enum, mirroring the existing option style** — `ConvectiveForm { Convective,
+   SkewSymmetric, Rotational }` in `src/operators/` next to `convection.hpp`, surfaced as
+   `Parameters::convective_form` + `TimeIntegratorOptions::convective_form`, deck key
+   `physics.convective_form: convective|skew|rotational`. **Default stays `Convective`** so
+   existing decks and every current baseline are bit-for-bit unchanged.
+2. **`Convection` gains the form, and nothing else changes.** It already owns the dealiased
+   rule and the `Mult` contract; the form selects which integrator is constructed. The
+   dealiasing rule (`3k`) applies to **all three** forms — over-integration and choice of
+   form are orthogonal, and the rotational form's `(∇×u)×u` is the same cubic integrand.
+   Keep `Mult` returning the **LHS-signed** term for every form so the IMEX RHS assembly in
+   `StokesTimeIntegrator::SubtractConvection` needs no per-form branching.
+3. **The rotational form needs a pressure decision, and it is not cosmetic.** It moves
+   `½|u|²` into the pressure variable, so the solver recovers the **Bernoulli head**
+   `P = p + ½|u|²`. Either (a) subtract `½|u|²` after the solve to report static pressure —
+   keeps every pressure test and the mean-zero post-processor meaningful — or (b) document
+   that `Pressure()` means something different in this mode. **Prefer (a):** option (b)
+   silently changes what an existing accessor returns, which is how a subtle physics bug
+   gets shipped. Note this interacts with `pressure_mean` and with the MMS pressure
+   assertions, which are written against static `p`.
+
+### How to test it (write these with the change, not after)
+
+- **Equivalence on a divergence-free field.** For an analytically divergence-free `u`, all
+  three forms must produce the same weak term to quadrature accuracy. This is the flagship —
+  it is the statement that the forms are the same equation. `test/convection_test.cpp`
+  already has verified divergence-free polynomial fields to reuse.
+- **Discrete energy conservation.** With `ν=0`, `f=0`, periodic box: skew-symmetric must
+  hold kinetic energy to ~solver tolerance over many steps, while the convective form
+  drifts measurably. This is the property being bought, so assert it directly — it is the
+  only test that would actually fail if the skew residual were silently the convective one
+  (see the TRAP above). **A form-selection test that only checks "it runs" would pass on a
+  broken swap.**
+- **MMS per form.** Extend `nse_mms_test` over the form enum. The manufactured forcing must
+  be rebuilt per form (they differ off the divergence-free manifold), and the convective
+  terms must be **verified numerically against finite differences**, not hand algebra — the
+  2D derivation was wrong by a factor of 3 on the first attempt in 2.2 and only the
+  numerical check caught it.
+- **Rotational pressure.** Assert the recovered static pressure matches the MMS `p` after
+  the `½|u|²` correction — the check that decision 3 was implemented.
+
+### Constraints that still apply
+
+Dealiasing is **not** optional for any form. No hand-written `mfem::forall`. The implicit
+block solve stays untouched — this is an explicit-side change only, so `StokesSolver`, the
+preconditioners, and the Schur block must not need edits. Per 2.0, any *default* change
+(e.g. making skew the default) needs measured NSE evidence, not a preference.
 
 ## Environment & build
 
