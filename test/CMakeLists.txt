@@ -1,6 +1,16 @@
 # CTest registration. Per CLAUDE.md, EVERY test runs under MPI at 1, 2, and 4
 # ranks via the configured launcher; np=1 exists for debugging, green requires
 # np in {2, 4}.
+#
+# Labels:
+#   smoke -- harness-only (hello_mpi), all np
+#   fast  -- the real gate: every test at np in {1, 2, 4}. Green means THIS.
+#   dev   -- INNER-LOOP PRE-FILTER ONLY: the np=1 registration of each `fast`
+#            test, additionally labelled. Same binaries, same assertions, just
+#            the serial rank count. It does NOT redefine green (np=1 cannot see
+#            partition-boundary or reduction bugs) -- it exists so a small edit
+#            can be checked in seconds instead of ~25 min. See INCNS_DEV_NP.
+#   slow  -- the full CC robustness grid, np=4, on demand only.
 
 find_program(MPIEXEC_EXECUTABLE NAMES mpirun REQUIRED)
 find_package(GTest REQUIRED)
@@ -8,6 +18,15 @@ find_package(yaml-cpp REQUIRED)
 
 # Rank counts every test is registered at (guardrail: never above 4).
 set(INCNS_TEST_NPS 1 2 4)
+
+# Which rank count also carries the `dev` label (see the header comment).
+#
+# WHY np=1: on a 1-GPU allocation the np2/np4 registrations of a GPU-touching
+# test buy little parallel coverage relative to what they cost -- measured
+# 2026-07-24 on one H100, stokes_solver_test took 4.8 s at np1 and 47.3 s at
+# np2, ~10x for identical assertions, purely from two ranks serializing on one
+# card. Dropping to np=1 removes that contention tax without dropping a test.
+set(INCNS_DEV_NP 1)
 
 # --- harness smoke (from 1.0b): pure MPI/MFEM hello, label `smoke` ----------
 foreach(np IN LISTS INCNS_TEST_NPS)
@@ -39,8 +58,14 @@ function(incns_add_mpi_test name src)
     add_test(
       NAME ${name}_np${np}
       COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:${name}>)
+    # The np=1 run carries `dev` IN ADDITION to `fast`, so `-L dev` selects the
+    # serial pre-filter while `-L fast` still selects everything it always did.
+    set(_labels "fast")
+    if(np EQUAL INCNS_DEV_NP)
+      list(APPEND _labels "dev")
+    endif()
     set_tests_properties(${name}_np${np} PROPERTIES
-      LABELS "fast"
+      LABELS "${_labels}"
       PROCESSORS ${np})
   endforeach()
 endfunction()
@@ -100,15 +125,19 @@ incns_add_mpi_test(deck_test deck_test.cpp
 
 # The actual driver executables, run on the committed deck (label fast).
 foreach(np IN LISTS INCNS_TEST_NPS)
+  set(_labels "fast")
+  if(np EQUAL INCNS_DEV_NP)
+    list(APPEND _labels "dev")
+  endif()
   add_test(NAME run_case_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml)
   set_tests_properties(run_case_np${np} PROPERTIES
-    LABELS "fast" PROCESSORS ${np}
+    LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "run_case: done")
   add_test(NAME taylor_green_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:taylor_green>)
   set_tests_properties(taylor_green_np${np} PROPERTIES
-    LABELS "fast" PROCESSORS ${np}
+    LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "taylor_green: done")
 endforeach()

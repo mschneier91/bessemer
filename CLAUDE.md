@@ -738,6 +738,22 @@ The tests:
 Only the fast tier runs inside the agentic loop; it is the **unit tests above plus** the
 convergence oracles below.
 
+### Dev tier (`scripts/dev.sh`, i.e. `ctest -L dev`) — pre-filter, NOT a gate
+
+The np=1 registration of every fast-tier test, run in parallel. Same binaries, same
+assertions, serial rank count only. Use it while editing to catch a compile break or an
+obvious regression in seconds instead of ~25 minutes.
+
+**A green dev tier NEVER licenses a commit.** np=1 cannot see the partition-boundary and
+reduction bugs that np ∈ {2, 4} exist to catch — the rule above is unchanged. Always run the
+fast tier before committing.
+
+Why it exists: on a **1-GPU** allocation the np2/np4 runs of a GPU test mostly measure
+contention, not parallelism — two ranks serialize on one card. Measured 2026-07-24 on one
+H100: `stokes_solver_test` 4.8 s at np1 vs **47.3 s at np2**, identical assertions. Corollary
+worth remembering — the fast tier needs **≥1 GPU per rank**; running it on 1 GPU makes the
+np4 tests OOM, which is an allocation-shape problem, not a code failure.
+
 ### Fast tier (`ctest -L fast`, CPU build, < 3 min total, 2–4 MPI ranks)
 
 - **2D Taylor–Green vortex, exact solution — this is the first check.** The 2D TGV has a
