@@ -46,14 +46,11 @@ void Case::EnsureSetup()
    if (integrator_) { return; }
    INCNS_PROFILE("case::setup");
 
-   // The Case dispatches on the equation set. Navier-Stokes (convection,
-   // dealiasing, the NSE stepper) is Sprint 2 -- the selector exists now but is
-   // rejected until then, rather than silently solving Stokes.
-   MFEM_VERIFY(params_.equation == Equation::Stokes,
-               "Case: NavierStokes is not available until Sprint 2; set "
-               "the equation to Stokes");
-
+   // The Case dispatches on the equation set. Both are available as of Sprint
+   // 2.2: NavierStokes just adds the dealiased, AB/EXT-extrapolated convection
+   // term to the right-hand side -- the implicit block solve is identical.
    TimeIntegratorOptions opts;
+   opts.convection = (params_.equation == Equation::NavierStokes);
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;

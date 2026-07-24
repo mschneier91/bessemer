@@ -24,7 +24,7 @@ namespace incns
 enum class Equation
 {
    Stokes,      ///< Unsteady Stokes (Sprint 1).
-   NavierStokes ///< Incompressible Navier-Stokes (Sprint 2; not yet available).
+   NavierStokes ///< Incompressible Navier-Stokes (Sprint 2.2; IMEX BDF/AB).
 };
 
 /// The kind of boundary condition a deck-declared group carries.
@@ -88,8 +88,9 @@ struct Parameters
    std::string device = "cpu";
 
    // --- physics -------------------------------------------------------------
-   /// Equation set to solve. NavierStokes is not available until Sprint 2; the
-   /// Case rejects it cleanly for now (interface lands, wiring comes later).
+   /// Equation set to solve. NavierStokes (Sprint 2.2) adds the dealiased
+   /// convection term, extrapolated to t^{n+1} by AB/EXT and carried on the
+   /// right-hand side; the implicit block solve is identical to Stokes.
    Equation equation = Equation::Stokes;
    /// Kinematic viscosity. In Dimensionless mode this is read as 1/Re (a deck
    /// may equivalently give `physics: Re`); in Dimensional mode it carries

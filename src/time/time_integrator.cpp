@@ -3,6 +3,7 @@
 #include "time/multistep_coeffs.hpp"
 #include "util/profiler.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -27,6 +28,14 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    MFEM_VERIFY(opts_.dt > 0.0, "time_integrator: dt must be positive");
    MFEM_VERIFY(opts_.order == 2 || opts_.order == 3,
                "time_integrator: order must be 2 (production) or 3 (test-only)");
+
+   // NSE (2.2): the dealiased convection operator, built only when asked -- the
+   // Stokes path then allocates nothing and is bit-for-bit unchanged. IMEX, so
+   // this never touches the implicit block solve.
+   if (opts_.convection)
+   {
+      convection_ = std::make_unique<Convection>(spaces_, rules_);
+   }
 
    // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
    // halving the viscosity passed to the solver (the Schur scale follows).
@@ -189,6 +198,38 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    // momentum block); the trapezoidal solver always exists.
    trap_->Blocks().Mass().Mult(combo, tmp);
    b -= tmp;
+
+   SubtractConvection(t_new, b);
+}
+
+void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b)
+{
+   if (!convection_) { return; }
+   INCNS_PROFILE("time_integrator::convection");
+
+   // Match the extrapolation order to the history actually available: EXT1 on
+   // the first step, EXT2 once two entries exist, capped at 3. A fixed EXT2
+   // would read hist_[1] before it exists during the startup ramp.
+   const std::size_t k =
+      std::min<std::size_t>(hist_.size(), (opts_.order == 3 ? 3 : 2));
+   MFEM_VERIFY(k >= 1, "time_integrator: convection needs velocity history");
+
+   std::vector<double> times(hist_times_.begin(), hist_times_.begin() + k);
+   const std::vector<double> g = ExtrapolationWeights(t_new, times);
+
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+   Vector nu_j(n_u);
+   // Device-aware Vector ops throughout -- NEVER a hand-written mfem::forall
+   // (CLAUDE.md: it silently becomes a host loop over device pointers). MFEM's
+   // navier miniapp combines its AB history with a forall; this is the
+   // device-safe equivalent of that step.
+   for (std::size_t j = 0; j < k; ++j)
+   {
+      convection_->Mult(hist_[j], nu_j);
+      // Convection is on the LHS of the momentum equation, so it leaves the
+      // right-hand side with a minus sign.
+      b.Add(-g[j], nu_j);
+   }
 }
 
 void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
@@ -235,6 +276,11 @@ void StokesTimeIntegrator::StepStartup()
       b.Add(1.0 / dt_, tmp);
       trap_->Blocks().ViscousUnconstrained().Mult(hist_[0], tmp); // (nu/2) K u^0
       b -= tmp;
+      // NSE: the starter builds its RHS inline (it does NOT go through
+      // AssembleBdfRhs), so the convection term has to be subtracted here too
+      // -- otherwise step 1 would silently solve Stokes and cost the march its
+      // temporal order. Only one history entry exists, so this is EXT1.
+      SubtractConvection(t_new, b);
       // The starter's momentum block is (1/dt) M + (nu/2) K; refresh it if the
       // first step is (re)tried at a different dt (adaptive rejection).
       if (std::abs(trap_c0_ - 1.0 / dt_) > 1e-12 / dt_)

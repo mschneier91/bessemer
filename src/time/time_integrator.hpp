@@ -8,6 +8,7 @@
 #define INCNS_TIME_TIME_INTEGRATOR_HPP
 
 #include "bc/boundary_conditions.hpp"
+#include "operators/convection.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solver/stokes_solver.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -37,6 +38,11 @@ struct TimeIntegratorOptions
    bool adaptive = false;
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
+   /// Solve Navier-Stokes rather than unsteady Stokes (Sprint 2.2): adds the
+   /// dealiased convection term N(u) = (u.grad)u, extrapolated to t^{n+1} by
+   /// AB/EXT and carried on the RIGHT-hand side. The implicit block solve is
+   /// UNCHANGED -- this is IMEX, so convection never enters the matrix.
+   bool convection = false;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
@@ -206,6 +212,23 @@ private:
    void AssembleBdfRhs(const std::vector<double>& c, double t_new,
                        mfem::Vector& b);
 
+   /**
+    * @brief Subtract the AB/EXT-extrapolated convection term from @p b.
+    *
+    * IMEX: the nonlinear term is explicit, so N(u) is evaluated on the stored
+    * velocity history and extrapolated to @p t_new -- it never enters the
+    * matrix. Convection sits on the LHS of the momentum equation, so it is
+    * SUBTRACTED from the right-hand side (Convection::Mult returns +(u.grad)u).
+    *
+    * The extrapolation order is matched to the number of available history
+    * entries, so the startup ramp degrades gracefully (EXT1 on the first step)
+    * exactly as the BDF side does -- a fixed EXT2 on step 0 would read a
+    * history entry that does not exist yet.
+    *
+    * No-op when TimeIntegratorOptions::convection is false.
+    */
+   void SubtractConvection(double t_new, mfem::Vector& b);
+
    void StepStartup();  ///< Trapezoidal starter / early BDF2 steps.
    void StepFixed();    ///< Fixed-step BDF2/BDF3 step.
    void StepAdaptive(); ///< Adaptive attempt loop (BDF2 + BDF3 candidates).
@@ -226,6 +249,8 @@ private:
    SolverCache bdf3_;                   ///< BDF3 solver cache.
 
    std::unique_ptr<AdaptiveController> controller_; ///< Adaptive mode only.
+   /// Dealiased convection operator; built only when opts_.convection is set.
+   std::unique_ptr<Convection> convection_;
 
    mfem::ParGridFunction u_;  ///< Velocity field.
    mfem::ParGridFunction p_;  ///< Pressure field.
