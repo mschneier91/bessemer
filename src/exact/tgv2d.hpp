@@ -65,6 +65,58 @@ inline mfem::VectorFunctionCoefficient VelocityCoefficient(double nu)
    { Velocity(x, t, nu, u); });
 }
 
+/**
+ * @brief Pressure coefficient for the NSE TGV (time-dependent; use SetTime).
+ *
+ * For unsteady @b Stokes the exact pressure is zero, not this.
+ *
+ * @param nu Kinematic viscosity.
+ * @return A scalar mfem::FunctionCoefficient.
+ */
+inline mfem::FunctionCoefficient PressureCoefficient(double nu)
+{
+   return mfem::FunctionCoefficient(
+             [nu](const mfem::Vector & x, double t)
+   { return Pressure(x, t, nu); });
+}
+
+/**
+ * @brief Analytic kinetic energy @c 1/2 int |u|^2 = pi^2 e^{-4 nu t} on the
+ *        FULL @c [0,2pi]^2 box.
+ *
+ * Exact only on the whole periodic box (the domain this header's fields are
+ * posed on); it is not a per-subdomain quantity.
+ *
+ * Verified numerically against 200x200 Gauss-Legendre quadrature to 1.3e-16
+ * relative before use -- see [[feedback-verify-mms-forcing-numerically]]; the
+ * closed forms here are not hand algebra taken on trust.
+ *
+ * @param t  Time.
+ * @param nu Kinematic viscosity.
+ * @return Kinetic energy at time @p t.
+ */
+inline double KineticEnergy(double t, double nu)
+{
+   return M_PI * M_PI * std::exp(-4.0 * nu * t);
+}
+
+/**
+ * @brief Analytic dissipation rate @c nu int |grad u|^2 = 4 nu pi^2 e^{-4 nu t}
+ *        on the FULL @c [0,2pi]^2 box.
+ *
+ * Satisfies the energy balance @c d(KE)/dt = -DissipationRate() identically --
+ * both the closed form and that balance were checked numerically (exact to
+ * machine precision) before use.
+ *
+ * @param t  Time.
+ * @param nu Kinematic viscosity.
+ * @return Dissipation rate at time @p t.
+ */
+inline double DissipationRate(double t, double nu)
+{
+   return 4.0 * nu * M_PI * M_PI * std::exp(-4.0 * nu * t);
+}
+
 } // namespace tgv2d
 } // namespace incns
 

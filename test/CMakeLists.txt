@@ -94,6 +94,10 @@ target_link_libraries(schur_quality_test PRIVATE yaml-cpp::yaml-cpp)
 incns_add_mpi_test(multistep_coeffs_test multistep_coeffs_test.cpp)
 incns_add_mpi_test(unsteady_mms_test unsteady_mms_test.cpp)
 incns_add_mpi_test(tgv_stokes_temporal_test tgv_stokes_temporal_test.cpp)
+# The NSE counterpart: unforced TGV with convection ON (exact NSE solution,
+# nonzero analytic pressure) + the analytic energy-decay harness that the 2.2b
+# convective-form comparison will read.
+incns_add_mpi_test(tgv_nse_test tgv_nse_test.cpp)
 incns_add_mpi_test(adaptive_controller_test adaptive_controller_test.cpp)
 incns_add_mpi_test(adaptive_tgv_test adaptive_tgv_test.cpp)
 incns_add_mpi_test(grad_div_test grad_div_test.cpp)
