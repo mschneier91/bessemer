@@ -1,21 +1,35 @@
 #!/bin/bash
 #SBATCH -J incns-nse-par
-#SBATCH -p GPU
-#SBATCH -N 1
+#SBATCH -p GPU-shared
 #SBATCH --gres=gpu:h100-80:4
+#SBATCH -n 4
+#SBATCH -c 8
 #SBATCH -t 2:00:00
 #SBATCH -o nse-par-%j.out
 #SBATCH -e nse-par-%j.out
 #
+# -n 4 -c 8 = 32 cores: 4 MPI ranks x 8 cores. An h100-80 node is 104 cores /
+# 8 GPUs (~13 per GPU), so 32 for 4 GPUs stays inside the proportionate share
+# while leaving the build's -j16 real cores to work with. Requested explicitly
+# because GPU-shared shares the NODE -- without -n/-c the default core count is
+# not what a 4-rank job wants.
+#
 # scripts/nse_parallel.sbatch -- the NSE path at np in {1,2,4}: the parallel
 # check the Sprint 2.2 sign-off never got (everything to date is np1).
 #
-# WHY THIS NEEDS 4 WHOLE GPUs, NOT GPU-shared:
+# WHY 4 GPUs, AND WHY GPU-shared:
 #   Convection does shared-face assembly, so np2/np4 is where a rank-boundary
 #   bug would actually show. But np4 on ONE card OOMs BY CONSTRUCTION (it is a
-#   memory limit, not a code failure -- see the GPU plan). Rank binding maps
-#   local_rank % GetDeviceCount(), so 4 ranks over 4 cards is one rank per card.
-#   `-p GPU -N 1 --gres=gpu:h100-80:4` gets whole cards; GPU-shared does not.
+#   memory limit, not a code failure -- see the GPU plan), so np4 needs 4 cards.
+#   Rank binding maps local_rank % GetDeviceCount(), giving one rank per card.
+#
+#   It must be GPU-shared, NOT GPU: on Bridges-2 the `GPU` partition is
+#   WHOLE-NODE ONLY and an H100 node has 8 cards, so `--gres=gpu:h100-80:4`
+#   there is rejected outright ("must request all resources, gpu count 4 is
+#   low"). GPU-shared runs on the SAME h100-80:8 nodes and hands out 4 DISTINCT
+#   cards -- it shares the node, not the GPUs -- which is exactly what one
+#   rank per card needs, at half the SUs of an 8-card whole-node job.
+#   (If you ever do want the whole node: `-p GPU -N 1 --gres=gpu:h100-80:8`.)
 #
 # SUBMIT (a human submits batch jobs -- CLAUDE.md guardrail):
 #   cd /ocean/projects/mth260019p/schneier/bessemer
