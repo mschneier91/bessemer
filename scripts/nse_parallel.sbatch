@@ -62,6 +62,12 @@ export INCNS_DEVICE=cuda
   echo "gpus_allocated   ${SLURM_GPUS_ON_NODE:-unknown} (CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset})"
   echo "machine          ${INCNS_MACHINE:-unknown}"
   echo "mfem             ${MFEM_DIR:-unknown}"
+  # Provenance: which commit actually ran. Slurm stores the script PATH, not a
+  # copy, so a pending job picks up whatever the file says at LAUNCH time --
+  # without this the report cannot be tied back to a revision after the fact.
+  echo "branch           $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  echo "commit           $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  echo "tree_dirty       $(test -n "$(git status --porcelain 2>/dev/null)" && echo YES || echo no)"
 } >> "$REPORT"
 
 echo "--- nvidia-smi ---" | tee -a "$REPORT"
