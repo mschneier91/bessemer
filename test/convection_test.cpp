@@ -118,7 +118,7 @@ TEST_P(ConvectionExactness, OverIntegratedIsExactAndCollocatedIsNot)
    // so u_true carries no interpolation error into the comparison.
    ParGridFunction u_gf(&spaces.Velocity());
    VectorFunctionCoefficient u_coeff(
-      dim, [k](const Vector & x, Vector & v) { PolyVelocity(k, x, v); });
+   dim, [k](const Vector & x, Vector & v) { PolyVelocity(k, x, v); });
    u_gf.ProjectCoefficient(u_coeff);
    Vector u_true(spaces.Velocity().GetTrueVSize());
    u_gf.GetTrueDofs(u_true);

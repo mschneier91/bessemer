@@ -146,7 +146,8 @@ BoxSpec PeriodicBox(int n)
 struct TgvResult
 {
    double u_err = 0.0;      // ||u - u_exact||_L2 at t_final
-   double u_norm = 0.0;     // ||u_exact||_L2 at t_final -- the scale u_err lives on
+   double u_norm =
+      0.0;     // ||u_exact||_L2 at t_final -- the scale u_err lives on
    double p_err = 0.0;      // ||p - p_exact||_L2 at t_final (zero-mean matched)
    double p_norm = 0.0;     // ||p||_L2 at t_final
    Vector u_true;           // velocity true dofs at t_final (same-mesh comparisons)
@@ -192,9 +193,9 @@ TgvResult MarchTgv(int n, int ku, double dt, bool convection,
       r.times.push_back(stepper.Time());
       r.energy.push_back(incns::KineticEnergy(stepper.Velocity(), rules));
       r.dissipation.push_back(
-         incns::DissipationRate(stepper.Velocity(), kNu, rules));
+                      incns::DissipationRate(stepper.Velocity(), kNu, rules));
       r.divergence.push_back(
-         incns::DivergenceNorm(stepper.Velocity(), rules));
+                     incns::DivergenceNorm(stepper.Velocity(), rules));
    };
 
    if (record_history)
@@ -242,7 +243,7 @@ TgvResult MarchTgv(int n, int ku, double dt, bool convection,
    // SHAPE, not gauge. SubtractMean is mass-weighted and MPI-collective -- a
    // nodal average would be wrong at high order.
    FunctionCoefficient p_exact(
-      [](const Vector & x, double t) { return incns::tgv2d::Pressure(x, t, kNu); });
+   [](const Vector & x, double t) { return incns::tgv2d::Pressure(x, t, kNu); });
    p_exact.SetTime(stepper.Time());
 
    ParGridFunction p_shifted(stepper.Pressure());

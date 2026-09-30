@@ -287,7 +287,7 @@ TEST(SchurQuality, LorAmgViscousMeshRobust)
    // DEBUG_DEVICE runs forall bodies on the host and is bitwise-reproducible, so
    // it is deliberately excluded from the mask and keeps the strict host counts.
    const bool real_gpu = mfem::Device::Allows(mfem::Backend::CUDA_MASK |
-                                              mfem::Backend::HIP_MASK);
+                         mfem::Backend::HIP_MASK);
    const std::string npkey = "np" + std::to_string(Mpi::WorldSize());
    YAML::Node base = node[npkey];
    if (real_gpu && node["cuda"] && node["cuda"][npkey])

@@ -18,10 +18,12 @@ namespace
 int LauncherLocalRank()
 {
    // OpenMPI, MVAPICH/MPICH, Intel MPI, and Slurm respectively.
-   for (const char* var : {"OMPI_COMM_WORLD_LOCAL_RANK",
-                           "MV2_COMM_WORLD_LOCAL_RANK",
-                           "MPI_LOCALRANKID",
-                           "SLURM_LOCALID"})
+   for (const char* var :
+        {"OMPI_COMM_WORLD_LOCAL_RANK",
+         "MV2_COMM_WORLD_LOCAL_RANK",
+         "MPI_LOCALRANKID",
+         "SLURM_LOCALID"
+        })
    {
       const char* v = std::getenv(var);
       if (v && v[0] != '\0') { return std::atoi(v); }

@@ -35,7 +35,7 @@ namespace incns_test
 inline double ReproTol(double host_tol)
 {
    const bool real_gpu = mfem::Device::Allows(mfem::Backend::CUDA_MASK |
-                                              mfem::Backend::HIP_MASK);
+                         mfem::Backend::HIP_MASK);
    // ~60x the measured 1.5e-11 floor, and still orders below any
    // discretization-error scale these cases resolve.
    return real_gpu ? 1e-9 : host_tol;
