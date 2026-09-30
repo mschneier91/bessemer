@@ -1030,9 +1030,13 @@ Launched by a human via the batch scheduler. See Guardrails.
   **If a kernel genuinely cannot be expressed that way** (sum factorization, `MFEM_SHARED`
   tiles — e.g. `vecdivdiv_integrator.cpp`), that TU must be compiled by nvcc:
   `set_source_files_properties(... PROPERTIES LANGUAGE CUDA)` + `--expt-extended-lambda` +
-  `CMAKE_CUDA_ARCHITECTURES`. Any file defining device kernels must open with
+  `CMAKE_CUDA_ARCHITECTURES`. A bessemer-specific file defining device kernels opens with
   `#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)` / `#error` so this failure becomes a
-  compile error instead of a runtime segfault.
+  compile error instead of a runtime segfault. **Exception — code written to go upstream
+  into MFEM carries no such guard** (MFEM would not; human decision, 2026-09-30). That is
+  currently `vecdivdiv_integrator.cpp`: its only protection is the `LANGUAGE CUDA` entry in
+  `src/CMakeLists.txt`, so never drop it from that list, and on a CUDA build confirm it
+  still compiles through nvcc (a missing entry compiles clean and segfaults on the GPU).
 - **Device-resident vectors in the solve path.** Any `Vector`/`BlockVector` an operator
   applies to (or that a device kernel writes) must live in the **device memory space**, or
   every apply forces a silent host↔device copy (a fallback that stays correct but kills GPU

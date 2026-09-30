@@ -3,17 +3,6 @@
 #include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
-// This TU defines real device kernels (forall_2D + MFEM_SHARED tiles below).
-// MFEM_HOST_DEVICE and forall's CUDA dispatch are both guarded on __CUDACC__
-// (mfem config/config.hpp, general/forall.hpp), so a host compiler does not
-// reject this code -- it degrades it into host loops over device pointers, and
-// the first symptom is a SIGSEGV "Invalid permissions" deep in AssemblePA. Make
-// that a compile error instead. src/CMakeLists.txt marks this file LANGUAGE
-// CUDA; this line is what notices if that ever stops being true.
-#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)
-#error "vecdivdiv_integrator.cpp defines device kernels and must be compiled by nvcc -- see the nvcc TU list in src/CMakeLists.txt"
-#endif
-
 namespace incns
 {
 

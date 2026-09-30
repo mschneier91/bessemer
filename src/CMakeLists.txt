@@ -41,8 +41,9 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
 # by a host compiler the kernels do not fail to build -- they quietly become
 # host loops iterating over device pointers, which segfaults with "Invalid
-# permissions" at run time. The file carries a matching #error so that stops
-# being a silent failure mode.
+# permissions" at run time. The file itself carries NO #error guard for this
+# (it is written to go upstream into MFEM, which would not carry one), so this
+# LANGUAGE CUDA property is the only thing preventing that -- keep it.
 if(USE_CUDA)
   set_source_files_properties(operators/vecdivdiv_integrator.cpp
                               PROPERTIES LANGUAGE CUDA)
