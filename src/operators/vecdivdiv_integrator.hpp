@@ -3,8 +3,7 @@
  * @brief Sum-factorized grad-div integrator (Q div u, div v) for [H1]^d vector
  *        fields (vecdivdiv_spec.md; out-of-tree against installed MFEM).
  */
-#ifndef INCNS_OPERATORS_VECDIVDIV_INTEGRATOR_HPP
-#define INCNS_OPERATORS_VECDIVDIV_INTEGRATOR_HPP
+#pragma once
 
 #include "mfem.hpp"
 #include "mfem/fem/kernel_dispatch.hpp"
@@ -177,5 +176,3 @@ public:
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_VECDIVDIV_INTEGRATOR_HPP
