@@ -5,7 +5,9 @@
 //      coefficient sweep, curved meshes, <= 1e-12 relative;
 //  7.3 the collocated-GLL rule (Q1D == D1D, the SEM configuration);
 //  7.4 PA diagonal equals the assembled matrix diagonal;
-//  7.5 transpose apply equals primal apply (symmetric forwarding).
+//  7.5 transpose apply equals primal apply (symmetric forwarding);
+//  EA  component blocks, element-assembled on a scalar space and merged,
+//      equal the assembled vector operator.
 
 #include <gtest/gtest.h>
 
@@ -15,10 +17,12 @@
 
 #include <cmath>
 #include <memory>
+#include <vector>
 
 using namespace mfem;
 using incns::Rule1D;
 using incns::RuleBook;
+using incns::VectorDivDivComponentIntegrator;
 using incns::VectorDivDivIntegrator;
 
 namespace
@@ -202,5 +206,101 @@ TEST(VecDivDiv, DiagonalMatchesAssembled)
 
       d_fa -= d_pa;
       EXPECT_LE(Norm(d_fa), 1e-12 * Norm(d_pa)) << "dim=" << dim;
+   }
+}
+
+// EA -- the dim x dim component blocks, each element-assembled on a SCALAR
+// space (AssemblyLevel::FULL, i.e. AssembleEA -> sparse matrix) and merged
+// with HypreParMatrixFromBlocks, equal the legacy-assembled vector operator.
+// The off-diagonal blocks are not symmetric, so this pins the EA row/column
+// convention and lexicographic dof order; at np > 1 it pins that the merged
+// block ordering is the byNODES vector true-dof ordering the LOR-AMG merge
+// relies on. Also checks each block's AssemblyLevel::ELEMENT action against
+// its FULL matrix. Q1 is the LOR use; p = 2, 3 guard the tensor indexing.
+TEST(VecDivDiv, ComponentEaMatchesVectorAssembly)
+{
+   RuleBook rules;
+   for (int dim : {2, 3})
+   {
+      const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+      const int pmax = (dim == 2) ? 3 : 2;
+      for (int p = 1; p <= pmax; ++p)
+      {
+         Mesh serial = MakeCurvedMesh(dim, (dim == 2) ? 3 : 2, p);
+         ParMesh mesh(MPI_COMM_WORLD, serial);
+         H1_FECollection fec(p, dim);
+         ParFiniteElementSpace vfes(&mesh, &fec, dim, Ordering::byNODES);
+         ParFiniteElementSpace sfes(&mesh, &fec);
+         const IntegrationRule& ir = rules.Get(geom, 2 * p + dim - 1);
+         FunctionCoefficient q(Coef);
+         Array<int> empty;
+
+         // Reference: the vector operator, legacy full assembly.
+         auto* ref_integ = new VectorDivDivIntegrator(q);
+         ref_integ->SetIntRule(&ir);
+         ParBilinearForm ref(&vfes);
+         ref.AddDomainIntegrator(ref_integ);
+         ref.Assemble();
+         ref.Finalize();
+         OperatorPtr K_ref;
+         ref.FormSystemMatrix(empty, K_ref);
+
+         // Blocks: the parent supplies the coefficient and the rule.
+         VectorDivDivIntegrator parent(q);
+         parent.SetIntRule(&ir);
+         // Lifetimes (both bit here): the handle from FormSystemMatrix owns
+         // each block matrix and OperatorHandle copies do NOT, so the handle
+         // vector must never reallocate; and at np = 1 a FULL-assembled matrix
+         // borrows its form's storage, so the forms must outlive the merge.
+         std::vector<std::unique_ptr<ParBilinearForm>> fa_forms;
+         std::vector<OperatorPtr> K_blocks;
+         K_blocks.reserve(dim * dim);
+         Array2D<const HypreParMatrix*> blocks(dim, dim);
+         for (int i = 0; i < dim; ++i)
+         {
+            for (int j = 0; j < dim; ++j)
+            {
+               fa_forms.push_back(std::make_unique<ParBilinearForm>(&sfes));
+               ParBilinearForm& fa = *fa_forms.back();
+               ParBilinearForm ea(&sfes);
+               fa.SetAssemblyLevel(AssemblyLevel::FULL);
+               ea.SetAssemblyLevel(AssemblyLevel::ELEMENT);
+               fa.AddDomainIntegrator(
+                    new VectorDivDivComponentIntegrator(parent, i, j));
+               ea.AddDomainIntegrator(
+                    new VectorDivDivComponentIntegrator(parent, i, j));
+               fa.Assemble();
+               ea.Assemble();
+               K_blocks.emplace_back(Operator::Hypre_ParCSR);
+               fa.FormSystemMatrix(empty, K_blocks.back());
+               const HypreParMatrix* Kij = K_blocks.back().As<HypreParMatrix>();
+               ASSERT_NE(Kij, nullptr) << "FULL did not yield a HypreParMatrix";
+               blocks(i, j) = Kij;
+
+               // ELEMENT-level action (EA data applied per element) vs the
+               // FULL matrix built from the same EA data.
+               OperatorPtr A_ea;
+               ea.FormSystemMatrix(empty, A_ea);
+               Vector x(sfes.GetTrueVSize()), y_ea(x.Size()), y_fa(x.Size());
+               x.Randomize(11 + 3 * i + j);
+               A_ea->Mult(x, y_ea);
+               Kij->Mult(x, y_fa);
+               y_ea -= y_fa;
+               EXPECT_LE(Norm(y_ea), 1e-12 * Norm(y_fa))
+                     << "ELEMENT vs FULL: dim=" << dim << " p=" << p
+                     << " block=(" << i << "," << j << ")";
+            }
+         }
+         std::unique_ptr<HypreParMatrix> K(HypreParMatrixFromBlocks(blocks));
+         ASSERT_EQ(K->Height(), K_ref->Height());
+
+         Vector x(vfes.GetTrueVSize()), y(x.Size()), y_ref(x.Size());
+         x.Randomize(5 + p);
+         K->Mult(x, y);
+         K_ref->Mult(x, y_ref);
+         y -= y_ref;
+         EXPECT_LE(Norm(y), 1e-12 * Norm(y_ref))
+               << "merged blocks vs vector: dim=" << dim << " p=" << p;
+      }
    }
 }

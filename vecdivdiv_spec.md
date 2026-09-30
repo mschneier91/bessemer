@@ -542,8 +542,14 @@ Definition of done: all §7 tests pass on CPU + GPU; §8 acceptance numbers reco
 
 ## 10. Explicit non-goals (defer)
 
-- `AssembleEA` / element assembly (dense (d·nd)² element matrices are impractical at high p;
-  the elasticity EA path exists for p=1 LOR-AMG needs only).
+- `AssembleEA` / element assembly **of the vector integrator** (dense (d·nd)² element
+  matrices are impractical at high p; the elasticity EA path exists for p=1 LOR-AMG needs
+  only). **Update 2026-09-30:** added for exactly that p=1 LOR-AMG need, as
+  `VectorDivDivComponentIntegrator` — one (i, j) block on a *scalar* space, MFEM's own
+  `ElasticityComponentIntegrator` pattern. A vector `AssembleEA` is not possible anyway:
+  MFEM's EA extension (installed `17d1afc`) sizes element matrices by the scalar dof count
+  and ignores vdim. Direct O(nd² nq) kernel, not sum-factorized; pinned by
+  `VecDivDiv.ComponentEaMatchesVectorAssembly`. Not yet wired into the LOR-AMG path.
 - `AssembleMF` (true matrix-free without stored qdata).
 - Simplex PA, NURBS/patch assembly, surface meshes (sdim > dim), libCEED path.
 - √α-folded 9-real qdata for Q ≥ 0 (mild bandwidth win; do only if benchmarks demand).

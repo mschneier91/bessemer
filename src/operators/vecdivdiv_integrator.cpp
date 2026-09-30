@@ -74,6 +74,11 @@ namespace vecdivdiv
 
 using kernels::internal::SetMaxOf;
 
+// Quadrature data for PA and component EA; defined after the kernels.
+void SetupQuadratureData(Mesh& mesh, const IntegrationRule& ir,
+                         const GeometricFactors& geom, Coefficient* Q,
+                         MemoryType mt, Vector& qdata);
+
 template <int T_D1D = 0, int T_Q1D = 0>
 void SmemApply2D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
                  const Vector& d, const Vector& x, Vector& y,
@@ -290,51 +295,37 @@ const VddRegistrar vdd_registrar;
 /// \endcond
 
 // ---------------------------------------------------------------------------
-// PA setup: adjugate + alpha per quadrature point (spec par.2.3 formulas, the
-// same expressions the vecdiffusion setup uses).
+// Quadrature data shared by the PA setup and the component-block EA:
+// (nq, dim*dim + 1, ne) with adj(J) in the A[k][i] slot order k + i*dim, then
+// alpha = Q w / detJ (spec par.2.3 formulas, the same expressions the
+// vecdiffusion setup uses).
 // ---------------------------------------------------------------------------
-void VectorDivDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
+void vecdivdiv::SetupQuadratureData(Mesh& mesh, const IntegrationRule& ir,
+                                    const GeometricFactors& geom,
+                                    Coefficient* Q, MemoryType mt,
+                                    Vector& qdata)
 {
-   Mesh* mesh = fes.GetMesh();
-   const FiniteElement& el = *fes.GetTypicalFE();
-   const IntegrationRule* ir =
-      IntRule ? IntRule : &DiffusionIntegrator::GetRule(el, el);
-   dim_ = mesh->Dimension();
-   MFEM_VERIFY(dim_ == 2 || dim_ == 3,
-               "VectorDivDivIntegrator: dim must be 2 or 3");
-   MFEM_VERIFY(mesh->SpaceDimension() == dim_,
-               "VectorDivDivIntegrator: sdim must equal dim");
-   MFEM_VERIFY(fes.GetVDim() == dim_,
-               "VectorDivDivIntegrator: vdim must equal dim");
+   const int dim = mesh.Dimension();
+   const int ne = mesh.GetNE();
 
-   const MemoryType mt = (pa_mt == MemoryType::DEFAULT)
-                         ? Device::GetDeviceMemoryType() : pa_mt;
-   ne_ = fes.GetNE();
-   geom_ = mesh->GetGeometricFactors(*ir, GeometricFactors::JACOBIANS, mt);
-   // Tensor basis required for PA; use full assembly on non-tensor elements.
-   maps_ = &el.GetDofToQuad(*ir, DofToQuad::TENSOR);
-   dofs1D_ = maps_->ndof;
-   quad1D_ = maps_->nqpt;
-
-   QuadratureSpace qs(*mesh, *ir);
+   QuadratureSpace qs(mesh, ir);
    CoefficientVector coeff(qs, CoefficientStorage::FULL);
    if (Q) { coeff.Project(*Q); }
    else { coeff.SetConstant(1.0); }
    MFEM_VERIFY(coeff.GetVDim() == 1,
                "VectorDivDivIntegrator: scalar coefficient required");
 
-   const int nq = ir->GetNPoints();
-   const int pa_size = dim_ * dim_ + 1; // adj(J) entries + alpha
-   pa_data_.SetSize(nq * pa_size * ne_, mt);
-   pa_data_.UseDevice(true);
+   const int nq = ir.GetNPoints();
+   const int pa_size = dim * dim + 1; // adj(J) entries + alpha
+   qdata.SetSize(nq * pa_size * ne, mt);
+   qdata.UseDevice(true);
 
-   const auto W = Reshape(ir->GetWeights().Read(), nq);
-   const auto C = Reshape(coeff.Read(), nq, ne_);
-   const auto J = Reshape(geom_->J.Read(), nq, dim_, dim_, ne_);
-   auto D = Reshape(pa_data_.Write(), nq, pa_size, ne_);
-   const int dim = dim_;
+   const auto W = Reshape(ir.GetWeights().Read(), nq);
+   const auto C = Reshape(coeff.Read(), nq, ne);
+   const auto J = Reshape(geom.J.Read(), nq, dim, dim, ne);
+   auto D = Reshape(qdata.Write(), nq, pa_size, ne);
 
-   mfem::forall(ne_ * nq, [ = ] MFEM_HOST_DEVICE(int idx)
+   mfem::forall(ne * nq, [ = ] MFEM_HOST_DEVICE(int idx)
    {
       const int e = idx / nq, q = idx % nq;
       if (dim == 2)
@@ -376,6 +367,35 @@ void VectorDivDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
          D(q, 9, e) = C(q, e) * W(q) / detJ; // alpha
       }
    });
+}
+
+// ---------------------------------------------------------------------------
+// PA setup: adjugate + alpha per quadrature point.
+// ---------------------------------------------------------------------------
+void VectorDivDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
+{
+   Mesh* mesh = fes.GetMesh();
+   const FiniteElement& el = *fes.GetTypicalFE();
+   const IntegrationRule* ir =
+      IntRule ? IntRule : &DiffusionIntegrator::GetRule(el, el);
+   dim_ = mesh->Dimension();
+   MFEM_VERIFY(dim_ == 2 || dim_ == 3,
+               "VectorDivDivIntegrator: dim must be 2 or 3");
+   MFEM_VERIFY(mesh->SpaceDimension() == dim_,
+               "VectorDivDivIntegrator: sdim must equal dim");
+   MFEM_VERIFY(fes.GetVDim() == dim_,
+               "VectorDivDivIntegrator: vdim must equal dim");
+
+   const MemoryType mt = (pa_mt == MemoryType::DEFAULT)
+                         ? Device::GetDeviceMemoryType() : pa_mt;
+   ne_ = fes.GetNE();
+   geom_ = mesh->GetGeometricFactors(*ir, GeometricFactors::JACOBIANS, mt);
+   // Tensor basis required for PA; use full assembly on non-tensor elements.
+   maps_ = &el.GetDofToQuad(*ir, DofToQuad::TENSOR);
+   dofs1D_ = maps_->ndof;
+   quad1D_ = maps_->nqpt;
+
+   vecdivdiv::SetupQuadratureData(*mesh, *ir, *geom_, Q, mt, pa_data_);
 }
 
 void VectorDivDivIntegrator::AddMultPA(const Vector& x, Vector& y) const
@@ -453,6 +473,104 @@ void VectorDivDivIntegrator::AssembleDiagonalPA(Vector& diag)
                   }
       });
    }
+}
+
+// ---------------------------------------------------------------------------
+// Component-block EA: K^{ij}(a, b) = sum_q alpha (Ghat_a . A[:,i])
+// (Ghat_b . A[:,j]), row a (test, component i), column b (trial, component
+// j). One thread per (e, a, b) entry, reference gradients rebuilt from the 1D
+// tables as in the PA diagonal, so dofs are lexicographic -- the order MFEM's
+// EA restriction uses. Direct O(nd^2 nq) per element: fine for the Q1 LOR
+// matrices this exists for, not a high-order path (spec par.10).
+// MFEM's EA storage is row-major per element: in a column-major
+// Reshape(nd, nd, ne), entry (b, a, e) is row a, column b.
+// ---------------------------------------------------------------------------
+void VectorDivDivComponentIntegrator::AssembleEA(const FiniteElementSpace& fes,
+      Vector& emat, const bool add)
+{
+   Mesh* mesh = fes.GetMesh();
+   const FiniteElement& el = *fes.GetTypicalFE();
+   const int dim = mesh->Dimension();
+   MFEM_VERIFY(dim == 2 || dim == 3,
+               "VectorDivDivComponentIntegrator: dim must be 2 or 3");
+   MFEM_VERIFY(mesh->SpaceDimension() == dim,
+               "VectorDivDivComponentIntegrator: sdim must equal dim");
+   MFEM_VERIFY(fes.GetVDim() == 1,
+               "VectorDivDivComponentIntegrator: blocks live on a scalar "
+               "(vdim == 1) space");
+   MFEM_VERIFY(el.GetGeomType() == Geometry::SQUARE ||
+               el.GetGeomType() == Geometry::CUBE,
+               "VectorDivDivComponentIntegrator: quads/hexes only");
+   MFEM_VERIFY(0 <= i_block_ && i_block_ < dim && 0 <= j_block_ && j_block_ < dim,
+               "VectorDivDivComponentIntegrator: block index out of range");
+
+   const IntegrationRule* ir =
+      IntRule ? IntRule
+      : parent_.GetIntRule() ? parent_.GetIntRule()
+      : &DiffusionIntegrator::GetRule(el, el);
+   const MemoryType mt = Device::GetDeviceMemoryType();
+   const GeometricFactors* geom =
+      mesh->GetGeometricFactors(*ir, GeometricFactors::JACOBIANS, mt);
+   Vector qdata;
+   vecdivdiv::SetupQuadratureData(*mesh, *ir, *geom, parent_.Q, mt, qdata);
+
+   const DofToQuad& maps = el.GetDofToQuad(*ir, DofToQuad::TENSOR);
+   const int D1D = maps.ndof, Q1D = maps.nqpt;
+   const int ne = fes.GetNE();
+   const int nd = el.GetDof();
+   const int nq = ir->GetNPoints();
+   MFEM_VERIFY(emat.Size() == nd * nd * ne,
+               "VectorDivDivComponentIntegrator: emat must be nd*nd*ne");
+
+   const int ib = i_block_, jb = j_block_;
+   const auto B = Reshape(maps.B.Read(), Q1D, D1D);
+   const auto G = Reshape(maps.G.Read(), Q1D, D1D);
+   const auto DE = Reshape(qdata.Read(), nq, dim * dim + 1, ne);
+   auto E = Reshape(add ? emat.ReadWrite() : emat.Write(), nd, nd, ne);
+
+   mfem::forall(ne * nd * nd, [ = ] MFEM_HOST_DEVICE(int idx)
+   {
+      const int e = idx / (nd * nd);
+      const int a = (idx / nd) % nd; // row
+      const int b = idx % nd;        // column (fastest -> coalesced writes)
+      const int ax = a % D1D, ay = (a / D1D) % D1D, az = a / (D1D * D1D);
+      const int bx = b % D1D, by = (b / D1D) % D1D, bz = b / (D1D * D1D);
+      const int NQZ = (dim == 3) ? Q1D : 1;
+      real_t acc = 0.0;
+      for (int qz = 0; qz < NQZ; ++qz)
+         for (int qy = 0; qy < Q1D; ++qy)
+            for (int qx = 0; qx < Q1D; ++qx)
+            {
+               const int q = qx + Q1D * (qy + Q1D * qz);
+               // reference gradients of dofs a, b ([2] unused in 2D)
+               real_t ga[3] = {0.0, 0.0, 0.0}, gb[3] = {0.0, 0.0, 0.0};
+               if (dim == 2)
+               {
+                  ga[0] = G(qx, ax) * B(qy, ay);
+                  ga[1] = B(qx, ax) * G(qy, ay);
+                  gb[0] = G(qx, bx) * B(qy, by);
+                  gb[1] = B(qx, bx) * G(qy, by);
+               }
+               else
+               {
+                  ga[0] = G(qx, ax) * B(qy, ay) * B(qz, az);
+                  ga[1] = B(qx, ax) * G(qy, ay) * B(qz, az);
+                  ga[2] = B(qx, ax) * B(qy, ay) * G(qz, az);
+                  gb[0] = G(qx, bx) * B(qy, by) * B(qz, bz);
+                  gb[1] = B(qx, bx) * G(qy, by) * B(qz, bz);
+                  gb[2] = B(qx, bx) * B(qy, by) * G(qz, bz);
+               }
+               real_t pa = 0.0, pb = 0.0;
+               for (int k = 0; k < dim; ++k)
+               {
+                  pa += ga[k] * DE(q, k + ib * dim, e);
+                  pb += gb[k] * DE(q, k + jb * dim, e);
+               }
+               acc += DE(q, dim * dim, e) * pa * pb;
+            }
+      if (add) { E(b, a, e) += acc; }
+      else { E(b, a, e) = acc; }
+   });
 }
 
 } // namespace incns
