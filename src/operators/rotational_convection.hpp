@@ -135,6 +135,9 @@ public:
     */
    const mfem::Vector& GetQuadratureData() const { return pa_data_; }
 
+   /// @return The mesh of the last AssemblePA() (null before it).
+   const mfem::Mesh* GetAssembledMesh() const { return pa_mesh_; }
+
    /// Apply kernel signature: ne, sign, B, d, x, y, d1d, q1d.
    using ApplyType = void (*)(int, mfem::real_t, const mfem::Array<mfem::real_t>&,
                               const mfem::Vector&, const mfem::Vector&,

@@ -472,6 +472,9 @@ void VectorRotationalConvectionIntegrator::AddNodalSkewPA(Vector& s_e) const
                << d1d_ << ", q1d = " << q1d_ << " exceed the device limits ("
                << lim.MAX_D1D << ", " << lim.MAX_Q1D << ")");
    const int NE = ne_, D1D = d1d_, Q1D = q1d_;
+   MFEM_VERIFY(s_e.Size() == (dim_ == 3 ? D1D * D1D* D1D : D1D * D1D) *
+               dim_ * NE, "VectorRotationalConvectionIntegrator::AddNodalSkewPA: "
+               "s_e is not an E-vector of the assembled velocity space");
    const auto B = Reshape(maps_->B.Read(), Q1D, D1D);
 
    if (dim_ == 2)

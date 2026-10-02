@@ -25,6 +25,7 @@ add_library(incns STATIC
   post/checkpoint.cpp
   post/diagnostics.cpp
   precond/cahouet_chabard.cpp
+  precond/point_block_jacobi.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
@@ -37,7 +38,9 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # kernels that cannot be expressed as device-aware mfem::Vector operations.
 # vecdivdiv_integrator.cpp -- sum-factorized grad-div built on forall_2D with
 # MFEM_SHARED tiles; rotational_convection.cpp -- the lagged-vorticity
-# rotational term's setup/apply/nodal-skew kernels (same tile machinery).
+# rotational term's setup/apply/nodal-skew kernels (same tile machinery);
+# point_block_jacobi.cpp -- essential-dof rule, block fill and byNODES
+# gather/scatter foralls for the velocity point-block Jacobi.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
@@ -50,6 +53,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 if(USE_CUDA)
   set_source_files_properties(operators/vecdivdiv_integrator.cpp
                               operators/rotational_convection.cpp
+                              precond/point_block_jacobi.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()
