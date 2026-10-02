@@ -34,6 +34,30 @@ enum class VelocityPreconditioner
    LORAMG
 };
 
+/**
+ * @brief Velocity-block preconditioner when the semi-implicit rotational term
+ *        N is in the momentum block (rotational_convection_pa_spec.md par.7.5;
+ *        deck `solver.rotation_pc: symmetric|pbj_only|pbj_krylov`).
+ *
+ * N is skew with an exactly zero diagonal, so scalar Jacobi -- and LOR-AMG,
+ * built on sigma M + nu K -- cannot see it; the outer FGMRES always applies
+ * the true operator, so every choice is correct, they differ in iterations.
+ * The two point-block Jacobi choices replace the velocity PC on BOTH Schur
+ * paths (VelocityPreconditioner / cc.a_pc are then not used).
+ */
+enum class RotationVelocityPC
+{
+   /// The usual velocity PC (Jacobi / Chebyshev / LOR-AMG) on the symmetric
+   /// part only; N enters through the outer operator. The default.
+   Symmetric,
+   /// Point-block Jacobi (the nodal dim x dim blocks of the full block,
+   /// rotation included) applied once. Cheapest.
+   PbjOnly,
+   /// GMRES on the full velocity block preconditioned by point-block Jacobi,
+   /// loose tolerance -- for runs with a large volume at rotation number > 1.
+   PbjKrylov
+};
+
 } // namespace incns
 
 #endif // INCNS_SOLVER_VELOCITY_PRECONDITIONER_HPP

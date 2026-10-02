@@ -174,7 +174,11 @@ output:
 Solver knobs also live in the deck — e.g. `solver: { schur: cc, n_inner: 10 }`
 selects the Cahouet–Chabard preconditioner, `discretization: { order_u: 4,
 order_p: 3 }` bumps the order, `time: { adaptive: true, atol: 1e-6 }` turns on
-adaptive stepping. Analytic initial/boundary fields beyond the named registry
+adaptive stepping. For Navier–Stokes, `physics: { convective_form: rotational }`
+switches to the semi-implicit rotational form (lagged vorticity in the implicit
+velocity block; `Pressure()` still reports static pressure), and
+`solver: { rotation_pc: pbj_krylov }` (or `pbj_only`) preconditions its velocity
+block with point-block Jacobi. Analytic initial/boundary fields beyond the named registry
 (`taylor_green_2d`, `zero`) are supplied from Python or an in-code driver.
 
 Output is written as a ParaView collection (`<path>/<name>/…`) with high-order

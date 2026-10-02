@@ -380,6 +380,15 @@ PYBIND11_MODULE(_core, m)
    .value("LORAMG", VelocityPreconditioner::LORAMG)
    .value("BoomerAMG", VelocityPreconditioner::LORAMG);
 
+   py::enum_<ConvectiveForm>(m, "ConvectiveForm")
+   .value("Convective", ConvectiveForm::Convective)
+   .value("Rotational", ConvectiveForm::Rotational);
+
+   py::enum_<RotationVelocityPC>(m, "RotationVelocityPC")
+   .value("Symmetric", RotationVelocityPC::Symmetric)
+   .value("PbjOnly", RotationVelocityPC::PbjOnly)
+   .value("PbjKrylov", RotationVelocityPC::PbjKrylov);
+
    py::enum_<SchurBlockType>(m, "SchurBlockType")
    .value("Mass", SchurBlockType::Mass)
    .value("CahouetChabard", SchurBlockType::CahouetChabard);
@@ -500,6 +509,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("nu", &Parameters::nu)
    .def_readwrite("grad_div", &Parameters::grad_div)
    .def_readwrite("grad_div_scale", &Parameters::grad_div_scale)
+   .def_readwrite("convective_form", &Parameters::convective_form)
    .def_readwrite("order_u", &Parameters::order_u)
    .def_readwrite("order_p", &Parameters::order_p)
    .def_readwrite("collocated_mass", &Parameters::collocated_mass)
@@ -513,6 +523,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("kdim", &Parameters::kdim)
    .def_readwrite("velocity_prec", &Parameters::velocity_prec)
    .def_readwrite("amg_reuse", &Parameters::amg_reuse)
+   .def_readwrite("rotation_pc", &Parameters::rotation_pc)
    .def_readwrite("schur", &Parameters::schur)
    .def_readwrite("cc", &Parameters::cc)
    .def_readwrite("print_level", &Parameters::print_level)

@@ -56,6 +56,16 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else if (gs == "nu") { p.grad_div_scale = GradDivScale::OrderNu; }
       else { MFEM_ABORT("parameters: unknown physics.grad_div_scale '" << gs << "'"); }
    }
+   if (physics && physics["convective_form"])
+   {
+      const std::string cf = physics["convective_form"].as<std::string>();
+      if (cf == "convective") { p.convective_form = ConvectiveForm::Convective; }
+      else if (cf == "rotational")
+      {
+         p.convective_form = ConvectiveForm::Rotational;
+      }
+      else { MFEM_ABORT("parameters: unknown physics.convective_form '" << cf << "'"); }
+   }
 
    const YAML::Node nd = root["nondimensionalization"];
    if (nd && nd["mode"])
@@ -139,6 +149,17 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
    }
    Maybe(solver, "amg_reuse", p.amg_reuse);
+   if (solver && solver["rotation_pc"])
+   {
+      const std::string rp = solver["rotation_pc"].as<std::string>();
+      if (rp == "symmetric") { p.rotation_pc = RotationVelocityPC::Symmetric; }
+      else if (rp == "pbj_only") { p.rotation_pc = RotationVelocityPC::PbjOnly; }
+      else if (rp == "pbj_krylov")
+      {
+         p.rotation_pc = RotationVelocityPC::PbjKrylov;
+      }
+      else { MFEM_ABORT("parameters: unknown solver.rotation_pc '" << rp << "'"); }
+   }
    if (solver && solver["schur"])
    {
       const std::string sm = solver["schur"].as<std::string>();

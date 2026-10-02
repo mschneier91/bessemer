@@ -20,9 +20,14 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.grad_div = o.grad_div;
    so.grad_div_scale = o.grad_div_scale;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
+   so.lagged_velocity = o.lagged_velocity;
+   so.rotation_alpha = o.rotation_alpha;
+   // Point-block Jacobi replaces the velocity PC: no LOR source then.
+   const bool pbj = o.lagged_velocity &&
+                    o.rotation_pc != RotationVelocityPC::Symmetric;
    so.lor_momentum =
-      cc ? (o.cc.a_pc == APC::LORAMG)
-      : (o.velocity_prec == VelocityPreconditioner::LORAMG);
+      !pbj && (cc ? (o.cc.a_pc == APC::LORAMG)
+               : (o.velocity_prec == VelocityPreconditioner::LORAMG));
    so.lor_frozen = so.lor_momentum && o.amg_reuse;
    return so;
 }
@@ -48,7 +53,9 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    // sign flip to physical pressure happens exactly once at output. B and B^T
    // are Delta-t independent, so they are wired once and never refreshed.
    BT_ = std::make_unique<TransposeOperator>(&op_.Divergence());
-   block_op_.SetBlock(0, 0, &op_.Momentum());
+   // (0,0) is the full momentum block: with a rotation term that is the
+   // nonsymmetric A + N (FGMRES is the outer solver on both paths).
+   block_op_.SetBlock(0, 0, &op_.FullMomentum());
    block_op_.SetBlock(0, 1, BT_.get(), cc_mode_ ? 1.0 : -1.0);
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
@@ -97,10 +104,37 @@ void StokesSolver::BuildVelocityPreconditioner()
    // is spectrally equivalent -- LOR tdofs match the HO velocity tdofs, so the
    // same ess-dof list applies. The block system FGMRES applies is the same
    // either way; only this preconditioner block changes.
-   const bool want_lor_amg =
-      cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
-      : (opts_.velocity_prec == VelocityPreconditioner::LORAMG);
-   if (want_lor_amg)
+   //
+   // With the rotation term, rotation_pc may replace all of that with
+   // point-block Jacobi (it sees N's nodal blocks; Jacobi/LOR-AMG cannot):
+   // applied once, or as the PC of a loose inner GMRES on the full block.
+   const bool use_pbj = op_.Rotation() &&
+                        opts_.rotation_pc != RotationVelocityPC::Symmetric;
+   const bool want_lor_amg = !use_pbj &&
+                             (cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
+                              : (opts_.velocity_prec == VelocityPreconditioner::LORAMG));
+   if (use_pbj)
+   {
+      vel_prec_.reset(); // a PbjKrylov GMRES borrows pbj_: drop it first
+      pbj_ = std::make_unique<PointBlockJacobi>(
+                spaces_.Velocity(), *op_.Rotation(), bc_.EssentialTrueDofs());
+      pbj_->SetDiagonal(op_.MomentumDiagonal()); // N's diagonal is exactly 0
+      pbj_->UpdateSkew();
+      if (opts_.rotation_pc == RotationVelocityPC::PbjKrylov)
+      {
+         auto gmres = std::make_unique<GMRESSolver>(spaces_.Velocity().GetComm());
+         gmres->SetKDim(opts_.pbj_krylov_kdim);
+         gmres->SetRelTol(opts_.pbj_krylov_rtol);
+         gmres->SetAbsTol(0.0);
+         gmres->SetMaxIter(opts_.pbj_krylov_max_iter);
+         gmres->SetPrintLevel(-1);
+         gmres->SetOperator(op_.FullMomentum());
+         gmres->SetPreconditioner(*pbj_);
+         gmres->iterative_mode = false;
+         vel_prec_ = std::move(gmres);
+      }
+   }
+   else if (want_lor_amg)
    {
       auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
                     op_.MomentumLORForm(), bc_.EssentialTrueDofs());
@@ -125,18 +159,20 @@ void StokesSolver::BuildVelocityPreconditioner()
                      op_.MomentumDiagonal(), bc_.EssentialTrueDofs());
    }
 
+   // PbjOnly leaves vel_prec_ empty: point-block Jacobi is the velocity PC.
+   Solver& vel = vel_prec_ ? *vel_prec_ : *pbj_;
    if (cc_mode_)
    {
       // Block Diag/LowerTri/UpperTri on the symmetric system; the minus of the
       // pressure row lives inside BlockStokesPC (exactly once).
       prec_ = std::make_unique<BlockStokesPC>(
-                 spaces_.BlockTrueOffsets(), *vel_prec_, *cc_pc_,
+                 spaces_.BlockTrueOffsets(), vel, *cc_pc_,
                  op_.Divergence(), opts_.cc.block_shape);
    }
    else
    {
       prec_ = std::make_unique<StokesBlockPreconditioner>(
-                 spaces_.BlockTrueOffsets(), *vel_prec_, *pressure_block_);
+                 spaces_.BlockTrueOffsets(), vel, *pressure_block_);
    }
    fgmres_.SetPreconditioner(*prec_);
 }
@@ -150,7 +186,7 @@ void StokesSolver::Refresh(double c0)
    // underlying pointer moved). B, B^T, the Schur block structure, and the
    // FGMRES object all persist untouched.
    op_.SetMassCoeff(c0);
-   block_op_.SetBlock(0, 0, &op_.Momentum());
+   block_op_.SetBlock(0, 0, &op_.FullMomentum());
 
    // CC Schur block: sigma tracks the BDF factor; everything structural inside
    // (masses, B, the L_p AMG hierarchy) is reused always (SPEC par.9).
@@ -164,8 +200,18 @@ void StokesSolver::Refresh(double c0)
    const bool lor_vel =
       cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
       : (opts_.velocity_prec == VelocityPreconditioner::LORAMG);
-   const bool frozen_amg = lor_vel && opts_.amg_reuse;
+   const bool use_pbj = op_.Rotation() &&
+                        opts_.rotation_pc != RotationVelocityPC::Symmetric;
+   const bool frozen_amg = !use_pbj && lor_vel && opts_.amg_reuse;
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
+}
+
+void StokesSolver::UpdateRotation()
+{
+   if (!op_.Rotation()) { return; }
+   INCNS_PROFILE("stokes_solver::update_rotation");
+   op_.Rotation()->UpdateVorticity();
+   if (pbj_) { pbj_->UpdateSkew(); }
 }
 
 void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,
@@ -228,6 +274,12 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
       //   constraint: b_p = -B u_D  (so that B u_0 + B u_D = 0).
       auto* Ac = dynamic_cast<ConstrainedOperator*>(&op_.Momentum());
       MFEM_VERIFY(Ac, "stokes_solver: momentum block is not constrained");
+      // Rotation term FIRST: it subtracts N u_D (its essential rows end up
+      // overwritten); the momentum elimination then sets b[ess] = u_D.
+      if (op_.Rotation())
+      {
+         op_.RotationConstrained().EliminateRHS(x.GetBlock(0), b.GetBlock(0));
+      }
       Ac->EliminateRHS(x.GetBlock(0), b.GetBlock(0));
 
       auto* Bc = dynamic_cast<RectangularConstrainedOperator*>(&op_.Divergence());

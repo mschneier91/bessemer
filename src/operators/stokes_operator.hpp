@@ -7,6 +7,7 @@
 #define INCNS_OPERATORS_STOKES_OPERATOR_HPP
 
 #include "operators/grad_div_scale.hpp"
+#include "operators/rotational_convection.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -50,6 +51,13 @@ struct StokesOperatorOptions
    /// rebuild the LOR hierarchy on each mass-factor change. Only meaningful with
    /// @ref lor_momentum.
    bool lor_frozen = false;
+   /// Lagged velocity w* of the semi-implicit rotational term
+   /// alpha ((curl w*) x u, v) (ConvectiveForm::Rotational). Null (the
+   /// default) = no rotation term. Borrowed: the caller updates it in place
+   /// and calls Rotation()->UpdateVorticity(); must outlive this object.
+   const mfem::ParGridFunction* lagged_velocity = nullptr;
+   /// The rotation term's alpha: 1 for BDF, 1/2 for the trapezoidal starter.
+   double rotation_alpha = 1.0;
 };
 
 /**
@@ -117,6 +125,36 @@ public:
     * @return Constrained when essential dofs were given at construction.
     */
    mfem::Operator& Momentum() { return *K_.Ptr(); }
+
+   /**
+    * @brief The momentum block the outer solver applies: Momentum() plus, with
+    *        a lagged velocity, the rotation term N (constrained with zero
+    *        diagonal on essential dofs, so the sum keeps identity rows there).
+    * @return Momentum() itself when there is no rotation term.
+    */
+   mfem::Operator& FullMomentum()
+   {
+      return full_momentum_ ? *full_momentum_ : *K_.Ptr();
+   }
+
+   /// @return The rotation integrator (null without a lagged velocity).
+   VectorRotationalConvectionIntegrator* Rotation() { return rot_; }
+
+   /**
+    * @brief The rotation term N on true dofs, UNCONSTRAINED (explicit
+    *        right-hand-side terms, e.g. the trapezoidal starter's N u^0).
+    * @pre A lagged velocity was given at construction.
+    * @return The operator.
+    */
+   mfem::Operator& RotationUnconstrained();
+
+   /**
+    * @brief The rotation term with essential rows/columns zeroed -- for the
+    *        Dirichlet right-hand-side elimination (b -= N u_D).
+    * @pre A lagged velocity was given at construction.
+    * @return The constrained operator.
+    */
+   mfem::ConstrainedOperator& RotationConstrained();
 
    /**
     * @brief The pure viscous operator @c nu*K on true dofs, UNCONSTRAINED
@@ -206,6 +244,18 @@ private:
    mfem::OperatorPtr K_; ///< True-dof momentum operator.
    mfem::OperatorPtr Kunc_; ///< True-dof unconstrained viscous operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
+   /// Rotation-term PA form (lagged velocity only); Delta-t independent, so
+   /// built once -- the vorticity is updated in place every step.
+   std::unique_ptr<mfem::ParBilinearForm> rot_form_;
+   /// The rotation integrator (owned by rot_form_; null without rotation).
+   VectorRotationalConvectionIntegrator* rot_ = nullptr;
+   mfem::OperatorPtr N_; ///< True-dof rotation operator P^T N P (unconstrained).
+   /// N with DIAG_ZERO on essential dofs: summed with the DIAG_ONE momentum
+   /// block, the essential rows stay identity (two DIAG_ONE operators would
+   /// put 2 there and halve inhomogeneous Dirichlet data).
+   std::unique_ptr<mfem::ConstrainedOperator> Nc_;
+   /// Momentum() + Nc_, rebuilt with the momentum block (rotation only).
+   std::unique_ptr<mfem::SumOperator> full_momentum_;
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
    mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).
 };

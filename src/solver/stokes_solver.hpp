@@ -11,6 +11,7 @@
 #include "operators/stokes_operator.hpp"
 #include "precond/block_stokes_pc.hpp"
 #include "precond/cahouet_chabard.hpp"
+#include "precond/point_block_jacobi.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -52,6 +53,15 @@ struct StokesSolverOptions
    /// the outer-solver knobs (rtol/atol/max_iter/kdim) likewise live on THIS
    /// struct (the CC config deliberately carries none).
    CahouetChabardConfig cc;
+   /// Lagged velocity w* of the semi-implicit rotational term in the momentum
+   /// block (see StokesOperatorOptions::lagged_velocity); null = none.
+   const mfem::ParGridFunction* lagged_velocity = nullptr;
+   double rotation_alpha = 1.0;  ///< Rotation-term alpha (1 BDF, 1/2 starter).
+   /// Velocity-block PC with the rotation term (ignored without it).
+   RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
+   int pbj_krylov_kdim = 20;      ///< PbjKrylov: inner GMRES restart.
+   double pbj_krylov_rtol = 1e-2; ///< PbjKrylov: inner relative tolerance.
+   int pbj_krylov_max_iter = 30;  ///< PbjKrylov: inner iteration cap.
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -140,6 +150,14 @@ public:
     */
    void Refresh(double c0);
 
+   /**
+    * @brief Recompute the rotation term from the lagged velocity's current
+    *        values (and the point-block Jacobi skew, if in use). Call once
+    *        per step after updating the lagged velocity, before SolveTrue.
+    *        No-op without a rotation term.
+    */
+   void UpdateRotation();
+
    /// @return FGMRES iterations of the last Solve().
    int Iterations() const { return iterations_; }
 
@@ -173,6 +191,9 @@ private:
    /// Velocity block preconditioner (Jacobi smoother or LOR-AMG). Declared
    /// after op_ so it is destroyed before the momentum matrix it may reference.
    std::unique_ptr<mfem::Solver> vel_prec_;
+   /// Point-block Jacobi (rotation_pc != Symmetric only). Owned here: with
+   /// PbjKrylov vel_prec_ is the inner GMRES that borrows it.
+   std::unique_ptr<PointBlockJacobi> pbj_;
    /// CC Schur PC (CahouetChabard mode only; null on the Mass path). Declared
    /// before prec_ (the block wrapper borrows it).
    std::unique_ptr<CahouetChabardSchurPC> cc_pc_;

@@ -1,5 +1,6 @@
 #include "operators/stokes_operator.hpp"
 
+#include "operators/convection.hpp" // DealiasedOrder
 #include "operators/vecdivdiv_integrator.hpp"
 
 #include "mesh/mesh_size_coefficient.hpp"
@@ -128,6 +129,28 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                              /*include_grad_div=*/false);
    }
 
+   // --- semi-implicit rotational term N = alpha ((curl w*) x u, v): Delta-t
+   // independent (the vorticity is updated in place each step), so built once.
+   // Same dealiased 3k rule as the convective form -- over-integration and the
+   // choice of form are orthogonal. Kept OUT of the momentum form so that
+   // Momentum() stays the symmetric block the Chebyshev/LOR-AMG velocity PCs
+   // need; the outer solver applies FullMomentum() = Momentum() + N.
+   if (opts_.lagged_velocity)
+   {
+      INCNS_PROFILE("rotation");
+      rot_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      rot_ = new VectorRotationalConvectionIntegrator(*opts_.lagged_velocity,
+         opts_.rotation_alpha);
+      rot_->SetIntRule(&rules_.Get(geom_, Convection::DealiasedOrder(ku_)));
+      rot_form_->AddDomainIntegrator(rot_);
+      rot_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      rot_form_->Assemble();
+      Array<int> no_ess;
+      rot_form_->FormSystemMatrix(no_ess, N_);
+      Nc_ = std::make_unique<ConstrainedOperator>(N_.Ptr(), ess_tdofs_, false,
+            Operator::DIAG_ZERO);
+   }
+
    // ==== Delta-t DEPENDENT momentum block A = c0*M + nu*K (+ grad-div) and, for
    // the non-frozen AMG path, its LOR source -- (re)built by SetMassCoeff ======
    BuildMomentum();
@@ -189,6 +212,13 @@ void StokesOperator::BuildMomentum()
       AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
                              /*include_grad_div=*/false);
    }
+
+   // The outer operator A + N re-points at the rebuilt momentum block.
+   if (Nc_)
+   {
+      full_momentum_ = std::make_unique<SumOperator>(K_.Ptr(), 1.0, Nc_.get(),
+                       1.0, false, false);
+   }
 }
 
 void StokesOperator::SetMassCoeff(double c0)
@@ -197,6 +227,20 @@ void StokesOperator::SetMassCoeff(double c0)
    mass_coeff_.constant = c0;
    opts_.mass_coeff = c0;
    BuildMomentum();
+}
+
+Operator& StokesOperator::RotationUnconstrained()
+{
+   MFEM_VERIFY(N_.Ptr(), "stokes_operator: no rotation term (no lagged "
+               "velocity at construction)");
+   return *N_.Ptr();
+}
+
+ConstrainedOperator& StokesOperator::RotationConstrained()
+{
+   MFEM_VERIFY(Nc_, "stokes_operator: no rotation term (no lagged velocity "
+               "at construction)");
+   return *Nc_;
 }
 
 ParBilinearForm& StokesOperator::MomentumLORForm() const

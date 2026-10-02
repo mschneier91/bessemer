@@ -161,7 +161,8 @@ struct TgvResult
 // March the UNFORCED TGV with convection on/off. Zero forcing throughout: the
 // convective term is balanced by the pressure, not by f.
 TgvResult MarchTgv(int n, int ku, double dt, bool convection,
-                   bool record_history = false)
+                   bool record_history = false,
+                   incns::ConvectiveForm form = incns::ConvectiveForm::Convective)
 {
    Mesh serial = MakeBoxMesh(PeriodicBox(n));
    ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -178,6 +179,7 @@ TgvResult MarchTgv(int n, int ku, double dt, bool convection,
    opts.dt = dt;
    opts.t_final = kTFinal;
    opts.convection = convection;
+   opts.convective_form = form;
    opts.rtol = 1e-12;
    opts.max_iter = 5000;
    opts.kdim = 400;
@@ -294,7 +296,7 @@ void Report(const char* label, const std::vector<double>& v)
 // analytic NONZERO pressure. A convection operator that is silently zero fails
 // the pressure half; one that is mis-scaled fails both.
 // ---------------------------------------------------------------------------
-TEST(TgvNse, UnforcedReproducesAnalyticVelocityAndPressure)
+void UnforcedOracle(incns::ConvectiveForm form)
 {
    const int ku = 3;
    // dt small enough that the TEMPORAL error stays below the spatial error at
@@ -318,7 +320,7 @@ TEST(TgvNse, UnforcedReproducesAnalyticVelocityAndPressure)
    double u_norm = 0.0, p_norm_fine = 0.0;
    for (int i = 0; i < 3; ++i)
    {
-      const TgvResult r = MarchTgv(ns[i], ku, dt, true);
+      const TgvResult r = MarchTgv(ns[i], ku, dt, true, false, form);
       ue[i] = r.u_err;
       pe[i] = r.p_err;
       u_norm = r.u_norm;
@@ -406,6 +408,16 @@ TEST(TgvNse, UnforcedReproducesAnalyticVelocityAndPressure)
                           << "t_final=0.1, got " << u_norm;
 }
 
+TEST(TgvNse, UnforcedReproducesAnalyticVelocityAndPressure)
+{
+   UnforcedOracle(incns::ConvectiveForm::Convective);
+}
+
+TEST(TgvNse, RotationalReproducesAnalyticVelocityAndPressure)
+{
+   UnforcedOracle(incns::ConvectiveForm::Rotational);
+}
+
 // ---------------------------------------------------------------------------
 // Convection OFF on this SAME case must land somewhere clearly different: the
 // Stokes TGV has p == 0. This is the control that proves the test above is
@@ -471,10 +483,10 @@ TEST(TgvNse, ConvectionOffGivesZeroPressure)
 // (This is precisely how the original version of this test failed: it reported
 // e = 0.04757, 0.04754, 0.04753 over a 4x dt refinement -- flat, i.e. pure
 // spatial floor -- for rates of 0.0009. The scheme was never the problem.)
-TEST(TgvNse, TemporalOrder)
+void TemporalOrderStudy(incns::ConvectiveForm form)
 {
    const int n = 6, ku = 3;
-   const TgvResult ref = MarchTgv(n, ku, 0.0003125, true);
+   const TgvResult ref = MarchTgv(n, ku, 0.0003125, true, false, form);
 
    // Step sizes scaled down with t_final (0.5 -> 0.1). The old 0.02/0.01/0.005
    // would be only 5/10/20 steps on the short march, making the trapezoidal
@@ -485,7 +497,7 @@ TEST(TgvNse, TemporalOrder)
    double e[3], ep[3];
    for (int i = 0; i < 3; ++i)
    {
-      const TgvResult run = MarchTgv(n, ku, dts[i], true);
+      const TgvResult run = MarchTgv(n, ku, dts[i], true, false, form);
       e[i]  = DiffNorm(run.u_true, ref.u_true, MPI_COMM_WORLD);
       ep[i] = DiffNorm(run.p_true, ref.p_true, MPI_COMM_WORLD);
    }
@@ -525,6 +537,16 @@ TEST(TgvNse, TemporalOrder)
                        << "; e(dt2)=" << ep[1] << " e(dt3)=" << ep[2];
 }
 
+TEST(TgvNse, TemporalOrder)
+{
+   TemporalOrderStudy(incns::ConvectiveForm::Convective);
+}
+
+TEST(TgvNse, RotationalTemporalOrder)
+{
+   TemporalOrderStudy(incns::ConvectiveForm::Rotational);
+}
+
 // ---------------------------------------------------------------------------
 // THE 2.2b HARNESS: discrete energy decay against the analytic history.
 //
@@ -539,7 +561,7 @@ TEST(TgvNse, TemporalOrder)
 // rotational forms land, a form that is energy-inconsistent shows up as a
 // BROKEN RATE here, which no single-resolution drift bound could distinguish
 // from "the mesh is a bit coarse".
-TEST(TgvNse, EnergyDecayMatchesAnalytic)
+void EnergyDecay(incns::ConvectiveForm form)
 {
    const int ku = 3;
    // dt is 16x SMALLER than the oracle study's, and that is load-bearing. The
@@ -565,7 +587,8 @@ TEST(TgvNse, EnergyDecayMatchesAnalytic)
 
    for (int i = 0; i < 3; ++i)
    {
-      const TgvResult r = MarchTgv(ns[i], ku, dt, true, /*record_history=*/true);
+      const TgvResult r = MarchTgv(ns[i], ku, dt, true, /*record_history=*/true,
+                                   form);
       ASSERT_GE(r.times.size(), 2u);
 
       double worst_ke = 0.0, worst_eps = 0.0, worst_div = 0.0;
@@ -645,4 +668,14 @@ TEST(TgvNse, EnergyDecayMatchesAnalytic)
          << "||div u|| is not converging under refinement (rate " << r_div
          << ", expected ~3): " << div_norm[1] << " -> " << div_norm[2]
          << " -- convection may be polluting the divergence constraint";
+}
+
+TEST(TgvNse, EnergyDecayMatchesAnalytic)
+{
+   EnergyDecay(incns::ConvectiveForm::Convective);
+}
+
+TEST(TgvNse, RotationalEnergyDecayMatchesAnalytic)
+{
+   EnergyDecay(incns::ConvectiveForm::Rotational);
 }

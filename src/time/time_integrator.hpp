@@ -43,6 +43,14 @@ struct TimeIntegratorOptions
    /// AB/EXT and carried on the RIGHT-hand side. The implicit block solve is
    /// UNCHANGED -- this is IMEX, so convection never enters the matrix.
    bool convection = false;
+   /// Treatment of the nonlinear term when @ref convection is on. Rotational:
+   /// the lagged-vorticity term (curl w*) x u moves INTO the implicit velocity
+   /// block (w* = EXT-extrapolated velocity, updated every step), nothing is
+   /// explicit, and Pressure() reports static pressure recovered from the
+   /// Bernoulli head the solve produces (P - 1/2|u|^2, interpolated).
+   ConvectiveForm convective_form = ConvectiveForm::Convective;
+   /// Velocity-block PC with the rotational form (see RotationVelocityPC).
+   RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
@@ -191,8 +199,10 @@ public:
    /// @return The velocity field (updated by Step()).
    mfem::ParGridFunction& Velocity() { return u_; }
 
-   /// @return The pressure field (updated by Step()).
-   mfem::ParGridFunction& Pressure() { return p_; }
+   /// @return The (static) pressure field, updated by Step(). With the
+   ///         rotational form this is P - 1/2|u|^2, not the solved Bernoulli
+   ///         head P.
+   mfem::ParGridFunction& Pressure() { return rotational_ ? p_static_ : p_; }
 
 private:
    /// A solver cached per leading BDF weight (the momentum mass factor).
@@ -229,6 +239,19 @@ private:
     */
    void SubtractConvection(double t_new, mfem::Vector& b);
 
+   /**
+    * @brief Rotational form: set the lagged velocity w* to the EXT
+    *        extrapolation of the history to @p t_new (same order matching as
+    *        SubtractConvection: EXT1 on the first step, EXT2 after). The
+    *        caller then calls UpdateRotation() on each solver it uses.
+    * @param t_new Time the step solves for.
+    */
+   void UpdateLaggedVelocity(double t_new);
+
+   /// Rotational form: p_static_ = p_ - I(1/2|u_|^2), mean-normalized when
+   /// the pressure null space exists.
+   void UpdateStaticPressure();
+
    void StepStartup();  ///< Trapezoidal starter / early BDF2 steps.
    void StepFixed();    ///< Fixed-step BDF2/BDF3 step.
    void StepAdaptive(); ///< Adaptive attempt loop (BDF2 + BDF3 candidates).
@@ -251,6 +274,8 @@ private:
    std::unique_ptr<AdaptiveController> controller_; ///< Adaptive mode only.
    /// Dealiased convection operator; built only when opts_.convection is set.
    std::unique_ptr<Convection> convection_;
+   /// Rotational form active (convection on, ConvectiveForm::Rotational).
+   bool rotational_ = false;
 
    mfem::ParGridFunction u_;  ///< Velocity field.
    mfem::ParGridFunction p_;  ///< Pressure field.
@@ -258,6 +283,11 @@ private:
    mfem::ParGridFunction p2_scratch_; ///< BDF2 candidate pressure (adaptive).
    mfem::ParGridFunction u3_scratch_; ///< BDF3 candidate (adaptive).
    mfem::ParGridFunction p3_scratch_; ///< BDF3 candidate pressure (adaptive).
+   /// Rotational form: the lagged velocity w* every solver's rotation term
+   /// reads (updated in place before each solve).
+   mfem::ParGridFunction w_star_;
+   /// Rotational form: static pressure P - 1/2|u|^2 (what Pressure() returns).
+   mfem::ParGridFunction p_static_;
 
    std::deque<mfem::Vector> hist_; ///< Velocity true-dof history, newest first.
    std::deque<double> hist_times_; ///< Times of the history entries.

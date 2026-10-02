@@ -14,6 +14,7 @@
 #include "mfem.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <string>
 
@@ -124,4 +125,49 @@ TEST(Deck, ParaViewOutputIsWritten)
       EXPECT_NE(content.find("Cycle000002"), std::string::npos)
             << "expected the final-cycle dataset in the collection index";
    }
+}
+
+// The rotational-form keys: `physics.convective_form` and `solver.rotation_pc`
+// parse, unstated ones keep the defaults (Convective / Symmetric), and the
+// Case actually hands them to the integrator -- the rotational TGV march
+// differs from the convective one at discretization level (same physics,
+// different scheme) while agreeing with it to O(h, dt).
+TEST(Deck, RotationalFormKeys)
+{
+   const Parameters defaults = Parameters::LoadYAML(INCNS_TGV_DECK);
+   EXPECT_EQ(defaults.convective_form, incns::ConvectiveForm::Convective);
+   EXPECT_EQ(defaults.rotation_pc, incns::RotationVelocityPC::Symmetric);
+
+   // One file per rank: every rank parses, none races another's write.
+   const std::string path =
+      "deck_rotational_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   {
+      std::ofstream f(path);
+      f << "equation: navier_stokes\n"
+        << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
+        << "solver:\n  rotation_pc: pbj_krylov\n";
+   }
+   const Parameters p = Parameters::LoadYAML(path);
+   std::remove(path.c_str());
+   EXPECT_EQ(p.equation, incns::Equation::NavierStokes);
+   EXPECT_EQ(p.convective_form, incns::ConvectiveForm::Rotational);
+   EXPECT_EQ(p.rotation_pc, incns::RotationVelocityPC::PbjKrylov);
+
+   // End to end through Case on the TGV deck, NSE, a few steps.
+   Parameters conv = defaults;
+   conv.equation = incns::Equation::NavierStokes;
+   conv.t_final = 3 * conv.dt;
+   conv.output.enabled = false;
+   Parameters rot = conv;
+   rot.convective_form = incns::ConvectiveForm::Rotational;
+   rot.rotation_pc = incns::RotationVelocityPC::PbjOnly;
+   const Vector uc = RunCase(conv), ur = RunCase(rot);
+   Vector d(ur);
+   d -= uc;
+   const double rel = std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d) /
+                                InnerProduct(MPI_COMM_WORLD, uc, uc));
+   EXPECT_GT(rel, 1e-12) << "rotational run identical to convective: the "
+                         << "Case did not pass the convective form through";
+   EXPECT_LT(rel, 1e-2) << "rotational and convective TGV disagree beyond "
+                        << "discretization error";
 }

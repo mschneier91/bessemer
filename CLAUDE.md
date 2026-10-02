@@ -344,11 +344,10 @@ before touching Sprint 2.**
   item's original green condition was NOT built — the human accepted the 3D MMS instead
   on 2026-07-24. Close it later if the oracle is wanted. Also: NSE tests have run at np1
   only; convection does shared-face assembly, so np2/np4 is the real parallel check.
-- **2.2b — PLANNED (human, 2026-07-24; NOT started, gated on upstream MFEM PRs).
-  Selectable convective form: convective / skew-symmetric / rotational.** Expected within
-  a few weeks, once the relevant PRs land in the main MFEM repo. Design and rationale in
-  **"Convective form" below** — read that before starting; it records what is already in
-  MFEM, the trap in today's classes, and the decisions already made.
+- **2.2b — Selectable convective form. ROTATIONAL DONE 2026-10-02 (semi-implicit, per
+  `rotational_convection_pa_spec.md`); SKEW-SYMMETRIC still PLANNED, gated on upstream
+  MFEM PRs.** Design, rationale, what landed, and the remaining trap in **"Convective
+  form" below** — read that before touching either form.
 - **2.3 — Preconditioner deep-dive → PULLED FORWARD (human decision, 2026-07-16).**
   The detailed direction arrived as **`SPEC_cahouet_chabard_mfem.md`** (repo root):
   Cahouet–Chabard with the **consistent `B M_v⁻¹ Bᵀ`** operator (Creff–Guermond), NOT the
@@ -450,7 +449,9 @@ that deliberately rather than by default.)*
   default rule. Prevents aliasing-driven blow-up in DNS. The convection integrator carries
   its higher-order rule from the **rule book**; linear terms keep the standard rule. Do not
   "simplify" the convection term back to the default quadrature.
-- **Convective form — PLANNED (2.2b), not yet built.** See the dedicated section below.
+- **Convective form (2.2b).** `physics.convective_form: convective` (default, IMEX) or
+  `rotational` (semi-implicit lagged vorticity in the implicit block); skew-symmetric is
+  still planned. See the dedicated section below.
 - **Higher-order pair: BDF3 / AB3.** Implemented alongside BDF2/AB2 **solely to drive the
   adaptive error estimator below** — it is *not* a production time scheme and is never the
   advancing solution outside of tests. (Tests do march it directly to verify 3rd order,
@@ -499,13 +500,47 @@ that deliberately rather than by default.)*
     programmatically. The adaptive-mode check consumes this record to assert bounded
     rejections and a sane step sequence — it is never reconstructed by parsing logs.
 
-## Convective form — PLANNED (2.2b), gated on upstream MFEM
+## Convective form (2.2b) — rotational DONE, skew-symmetric PLANNED
 
-**Status: NOT started.** Human decision 2026-07-24: add the **skew-symmetric** and
-**rotational** forms of the nonlinear term alongside today's convective form, once the
-relevant PRs land in the main MFEM repo. Expected within a few weeks; explicitly *not* the
-next thing worked on. Everything here is design intent recorded ahead of time — nothing
-below has been built or tested.
+**Status (2026-10-02).** The **rotational** form is built and validated — but NOT as the
+explicit-side change planned below. Human decision 2026-10-02 (via
+`rotational_convection_pa_spec.md`): it is **semi-implicit**, the lagged-vorticity term
+`α((∇×w*)×u, v)` (w* = EXT-extrapolated velocity) sits **in the implicit velocity block**,
+which supersedes the "explicit-side only / StokesSolver untouched" constraint at the end of
+this section *for the rotational form*. The **skew-symmetric** form is still planned,
+gated on upstream MFEM exactly as recorded below (the TRAP still applies to it).
+
+What landed (`physics.convective_form: rotational`, NSE only):
+- `src/operators/rotational_convection.{hpp,cpp}` — `VectorRotationalConvectionIntegrator`,
+  PA on quads/hexes, skew (Nᵀ = −N, exactly zero diagonal), `UpdateVorticity()` per step
+  (no reassembly), plus `AddNodalSkewPA` and `GetRotationNumberStats` (μ = |ω|/σ).
+- `src/precond/point_block_jacobi.{hpp,cpp}` — `PointBlockJacobi`: inverts the nodal
+  dim×dim blocks `diag(d) + [s]×` (batched, on the device). Scalar Jacobi and LOR-AMG cannot
+  see N at all; with GLL collocation and ν = 0 PBJ is exact.
+- `StokesOperator` keeps the symmetric `Momentum()` (what Chebyshev / LOR-AMG need) and adds
+  N as a separate form; the outer FGMRES applies `FullMomentum()` = Momentum (DIAG_ONE) + N
+  (**DIAG_ZERO** on essential dofs — two DIAG_ONE operators would put 2 on the essential
+  diagonal and halve inhomogeneous Dirichlet data). Dirichlet elimination subtracts N u_D.
+- Time stepping: w* by EXT (EXT1 on the starter, EXT2 after); the trapezoidal starter splits
+  N half implicit / half explicit like the viscous term; nothing is explicit afterwards.
+- Velocity PC, `solver.rotation_pc`: `symmetric` (default; the usual PC on σM+νK, N only in
+  the outer operator), `pbj_only`, `pbj_krylov` (GMRES(20) on the full block, rtol 1e-2,
+  ≤30 its, PBJ-preconditioned). The PBJ choices replace the velocity PC on both Schur paths.
+- **Pressure: decision 3(a) below is what was implemented.** The solve yields the Bernoulli
+  head P; `Pressure()` returns static `p = P − I(½|u|²)` (nodal interpolant, mean-normalized
+  with the null space); P stays internal as the Krylov warm start. Do-nothing OUTFLOW
+  conditions act on P, not p, in this mode — a modelling difference, not a bug.
+- Tests: `rotational_convection_test` / `point_block_jacobi_test` (spec Parts A/B);
+  `nse_mms_test` Rotational* (temporal order vs a same-mesh fine-dt reference — the MMS is
+  NOT spatially exact in this form, P is outside the pressure space — at ν = 0.05 so a
+  starter defect is not viscously damped; all velocity PCs × both Schur paths agree; static
+  pressure and velocity converge in h); `tgv_nse_test` Rotational* (analytic oracle,
+  temporal order, energy harness — same bounds as the convective form); `deck_test`.
+  **The TGV cannot see errors in N itself** (its convective term is a pure gradient, absorbed
+  by the pressure) — the MMS is what pins N.
+- Not done (follow-ups): logging `GetRotationNumberStats` during runs (the spec's §8 monitor
+  for when to switch `rotation_pc`); a GPU run (no GPU here); iteration baselines for the
+  rotational configurations on a real bluff-body case.
 
 ### Why this matters (the motivation, so it is not re-derived)
 
@@ -592,8 +627,10 @@ pressure).
 
 ### Constraints that still apply
 
-Dealiasing is **not** optional for any form. No hand-written `mfem::forall`. The implicit
-block solve stays untouched — this is an explicit-side change only, so `StokesSolver`, the
+Dealiasing is **not** optional for any form (the rotational term uses the same 3k rule).
+No hand-written `mfem::forall` outside the nvcc TUs. For the SKEW form the implicit block
+solve stays untouched — an explicit-side change only (the rotational form is the exception,
+by the 2026-10-02 decision above), so `StokesSolver`, the
 preconditioners, and the Schur block must not need edits. Per 2.0, any *default* change
 (e.g. making skew the default) needs measured NSE evidence, not a preference.
 
@@ -1008,7 +1045,7 @@ Launched by a human via the batch scheduler. See Guardrails.
   expensive GPU bug found so far (2026-07-21: 38 of 62 tests segfaulting on an H100, one
   root cause). Every TU is compiled by `mpicxx`/g++ — leaving `__CUDACC__` undefined —
   **except** the short, explicit nvcc list in `src/CMakeLists.txt` (currently
-  `vecdivdiv_integrator.cpp` alone). Outside that list, two consequences, both silent:
+  `vecdivdiv_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`). Outside that list, two consequences, both silent:
   - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
     host-only.
   - `forall`'s CUDA dispatch is `#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)`

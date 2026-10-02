@@ -51,6 +51,8 @@ void Case::EnsureSetup()
    // term to the right-hand side -- the implicit block solve is identical.
    TimeIntegratorOptions opts;
    opts.convection = (params_.equation == Equation::NavierStokes);
+   opts.convective_form = params_.convective_form;
+   opts.rotation_pc = params_.rotation_pc;
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;

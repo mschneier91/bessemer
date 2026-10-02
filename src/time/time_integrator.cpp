@@ -1,5 +1,6 @@
 #include "time/time_integrator.hpp"
 
+#include "post/pressure_mean.hpp"
 #include "time/multistep_coeffs.hpp"
 #include "util/profiler.hpp"
 
@@ -12,15 +13,37 @@ namespace incns
 
 using namespace mfem;
 
+namespace
+{
+// 1/2 |u_h|^2 at a point: the kinetic-energy density the rotational form
+// folds into the pressure (P = p + 1/2|u|^2).
+class HalfSpeedSquared : public Coefficient
+{
+   const GridFunction& u_;
+   Vector U_;
+
+public:
+   explicit HalfSpeedSquared(const GridFunction& u) : u_(u) { }
+   real_t Eval(ElementTransformation& T, const IntegrationPoint& ip) override
+   {
+      u_.GetVectorValue(T, ip, U_);
+      return 0.5 * (U_ * U_);
+   }
+};
+} // namespace
+
 StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       const RuleBook& rules,
       BoundaryConditions& bc,
       VectorCoefficient& forcing,
       const TimeIntegratorOptions& opts)
    : spaces_(spaces), rules_(rules), bc_(bc), forcing_(forcing), opts_(opts),
+     rotational_(opts.convection &&
+                 opts.convective_form == ConvectiveForm::Rotational),
      u_(&spaces.Velocity()), p_(&spaces.Pressure()),
      u2_scratch_(&spaces.Velocity()), p2_scratch_(&spaces.Pressure()),
      u3_scratch_(&spaces.Velocity()), p3_scratch_(&spaces.Pressure()),
+     w_star_(&spaces.Velocity()), p_static_(&spaces.Pressure()),
      dt_(opts.dt)
 {
    INCNS_PROFILE("time_integrator::setup");
@@ -29,13 +52,22 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    MFEM_VERIFY(opts_.order == 2 || opts_.order == 3,
                "time_integrator: order must be 2 (production) or 3 (test-only)");
 
+   MFEM_VERIFY(opts_.convection ||
+               opts_.convective_form == ConvectiveForm::Convective,
+               "time_integrator: a convective form other than Convective "
+               "needs convection (the Navier-Stokes equation)");
+
    // NSE (2.2): the dealiased convection operator, built only when asked -- the
    // Stokes path then allocates nothing and is bit-for-bit unchanged. IMEX, so
-   // this never touches the implicit block solve.
-   if (opts_.convection)
+   // this never touches the implicit block solve. The ROTATIONAL form has no
+   // explicit part: its lagged-vorticity term lives in every solver's
+   // momentum block, reading w_star_ (zero until the first step sets it).
+   if (opts_.convection && !rotational_)
    {
       convection_ = std::make_unique<Convection>(spaces_, rules_);
    }
+   w_star_ = 0.0;
+   p_static_ = 0.0;
 
    // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
    // halving the viscosity passed to the solver (the Schur scale follows).
@@ -50,6 +82,14 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.schur = opts_.schur;
       so.cc = opts_.cc;
       so.mass_coeff = 1.0 / dt_;
+      if (rotational_)
+      {
+         // Trapezoidal split, like the viscous term: alpha = 1/2 here, the
+         // other half of N goes to the right-hand side explicitly.
+         so.lagged_velocity = &w_star_;
+         so.rotation_alpha = 0.5;
+         so.rotation_pc = opts_.rotation_pc;
+      }
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
       so.max_iter = opts_.max_iter;
@@ -116,6 +156,9 @@ void StokesTimeIntegrator::SetHistory(const std::vector<Vector>& states,
    u_.SetFromTrueDofs(hist_[0]);
    if (pressure) { p_.SetFromTrueDofs(*pressure); }
    else { p_ = 0.0; }
+   // A restored pressure is the STATIC one (what Pressure() wrote); it only
+   // seeds p_ as a Krylov warm start, so the 1/2|u|^2 offset costs nothing.
+   if (rotational_) { p_static_ = p_; }
 }
 
 void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
@@ -149,6 +192,12 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.schur = opts_.schur;
       so.cc = opts_.cc;
       so.mass_coeff = c0; // the leading BDF weight beta0/dt -- exact match
+      if (rotational_)
+      {
+         so.lagged_velocity = &w_star_;
+         so.rotation_alpha = 1.0;
+         so.rotation_pc = opts_.rotation_pc;
+      }
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
       so.max_iter = opts_.max_iter;
@@ -232,6 +281,37 @@ void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b)
    }
 }
 
+void StokesTimeIntegrator::UpdateLaggedVelocity(double t_new)
+{
+   INCNS_PROFILE("time_integrator::lagged_velocity");
+   // Same order matching as SubtractConvection: EXT1 on the first step, EXT2
+   // once two history entries exist (3 in BDF3 test mode). The term does no
+   // work for ANY w* (skew), so the extrapolation affects accuracy only.
+   const std::size_t k =
+      std::min<std::size_t>(hist_.size(), (opts_.order == 3 ? 3 : 2));
+   MFEM_VERIFY(k >= 1, "time_integrator: rotation needs velocity history");
+   std::vector<double> times(hist_times_.begin(), hist_times_.begin() + k);
+   const std::vector<double> g = ExtrapolationWeights(t_new, times);
+   Vector w(spaces_.Velocity().GetTrueVSize());
+   w = 0.0;
+   for (std::size_t j = 0; j < k; ++j) { w.Add(g[j], hist_[j]); }
+   w_star_.SetFromTrueDofs(w); // distributed: the rotation setup reads it
+}
+
+void StokesTimeIntegrator::UpdateStaticPressure()
+{
+   // The rotational solve yields the Bernoulli head P = p + 1/2|u|^2; report
+   // static p = P - I(1/2|u_h|^2) (nodal interpolant on the pressure space --
+   // continuous since u_h is). The internal p_ stays P: it is the solver's
+   // warm start.
+   HalfSpeedSquared ke(u_);
+   ParGridFunction ke_gf(&spaces_.Pressure());
+   ke_gf.ProjectCoefficient(ke);
+   p_static_ = p_;
+   p_static_ -= ke_gf;
+   if (bc_.PressureNullspaceExists()) { SubtractMean(p_static_, rules_); }
+}
+
 void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
                                   ParGridFunction& u_gf, ParGridFunction& p_gf)
 {
@@ -250,6 +330,7 @@ void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
 
    t_ = t_new;
    ++step_count_;
+   if (rotational_) { UpdateStaticPressure(); }
 }
 
 void StokesTimeIntegrator::StepStartup()
@@ -289,6 +370,16 @@ void StokesTimeIntegrator::StepStartup()
          trap_c0_ = 1.0 / dt_;
       }
       solver = trap_.get();
+      if (rotational_)
+      {
+         // w* = u^0 (EXT1). The solver's block carries (1/2) N u^1 (alpha =
+         // 1/2); the explicit other half, (1/2) N u^0, mirrors the viscous
+         // split above. After UpdateRotation, so it uses this step's w*.
+         UpdateLaggedVelocity(t_new);
+         trap_->UpdateRotation();
+         trap_->Blocks().RotationUnconstrained().Mult(hist_[0], tmp);
+         b -= tmp;
+      }
    }
    else
    {
@@ -297,6 +388,11 @@ void StokesTimeIntegrator::StepStartup()
       const std::vector<double> c = BdfWeights(times);
       solver = &EnsureBdfSolver(bdf2_, c[0]);
       AssembleBdfRhs(c, t_new, b);
+      if (rotational_)
+      {
+         UpdateLaggedVelocity(t_new);
+         solver->UpdateRotation();
+      }
    }
 
    solver->SolveTrue(b, u_, p_);
@@ -327,6 +423,11 @@ void StokesTimeIntegrator::StepFixed()
 
    Vector b(n_u);
    AssembleBdfRhs(c, t_new, b);
+   if (rotational_)
+   {
+      UpdateLaggedVelocity(t_new);
+      solver.UpdateRotation();
+   }
    solver.SolveTrue(b, u_, p_);
    last_iterations_ = solver.Iterations();
    MFEM_VERIFY(solver.Converged(),
@@ -349,6 +450,8 @@ void StokesTimeIntegrator::StepAdaptive()
       const double dt = std::min(dt_, opts_.t_final - t_);
       const double t_new = t_ + dt;
       bc_.SetTime(t_new);
+      // One w* per attempt, shared by both candidates (same history).
+      if (rotational_) { UpdateLaggedVelocity(t_new); }
 
       // BDF2 candidate -- the only one that may advance the solution.
       std::vector<double> t2 = {t_new, hist_times_[0], hist_times_[1]};
@@ -358,6 +461,7 @@ void StokesTimeIntegrator::StepAdaptive()
       u2_scratch_ = u_;
       p2_scratch_ = p_;
       StokesSolver& s2 = EnsureBdfSolver(bdf2_, c2[0]);
+      s2.UpdateRotation(); // no-op without the rotational form
       s2.SolveTrue(b2, u2_scratch_, p2_scratch_);
       last_iterations_ = s2.Iterations();
       MFEM_VERIFY(s2.Converged(),
@@ -375,6 +479,7 @@ void StokesTimeIntegrator::StepAdaptive()
       u3_scratch_ = u_;
       p3_scratch_ = p_;
       StokesSolver& s3 = EnsureBdfSolver(bdf3_, c3[0]);
+      s3.UpdateRotation();
       s3.SolveTrue(b3, u3_scratch_, p3_scratch_);
       MFEM_VERIFY(s3.Converged(),
                   "time_integrator: BDF3 solve did not converge at t = "

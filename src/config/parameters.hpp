@@ -8,6 +8,7 @@
 
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
+#include "operators/convection.hpp" // ConvectiveForm
 #include "operators/grad_div_scale.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "solver/velocity_preconditioner.hpp"
@@ -99,6 +100,9 @@ struct Parameters
    double grad_div = 0.0; ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling (deck `physics.grad_div_scale: h|nu`).
    GradDivScale grad_div_scale = GradDivScale::OrderH;
+   /// Nonlinear-term treatment for NavierStokes (deck
+   /// `physics.convective_form: convective|rotational`); see ConvectiveForm.
+   ConvectiveForm convective_form = ConvectiveForm::Convective;
 
    /// Input scaling: mode + reference scales (see nondimensionalization.hpp).
    Nondimensionalization nondim;
@@ -129,6 +133,9 @@ struct Parameters
    /// AMG only: reuse (freeze) the LOR hierarchy across Delta-t changes for
    /// cheap adaptive stepping (deck `solver.amg_reuse: true`).
    bool amg_reuse = false;
+   /// Velocity-block PC with the rotational form (deck
+   /// `solver.rotation_pc: symmetric|pbj_only|pbj_krylov`).
+   RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
    /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
    /// the right default for the adaptive-primary workflow. `mass` remains
