@@ -539,7 +539,8 @@ What landed (`physics.convective_form: rotational`, NSE only):
   **The TGV cannot see errors in N itself** (its convective term is a pure gradient, absorbed
   by the pressure) — the MMS is what pins N.
 - Not done (follow-ups): logging `GetRotationNumberStats` during runs (the spec's §8 monitor
-  for when to switch `rotation_pc`); a GPU run (no GPU here); iteration baselines for the
+  for when to switch `rotation_pc`); a GPU run (see **PENDING GPU VALIDATION** under Test
+  tiers → Conditional checks); iteration baselines for the
   rotational configurations on a real bluff-body case.
 
 ### Why this matters (the motivation, so it is not re-derived)
@@ -972,6 +973,25 @@ fine end and the order assert fails for the wrong reason.
 - **CPU/GPU parity.** *Only when the CUDA build is present and a GPU is available.* Run one
   small case on both builds, assert agreement to tol. Skipped cleanly on a CPU-only
   machine — never a blocker there.
+- **PENDING GPU VALIDATION — do this the next time a GPU is available (open since
+  2026-10-02).** These device kernels were written and verified on the desktop (CPU build
+  + debug device) only; **none has ever executed on a GPU**, and the debug device cannot
+  catch a host-compiled kernel (see Coding conventions):
+  - `src/operators/rotational_convection.cpp` — setup, apply, nodal-skew and
+    rotation-number kernels (incl. the shared-memory tiles sized by `DofQuadLimits`);
+  - `src/precond/point_block_jacobi.cpp` — essential-dof rule, block fill, byNODES
+    gather/scatter, and the `BatchedDirectSolver` (cuBLAS/MAGMA/native) inverse path;
+  - `src/operators/vecdivdiv_integrator.cpp` — `VectorDivDivComponentIntegrator::AssembleEA`
+    (added 2026-09-30). This TU has **no** `#error` nvcc guard (by decision), so confirm
+    from the build log that it is compiled by nvcc.
+
+  Steps: `cmake --preset cuda && cmake --build --preset cuda` (clean, `-Werror`); then the
+  fast tier with **≥1 GPU per rank** (4 GPUs for np4 — see Environment & build), paying
+  particular attention to `rotational_convection_test` (its `A2_DeterminismGpu` runs ONLY
+  on a GPU and is skipped everywhere else), `point_block_jacobi_test`, `vecdivdiv_test`,
+  `nse_mms_test`, `tgv_nse_test`. GPU runs need human approval, and on a cluster the batch
+  script is drafted, not submitted (Guardrails). When it is green, record the result here
+  and delete this item.
 
 ### Expensive tier (manual only — NEVER in the loop)
 Resolved 3D TGV at Re=1600, channel-flow DNS, anything > a few minutes or > 8 ranks.
