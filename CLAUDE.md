@@ -1145,13 +1145,22 @@ Launched by a human via the batch scheduler. See Guardrails.
   there), so there is no cost to doing it always. The fitness function that catches misses is
   the **debug device** (`scripts/debug_device.sh`, `INCNS_DEVICE=debug`): MFEM's mprotect-
   guarded backend that *faults* on un-annotated host access of device memory instead of
-  copying — run it (no GPU needed) and fix what it flags.
-- **Known intermittent debug-device crash (found 2026-10-05, pre-existing on `main`):** at
-  np = 2, `nse_mms_test` sometimes segfaults ("Invalid permissions") in
-  `ParLinearForm::~ParLinearForm` -> `hypre_ParVectorDestroy` -- the fast-assembly
-  `ParLinearForm` + `ParallelAssemble` pattern in `StokesTimeIntegrator::AssembleForcing`
-  and `SubtractMean`, both convective forms. ~1 run in 3; not yet root-caused. A failing
-  debug-device `nse_mms_test` therefore needs a re-run / backtrace before blaming new code.
+  copying — run it (no GPU needed) and fix what it flags. **Status 2026-10-05: the whole
+  sweep is GREEN (74/74, np 1 and 2), so a failure there is now a regression** — re-run it
+  after any change to device-side code.
+- **Never hand MFEM device paths a hypre-malloc'd buffer — use `ParallelAssemble(Vector&)`.**
+  Root-caused 2026-10-05 (intermittent `nse_mms_test` crash at np = 2 on the debug device,
+  pre-existing on `main`): `ParLinearForm::ParallelAssemble()` returns a `HypreParVector`
+  that WRAPS a buffer hypre allocated with `malloc`. Once that buffer is device-valid, the
+  debug device page-protects its host copy, and because `mprotect` is page-granular the
+  protection also covers unrelated heap neighbours sharing those pages. The next touch of a
+  neighbour faults ("Invalid permissions") -- seen in hypre's own `free()` and inside a
+  prolongation copy, wherever the heap layout happened to put it, hence intermittent
+  (captured under gdb: the fault address sat in a `---p` page in the middle of `[heap]`).
+  MFEM's own allocations get private pages on the debug device, so the fix is to assemble
+  into MFEM-owned vectors: `form.ParallelAssemble(tv)` (done in `AssembleForcing`,
+  `StokesSolver::Solve`, `MassWeightedMean`). Do not reintroduce
+  `std::unique_ptr<HypreParVector>(form.ParallelAssemble())`.
 - **A green debug device does NOT mean GPU-ready.** It has a structural blind spot: at
   `forall.hpp`, `if (Device::Allows(Backend::DEBUG_DEVICE)) { goto backend_cpu; }` — running
   a forall on the host over "device" memory is the *intended, working* path there, since the

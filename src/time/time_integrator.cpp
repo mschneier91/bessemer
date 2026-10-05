@@ -216,8 +216,11 @@ void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
    f_form.AddDomainIntegrator(fi);
    f_form.UseFastAssembly(true); // device-ready assembly path (project policy)
    f_form.Assemble();
-   std::unique_ptr<HypreParVector> f_true(f_form.ParallelAssemble());
-   F = *f_true;
+   // Straight into F (MFEM-owned), not via ParallelAssemble()'s hypre-backed
+   // HypreParVector -- see MassWeightedMean (post/pressure_mean.cpp) for the
+   // debug-device page-protection fault that pattern causes.
+   F.SetSize(spaces_.Velocity().GetTrueVSize());
+   f_form.ParallelAssemble(F);
 }
 
 void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,

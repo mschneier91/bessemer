@@ -1,7 +1,5 @@
 #include "post/pressure_mean.hpp"
 
-#include <memory>
-
 namespace incns
 {
 
@@ -36,14 +34,20 @@ double MassWeightedMean(const ParGridFunction& p, const RuleBook& rules)
    ones.UseFastAssembly(true); // device-ready assembly path (project policy)
    ones.Assemble();
 
-   std::unique_ptr<HypreParVector> ones_true(ones.ParallelAssemble());
+   // Into an MFEM-owned Vector, NOT ParallelAssemble()'s HypreParVector: that
+   // one wraps a hypre-malloc'd host buffer, and on the debug device MFEM
+   // page-protects a device-valid host buffer -- for a malloc'd one the
+   // page-rounded protection also covers unrelated heap neighbours, which
+   // then fault intermittently (seen in nse_mms_test at np2, 2026-10-05).
+   Vector ones_true(fes.GetTrueVSize());
+   ones.ParallelAssemble(ones_true);
    Vector p_true;
    p.GetTrueDofs(p_true);
    Vector unit(p_true.Size());
    unit = 1.0;
 
-   const double integral = InnerProduct(comm, *ones_true, p_true);
-   const double volume = InnerProduct(comm, *ones_true, unit);
+   const double integral = InnerProduct(comm, ones_true, p_true);
+   const double volume = InnerProduct(comm, ones_true, unit);
    MFEM_VERIFY(volume > 0.0, "pressure_mean: non-positive domain volume");
    return integral / volume;
 }

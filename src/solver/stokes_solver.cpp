@@ -260,12 +260,15 @@ void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,
    f_form.AddDomainIntegrator(fi);
    f_form.UseFastAssembly(true);
    f_form.Assemble();
-   std::unique_ptr<HypreParVector> f_true(f_form.ParallelAssemble());
+   // MFEM-owned true-dof vector, not ParallelAssemble()'s hypre-backed
+   // HypreParVector -- see MassWeightedMean (post/pressure_mean.cpp).
+   Vector f_true(spaces_.Velocity().GetTrueVSize());
+   f_form.ParallelAssemble(f_true);
 
    // One-shot semantics: cold start from zero.
    u = 0.0;
    p = 0.0;
-   SolveTrue(*f_true, u, p);
+   SolveTrue(f_true, u, p);
 }
 
 void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
