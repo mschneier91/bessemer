@@ -30,6 +30,25 @@ namespace incns
  * node a essential -> d_{a,c} = 1 and, in 3D, s_{a,k} = 0 for k != c; in 2D,
  * s_a = 0 if either component is essential.
  *
+ * @par Why it needs explicit calls when scalar Jacobi does not
+ * A Jacobi smoother (e.g. mfem::OperatorJacobiSmoother) gets everything it
+ * needs through the one query every MFEM operator supports, its diagonal
+ * (Operator::AssembleDiagonal, which each PA integrator implements as
+ * AssembleDiagonalPA) -- so SetOperator() alone refreshes it, under the hood.
+ * Point-block Jacobi also needs the OFF-diagonal entries inside each node's
+ * dim x dim block, and MFEM has no matching query: a matrix-free operator
+ * exposes only Mult and its diagonal, and integrators have no "assemble the
+ * nodal blocks" hook. Those entries therefore have to come from the
+ * integrator that creates them -- hence the integrator in the constructor,
+ * UpdateSkew() pulling them from it, and SetOperator() being a no-op (the
+ * Operator it is handed cannot supply them). The per-step calls exist because
+ * the rotation term changes every step while the operator object does not:
+ * the integrator rewrites its vorticity data in place (no reassembly -- that
+ * is what keeps a step cheap), and nothing in MFEM tells a preconditioner
+ * that an operator's data changed. A Jacobi smoother has the same blind spot,
+ * it just rarely matters: its operator usually changes only with Delta-t,
+ * when SetOperator() is called anyway; SetDiagonal() is the analogue here.
+ *
  * @par How to use it
  *
  * **Your part:**
