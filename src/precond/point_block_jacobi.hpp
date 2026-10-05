@@ -39,10 +39,37 @@ namespace incns
  *     the diagonal of the rest of the velocity operator (e.g. AssembleDiagonal
  *     of your sigma M + nu K form). N contributes exactly zero, so it does not
  *     matter whether it is included.
- *  3. Every step, in this order: update w (in place, or with
- *     SetLaggedVelocity), then rot.UpdateVorticity(), then UpdateSkew().
- *     UpdateSkew reads the integrator's fresh vorticity data, which is why the
- *     order matters.
+ *  3. Every time step, in this order:
+ *     - (a) Update w. w is the lagged velocity the rotation term is linearized
+ *          about, N(w) u = alpha ((curl w) x u, v): the GridFunction you passed
+ *          to the integrator's constructor in step 1. The integrator keeps a
+ *          pointer to it, not a copy. It is typically the velocity history
+ *          extrapolated to the new time level, e.g. second order
+ *          w = 2 u^n - u^{n-1}. Overwrite it in place, or point the integrator
+ *          at a different GridFunction with rot.SetLaggedVelocity(w2) (same
+ *          mesh and order). A ParGridFunction must be consistent across ranks
+ *          before (b) (SetFromTrueDofs or Distribute).
+ *     - (b) rot.UpdateVorticity(): recomputes curl w at the quadrature points.
+ *          Nothing is reassembled -- operators already formed from the
+ *          integrator's form see the new vorticity.
+ *     - (c) UpdateSkew(): rebuilds and re-inverts the node blocks from the new
+ *          vorticity. It reads the integrator's vorticity data, so it must come
+ *          after (b); before (b) it would use the previous step's vorticity.
+ *     @code
+ *     // setup (step 1), for reference -- the integrator holds a pointer to w
+ *     ParGridFunction w(&vfes);
+ *     auto *rot = new VectorRotationalConvectionIntegrator(w, alpha);
+ *     n_form.AddDomainIntegrator(rot);   // PA form, Assemble()d once
+ *     PointBlockJacobi pbj(vfes, *rot, ess_tdofs);
+ *
+ *     // every time step n -> n+1
+ *     Vector w_true(vfes.GetTrueVSize());
+ *     add(2.0, u_n, -1.0, u_nm1, w_true); // w = 2 u^n - u^{n-1}, true dofs
+ *     w.SetFromTrueDofs(w_true);          // (a) update w in place
+ *     rot->UpdateVorticity();             // (b) curl w at quadrature points
+ *     pbj.UpdateSkew();                   // (c) node blocks from new curl w
+ *     gmres.Mult(rhs, x);                 // solve with pbj as the PC
+ *     @endcode
  *  4. Using it: it is nonsymmetric, so use it with GMRES/FGMRES, never PCG.
  *     The operator you apply must include N. If you sum N with an operator
  *     constrained so its Dirichlet rows are identity rows (DIAG_ONE),
