@@ -40,8 +40,13 @@ struct RotationNumberStats
  * @f$ d_q = \alpha \hat w_q \det J_q\, \omega_q @f$, computed through adj(J)
  * without dividing by det J (3 reals per point in 3D, 1 in 2D).
  *
- * PA only (no legacy/EA/MF assembly), on quads/hexes, dim == sdim == vdim in
- * {2, 3}, byNODES or byVDIM. Moving meshes: after node changes the caller must
+ * PA on quads/hexes, dim == sdim == vdim in {2, 3}, byNODES or byVDIM; plus
+ * legacy full assembly (AssembleElementMatrix -- the path MFEM's CPU LOR
+ * assembly uses) and, per component block, element assembly
+ * (VectorRotationalConvectionComponentIntegrator -- the GPU route). Both
+ * full/element assembly paths evaluate w on the mesh being assembled: for
+ * LOR, give them a w on the LOR space (H1 LOR shares the high-order true
+ * dofs, so that is a plain copy). Moving meshes: after node changes the caller must
  * call mesh->DeleteGeometricFactors() and AssemblePA() again.
  */
 class VectorRotationalConvectionIntegrator : public mfem::BilinearFormIntegrator
@@ -109,6 +114,19 @@ public:
    void AssembleDiagonalPA(mfem::Vector& diag) override;
 
    /**
+    * @brief Legacy full assembly of one element matrix (any rule; CPU), e.g.
+    *        for MFEM's LOR assembly or an assembled reference.
+    * @param el    Scalar finite element (vector via dim blocks, byNODES-style
+    *              elmat layout: index a + i*nd).
+    * @param Trans Element transformation; must belong to w's mesh (aborts
+    *              otherwise -- curl w would be read from the wrong element).
+    * @param elmat Output (dim*nd)^2 element matrix.
+    */
+   void AssembleElementMatrix(const mfem::FiniteElement& el,
+                              mfem::ElementTransformation& Trans,
+                              mfem::DenseMatrix& elmat) override;
+
+   /**
     * @brief Off-diagonal part of the nodal dim x dim blocks, for point-block
     *        Jacobi (spec 5.9). Adds into an E-vector of the velocity space,
     *        layout (D1D^dim, dim, NE), lexicographic: 3D component c
@@ -170,6 +188,57 @@ private:
    mfem::Vector w_e_;                       ///< E-vector buffer for w (reused).
    mfem::Vector pa_data_;                   ///< d_q, layout above.
    mutable mfem::Vector diag_tmp0_, diag_tmp1_; ///< Diagnostic scratch (reused).
+};
+
+/**
+ * @brief One (i, j) block of the rotation term on a SCALAR H1 space, for
+ *        element assembly: @f$ N^{ij}_{ab} = \alpha \sum_q \hat w_q \det J_q
+ *        \varphi_a \varphi_b [\omega_q]_{\times,ij} @f$ (row/test component
+ *        i, column/trial component j); the diagonal blocks are zero.
+ *
+ * Exists for the same reason as VectorDivDivComponentIntegrator: MFEM's EA
+ * extension sizes element matrices by the scalar dof count and ignores vdim,
+ * so a vector integrator cannot serve AssemblyLevel::ELEMENT / FULL. Assemble
+ * each block on a scalar space (FULL builds the sparse matrix on the device
+ * from AssembleEA) and merge with HypreParMatrixFromBlocks -- the route for a
+ * device-assembled LOR operator. Direct O(nd^2 nq) kernel: meant for low
+ * order (Q1 LOR), not high-order element matrices. Quads/hexes only.
+ * N^{ji} = -N^{ij} entrywise-transposed (the operator is skew).
+ */
+class VectorRotationalConvectionComponentIntegrator :
+   public mfem::BilinearFormIntegrator
+{
+   const mfem::GridFunction* w_; ///< Lagged velocity (not owned).
+   mfem::real_t alpha_;          ///< Scalar multiplier.
+   const int i_block_;           ///< Row (test) component.
+   const int j_block_;           ///< Column (trial) component.
+
+public:
+   /**
+    * @brief The (i, j) block for the vorticity of @a w.
+    * @param w       Vector H1 GridFunction on the assembly mesh, same order
+    *                and FE collection as the scalar space (not owned).
+    * @param alpha   Scalar multiplier.
+    * @param i_block Row (test) component, 0 <= i_block < dim.
+    * @param j_block Column (trial) component, 0 <= j_block < dim.
+    *
+    * The integration rule is this integrator's own if set, else
+    * VectorRotationalConvectionIntegrator::GetRule.
+    */
+   VectorRotationalConvectionComponentIntegrator(const mfem::GridFunction& w,
+         mfem::real_t alpha,
+         int i_block, int j_block)
+      : w_(&w), alpha_(alpha), i_block_(i_block), j_block_(j_block) { }
+
+   /**
+    * @brief Element matrices of the (i, j) block, row-major per element in
+    *        lexicographic dof order (MFEM's EA layout); w is read now.
+    * @param fes  Scalar (vdim == 1) H1 space on w's mesh, quads/hexes.
+    * @param emat Output, size nd * nd * ne.
+    * @param add  Accumulate into @a emat if true, overwrite otherwise.
+    */
+   void AssembleEA(const mfem::FiniteElementSpace& fes, mfem::Vector& emat,
+                   const bool add = true) override;
 };
 
 } // namespace incns

@@ -178,7 +178,8 @@ adaptive stepping. For Navier–Stokes, `physics: { convective_form: rotational 
 switches to the semi-implicit rotational form (lagged vorticity in the implicit
 velocity block; `Pressure()` still reports static pressure), and
 `solver: { rotation_pc: pbj_krylov }` (or `pbj_only`) preconditions its velocity
-block with point-block Jacobi. Analytic initial/boundary fields beyond the named registry
+block with point-block Jacobi (`rotation_lor: true` instead puts the rotation
+term into the LOR-AMG operator -- measured not to pay off, see CLAUDE.md). Analytic initial/boundary fields beyond the named registry
 (`taylor_green_2d`, `zero`) are supplied from Python or an in-code driver.
 
 Output is written as a ParaView collection (`<path>/<name>/…`) with high-order

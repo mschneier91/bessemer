@@ -149,6 +149,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
    }
    Maybe(solver, "amg_reuse", p.amg_reuse);
+   Maybe(solver, "rotation_lor", p.rotation_in_lor);
    if (solver && solver["rotation_pc"])
    {
       const std::string rp = solver["rotation_pc"].as<std::string>();

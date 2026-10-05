@@ -58,6 +58,10 @@ struct StokesOperatorOptions
    const mfem::ParGridFunction* lagged_velocity = nullptr;
    /// The rotation term's alpha: 1 for BDF, 1/2 for the trapezoidal starter.
    double rotation_alpha = 1.0;
+   /// Include the rotation term in the LOR source (needs lagged_velocity and
+   /// a non-frozen lor_momentum): w is copied to the LOR space by true dofs
+   /// and the LOR operator re-assembled by AssembleLorMomentum() each step.
+   bool rotation_in_lor = false;
 };
 
 /**
@@ -155,6 +159,22 @@ public:
     * @return The constrained operator.
     */
    mfem::ConstrainedOperator& RotationConstrained();
+
+   /// @return Whether the LOR source carries the rotation term.
+   bool RotationInLor() const { return lor_disc_ != nullptr; }
+
+   /**
+    * @brief Copy the lagged velocity onto the LOR space (by true dofs -- H1
+    *        LOR shares them) and assemble the LOR momentum operator
+    *        c0 M + nu K + N on it (MFEM legacy LOR assembly, CPU).
+    * @pre StokesOperatorOptions::rotation_in_lor.
+    * @return The assembled LOR operator, owned by LorDiscretization(); the
+    *         next call replaces it.
+    */
+   mfem::HypreParMatrix& AssembleLorMomentum();
+
+   /// @return The LOR discretization the rotation-in-LOR operator lives on.
+   mfem::ParLORDiscretization& LorDiscretization();
 
    /**
     * @brief The pure viscous operator @c nu*K on true dofs, UNCONSTRAINED
@@ -256,6 +276,11 @@ private:
    std::unique_ptr<mfem::ConstrainedOperator> Nc_;
    /// Momentum() + Nc_, rebuilt with the momentum block (rotation only).
    std::unique_ptr<mfem::SumOperator> full_momentum_;
+   /// Rotation in LOR: the LOR discretization of the velocity space (owned
+   /// here so the LOR-space w below and the assembled operator share it).
+   std::unique_ptr<mfem::ParLORDiscretization> lor_disc_;
+   /// Rotation in LOR: the lagged velocity on the LOR space.
+   std::unique_ptr<mfem::ParGridFunction> w_lor_;
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
    mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).
 };

@@ -129,6 +129,26 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                              /*include_grad_div=*/false);
    }
 
+   // --- rotation in the LOR source: an LOR discretization owned HERE, so the
+   // LOR-space copy of w* lives on the very mesh MFEM's legacy LOR assembly
+   // hands the integrator (it reads curl w through that mesh's elements).
+   if (opts_.rotation_in_lor)
+   {
+      MFEM_VERIFY(opts_.lagged_velocity && opts_.lor_momentum &&
+                  !opts_.lor_frozen, "stokes_operator: rotation_in_lor needs "
+                  "a lagged velocity and a non-frozen LOR source");
+      lor_disc_ = std::make_unique<ParLORDiscretization>(spaces_.Velocity());
+      // The true-dof copy below relies on H1 LOR's identity dof permutation.
+      const Array<int>& perm = lor_disc_->GetDofPermutation();
+      for (int i = 0; i < perm.Size(); ++i)
+      {
+         MFEM_VERIFY(perm[i] == i, "stokes_operator: LOR dof permutation is not "
+                     "the identity -- the true-dof copy of w would be wrong");
+      }
+      w_lor_ = std::make_unique<ParGridFunction>(&lor_disc_->GetParFESpace());
+      *w_lor_ = 0.0;
+   }
+
    // --- semi-implicit rotational term N = alpha ((curl w*) x u, v): Delta-t
    // independent (the vorticity is updated in place each step), so built once.
    // Same dealiased 3k rule as the convective form -- over-integration and the
@@ -211,6 +231,13 @@ void StokesOperator::BuildMomentum()
       lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
       AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
                              /*include_grad_div=*/false);
+      if (w_lor_)
+      {
+         // Legacy element matrices on the LOR elements, reading the LOR-space
+         // w (MFEM sets the collocated rule during LOR assembly).
+         lor_form_->AddDomainIntegrator(new VectorRotationalConvectionIntegrator(
+                                           *w_lor_, opts_.rotation_alpha));
+      }
    }
 
    // The outer operator A + N re-points at the rebuilt momentum block.
@@ -241,6 +268,25 @@ ConstrainedOperator& StokesOperator::RotationConstrained()
    MFEM_VERIFY(Nc_, "stokes_operator: no rotation term (no lagged velocity "
                "at construction)");
    return *Nc_;
+}
+
+HypreParMatrix& StokesOperator::AssembleLorMomentum()
+{
+   MFEM_VERIFY(lor_disc_, "stokes_operator: AssembleLorMomentum() requires "
+               "rotation_in_lor");
+   INCNS_PROFILE("stokes_operator::lor_rotation");
+   Vector w_true(spaces_.Velocity().GetTrueVSize());
+   opts_.lagged_velocity->GetTrueDofs(w_true);
+   w_lor_->SetFromTrueDofs(w_true);
+   lor_disc_->AssembleSystem(*lor_form_, ess_tdofs_);
+   return lor_disc_->GetAssembledMatrix();
+}
+
+ParLORDiscretization& StokesOperator::LorDiscretization()
+{
+   MFEM_VERIFY(lor_disc_, "stokes_operator: no LOR discretization (requires "
+               "rotation_in_lor)");
+   return *lor_disc_;
 }
 
 ParBilinearForm& StokesOperator::MomentumLORForm() const

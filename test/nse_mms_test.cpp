@@ -69,6 +69,10 @@ struct MmsConfig
    ConvectiveForm form = ConvectiveForm::Convective;
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    SchurBlockType schur = SchurBlockType::Mass;
+   /// Mass path's velocity PC (the CC path's a_pc default is LOR-AMG).
+   incns::VelocityPreconditioner velocity_prec =
+      incns::VelocityPreconditioner::Jacobi;
+   bool rotation_in_lor = false; ///< Rotation term in the LOR-AMG operator.
 };
 
 struct MmsResult
@@ -107,6 +111,8 @@ MmsResult NseMmsRun(int dim, int n, int ku, double nu, double dt,
    opts.convective_form = cfg.form;
    opts.rotation_pc = cfg.rotation_pc;
    opts.schur = cfg.schur;
+   opts.velocity_prec = cfg.velocity_prec;
+   opts.rotation_in_lor = cfg.rotation_in_lor;
    opts.rtol = 1e-12;
    opts.max_iter = 5000;
    opts.kdim = 400;
@@ -435,6 +441,17 @@ TEST(NseMms, RotationalPreconditionersAgree)
          runs.push_back(NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing,
                                   Rotational(pc, schur)));
       }
+   // LOR-AMG with the rotation term in the LOR operator, re-set-up every
+   // step, on both Schur paths (Mass: velocity_prec LORAMG; CC: a_pc LORAMG,
+   // its default). Also exercises the w -> LOR-space copy in a real march.
+   for (SchurBlockType schur : {SchurBlockType::Mass, SchurBlockType::CahouetChabard})
+   {
+      MmsConfig cfg = Rotational(RotationVelocityPC::Symmetric, schur);
+      cfg.velocity_prec = incns::VelocityPreconditioner::LORAMG;
+      cfg.rotation_in_lor = true;
+      runs.push_back(NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing,
+                               cfg));
+   }
    const Vector& ref = runs.front().u_true;
    const double ref_norm = std::sqrt(InnerProduct(MPI_COMM_WORLD, ref, ref));
    for (std::size_t i = 1; i < runs.size(); ++i)
@@ -442,7 +459,8 @@ TEST(NseMms, RotationalPreconditionersAgree)
       Vector d(runs[i].u_true);
       d -= ref;
       const double rel = std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d)) / ref_norm;
-      EXPECT_LE(rel, 1e-9) << "configuration " << i << " (schur x pc, row-major)";
+      EXPECT_LE(rel, 1e-9) << "configuration " << i << " (schur x pc, row-major;"
+                           << " 6, 7 = LOR-AMG with N on Mass, CC)";
    }
 }
 

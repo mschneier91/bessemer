@@ -20,6 +20,7 @@
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <sstream>
@@ -609,4 +610,280 @@ TEST(RotConv, A3_SerialVersusParallel)
       EXPECT_GT(st_ser.vol_fraction, 0.0); // threshold actually splits the domain
       EXPECT_LT(st_ser.vol_fraction, 1.0);
    }
+}
+
+// ===========================================================================
+// Full / element assembly (added after the spec, for LOR use): legacy
+// AssembleElementMatrix, the per-component EA integrator, and the LOR path.
+// ===========================================================================
+namespace
+{
+// alpha [omega]_x from a vector coefficient omega (vdim 1 in 2D, 3 in 3D);
+// with MFEM's VectorMassIntegrator(MatrixCoefficient&) it is an MFEM-only
+// reference for N (spec App. B).
+class SkewFromOmega : public MatrixCoefficient
+{
+   VectorCoefficient& om_;
+   real_t alpha_;
+   Vector o_;
+
+public:
+   SkewFromOmega(int dim, VectorCoefficient& om, real_t a)
+      : MatrixCoefficient(dim), om_(om), alpha_(a), o_(om.GetVDim()) { }
+   void Eval(DenseMatrix& K, ElementTransformation& T,
+             const IntegrationPoint& ip) override
+   {
+      om_.Eval(o_, T, ip);
+      const int d = GetHeight();
+      K.SetSize(d);
+      K = 0.0;
+      if (d == 2)
+      {
+         K(0, 1) = -alpha_ * o_(0);
+         K(1, 0) = alpha_ * o_(0);
+      }
+      else
+      {
+         K(0, 1) = -alpha_ * o_(2);
+         K(0, 2) = alpha_ * o_(1);
+         K(1, 0) = alpha_ * o_(2);
+         K(1, 2) = -alpha_ * o_(0);
+         K(2, 0) = -alpha_ * o_(1);
+         K(2, 1) = alpha_ * o_(0);
+      }
+   }
+};
+
+std::vector<Case> AssemblySweep()
+{
+   std::vector<Case> cases;
+   for (int dim : {2, 3})
+      for (int p = 1; p <= 3; ++p)
+         for (Rule r : {Rule::R1, Rule::R2, Rule::R4})
+         {
+            cases.push_back({dim, p, r, MeshKind::M2});
+         }
+   return cases;
+}
+} // namespace
+
+// Legacy element matrices equal an MFEM-only reference (VectorMassIntegrator
+// with alpha [curl w]_x from CurlGridFunctionCoefficient) element by element,
+// and the legacy-assembled operator equals the PA one on a partitioned mesh.
+TEST(RotConv, FullAssemblyMatchesMfemReference)
+{
+   RuleBook rules;
+   for (const Case& c : AssemblySweep())
+   {
+      SCOPED_TRACE(c.Label());
+      g_dim = c.dim;
+      g_periodic = false;
+      Mesh serial = MakeMesh(c);
+      H1_FECollection fec(c.p, c.dim);
+
+      // Element by element, serial.
+      FiniteElementSpace sfes(&serial, &fec, c.dim, Ordering::byNODES);
+      const IntegrationRule& ir = PickRule(rules, c, serial, *sfes.GetTypicalFE());
+      GridFunction sw(&sfes);
+      VectorFunctionCoefficient fw(c.dim, vel_fn);
+      sw.ProjectCoefficient(fw);
+      VectorRotationalConvectionIntegrator rot(sw, 1.7);
+      rot.SetIntRule(&ir);
+      CurlGridFunctionCoefficient curl(&sw);
+      SkewFromOmega skew(c.dim, curl, 1.7);
+      VectorMassIntegrator ref(skew);
+      ref.SetIntRule(&ir);
+      for (int e = 0; e < serial.GetNE(); ++e)
+      {
+         DenseMatrix A, B;
+         rot.AssembleElementMatrix(*sfes.GetFE(e),
+                                   *serial.GetElementTransformation(e), A);
+         ref.AssembleElementMatrix(*sfes.GetFE(e),
+                                   *serial.GetElementTransformation(e), B);
+         B -= A;
+         EXPECT_LE(B.MaxMaxNorm(), 1e-12 * A.MaxMaxNorm()) << "element " << e;
+      }
+
+      // Legacy-assembled operator vs PA, partitioned.
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      ParFiniteElementSpace fes(&mesh, &fec, c.dim, Ordering::byNODES);
+      ParGridFunction w(&fes);
+      Vector W;
+      Interpolate(w, vel_fn, W);
+      Array<int> empty;
+      NForm pa(fes, w, 1.7, ir, empty);
+      ParBilinearForm fa(&fes);
+      auto* fi = new VectorRotationalConvectionIntegrator(w, 1.7);
+      fi->SetIntRule(&ir);
+      fa.AddDomainIntegrator(fi);
+      fa.Assemble();
+      fa.Finalize();
+      OperatorPtr Afa;
+      fa.FormSystemMatrix(empty, Afa);
+      Vector x(fes.GetTrueVSize()), ypa(x.Size()), yfa(x.Size());
+      x.Randomize(19);
+      pa.op->Mult(x, ypa);
+      Afa->Mult(x, yfa);
+      yfa -= ypa;
+      EXPECT_LE(Norm(yfa), 1e-12 * Norm(ypa));
+   }
+}
+
+// The dim x dim component blocks, each element-assembled on a SCALAR space
+// (AssemblyLevel::FULL -> AssembleEA -> sparse matrix) and merged with
+// HypreParMatrixFromBlocks, equal the legacy-assembled vector operator (the
+// off-diagonal blocks are not symmetric: pins the EA layout); each block's
+// ELEMENT-level action equals its FULL matrix. At np > 1 this also pins the
+// merged block ordering against the byNODES true-dof ordering.
+TEST(RotConv, ComponentEaMatchesVectorAssembly)
+{
+   RuleBook rules;
+   for (const Case& c : AssemblySweep())
+   {
+      SCOPED_TRACE(c.Label());
+      g_dim = c.dim;
+      g_periodic = false;
+      Mesh serial = MakeMesh(c);
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      H1_FECollection fec(c.p, c.dim);
+      ParFiniteElementSpace vfes(&mesh, &fec, c.dim, Ordering::byNODES);
+      ParFiniteElementSpace sfes(&mesh, &fec);
+      const IntegrationRule& ir = PickRule(rules, c, mesh, *vfes.GetTypicalFE());
+      ParGridFunction w(&vfes);
+      Vector W;
+      Interpolate(w, vel_fn, W);
+      Array<int> empty;
+
+      ParBilinearForm ref(&vfes);
+      auto* ri = new VectorRotationalConvectionIntegrator(w, 1.7);
+      ri->SetIntRule(&ir);
+      ref.AddDomainIntegrator(ri);
+      ref.Assemble();
+      ref.Finalize();
+      OperatorPtr K_ref;
+      ref.FormSystemMatrix(empty, K_ref);
+
+      // Lifetimes (learned on the grad-div blocks): OperatorHandle copies do
+      // not own, so the handle vector must never reallocate; and at np = 1 a
+      // FULL matrix borrows its form's storage, so the forms outlive the merge.
+      std::vector<std::unique_ptr<ParBilinearForm>> forms;
+      std::vector<OperatorPtr> K_blocks;
+      K_blocks.reserve(c.dim * c.dim);
+      Array2D<const HypreParMatrix*> blocks(c.dim, c.dim);
+      for (int i = 0; i < c.dim; ++i)
+         for (int j = 0; j < c.dim; ++j)
+         {
+            forms.push_back(std::make_unique<ParBilinearForm>(&sfes));
+            ParBilinearForm& fa = *forms.back();
+            ParBilinearForm ea(&sfes);
+            fa.SetAssemblyLevel(AssemblyLevel::FULL);
+            ea.SetAssemblyLevel(AssemblyLevel::ELEMENT);
+            auto make = [&]()
+            {
+               auto* bi = new incns::VectorRotationalConvectionComponentIntegrator(
+                  w, 1.7, i, j);
+               bi->SetIntRule(&ir);
+               return bi;
+            };
+            fa.AddDomainIntegrator(make());
+            ea.AddDomainIntegrator(make());
+            fa.Assemble();
+            ea.Assemble();
+            K_blocks.emplace_back(Operator::Hypre_ParCSR);
+            fa.FormSystemMatrix(empty, K_blocks.back());
+            const HypreParMatrix* Kij = K_blocks.back().As<HypreParMatrix>();
+            ASSERT_NE(Kij, nullptr);
+            blocks(i, j) = Kij;
+
+            OperatorPtr A_ea;
+            ea.FormSystemMatrix(empty, A_ea);
+            Vector x(sfes.GetTrueVSize()), y_ea(x.Size()), y_fa(x.Size());
+            x.Randomize(31 + 3 * i + j);
+            A_ea->Mult(x, y_ea);
+            Kij->Mult(x, y_fa);
+            y_ea -= y_fa;
+            EXPECT_LE(Norm(y_ea), 1e-12 * std::max(Norm(y_fa), 1e-300))
+                  << "ELEMENT vs FULL, block (" << i << "," << j << ")";
+         }
+      std::unique_ptr<HypreParMatrix> K(HypreParMatrixFromBlocks(blocks));
+      ASSERT_EQ(K->Height(), K_ref->Height());
+      Vector x(vfes.GetTrueVSize()), y(x.Size()), y_ref(x.Size());
+      x.Randomize(7);
+      K->Mult(x, y);
+      K_ref->Mult(x, y_ref);
+      y -= y_ref;
+      EXPECT_LE(Norm(y), 1e-12 * Norm(y_ref)) << "merged blocks vs vector";
+   }
+}
+
+// LOR: w copied onto the LOR space by TRUE DOFS (H1 LOR shares them) and the
+// rotation term assembled through MFEM's ParLORDiscretization (legacy element
+// matrices on the LOR elements). A rigid rotation has curl = 2 Omega exactly
+// on the straight-sided LOR elements, so the LOR operator must be exactly
+// alpha [2 Omega]_x (x) M_LOR, with M_LOR the LOR vector mass assembled the
+// same way: N_LOR x = M_LOR (K (x) I) x. Pins the w-on-LOR handling, the
+// mesh match, the sign and alpha on the LOR path.
+TEST(RotConv, LorRigidRotation)
+{
+   for (int dim : {2, 3})
+      for (int p = 2; p <= 3; ++p)
+      {
+         SCOPED_TRACE("dim=" + std::to_string(dim) + " p=" + std::to_string(p));
+         g_dim = dim;
+         g_periodic = false;
+         Mesh serial = MakeCurvedMesh(dim, dim == 2 ? 3 : 2, p);
+         ParMesh mesh(MPI_COMM_WORLD, serial);
+         H1_FECollection fec(p, dim);
+         ParFiniteElementSpace fes(&mesh, &fec, dim, Ordering::byNODES);
+         ParGridFunction w_ho(&fes);
+         Vector W;
+         Interpolate(w_ho, rigid_fn, W);
+         const real_t alpha = 1.7;
+
+         ParLORDiscretization lor_n(fes), lor_m(fes);
+         ParGridFunction w_lor(&lor_n.GetParFESpace());
+         w_lor.SetFromTrueDofs(W); // the solver's copy path
+         Array<int> empty;
+         ParBilinearForm an(&fes), am(&fes);
+         an.AddDomainIntegrator(
+              new VectorRotationalConvectionIntegrator(w_lor, alpha));
+         am.AddDomainIntegrator(new VectorMassIntegrator());
+         lor_n.AssembleSystem(an, empty);
+         lor_m.AssembleSystem(am, empty);
+         const HypreParMatrix& N = lor_n.GetAssembledMatrix();
+         const HypreParMatrix& M = lor_m.GetAssembledMatrix();
+
+         // K = alpha [2 Omega]_x.
+         DenseMatrix K(dim);
+         K = 0.0;
+         if (dim == 2)
+         {
+            K(0, 1) = -alpha * 2 * kOmega2;
+            K(1, 0) = alpha * 2 * kOmega2;
+         }
+         else
+         {
+            const real_t o0 = 2 * kOmega3[0], o1 = 2 * kOmega3[1],
+                         o2 = 2 * kOmega3[2];
+            K(0, 1) = -alpha * o2; K(0, 2) = alpha * o1;
+            K(1, 0) = alpha * o2;  K(1, 2) = -alpha * o0;
+            K(2, 0) = -alpha * o1; K(2, 1) = alpha * o0;
+         }
+         const int n = fes.GetTrueVSize() / dim;
+         Vector x(fes.GetTrueVSize()), z(x.Size()), y(x.Size()), y_ref(x.Size());
+         x.Randomize(13);
+         const real_t* X = x.HostRead();
+         real_t* Z = z.HostWrite();
+         for (int a = 0; a < n; ++a)
+            for (int i = 0; i < dim; ++i)
+            {
+               real_t s = 0.0;
+               for (int j = 0; j < dim; ++j) { s += K(i, j) * X[j * n + a]; }
+               Z[i * n + a] = s;
+            }
+         N.Mult(x, y);
+         M.Mult(z, y_ref);
+         y -= y_ref;
+         EXPECT_LE(Norm(y), 1e-12 * Norm(y_ref));
+      }
 }

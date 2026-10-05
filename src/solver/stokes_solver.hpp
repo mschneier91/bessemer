@@ -62,6 +62,11 @@ struct StokesSolverOptions
    int pbj_krylov_kdim = 20;      ///< PbjKrylov: inner GMRES restart.
    double pbj_krylov_rtol = 1e-2; ///< PbjKrylov: inner relative tolerance.
    int pbj_krylov_max_iter = 30;  ///< PbjKrylov: inner iteration cap.
+   /// With rotation_pc == Symmetric and a LOR-AMG velocity PC: build the AMG
+   /// on the LOR operator INCLUDING the rotation term, re-assembled and
+   /// re-set-up every UpdateRotation() (cost: one LOR assembly + AMG setup
+   /// per step). Without it, LOR-AMG sees sigma M + nu K only.
+   bool rotation_in_lor = false;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
    int max_iter = 2000;          ///< FGMRES iteration cap.
@@ -194,6 +199,9 @@ private:
    /// Point-block Jacobi (rotation_pc != Symmetric only). Owned here: with
    /// PbjKrylov vel_prec_ is the inner GMRES that borrows it.
    std::unique_ptr<PointBlockJacobi> pbj_;
+   /// The LOR-AMG velocity PC when it carries the rotation term (owned by
+   /// vel_prec_; re-set-up on every UpdateRotation). Null otherwise.
+   mfem::LORSolver<mfem::HypreBoomerAMG>* lor_rot_ = nullptr;
    /// CC Schur PC (CahouetChabard mode only; null on the Mass path). Declared
    /// before prec_ (the block wrapper borrows it).
    std::unique_ptr<CahouetChabardSchurPC> cc_pc_;

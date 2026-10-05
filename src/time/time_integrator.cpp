@@ -89,6 +89,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
          so.lagged_velocity = &w_star_;
          so.rotation_alpha = 0.5;
          so.rotation_pc = opts_.rotation_pc;
+         so.rotation_in_lor = opts_.rotation_in_lor;
       }
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
@@ -197,6 +198,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
          so.lagged_velocity = &w_star_;
          so.rotation_alpha = 1.0;
          so.rotation_pc = opts_.rotation_pc;
+         so.rotation_in_lor = opts_.rotation_in_lor;
       }
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;

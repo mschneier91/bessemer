@@ -526,6 +526,28 @@ What landed (`physics.convective_form: rotational`, NSE only):
 - Velocity PC, `solver.rotation_pc`: `symmetric` (default; the usual PC on σM+νK, N only in
   the outer operator), `pbj_only`, `pbj_krylov` (GMRES(20) on the full block, rtol 1e-2,
   ≤30 its, PBJ-preconditioned). The PBJ choices replace the velocity PC on both Schur paths.
+- **Full / element assembly (added 2026-10-05, beyond the spec).** `AssembleElementMatrix`
+  (legacy, CPU — what MFEM's legacy LOR assembly calls) and the per-component
+  `VectorRotationalConvectionComponentIntegrator::AssembleEA` (GPU route; same pattern and
+  reason as the grad-div component blocks — MFEM's EA ignores vdim). Both read curl w on
+  the mesh being assembled and **abort if handed another mesh's elements**: for LOR the
+  integrator needs a w on the LOR space, which for H1 is a plain TRUE-DOF COPY (identity dof
+  permutation, checked). `solver.rotation_lor: true` (with LOR-AMG and `rotation_pc:
+  symmetric`) puts N into the LOR-AMG operator, re-assembled + AMG re-setup every step.
+  **MEASURED — leave it off** (`bench/bench_rotation_pc`, 3D p=4, 3³ curved, Dirichlet,
+  GMRES(50) to 1e-10 on the velocity block alone; np1, np4 within the AMG noise):
+  ```
+  ν dt/h²  |ω|dt   jacobi   lor   lor+N   pbj
+  0.01     1         33      47     35     25
+  0.01     10       179     365   fail     38
+  0.01     100     1844    fail   fail     47     (np4: lor+N 487)
+  1        100      206     146    143    129     (np4: lor+N 195)
+  100      any     75-90     29     29  75-89
+  ```
+  N in the LOR helps only near |ω|dt ≈ 1 and BREAKS AMG where rotation dominates a
+  mass-dominated block (component-wise smoothing cannot handle the skew inter-component
+  coupling) — exactly PBJ's regime. Plain LOR-AMG still wins where viscosity dominates. A
+  combined PC (LOR-AMG on σM+νK plus PBJ for N) is the obvious next experiment, not built.
 - **Pressure: decision 3(a) below is what was implemented.** The solve yields the Bernoulli
   head P; `Pressure()` returns static `p = P − I(½|u|²)` (nodal interpolant, mean-normalized
   with the null space); P stays internal as the Krylov warm start. Do-nothing OUTFLOW
@@ -983,7 +1005,9 @@ fine end and the order assert fails for the wrong reason.
     gather/scatter, and the `BatchedDirectSolver` (cuBLAS/MAGMA/native) inverse path;
   - `src/operators/vecdivdiv_integrator.cpp` — `VectorDivDivComponentIntegrator::AssembleEA`
     (added 2026-09-30). This TU has **no** `#error` nvcc guard (by decision), so confirm
-    from the build log that it is compiled by nvcc.
+    from the build log that it is compiled by nvcc;
+  - `VectorRotationalConvectionComponentIntegrator::AssembleEA` in
+    `rotational_convection.cpp` (added 2026-10-05).
 
   Steps: `cmake --preset cuda && cmake --build --preset cuda` (clean, `-Werror`); then the
   fast tier with **≥1 GPU per rank** (4 GPUs for np4 — see Environment & build), paying

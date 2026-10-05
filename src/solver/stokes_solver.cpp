@@ -28,7 +28,11 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.lor_momentum =
       !pbj && (cc ? (o.cc.a_pc == APC::LORAMG)
                : (o.velocity_prec == VelocityPreconditioner::LORAMG));
-   so.lor_frozen = so.lor_momentum && o.amg_reuse;
+   // Rotation in LOR: the LOR operator changes every step, so it is never
+   // frozen (amg_reuse does not apply).
+   so.rotation_in_lor = o.rotation_in_lor && so.lor_momentum &&
+                        o.lagged_velocity != nullptr;
+   so.lor_frozen = so.lor_momentum && o.amg_reuse && !so.rotation_in_lor;
    return so;
 }
 
@@ -45,6 +49,16 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
      fgmres_(spaces.Velocity().GetComm())
 {
    INCNS_PROFILE("stokes_solver::setup");
+   {
+      const bool lor_amg = (opts.schur == SchurBlockType::CahouetChabard)
+                           ? (opts.cc.a_pc == APC::LORAMG)
+                           : (opts.velocity_prec == VelocityPreconditioner::LORAMG);
+      MFEM_VERIFY(!opts.rotation_in_lor || !opts.lagged_velocity ||
+                  (lor_amg && opts.rotation_pc == RotationVelocityPC::Symmetric),
+                  "stokes_solver: rotation_in_lor needs the LOR-AMG velocity PC "
+                  "(solver.preconditioner: loramg, or cc a_pc LORAMG) and "
+                  "rotation_pc = symmetric");
+   }
 
    // Block system. Mass path (Sprint-1 default): [A, -B^T; B, 0] on physical p
    // (non-symmetric sign choice) -- numerically untouched, baselines intact.
@@ -108,6 +122,7 @@ void StokesSolver::BuildVelocityPreconditioner()
    // With the rotation term, rotation_pc may replace all of that with
    // point-block Jacobi (it sees N's nodal blocks; Jacobi/LOR-AMG cannot):
    // applied once, or as the PC of a loose inner GMRES on the full block.
+   lor_rot_ = nullptr; // set again below if this build carries N in LOR
    const bool use_pbj = op_.Rotation() &&
                         opts_.rotation_pc != RotationVelocityPC::Symmetric;
    const bool want_lor_amg = !use_pbj &&
@@ -133,6 +148,21 @@ void StokesSolver::BuildVelocityPreconditioner()
          gmres->iterative_mode = false;
          vel_prec_ = std::move(gmres);
       }
+   }
+   else if (want_lor_amg && op_.RotationInLor())
+   {
+      // AMG on the LOR c0 M + nu K + N, on op_'s own LOR discretization (the
+      // one its LOR-space w lives on). Drop the old PC first: re-assembly
+      // replaces the matrix it was set up on.
+      vel_prec_.reset();
+      auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
+                    op_.AssembleLorMomentum(), op_.LorDiscretization());
+      lor->GetSolver().SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
+      lor->GetSolver().SetPrintLevel(0);
+      lor->GetSolver().iterative_mode = false;
+      if (cc_mode_) { lor->GetSolver().SetMaxIter(opts_.cc.a_vcycles); }
+      lor_rot_ = lor.get();
+      vel_prec_ = std::move(lor);
    }
    else if (want_lor_amg)
    {
@@ -212,6 +242,7 @@ void StokesSolver::UpdateRotation()
    INCNS_PROFILE("stokes_solver::update_rotation");
    op_.Rotation()->UpdateVorticity();
    if (pbj_) { pbj_->UpdateSkew(); }
+   if (lor_rot_) { lor_rot_->SetOperator(op_.AssembleLorMomentum()); }
 }
 
 void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,

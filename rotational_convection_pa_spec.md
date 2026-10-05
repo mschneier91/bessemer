@@ -92,6 +92,11 @@ Not in scope (verify and abort with a clear message where applicable):
 - Simplices, mixed meshes, variable order, NURBS, `sdim > dim`.
 - libCEED backends (Section 5.8, item 1).
 - Legacy element assembly (`AssembleElementMatrix`), element assembly (`AssembleEA`), matrix-free (`AddMultMF`), `AddAbsMultPA`. Do not implement.
+  **Update 2026-10-05 (bessemer):** `AssembleElementMatrix` and per-component `AssembleEA`
+  (`VectorRotationalConvectionComponentIntegrator`) were added afterwards for LOR use; see
+  CLAUDE.md "Convective form" for the design, tests, and the measured verdict on putting N
+  into LOR-AMG (it does not pay off where rotation dominates). `AddMultMF` and
+  `AddAbsMultPA` remain unimplemented.
 - A coefficient mode that takes `omega` as a `VectorCoefficient`. The integrator always takes a `GridFunction` `w`; tests that need a known vorticity use a rigid rotation (P4).
 - The pressure Schur complement and anything else in the Navier-Stokes solver beyond the (1,1) block (Section 8 has integration notes only).
 

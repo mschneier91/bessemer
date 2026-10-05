@@ -677,4 +677,181 @@ VectorRotationalConvectionIntegrator::GetRotationNumberStats(
    return st;
 }
 
+// ---------------------------------------------------------------------------
+// Legacy full assembly (CPU): curl w from the physical gradient of w at each
+// point (GridFunction::GetVectorGradient -- independent of the PA setup
+// path), then elmat(a + i nd, b + j nd) += alpha w detJ phi_a phi_b
+// [omega]_x(i, j). w is read through Trans's element number, so Trans must
+// belong to w's mesh -- MFEM's legacy LOR assembly calls this on LOR
+// elements, where a high-order w would be read from the wrong element.
+// ---------------------------------------------------------------------------
+void VectorRotationalConvectionIntegrator::AssembleElementMatrix(
+   const FiniteElement& el, ElementTransformation& Trans, DenseMatrix& elmat)
+{
+   const int nd = el.GetDof();
+   const int dim = el.GetDim();
+   MFEM_VERIFY(dim == 2 || dim == 3,
+               "VectorRotationalConvectionIntegrator: dim must be 2 or 3");
+   MFEM_VERIFY(Trans.GetSpaceDim() == dim,
+               "VectorRotationalConvectionIntegrator: sdim must equal dim");
+   MFEM_VERIFY(Trans.mesh == w_->FESpace()->GetMesh(),
+               "VectorRotationalConvectionIntegrator: the lagged velocity must "
+               "live on the mesh being assembled -- for LOR, give the "
+               "integrator a w on the LOR space (same true dofs as the "
+               "high-order field)");
+   MFEM_VERIFY(w_->FESpace()->GetVDim() == dim,
+               "VectorRotationalConvectionIntegrator: w must have vdim == dim");
+
+   const IntegrationRule* ir = IntRule ? IntRule : &GetRule(el, Trans);
+   Vector shape(nd);
+   DenseMatrix G, K(dim);
+   elmat.SetSize(dim * nd);
+   elmat = 0.0;
+   for (int q = 0; q < ir->GetNPoints(); ++q)
+   {
+      const IntegrationPoint& ip = ir->IntPoint(q);
+      Trans.SetIntPoint(&ip);
+      el.CalcShape(ip, shape);
+      w_->GetVectorGradient(Trans, G); // G(c, k) = dw_c/dx_k
+      const real_t wgt = alpha_ * ip.weight * Trans.Weight();
+      K = 0.0;
+      if (dim == 2)
+      {
+         const real_t om = G(1, 0) - G(0, 1);
+         K(0, 1) = -wgt * om;
+         K(1, 0) = wgt * om;
+      }
+      else
+      {
+         const real_t o0 = G(2, 1) - G(1, 2);
+         const real_t o1 = G(0, 2) - G(2, 0);
+         const real_t o2 = G(1, 0) - G(0, 1);
+         K(0, 1) = -wgt * o2; K(0, 2) = wgt * o1;
+         K(1, 0) = wgt * o2;  K(1, 2) = -wgt * o0;
+         K(2, 0) = -wgt * o1; K(2, 1) = wgt * o0;
+      }
+      for (int i = 0; i < dim; ++i)
+         for (int j = 0; j < dim; ++j)
+         {
+            if (i == j) { continue; }
+            for (int a = 0; a < nd; ++a)
+               for (int b = 0; b < nd; ++b)
+               {
+                  elmat(a + i * nd, b + j * nd) += K(i, j) * shape(a) * shape(b);
+               }
+         }
+   }
+}
+
+// ---------------------------------------------------------------------------
+// Component-block EA: N^{ij}(a, b) = sign_ij sum_q D(q, c_ij) B_a(q) B_b(q),
+// with D the PA quadrature data (alpha w detJ omega, from the same setup
+// kernel) and [omega]_x(i, j) = sign_ij omega_{c_ij}: in 3D c = 3 - i - j and
+// sign = -1 when j == i + 1 (mod 3), else +1; in 2D c = 0, sign -1 for (0,1).
+// One thread per (e, a, b) entry, reference basis from the 1D tables, so dofs
+// are lexicographic (MFEM's EA order); row-major per element: in a
+// column-major Reshape(nd, nd, ne), entry (b, a, e) is row a, column b.
+// ---------------------------------------------------------------------------
+void VectorRotationalConvectionComponentIntegrator::AssembleEA(
+   const FiniteElementSpace& fes, Vector& emat, const bool add)
+{
+   MFEM_VERIFY(!DeviceCanUseCeed(),
+               "VectorRotationalConvectionComponentIntegrator: "
+               "libCEED backends are not supported");
+   Mesh* mesh = fes.GetMesh();
+   const FiniteElement& el = *fes.GetTypicalFE();
+   const int dim = mesh->Dimension();
+   const FiniteElementSpace& wfes = *w_->FESpace();
+   MFEM_VERIFY((dim == 2 || dim == 3) && mesh->SpaceDimension() == dim,
+               "VectorRotationalConvectionComponentIntegrator: dim == sdim in "
+               "{2, 3} required");
+   MFEM_VERIFY(fes.GetVDim() == 1,
+               "VectorRotationalConvectionComponentIntegrator: "
+               "blocks live on a scalar (vdim == 1) space");
+   MFEM_VERIFY(el.GetGeomType() == Geometry::SQUARE ||
+               el.GetGeomType() == Geometry::CUBE,
+               "VectorRotationalConvectionComponentIntegrator: quads/hexes only");
+   MFEM_VERIFY(wfes.GetMesh() == mesh && wfes.GetVDim() == dim &&
+               std::string(wfes.FEColl()->Name()) == fes.FEColl()->Name(),
+               "VectorRotationalConvectionComponentIntegrator: w must be a "
+               "vdim == dim field on the assembly mesh with the space's FE "
+               "collection");
+   MFEM_VERIFY(0 <= i_block_ && i_block_ < dim && 0 <= j_block_ && j_block_ < dim,
+               "VectorRotationalConvectionComponentIntegrator: block index out "
+               "of range");
+
+   const int ne = fes.GetNE();
+   const int nd = el.GetDof();
+   MFEM_VERIFY(emat.Size() == nd * nd * ne,
+               "VectorRotationalConvectionComponentIntegrator: emat must be "
+               "nd*nd*ne");
+   if (i_block_ == j_block_) // [omega]_x has a zero diagonal
+   {
+      if (!add) { emat = 0.0; }
+      return;
+   }
+
+   const IntegrationRule* ir =
+      IntRule ? IntRule
+      : &VectorRotationalConvectionIntegrator::GetRule(
+         el, *mesh->GetTypicalElementTransformation());
+   const MemoryType mt = Device::GetDeviceMemoryType();
+   const GeometricFactors* geom =
+      mesh->GetGeometricFactors(*ir, GeometricFactors::JACOBIANS, mt);
+   const DofToQuad& maps = el.GetDofToQuad(*ir, DofToQuad::TENSOR);
+   const int D1D = maps.ndof, Q1D = maps.nqpt;
+   MFEM_VERIFY(D1D <= Q1D, "VectorRotationalConvectionComponentIntegrator: "
+               "needs q1d >= d1d, got d1d = " << D1D << ", q1d = " << Q1D);
+   const int nq = ir->GetNPoints();
+
+   // Quadrature data from the integrator's own setup kernel (one call; the
+   // buffers are temporaries -- EA runs once per assembly, not per apply).
+   const Operator* w_restr =
+      wfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
+   Vector w_e(w_restr->Height(), mt), qdata((dim == 3 ? 3 : 1) * nq * ne, mt);
+   w_e.UseDevice(true);
+   qdata.UseDevice(true);
+   w_restr->Mult(*w_, w_e);
+   VectorRotationalConvectionIntegrator::RotConvSetupPA::Run(
+      dim, D1D, Q1D, ne, alpha_, maps.B.Read(), maps.G.Read(),
+      ir->GetWeights().Read(), geom->J.Read(), w_e.Read(), qdata.Write(), D1D,
+      Q1D);
+
+   const int c = (dim == 3) ? 3 - i_block_ - j_block_ : 0;
+   const real_t sign = (dim == 3)
+                       ? ((j_block_ == (i_block_ + 1) % 3) ? -1.0 : 1.0)
+                       : (i_block_ == 0 ? -1.0 : 1.0);
+   const int ncomp = (dim == 3) ? 3 : 1;
+   const auto B = Reshape(maps.B.Read(), Q1D, D1D);
+   const auto D = Reshape(qdata.Read(), nq, ncomp, ne);
+   auto E = Reshape(add ? emat.ReadWrite() : emat.Write(), nd, nd, ne);
+
+   mfem::forall(ne * nd * nd, [ = ] MFEM_HOST_DEVICE(int idx)
+   {
+      const int e = idx / (nd * nd);
+      const int a = (idx / nd) % nd; // row
+      const int b = idx % nd;        // column (fastest -> coalesced writes)
+      const int ax = a % D1D, ay = (a / D1D) % D1D, az = a / (D1D * D1D);
+      const int bx = b % D1D, by = (b / D1D) % D1D, bz = b / (D1D * D1D);
+      const int NQZ = (dim == 3) ? Q1D : 1;
+      real_t acc = 0.0;
+      for (int qz = 0; qz < NQZ; ++qz)
+         for (int qy = 0; qy < Q1D; ++qy)
+            for (int qx = 0; qx < Q1D; ++qx)
+            {
+               const int q = qx + Q1D * (qy + Q1D * qz);
+               real_t ba = B(qx, ax) * B(qy, ay);
+               real_t bb = B(qx, bx) * B(qy, by);
+               if (dim == 3)
+               {
+                  ba *= B(qz, az);
+                  bb *= B(qz, bz);
+               }
+               acc += D(q, c, e) * ba * bb;
+            }
+      if (add) { E(b, a, e) += sign * acc; }
+      else { E(b, a, e) = sign * acc; }
+   });
+}
+
 } // namespace incns

@@ -51,6 +51,9 @@ struct TimeIntegratorOptions
    ConvectiveForm convective_form = ConvectiveForm::Convective;
    /// Velocity-block PC with the rotational form (see RotationVelocityPC).
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
+   /// Rotational form + LOR-AMG velocity PC: include the rotation term in the
+   /// LOR operator, re-set-up every step (StokesSolverOptions::rotation_in_lor).
+   bool rotation_in_lor = false;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).

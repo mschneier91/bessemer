@@ -136,6 +136,9 @@ struct Parameters
    /// Velocity-block PC with the rotational form (deck
    /// `solver.rotation_pc: symmetric|pbj_only|pbj_krylov`).
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
+   /// Rotational form + LOR-AMG velocity PC: put the rotation term into the
+   /// LOR operator too, re-set-up every step (deck `solver.rotation_lor`).
+   bool rotation_in_lor = false;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
    /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
    /// the right default for the adaptive-primary workflow. `mass` remains

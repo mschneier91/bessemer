@@ -53,6 +53,7 @@ void Case::EnsureSetup()
    opts.convection = (params_.equation == Equation::NavierStokes);
    opts.convective_form = params_.convective_form;
    opts.rotation_pc = params_.rotation_pc;
+   opts.rotation_in_lor = params_.rotation_in_lor;
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;

@@ -145,13 +145,15 @@ TEST(Deck, RotationalFormKeys)
       std::ofstream f(path);
       f << "equation: navier_stokes\n"
         << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
-        << "solver:\n  rotation_pc: pbj_krylov\n";
+        << "solver:\n  rotation_pc: pbj_krylov\n  rotation_lor: true\n";
    }
    const Parameters p = Parameters::LoadYAML(path);
    std::remove(path.c_str());
    EXPECT_EQ(p.equation, incns::Equation::NavierStokes);
    EXPECT_EQ(p.convective_form, incns::ConvectiveForm::Rotational);
    EXPECT_EQ(p.rotation_pc, incns::RotationVelocityPC::PbjKrylov);
+   EXPECT_TRUE(p.rotation_in_lor);
+   EXPECT_FALSE(defaults.rotation_in_lor);
 
    // End to end through Case on the TGV deck, NSE, a few steps.
    Parameters conv = defaults;
