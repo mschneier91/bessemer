@@ -30,6 +30,38 @@ namespace incns
  * Essential dofs follow the constrained operator (DIAG_ONE): component c of
  * node a essential -> d_{a,c} = 1 and, in 3D, s_{a,k} = 0 for k != c; in 2D,
  * s_a = 0 if either component is essential.
+ *
+ * @par How to use it (inside bessemer the time integrator and StokesSolver
+ *      already make these calls -- the deck's solver.rotation_pc turns it on)
+ *
+ * **Your part:**
+ *  1. Once: put a VectorRotationalConvectionIntegrator in a PA form, and
+ *     construct PointBlockJacobi(fes, rot, ess_tdofs).
+ *  2. At setup, and whenever Delta-t or nu changes: SetDiagonal(d), where d is
+ *     the diagonal of the rest of the velocity operator (e.g. AssembleDiagonal
+ *     of your sigma M + nu K form). N contributes exactly zero, so it does not
+ *     matter whether it is included.
+ *  3. Every step, in this order: update w (in place, or with
+ *     SetLaggedVelocity), then rot.UpdateVorticity(), then UpdateSkew().
+ *     UpdateSkew reads the integrator's fresh vorticity data, which is why the
+ *     order matters.
+ *  4. Using it: it is nonsymmetric, so use it with GMRES/FGMRES, never PCG.
+ *     The operator you apply must include N. If you sum N with an operator
+ *     constrained so its Dirichlet rows are identity rows (DIAG_ONE),
+ *     constrain N with DIAG_ZERO, or those rows end up with 2 on the
+ *     diagonal.
+ *
+ * **This class's part:** assembling s from the integrator (via the proxy),
+ * summing over elements and MPI ranks, handling nonconforming meshes,
+ * applying the essential-dof rule, inverting every node block, and applying
+ * the inverse in either vector ordering -- all of it on the device.
+ *
+ * **Caveat -- it cannot tell when its inputs are stale.** If you forget
+ * UpdateSkew() after the vorticity changes, or SetDiagonal() after Delta-t
+ * changes, it silently preconditions with old blocks. The answer stays
+ * correct, because the outer Krylov solver always applies the true operator,
+ * but iteration counts climb. point_block_jacobi_test B3 is built to catch
+ * exactly that.
  */
 class PointBlockJacobi : public mfem::Solver
 {
