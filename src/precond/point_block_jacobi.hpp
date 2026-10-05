@@ -1,8 +1,7 @@
 /**
  * @file point_block_jacobi.hpp
  * @brief Matrix-free point-block Jacobi for the velocity block
- *        A = sigma M + nu K + N(omega) (rotational_convection_pa_spec.md,
- *        Part B).
+ *        A = sigma M + nu K + N(omega).
  */
 #ifndef INCNS_PRECOND_POINT_BLOCK_JACOBI_HPP
 #define INCNS_PRECOND_POINT_BLOCK_JACOBI_HPP
@@ -31,8 +30,7 @@ namespace incns
  * node a essential -> d_{a,c} = 1 and, in 3D, s_{a,k} = 0 for k != c; in 2D,
  * s_a = 0 if either component is essential.
  *
- * @par How to use it (inside bessemer the time integrator and StokesSolver
- *      already make these calls -- the deck's solver.rotation_pc turns it on)
+ * @par How to use it
  *
  * **Your part:**
  *  1. Once: put a VectorRotationalConvectionIntegrator in a PA form, and
@@ -60,8 +58,7 @@ namespace incns
  * UpdateSkew() after the vorticity changes, or SetDiagonal() after Delta-t
  * changes, it silently preconditions with old blocks. The answer stays
  * correct, because the outer Krylov solver always applies the true operator,
- * but iteration counts climb. point_block_jacobi_test B3 is built to catch
- * exactly that.
+ * but iteration counts climb.
  */
 class PointBlockJacobi : public mfem::Solver
 {
