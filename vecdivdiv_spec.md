@@ -1,6 +1,6 @@
 # Spec: `VectorDivDivIntegrator` — sum-factorized grad-div for H1 vector fields in MFEM
 
-> **Renamed 2026-10-05 (bessemer):** `VectorDivDivIntegrator` → `GradDivIntegrator`, `VectorDivDivComponentIntegrator` → `GradDivComponentIntegrator`; files `src/operators/vecdivdiv_integrator.*` → `grad_div_integrator.*`, tests `vecdivdiv_test` → `grad_div_integrator_test`, `vecdivdiv_elasticity_test` → `grad_div_elasticity_test`. This spec keeps its name and its original text; read the old names as the new ones.
+> **Renamed 2026-10-05 (bessemer):** `VectorDivDivIntegrator` → `GradDivIntegrator`, `VectorDivDivComponentIntegrator` → `GradDivComponentIntegrator`; files `src/operators/vecdivdiv_integrator.*` → `grad_div_integrator.*`, tests `vecdivdiv_test` → `grad_div_integrator_test`, `vecdivdiv_elasticity_test` → `grad_div_integrator_elasticity_test`. This spec keeps its name and its original text; read the old names as the new ones.
 
 **Target:** MFEM master (verified against commit `951cf888`, 2026-07-14, v4.9.1-dev).
 **Deliverable:** A new `BilinearFormIntegrator` for a(u,v) = (Q div u, div v), u,v in [H1(Ω)]^d,

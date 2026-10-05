@@ -16,7 +16,7 @@
 using namespace mfem;
 using incns::GradDivIntegrator;
 
-TEST(GradDivElasticity, ElementMatricesMatch)
+TEST(GradDivIntegratorElasticity, ElementMatricesMatch)
 {
    for (int dim : {2, 3})
    {
@@ -68,7 +68,8 @@ TEST(GradDivElasticity, ElementMatricesMatch)
 // elasticity's own full assembly, so if MFEM's elasticity PA were wrong the
 // failure says which side it is on. Curved partitioned mesh, varying
 // coefficient, dim 2/3, p 1-3, one shared rule.
-TEST(GradDivElasticity, PartialAssemblyMatchesElasticityPartialAssembly)
+TEST(GradDivIntegratorElasticity,
+     PartialAssemblyMatchesElasticityPartialAssembly)
 {
    for (int dim : {2, 3})
    {
