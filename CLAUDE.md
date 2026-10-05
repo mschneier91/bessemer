@@ -515,8 +515,11 @@ What landed (`physics.convective_form: rotational`, NSE only):
   PA on quads/hexes, skew (Nᵀ = −N, exactly zero diagonal), `UpdateVorticity()` per step
   (no reassembly), plus `AddNodalSkewPA` and `GetRotationNumberStats` (μ = |ω|/σ).
 - `src/precond/point_block_jacobi.{hpp,cpp}` — `PointBlockJacobi`: inverts the nodal
-  dim×dim blocks `diag(d) + [s]×` (batched, on the device). Scalar Jacobi and LOR-AMG cannot
-  see N at all; with GLL collocation and ν = 0 PBJ is exact.
+  dim×dim blocks `diag(d) + [s]×` on the device, in CLOSED FORM into a persistent buffer,
+  and applies them in ONE fused kernel straight on the true-dof layout (2026-10-05; it
+  first used the spec's `BatchedDirectSolver` + byNODES gather/scatter: measured ~10× a
+  scalar-Jacobi sweep plus a per-step allocation — now 2×, in place). Scalar Jacobi and
+  LOR-AMG cannot see N at all; with GLL collocation and ν = 0 PBJ is exact.
 - `StokesOperator` keeps the symmetric `Momentum()` (what Chebyshev / LOR-AMG need) and adds
   N as a separate form; the outer FGMRES applies `FullMomentum()` = Momentum (DIAG_ONE) + N
   (**DIAG_ZERO** on essential dofs — two DIAG_ONE operators would put 2 on the essential
@@ -550,7 +553,11 @@ What landed (`physics.convective_form: rotational`, NSE only):
   combined PC (LOR-AMG on σM+νK plus PBJ for N) is the obvious next experiment, not built.
 - **Pressure: decision 3(a) below is what was implemented.** The solve yields the Bernoulli
   head P; `Pressure()` returns static `p = P − I(½|u|²)` (nodal interpolant, mean-normalized
-  with the null space); P stays internal as the Krylov warm start. Do-nothing OUTFLOW
+  with the null space); P stays internal as the Krylov warm start. `I(½|u|²)` is computed
+  on the device every step by `src/post/kinetic_head` (sum-factorized u at the pressure
+  nodes; the host `ProjectCoefficient` it replaced was O(p⁶) per element and ~50× slower at
+  p = 6). Every step, NOT lazily: `OutputWriter` holds `Pressure()` by reference and reads it
+  at each save, so a lazily-updated field would be written stale. Do-nothing OUTFLOW
   conditions act on P, not p, in this mode — a modelling difference, not a bug.
 - Tests: `rotational_convection_test` / `point_block_jacobi_test` (spec Parts A/B);
   `nse_mms_test` Rotational* (temporal order vs a same-mesh fine-dt reference — the MMS is
@@ -1001,8 +1008,10 @@ fine end and the order assert fails for the wrong reason.
   catch a host-compiled kernel (see Coding conventions):
   - `src/operators/rotational_convection.cpp` — setup, apply, nodal-skew and
     rotation-number kernels (incl. the shared-memory tiles sized by `DofQuadLimits`);
-  - `src/precond/point_block_jacobi.cpp` — essential-dof rule, block fill, byNODES
-    gather/scatter, and the `BatchedDirectSolver` (cuBLAS/MAGMA/native) inverse path;
+  - `src/precond/point_block_jacobi.cpp` — essential-dof rule, closed-form block inverse,
+    fused block apply (rewritten 2026-10-05);
+  - `src/post/kinetic_head.cpp` — the static-pressure ½|u|² kernel (2026-10-05; 3D shared
+    tiles ~45 KB at CUDA's limit of 14);
   - `src/operators/grad_div_integrator.cpp` — `GradDivComponentIntegrator::AssembleEA`
     (added 2026-09-30). This TU has **no** `#error` nvcc guard (by decision), so confirm
     from the build log that it is compiled by nvcc;
@@ -1096,7 +1105,8 @@ Launched by a human via the batch scheduler. See Guardrails.
   expensive GPU bug found so far (2026-07-21: 38 of 62 tests segfaulting on an H100, one
   root cause). Every TU is compiled by `mpicxx`/g++ — leaving `__CUDACC__` undefined —
   **except** the short, explicit nvcc list in `src/CMakeLists.txt` (currently
-  `grad_div_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`). Outside that list, two consequences, both silent:
+  `grad_div_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`,
+  `kinetic_head.cpp`). Outside that list, two consequences, both silent:
   - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
     host-only.
   - `forall`'s CUDA dispatch is `#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)`
@@ -1136,6 +1146,12 @@ Launched by a human via the batch scheduler. See Guardrails.
   the **debug device** (`scripts/debug_device.sh`, `INCNS_DEVICE=debug`): MFEM's mprotect-
   guarded backend that *faults* on un-annotated host access of device memory instead of
   copying — run it (no GPU needed) and fix what it flags.
+- **Known intermittent debug-device crash (found 2026-10-05, pre-existing on `main`):** at
+  np = 2, `nse_mms_test` sometimes segfaults ("Invalid permissions") in
+  `ParLinearForm::~ParLinearForm` -> `hypre_ParVectorDestroy` -- the fast-assembly
+  `ParLinearForm` + `ParallelAssemble` pattern in `StokesTimeIntegrator::AssembleForcing`
+  and `SubtractMean`, both convective forms. ~1 run in 3; not yet root-caused. A failing
+  debug-device `nse_mms_test` therefore needs a re-run / backtrace before blaming new code.
 - **A green debug device does NOT mean GPU-ready.** It has a structural blind spot: at
   `forall.hpp`, `if (Device::Allows(Backend::DEBUG_DEVICE)) { goto backend_cpu; }` — running
   a forall on the host over "device" memory is the *intended, working* path there, since the

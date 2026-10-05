@@ -7,6 +7,7 @@ add_library(incns STATIC
   util/profiler.cpp
   util/device.cpp
   post/pressure_mean.cpp
+  post/kinetic_head.cpp
   bc/boundary_conditions.cpp
   operators/stokes_operator.cpp
   operators/convection.cpp
@@ -39,8 +40,9 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # grad_div_integrator.cpp -- sum-factorized grad-div built on forall_2D with
 # MFEM_SHARED tiles; rotational_convection.cpp -- the lagged-vorticity
 # rotational term's setup/apply/nodal-skew kernels (same tile machinery);
-# point_block_jacobi.cpp -- essential-dof rule, block fill and byNODES
-# gather/scatter foralls for the velocity point-block Jacobi.
+# point_block_jacobi.cpp -- essential-dof rule, closed-form nodal block
+# inverses and the fused block apply for the velocity point-block Jacobi; kinetic_head.cpp
+# -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure).
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
@@ -54,6 +56,7 @@ if(USE_CUDA)
   set_source_files_properties(operators/grad_div_integrator.cpp
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp
+                              post/kinetic_head.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()

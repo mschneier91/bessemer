@@ -509,6 +509,12 @@ A separate form is required because the rotation integrator's own `AssembleDiago
 
 **`UpdateSkew()`.** `skew_form->AssembleDiagonal(s)`, then a `forall` over `ess.Size()` applying the rule of 7.2 (decode `(c, a)`; 3D: zero `s` at `(j, a)` for `j != c`; 2D: zero `s` at `(0, a)`). Concurrent writes of zero to the same entry from two essential components of one node are benign.
 
+> **Implementation note (bessemer, 2026-10-05):** built this way first, then replaced by
+> closed-form 2×2/3×3 inverses written in place plus one fused apply kernel on the true-dof
+> layout (no gather/scatter, no per-step allocation). Measured on CPU: the apply went from
+> ~10× to 2× a scalar Jacobi sweep, the rebuild from ~29 to ~2 ns/dof. Table A3's closed-form
+> row is what this now matches. See CLAUDE.md "Convective form".
+
 **Block inversion with MFEM's `BatchedDirectSolver`** (`linalg/batched/solver.hpp`). It takes a `DenseTensor` of shape `(m, m, n_mat)` holding `n_mat` square blocks, inverts all of them in one batched call at construction, and its `Mult` applies the block-diagonal inverse. The batched backend is chosen by `BatchedLinAlg`: MAGMA if MFEM was built with it, otherwise cuBLAS or hipBLAS on GPUs, otherwise a native `mfem::forall` implementation. Everything stays on the device (`DenseTensor` copies through `Memory::CopyFrom`).
 
 At the end of `UpdateSkew()` (and of `SetDiagonal()`, so the inverse is valid after either call), rebuild the blocks and the solver:

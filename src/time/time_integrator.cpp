@@ -13,36 +13,6 @@ namespace incns
 
 using namespace mfem;
 
-namespace
-{
-/**
- * @brief 1/2 |u_h|^2 at a point: the kinetic-energy density the rotational
- *        form folds into the pressure (P = p + 1/2|u|^2).
- */
-class HalfSpeedSquared : public Coefficient
-{
-   const GridFunction& u_; ///< The velocity field (not owned).
-   Vector U_;              ///< Scratch: u_h at the current point.
-
-public:
-   /**
-    * @brief Coefficient for the field @p u.
-    * @param u Velocity GridFunction (must outlive the coefficient).
-    */
-   explicit HalfSpeedSquared(const GridFunction& u) : u_(u) { }
-   /**
-    * @brief Evaluate 1/2 |u_h|^2.
-    * @param T  Element transformation (its element selects u's dofs).
-    * @param ip Point in the reference element.
-    * @return 1/2 |u_h(x)|^2.
-    */
-   real_t Eval(ElementTransformation& T, const IntegrationPoint& ip) override
-   {
-      u_.GetVectorValue(T, ip, U_);
-      return 0.5 * (U_ * U_);
-   }
-};
-} // namespace
 
 StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       const RuleBook& rules,
@@ -56,6 +26,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
      u2_scratch_(&spaces.Velocity()), p2_scratch_(&spaces.Pressure()),
      u3_scratch_(&spaces.Velocity()), p3_scratch_(&spaces.Pressure()),
      w_star_(&spaces.Velocity()), p_static_(&spaces.Pressure()),
+     ke_(&spaces.Pressure()),
      dt_(opts.dt)
 {
    INCNS_PROFILE("time_integrator::setup");
@@ -80,6 +51,11 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    }
    w_star_ = 0.0;
    p_static_ = 0.0;
+   if (rotational_)
+   {
+      kinetic_head_ = std::make_unique<KineticHeadInterpolator>(
+                         spaces_.Velocity(), spaces_.Pressure());
+   }
 
    // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
    // halving the viscosity passed to the solver (the Schur scale follows).
@@ -316,13 +292,13 @@ void StokesTimeIntegrator::UpdateStaticPressure()
 {
    // The rotational solve yields the Bernoulli head P = p + 1/2|u|^2; report
    // static p = P - I(1/2|u_h|^2) (nodal interpolant on the pressure space --
-   // continuous since u_h is). The internal p_ stays P: it is the solver's
-   // warm start.
-   HalfSpeedSquared ke(u_);
-   ParGridFunction ke_gf(&spaces_.Pressure());
-   ke_gf.ProjectCoefficient(ke);
+   // continuous since u_h is), computed on the device. Every step, not
+   // lazily: OutputWriter holds Pressure() by reference and reads it at each
+   // save. The internal p_ stays P: it is the solver's warm start.
+   INCNS_PROFILE("time_integrator::static_pressure");
+   kinetic_head_->Interpolate(u_, ke_);
    p_static_ = p_;
-   p_static_ -= ke_gf;
+   p_static_ -= ke_;
    if (bc_.PressureNullspaceExists()) { SubtractMean(p_static_, rules_); }
 }
 

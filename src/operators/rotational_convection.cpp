@@ -279,8 +279,10 @@ VectorRotationalConvectionIntegrator::RotConvSetupPA::Fallback(int dim, int,
 // Specializations (spec 5.6) for p = 1..8 (D1D = p + 1), both dims, at every
 // Q1D a production rule can produce -- measured on the installed MFEM:
 // collocated/Gauss p+1; VectorConvectionNLFIntegrator::GetRule at mesh order
-// 1 and 2 (2D and 3D); the 3/2 rule ceil(3(p+1)/2); and the RuleBook's
-// dealiased order 3p (Convection::DealiasedOrder). Union per D1D below.
+// 1 and 2 (2D and 3D); the 3/2 rule ceil(3(p+1)/2); the RuleBook's
+// dealiased order 3p (Convection::DealiasedOrder); and Gauss p+2 (Q1D = D1D+1,
+// a common choice -- measured ~2.5x slower through the generic fallback at
+// p = 4..6 before it was added). Union per D1D below.
 namespace
 {
 template <int DIM, int D1D, int Q1D>
@@ -306,20 +308,25 @@ void AddRotConvSpecializations()
    AddRotConvSpecialization<DIM, 4, 6>();
    AddRotConvSpecialization<DIM, 4, 7>();
    AddRotConvSpecialization<DIM, 5, 5>();   // p = 4
+   AddRotConvSpecialization<DIM, 5, 6>();
    AddRotConvSpecialization<DIM, 5, 7>();
    AddRotConvSpecialization<DIM, 5, 8>();
    AddRotConvSpecialization<DIM, 6, 6>();   // p = 5
+   AddRotConvSpecialization<DIM, 6, 7>();
    AddRotConvSpecialization<DIM, 6, 8>();
    AddRotConvSpecialization<DIM, 6, 9>();
    AddRotConvSpecialization<DIM, 6, 10>();
    AddRotConvSpecialization<DIM, 7, 7>();   // p = 6
+   AddRotConvSpecialization<DIM, 7, 8>();
    AddRotConvSpecialization<DIM, 7, 10>();
    AddRotConvSpecialization<DIM, 7, 11>();
    AddRotConvSpecialization<DIM, 8, 8>();   // p = 7
+   AddRotConvSpecialization<DIM, 8, 9>();
    AddRotConvSpecialization<DIM, 8, 11>();
    AddRotConvSpecialization<DIM, 8, 12>();
    AddRotConvSpecialization<DIM, 8, 13>();
    AddRotConvSpecialization<DIM, 9, 9>();   // p = 8
+   AddRotConvSpecialization<DIM, 9, 10>();
    AddRotConvSpecialization<DIM, 9, 13>();
    AddRotConvSpecialization<DIM, 9, 14>();
 }

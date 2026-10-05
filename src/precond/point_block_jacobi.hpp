@@ -47,8 +47,6 @@ public:
    PointBlockJacobi(mfem::FiniteElementSpace& fes,
                     const VectorRotationalConvectionIntegrator& rot,
                     const mfem::Array<int>& ess_tdofs);
-   /// Out of line: the batched solver's type is complete only in the .cpp.
-   ~PointBlockJacobi() override;
 
    /**
     * @brief Set the diagonal of the velocity operator and rebuild the blocks.
@@ -78,7 +76,7 @@ public:
    const mfem::Vector& GetSkew() const { return s_; }
 
 private:
-   /// Fill the nodal blocks from d_ and s_ and invert them in one batch.
+   /// Invert the nodal blocks from d_ and s_ into inv_ (closed form, in place).
    void RebuildBlocks();
 
    int dim_;      ///< Spatial dimension (2 or 3).
@@ -89,9 +87,8 @@ private:
    d_;              ///< Operator diagonal (dim*n), essential rule applied.
    mfem::Vector s_;              ///< Nodal skew (dim*n), essential rule applied.
    std::unique_ptr<mfem::BilinearForm> skew_form_; ///< PA form, proxy integrator.
-   std::unique_ptr<mfem::BatchedDirectSolver> blocks_inv_; ///< Batched inverse.
-   mutable mfem::Vector r_node_; ///< byNODES: residual gathered node-contiguous.
-   mutable mfem::Vector z_node_; ///< byNODES: correction before the scatter.
+   /// Inverse nodal blocks, (dim, dim, n) column-major: inv(i, j, a).
+   mfem::Vector inv_;
 };
 
 } // namespace incns

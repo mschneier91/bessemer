@@ -9,6 +9,7 @@
 
 #include "bc/boundary_conditions.hpp"
 #include "operators/convection.hpp"
+#include "post/kinetic_head.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solver/stokes_solver.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -315,6 +316,10 @@ private:
    mfem::ParGridFunction w_star_;
    /// Rotational form: static pressure P - 1/2|u|^2 (what Pressure() returns).
    mfem::ParGridFunction p_static_;
+   /// Rotational form: I_p(1/2|u|^2) scratch on the pressure space (reused).
+   mfem::ParGridFunction ke_;
+   /// Rotational form: device interpolant of 1/2|u|^2 at the pressure nodes.
+   std::unique_ptr<KineticHeadInterpolator> kinetic_head_;
 
    std::deque<mfem::Vector> hist_; ///< Velocity true-dof history, newest first.
    std::deque<double> hist_times_; ///< Times of the history entries.

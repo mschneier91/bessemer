@@ -96,12 +96,16 @@ void ZeroEssentialSkew(const Array<int>& ess, int dim, int n, bool by_vdim,
    });
 }
 
-// blocks(i, j, a) = diag(d_a) + [s_a]_x, column-major within each block.
-void FillBlocks(int dim, int n, bool by_vdim, const Vector& d, const Vector& s,
-                DenseTensor& blocks)
+// inv(i, j, a) = B_a^{-1}, B_a = diag(d_a) + [s_a]_x, column-major per node,
+// in closed form (adjugate / determinant), written in place: no allocation,
+// no batched-library call. det B_a = d0 d1 d2 + d0 s0^2 + d1 s1^2 + d2 s2^2
+// (2D: d0 d1 + s^2) > 0 for a positive diagonal, for any vorticity; essential
+// nodes carry identity rows/columns.
+void InvertBlocks(int dim, int n, bool by_vdim, const Vector& d,
+                  const Vector& s, Vector& inv)
 {
    const auto D = d.Read(), S = s.Read();
-   auto Bt = Reshape(blocks.Write(), dim, dim, n);
+   auto I = Reshape(inv.Write(), dim, dim, n);
    mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int a)
    {
       if (dim == 3)
@@ -112,37 +116,57 @@ void FillBlocks(int dim, int n, bool by_vdim, const Vector& d, const Vector& s,
          const real_t s0 = S[Idx(0, a, n, 3, by_vdim)];
          const real_t s1 = S[Idx(1, a, n, 3, by_vdim)];
          const real_t s2 = S[Idx(2, a, n, 3, by_vdim)];
-         Bt(0, 0, a) = d0;  Bt(0, 1, a) = -s2; Bt(0, 2, a) = s1;
-         Bt(1, 0, a) = s2;  Bt(1, 1, a) = d1;  Bt(1, 2, a) = -s0;
-         Bt(2, 0, a) = -s1; Bt(2, 1, a) = s0;  Bt(2, 2, a) = d2;
+         // B = [[d0, -s2, s1], [s2, d1, -s0], [-s1, s0, d2]].
+         const real_t b00 = d0, b01 = -s2, b02 = s1;
+         const real_t b10 = s2, b11 = d1, b12 = -s0;
+         const real_t b20 = -s1, b21 = s0, b22 = d2;
+         // adj(B) (B adj(B) = det(B) I).
+         const real_t a00 = b11 * b22 - b12 * b21;
+         const real_t a01 = b02 * b21 - b01 * b22;
+         const real_t a02 = b01 * b12 - b02 * b11;
+         const real_t a10 = b12 * b20 - b10 * b22;
+         const real_t a11 = b00 * b22 - b02 * b20;
+         const real_t a12 = b02 * b10 - b00 * b12;
+         const real_t a20 = b10 * b21 - b11 * b20;
+         const real_t a21 = b01 * b20 - b00 * b21;
+         const real_t a22 = b00 * b11 - b01 * b10;
+         const real_t r = 1.0 / (b00 * a00 + b01 * a10 + b02 * a20);
+         I(0, 0, a) = r * a00; I(0, 1, a) = r * a01; I(0, 2, a) = r * a02;
+         I(1, 0, a) = r * a10; I(1, 1, a) = r * a11; I(1, 2, a) = r * a12;
+         I(2, 0, a) = r * a20; I(2, 1, a) = r * a21; I(2, 2, a) = r * a22;
       }
       else
       {
+         // B = [[d0, -s], [s, d1]] -> B^{-1} = [[d1, s], [-s, d0]] / det.
+         const real_t d0 = D[Idx(0, a, n, 2, by_vdim)];
+         const real_t d1 = D[Idx(1, a, n, 2, by_vdim)];
          const real_t s0 = S[Idx(0, a, n, 2, by_vdim)];
-         Bt(0, 0, a) = D[Idx(0, a, n, 2, by_vdim)]; Bt(0, 1, a) = -s0;
-         Bt(1, 0, a) = s0; Bt(1, 1, a) = D[Idx(1, a, n, 2, by_vdim)];
+         const real_t r = 1.0 / (d0 * d1 + s0 * s0);
+         I(0, 0, a) = r * d1;  I(0, 1, a) = r * s0;
+         I(1, 0, a) = -r * s0; I(1, 1, a) = r * d0;
       }
    });
 }
 
-// byNODES true-dof vector <-> node-contiguous (dim, n) layout.
-void GatherNodes(int dim, int n, const Vector& r, Vector& rn)
+// z_a = B_a^{-1} r_a for every node, reading and writing the true-dof layout
+// directly (byNODES or byVDIM): one kernel, no gather/scatter pass. For
+// byNODES each component access is contiguous across nodes (coalesced).
+void ApplyBlocks(int dim, int n, bool by_vdim, const Vector& inv,
+                 const Vector& r, Vector& z)
 {
+   const auto I = Reshape(inv.Read(), dim, dim, n);
    const auto R = r.Read();
-   auto RN = rn.Write();
-   mfem::forall(dim * n, [ = ] MFEM_HOST_DEVICE(int i)
-   {
-      RN[i] = R[(i % dim) * n + i / dim];
-   });
-}
-
-void ScatterNodes(int dim, int n, const Vector& zn, Vector& z)
-{
-   const auto ZN = zn.Read();
    auto Z = z.Write();
-   mfem::forall(dim * n, [ = ] MFEM_HOST_DEVICE(int i)
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int a)
    {
-      Z[(i % dim) * n + i / dim] = ZN[i];
+      real_t ra[3] = {0.0, 0.0, 0.0};
+      for (int c = 0; c < dim; ++c) { ra[c] = R[Idx(c, a, n, dim, by_vdim)]; }
+      for (int i = 0; i < dim; ++i)
+      {
+         real_t zi = 0.0;
+         for (int j = 0; j < dim; ++j) { zi += I(i, j, a) * ra[j]; }
+         Z[Idx(i, a, n, dim, by_vdim)] = zi;
+      }
    });
 }
 
@@ -178,17 +202,10 @@ PointBlockJacobi::PointBlockJacobi(FiniteElementSpace& fes,
    s_.SetSize(dim_ * n_);
    s_.UseDevice(true);
    s_ = 0.0;
-   if (!by_vdim_)
-   {
-      r_node_.SetSize(dim_ * n_);
-      r_node_.UseDevice(true);
-      z_node_.SetSize(dim_ * n_);
-      z_node_.UseDevice(true);
-   }
+   inv_.SetSize(dim_ * dim_ * n_);
+   inv_.UseDevice(true);
    RebuildBlocks();
 }
-
-PointBlockJacobi::~PointBlockJacobi() = default;
 
 void PointBlockJacobi::SetDiagonal(const Vector& d)
 {
@@ -208,25 +225,14 @@ void PointBlockJacobi::UpdateSkew()
 
 void PointBlockJacobi::RebuildBlocks()
 {
-   // INVERSE mode: each apply is then one batched small mat-vec, which
-   // parallelizes better than triangular solves. The blocks are always
-   // invertible: positive diagonal gives det > 0 for any vorticity, and
-   // essential nodes get identity rows/columns. BatchedDirectSolver has no
-   // SetOperator, so it is rebuilt -- once per step.
-   if (n_ == 0) { blocks_inv_.reset(); return; }
-   DenseTensor blocks(dim_, dim_, n_);
-   pbj::FillBlocks(dim_, n_, by_vdim_, d_, s_, blocks);
-   blocks_inv_ = std::make_unique<BatchedDirectSolver>(
-                    blocks, BatchedDirectSolver::INVERSE);
+   // Closed-form inverses, in place: once per step (UpdateSkew) and per
+   // Delta-t change (SetDiagonal), no allocation after construction.
+   pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, inv_);
 }
 
 void PointBlockJacobi::Mult(const Vector& r, Vector& z) const
 {
-   if (!blocks_inv_) { return; } // no local dofs
-   if (by_vdim_) { blocks_inv_->Mult(r, z); return; }
-   pbj::GatherNodes(dim_, n_, r, r_node_);
-   blocks_inv_->Mult(r_node_, z_node_);
-   pbj::ScatterNodes(dim_, n_, z_node_, z);
+   pbj::ApplyBlocks(dim_, n_, by_vdim_, inv_, r, z);
 }
 
 } // namespace incns
