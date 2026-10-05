@@ -394,25 +394,33 @@ void VectorDivDivIntegrator::AddMultPA(const Vector& x, Vector& y) const
 }
 
 // ---------------------------------------------------------------------------
-// PA diagonal: diag(a, c) = sum_q alpha (Ghat_a . A[:,c])^2, evaluated
-// directly per (dof, qpt) pair from the 1D basis tables. Deviation from the
-// spec's par.5.5 sweep structure (documented): the sum-factorized QQD/QDD
-// sweeps live in an uninstalled MFEM source file; this direct form is
-// verifiable against the assembled diagonal and runs ONCE per assembly, so
-// setup-time performance is not on the critical path. A sum-factorized
-// version is a later optimization if profiling ever demands it.
+// PA diagonal: diag(a, c) = sum_q alpha (Ghat_a . A[:,c])^2
+//                         = sum_{k,l} sum_q (alpha A_kc A_lc) Ghat_ak Ghat_al.
+// Ghat_ak Ghat_al is a tensor product of 1D factors -- per direction d: G^2
+// if d == k == l, B G if exactly one of k, l is d, else B^2 -- so each (k, l)
+// term (k <= l; the off-diagonal pairs counted twice) is a weighted
+// mass-like diagonal that sum-factorizes direction by direction: O(p^4) per
+// element in 3D instead of the direct O(p^6), on forall_2D(ne, Q1D, Q1D)
+// threads. Its shared tiles are sized by the device's DofQuadLimits (CUDA 14:
+// ~48 KB in 3D); beyond them AssembleDiagonalPA falls back to the direct form.
 // ---------------------------------------------------------------------------
-void VectorDivDivIntegrator::AssembleDiagonalPA(Vector& diag)
+namespace vecdivdiv
 {
-   const int D1D = dofs1D_, Q1D = quad1D_, dim = dim_;
-   const auto B = Reshape(maps_->B.Read(), Q1D, D1D);
-   const auto G = Reshape(maps_->G.Read(), Q1D, D1D);
+
+// Direct form: per (dof, component), a sum over every quadrature point.
+// O(p^6) per element in 3D, one thread per element -- the reference the
+// sum-factorized kernel is tested against, and its fallback.
+void DiagonalDirect(int dim, int ne, int D1D, int Q1D, const Array<real_t>& b,
+                    const Array<real_t>& g, const Vector& pa_data, Vector& diag)
+{
+   const auto B = Reshape(b.Read(), Q1D, D1D);
+   const auto G = Reshape(g.Read(), Q1D, D1D);
 
    if (dim == 2)
    {
-      const auto DE = Reshape(pa_data_.Read(), Q1D, Q1D, 5, ne_);
-      auto Y = Reshape(diag.ReadWrite(), D1D, D1D, 2, ne_);
-      mfem::forall(ne_, [ = ] MFEM_HOST_DEVICE(int e)
+      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, 5, ne);
+      auto Y = Reshape(diag.ReadWrite(), D1D, D1D, 2, ne);
+      mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
       {
          for (int c = 0; c < 2; ++c)
             for (int dy = 0; dy < D1D; ++dy)
@@ -435,9 +443,9 @@ void VectorDivDivIntegrator::AssembleDiagonalPA(Vector& diag)
    }
    else
    {
-      const auto DE = Reshape(pa_data_.Read(), Q1D, Q1D, Q1D, 10, ne_);
-      auto Y = Reshape(diag.ReadWrite(), D1D, D1D, D1D, 3, ne_);
-      mfem::forall(ne_, [ = ] MFEM_HOST_DEVICE(int e)
+      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 10, ne);
+      auto Y = Reshape(diag.ReadWrite(), D1D, D1D, D1D, 3, ne);
+      mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
       {
          for (int c = 0; c < 3; ++c)
             for (int dz = 0; dz < D1D; ++dz)
@@ -462,6 +470,175 @@ void VectorDivDivIntegrator::AssembleDiagonalPA(Vector& diag)
                   }
       });
    }
+}
+
+void DiagonalSumFactorized(int dim, int ne, int D1D, int Q1D,
+                           const Array<real_t>& b, const Array<real_t>& g,
+                           const Vector& pa_data, Vector& diag)
+{
+   const auto B = Reshape(b.Read(), Q1D, D1D);
+   const auto G = Reshape(g.Read(), Q1D, D1D);
+   if (dim == 2)
+   {
+      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, 5, ne);
+      auto Y = Reshape(diag.ReadWrite(), D1D, D1D, 2, ne);
+      mfem::forall_2D(ne, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+      {
+         constexpr int MD = DofQuadLimits::MAX_D1D;
+         constexpr int MQ = DofQuadLimits::MAX_Q1D;
+         // F[f][d][q]: f = 0 B^2, 1 B G, 2 G^2 (f = how many of k, l are d).
+         MFEM_SHARED real_t F[3][MD][MQ];
+         MFEM_SHARED real_t t1[MD][MQ]; // [dy][qx]
+         MFEM_FOREACH_THREAD(d, y, D1D)
+         {
+            MFEM_FOREACH_THREAD(q, x, Q1D)
+            {
+               F[0][d][q] = B(q, d) * B(q, d);
+               F[1][d][q] = B(q, d) * G(q, d);
+               F[2][d][q] = G(q, d) * G(q, d);
+            }
+         }
+         MFEM_SYNC_THREAD;
+         for (int c = 0; c < 2; ++c)
+            for (int k = 0; k < 2; ++k)
+               for (int l = k; l < 2; ++l)
+               {
+                  const real_t wkl = (k == l) ? 1.0 : 2.0;
+                  const int fx = (k == 0) + (l == 0);
+                  const int fy = (k == 1) + (l == 1);
+                  // y: t1[dy][qx] = sum_qy Fy[dy][qy] alpha A_kc A_lc
+                  MFEM_FOREACH_THREAD(dy, y, D1D)
+                  {
+                     MFEM_FOREACH_THREAD(qx, x, Q1D)
+                     {
+                        real_t u = 0.0;
+                        for (int qy = 0; qy < Q1D; ++qy)
+                        {
+                           u += F[fy][dy][qy] * DE(qx, qy, 4, e) *
+                                DE(qx, qy, k + c * 2, e) * DE(qx, qy, l + c * 2, e);
+                        }
+                        t1[dy][qx] = u;
+                     }
+                  }
+                  MFEM_SYNC_THREAD;
+                  // x: diag(dx, dy, c) += w_kl sum_qx Fx[dx][qx] t1[dy][qx]
+                  MFEM_FOREACH_THREAD(dy, y, D1D)
+                  {
+                     MFEM_FOREACH_THREAD(dx, x, D1D)
+                     {
+                        real_t u = 0.0;
+                        for (int qx = 0; qx < Q1D; ++qx) { u += F[fx][dx][qx] * t1[dy][qx]; }
+                        Y(dx, dy, c, e) += wkl * u;
+                     }
+                  }
+                  MFEM_SYNC_THREAD; // t1 is reused by the next (k, l)
+               }
+      });
+   }
+   else
+   {
+      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 10, ne);
+      auto Y = Reshape(diag.ReadWrite(), D1D, D1D, D1D, 3, ne);
+      mfem::forall_2D(ne, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+      {
+         constexpr int MD = DofQuadLimits::MAX_D1D;
+         constexpr int MQ = DofQuadLimits::MAX_Q1D;
+         MFEM_SHARED real_t F[3][MD][MQ];
+         MFEM_SHARED real_t t1[MD][MQ][MQ]; // [dz][qy][qx]
+         MFEM_SHARED real_t t2[MD][MD][MQ]; // [dz][dy][qx]
+         MFEM_FOREACH_THREAD(d, y, D1D)
+         {
+            MFEM_FOREACH_THREAD(q, x, Q1D)
+            {
+               F[0][d][q] = B(q, d) * B(q, d);
+               F[1][d][q] = B(q, d) * G(q, d);
+               F[2][d][q] = G(q, d) * G(q, d);
+            }
+         }
+         MFEM_SYNC_THREAD;
+         for (int c = 0; c < 3; ++c)
+            for (int k = 0; k < 3; ++k)
+               for (int l = k; l < 3; ++l)
+               {
+                  const real_t wkl = (k == l) ? 1.0 : 2.0;
+                  const int fx = (k == 0) + (l == 0);
+                  const int fy = (k == 1) + (l == 1);
+                  const int fz = (k == 2) + (l == 2);
+                  // z: threads (qx, qy), loop dz, qz.
+                  MFEM_FOREACH_THREAD(qy, y, Q1D)
+                  {
+                     MFEM_FOREACH_THREAD(qx, x, Q1D)
+                     {
+                        for (int dz = 0; dz < D1D; ++dz)
+                        {
+                           real_t u = 0.0;
+                           for (int qz = 0; qz < Q1D; ++qz)
+                           {
+                              u += F[fz][dz][qz] * DE(qx, qy, qz, 9, e) *
+                                   DE(qx, qy, qz, k + c * 3, e) *
+                                   DE(qx, qy, qz, l + c * 3, e);
+                           }
+                           t1[dz][qy][qx] = u;
+                        }
+                     }
+                  }
+                  MFEM_SYNC_THREAD;
+                  // y: threads (qx, dy), loop dz, qy.
+                  MFEM_FOREACH_THREAD(dy, y, D1D)
+                  {
+                     MFEM_FOREACH_THREAD(qx, x, Q1D)
+                     {
+                        for (int dz = 0; dz < D1D; ++dz)
+                        {
+                           real_t u = 0.0;
+                           for (int qy = 0; qy < Q1D; ++qy)
+                           {
+                              u += F[fy][dy][qy] * t1[dz][qy][qx];
+                           }
+                           t2[dz][dy][qx] = u;
+                        }
+                     }
+                  }
+                  MFEM_SYNC_THREAD;
+                  // x: threads (dx, dy), loop dz, qx; accumulate the output.
+                  MFEM_FOREACH_THREAD(dy, y, D1D)
+                  {
+                     MFEM_FOREACH_THREAD(dx, x, D1D)
+                     {
+                        for (int dz = 0; dz < D1D; ++dz)
+                        {
+                           real_t u = 0.0;
+                           for (int qx = 0; qx < Q1D; ++qx)
+                           {
+                              u += F[fx][dx][qx] * t2[dz][dy][qx];
+                           }
+                           Y(dx, dy, dz, c, e) += wkl * u;
+                        }
+                     }
+                  }
+                  MFEM_SYNC_THREAD; // t1, t2 are reused by the next (k, l)
+               }
+      });
+   }
+}
+
+} // namespace vecdivdiv
+
+void VectorDivDivIntegrator::AssembleDiagonalPA(Vector& diag)
+{
+   const DeviceDofQuadLimits& lim = DeviceDofQuadLimits::Get();
+   if (dofs1D_ <= lim.MAX_D1D && quad1D_ <= lim.MAX_Q1D)
+   {
+      vecdivdiv::DiagonalSumFactorized(dim_, ne_, dofs1D_, quad1D_, maps_->B,
+                                       maps_->G, pa_data_, diag);
+   }
+   else { AssembleDiagonalPADirect(diag); }
+}
+
+void VectorDivDivIntegrator::AssembleDiagonalPADirect(Vector& diag) const
+{
+   vecdivdiv::DiagonalDirect(dim_, ne_, dofs1D_, quad1D_, maps_->B, maps_->G,
+                             pa_data_, diag);
 }
 
 // ---------------------------------------------------------------------------

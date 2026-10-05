@@ -1007,7 +1007,10 @@ fine end and the order assert fails for the wrong reason.
     (added 2026-09-30). This TU has **no** `#error` nvcc guard (by decision), so confirm
     from the build log that it is compiled by nvcc;
   - `VectorRotationalConvectionComponentIntegrator::AssembleEA` in
-    `rotational_convection.cpp` (added 2026-10-05).
+    `rotational_convection.cpp` (added 2026-10-05);
+  - `vecdivdiv::DiagonalSumFactorized` (the grad-div PA diagonal, sum-factorized
+    2026-10-05): its 3D shared tiles are ~48.6 KB at CUDA's MAX_D1D = MAX_Q1D = 14, right
+    at the 48 KB static limit -- confirm it launches at the largest size in use.
 
   Steps: `cmake --preset cuda && cmake --build --preset cuda` (clean, `-Werror`); then the
   fast tier with **≥1 GPU per rank** (4 GPUs for np4 — see Environment & build), paying

@@ -4,7 +4,8 @@
 //  7.1 PA operator action equals the fully assembled action, dim x order x
 //      coefficient sweep, curved meshes, <= 1e-12 relative;
 //  7.3 the collocated-GLL rule (Q1D == D1D, the SEM configuration);
-//  7.4 PA diagonal equals the assembled matrix diagonal;
+//  7.4 PA diagonal (sum-factorized) equals the assembled matrix diagonal,
+//      and equals the direct reference/fallback form element by element;
 //  7.5 transpose apply equals primal apply (symmetric forwarding);
 //  EA  component blocks, element-assembled on a scalar space and merged,
 //      equal the assembled vector operator.
@@ -167,45 +168,100 @@ TEST(VecDivDiv, PaMatchesFullAssembly)
    }
 }
 
-// 7.4 -- PA diagonal equals the assembled matrix diagonal (2D and 3D, curved,
-// function coefficient).
+// 7.4 -- PA diagonal (sum-factorized path) equals the assembled matrix
+// diagonal: curved meshes, function coefficient, GL and collocated GLL rules,
+// dim {2,3} x p sweep.
 TEST(VecDivDiv, DiagonalMatchesAssembled)
 {
    RuleBook rules;
    for (int dim : {2, 3})
    {
       const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-      const int p = (dim == 2) ? 3 : 2;
-      Mesh serial = MakeCurvedMesh(dim, 2, p);
-      ParMesh mesh(MPI_COMM_WORLD, serial);
-      H1_FECollection fec(p, dim);
-      ParFiniteElementSpace fes(&mesh, &fec, dim, Ordering::byNODES);
-      const IntegrationRule& ir = rules.Get(geom, 2 * p + dim - 1);
-      FunctionCoefficient q(Coef);
+      const int pmax = (dim == 2) ? 4 : 3;
+      for (int p = 1; p <= pmax; ++p)
+         for (int gll = 0; gll < 2; ++gll)
+         {
+            Mesh serial = MakeCurvedMesh(dim, 2, p);
+            ParMesh mesh(MPI_COMM_WORLD, serial);
+            H1_FECollection fec(p, dim);
+            ParFiniteElementSpace fes(&mesh, &fec, dim, Ordering::byNODES);
+            const IntegrationRule& ir =
+               gll ? rules.Get(geom, 2 * p - 1, Rule1D::GaussLobatto)
+               : rules.Get(geom, 2 * p + dim - 1);
+            FunctionCoefficient q(Coef);
 
-      ParBilinearForm pa(&fes), fa(&fes);
-      auto* ipa = new VectorDivDivIntegrator(q);
-      auto* ifa = new VectorDivDivIntegrator(q);
-      ipa->SetIntRule(&ir);
-      ifa->SetIntRule(&ir);
-      pa.AddDomainIntegrator(ipa);
-      fa.AddDomainIntegrator(ifa);
-      pa.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      pa.Assemble();
-      fa.Assemble();
-      fa.Finalize();
+            ParBilinearForm pa(&fes), fa(&fes);
+            auto* ipa = new VectorDivDivIntegrator(q);
+            auto* ifa = new VectorDivDivIntegrator(q);
+            ipa->SetIntRule(&ir);
+            ifa->SetIntRule(&ir);
+            pa.AddDomainIntegrator(ipa);
+            fa.AddDomainIntegrator(ifa);
+            pa.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+            pa.Assemble();
+            fa.Assemble();
+            fa.Finalize();
 
-      Vector d_pa(fes.GetTrueVSize());
-      pa.AssembleDiagonal(d_pa);
+            Vector d_pa(fes.GetTrueVSize());
+            pa.AssembleDiagonal(d_pa);
 
-      Array<int> empty;
-      OperatorPtr Afa;
-      fa.FormSystemMatrix(empty, Afa);
-      Vector d_fa(fes.GetTrueVSize());
-      Afa.As<HypreParMatrix>()->GetDiag(d_fa);
+            Array<int> empty;
+            OperatorPtr Afa;
+            fa.FormSystemMatrix(empty, Afa);
+            Vector d_fa(fes.GetTrueVSize());
+            Afa.As<HypreParMatrix>()->GetDiag(d_fa);
 
-      d_fa -= d_pa;
-      EXPECT_LE(Norm(d_fa), 1e-12 * Norm(d_pa)) << "dim=" << dim;
+            d_fa -= d_pa;
+            EXPECT_LE(Norm(d_fa), 1e-12 * Norm(d_pa))
+                  << "dim=" << dim << " p=" << p << " gll=" << gll;
+         }
+   }
+}
+
+// The sum-factorized diagonal equals the direct one (the fallback beyond the
+// shared-tile limits, kept as the reference) element by element, on the
+// E-vector, before any assembly to true dofs can average a defect away.
+namespace
+{
+struct DirectDiagonalProbe : VectorDivDivIntegrator
+{
+   using VectorDivDivIntegrator::VectorDivDivIntegrator;
+   using VectorDivDivIntegrator::AssembleDiagonalPADirect;
+};
+} // namespace
+
+TEST(VecDivDiv, SumFactorizedDiagonalMatchesDirect)
+{
+   RuleBook rules;
+   for (int dim : {2, 3})
+   {
+      const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+      const int pmax = (dim == 2) ? 5 : 4;
+      for (int p = 1; p <= pmax; ++p)
+         for (int gll = 0; gll < 2; ++gll)
+         {
+            Mesh mesh = MakeCurvedMesh(dim, 2, p);
+            H1_FECollection fec(p, dim);
+            FiniteElementSpace fes(&mesh, &fec, dim, Ordering::byNODES);
+            const IntegrationRule& ir =
+               gll ? rules.Get(geom, 2 * p - 1, Rule1D::GaussLobatto)
+               : rules.Get(geom, 2 * p + dim - 1);
+            FunctionCoefficient q(Coef);
+            DirectDiagonalProbe vdd(q);
+            vdd.SetIntRule(&ir);
+            vdd.AssemblePA(fes);
+
+            const int esize =
+               fes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC)->Height();
+            Vector d_sf(esize), d_dir(esize);
+            d_sf = 0.0;
+            d_dir = 0.0;
+            vdd.AssembleDiagonalPA(d_sf);
+            vdd.AssembleDiagonalPADirect(d_dir);
+            d_dir -= d_sf;
+            EXPECT_LE(d_dir.Normlinf(), 1e-13 * d_sf.Normlinf())
+                  << "dim=" << dim << " p=" << p << " gll=" << gll;
+         }
    }
 }
 

@@ -37,6 +37,14 @@ class VectorDivDivIntegrator : public mfem::BilinearFormIntegrator
 protected:
    mfem::Coefficient* Q = nullptr; ///< Scalar coefficient (null = 1).
 
+   /**
+    * @brief The direct (not sum-factorized) PA diagonal, O(p^6) per element
+    *        in 3D: the reference form and the fallback beyond the tile limits.
+    *        Protected so a test can compare it with the factorized path.
+    * @param diag Output E-vector diagonal (accumulated into).
+    */
+   void AssembleDiagonalPADirect(mfem::Vector& diag) const;
+
 private:
 #ifndef MFEM_THREAD_SAFE
    mfem::DenseMatrix dshape_, gshape_; ///< Full-assembly scratch.
@@ -100,7 +108,10 @@ public:
    { AddMultPA(x, y); }
 
    /**
-    * @brief PA diagonal: diag(a,c) = sum_q alpha (Ghat_a . A[:,c])^2.
+    * @brief PA diagonal: diag(a,c) = sum_q alpha (Ghat_a . A[:,c])^2,
+    *        sum-factorized (O(p^4) per element in 3D, Q1D x Q1D threads per
+    *        element); beyond the device's MAX_D1D / MAX_Q1D shared-tile limits
+    *        it falls back to AssembleDiagonalPADirect.
     * @param diag Output E-vector diagonal (accumulated into).
     */
    void AssembleDiagonalPA(mfem::Vector& diag) override;

@@ -463,6 +463,16 @@ const real_t Sij = DE(q, DIM*DIM, e) * DE(q, i + c*DIM, e) * DE(q, j + c*DIM, e)
 and note that unlike vector diffusion the diagonal differs per component (no shared `temp`
 written to all components — compute per c).
 
+**Implementation note (bessemer, 2026-10-05).** First landed as a DIRECT form (per output
+dof, a sum over every quadrature point: O(p⁶)/element in 3D, one thread per element)
+because the referenced MFEM source is not installed. Now sum-factorized as specified:
+`vecdivdiv::DiagonalSumFactorized` — per component c and direction pair (k ≤ l, off-diagonal
+pairs doubled), z→y→x contractions of `Sij` against 1D factor tables B², BG, G²
+(`forall_2D(ne, Q1D, Q1D)`, shared tiles sized by `DofQuadLimits`). Measured on CPU (3D,
+ns/dof, p = 2…6): 363, 269, 180, 183, 155, against the direct form's 354, 488, 512, 832, 888.
+The direct form is kept as `AssembleDiagonalPADirect` — the test reference and the fallback
+when d1d/q1d exceed the device's shared-tile limits (CUDA 14, HIP 10).
+
 ---
 
 ## 6. Constraints, edge cases, error handling
