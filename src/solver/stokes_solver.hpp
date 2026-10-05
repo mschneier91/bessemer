@@ -2,8 +2,7 @@
  * @file stokes_solver.hpp
  * @brief One implicit (steady) Stokes saddle-point solve.
  */
-#ifndef INCNS_SOLVER_STOKES_SOLVER_HPP
-#define INCNS_SOLVER_STOKES_SOLVER_HPP
+#pragma once
 
 #include "bc/boundary_conditions.hpp"
 #include "operators/block_preconditioner.hpp"
@@ -215,5 +214,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_SOLVER_STOKES_SOLVER_HPP

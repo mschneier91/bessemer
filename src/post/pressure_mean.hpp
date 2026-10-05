@@ -2,8 +2,7 @@
  * @file pressure_mean.hpp
  * @brief Mass-weighted mean-zero normalization of the pressure field.
  */
-#ifndef INCNS_POST_PRESSURE_MEAN_HPP
-#define INCNS_POST_PRESSURE_MEAN_HPP
+#pragma once
 
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
@@ -36,5 +35,3 @@ double MassWeightedMean(const mfem::ParGridFunction& p, const RuleBook& rules);
 void SubtractMean(mfem::ParGridFunction& p, const RuleBook& rules);
 
 } // namespace incns
-
-#endif // INCNS_POST_PRESSURE_MEAN_HPP

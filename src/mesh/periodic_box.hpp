@@ -2,8 +2,7 @@
  * @file periodic_box.hpp
  * @brief Cartesian quad/hex box mesh factory with optional periodicity.
  */
-#ifndef INCNS_MESH_PERIODIC_BOX_HPP
-#define INCNS_MESH_PERIODIC_BOX_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -85,5 +84,3 @@ mfem::Mesh MakeBoxMesh(const BoxSpec& spec);
 void AssertTensorProductGeometry(const mfem::Mesh& mesh);
 
 } // namespace incns
-
-#endif // INCNS_MESH_PERIODIC_BOX_HPP

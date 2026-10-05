@@ -2,8 +2,7 @@
  * @file convection.hpp
  * @brief Dealiased nonlinear convection operator N(u) = (u . grad)u (Sprint 2.1).
  */
-#ifndef INCNS_OPERATORS_CONVECTION_HPP
-#define INCNS_OPERATORS_CONVECTION_HPP
+#pragma once
 
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -111,5 +110,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_CONVECTION_HPP

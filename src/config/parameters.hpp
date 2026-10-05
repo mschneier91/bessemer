@@ -3,8 +3,7 @@
  * @brief Case parameters (physics, discretization, mesh, time, solver, output)
  *        and the YAML deck loader.
  */
-#ifndef INCNS_CONFIG_PARAMETERS_HPP
-#define INCNS_CONFIG_PARAMETERS_HPP
+#pragma once
 
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
@@ -191,5 +190,3 @@ struct Parameters
 };
 
 } // namespace incns
-
-#endif // INCNS_CONFIG_PARAMETERS_HPP

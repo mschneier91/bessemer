@@ -10,8 +10,7 @@
  * enclosed/periodic case: no pinning, no shift, ever (repo law); singularity
  * is handled by the Ortho wrapper + projected RHS/iterates.
  */
-#ifndef INCNS_PRECOND_LP_SURROGATE_HPP
-#define INCNS_PRECOND_LP_SURROGATE_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -175,5 +174,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_LP_SURROGATE_HPP

@@ -8,8 +8,7 @@
  * matrix -- no code path for that may exist, in this class or elsewhere. It is
  * exactly the composition B ( M_v^-1 ( B^T x ) ) of three fixed applications.
  */
-#ifndef INCNS_PRECOND_MIXED_POISSON_OP_HPP
-#define INCNS_PRECOND_MIXED_POISSON_OP_HPP
+#pragma once
 
 #include "precond/mass_inverse.hpp"
 #include "mfem.hpp"
@@ -80,5 +79,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_MIXED_POISSON_OP_HPP

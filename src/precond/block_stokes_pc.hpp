@@ -4,8 +4,7 @@
  *        canonical symmetric system [A B^T; B 0] with internal p~ = -p_phys
  *        (SPEC_cahouet_chabard_mfem.md par.2.4/par.6.5; docs/precond_cc.md).
  */
-#ifndef INCNS_PRECOND_BLOCK_STOKES_PC_HPP
-#define INCNS_PRECOND_BLOCK_STOKES_PC_HPP
+#pragma once
 
 #include "precond/cahouet_chabard.hpp" // BlockPCShape
 #include "mfem.hpp"
@@ -114,5 +113,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_BLOCK_STOKES_PC_HPP

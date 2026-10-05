@@ -4,8 +4,7 @@
  *        @f$ \alpha ((\nabla\times w)\times u, v) @f$, partially assembled
  *        (rotational_convection_pa_spec.md, Part A).
  */
-#ifndef INCNS_OPERATORS_ROTATIONAL_CONVECTION_HPP
-#define INCNS_OPERATORS_ROTATIONAL_CONVECTION_HPP
+#pragma once
 
 #include "mfem.hpp"
 #include "mfem/fem/kernel_dispatch.hpp"
@@ -255,5 +254,3 @@ public:
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_ROTATIONAL_CONVECTION_HPP

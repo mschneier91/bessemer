@@ -3,8 +3,7 @@
  * @brief PI (Gustafsson) step-size controller with mixed abs/rel tolerance,
  *        rejection handling, a pluggable dt ceiling, and step-history recording.
  */
-#ifndef INCNS_TIME_ADAPTIVE_CONTROLLER_HPP
-#define INCNS_TIME_ADAPTIVE_CONTROLLER_HPP
+#pragma once
 
 #include <functional>
 #include <vector>
@@ -125,5 +124,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_TIME_ADAPTIVE_CONTROLLER_HPP

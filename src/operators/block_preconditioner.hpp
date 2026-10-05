@@ -2,8 +2,7 @@
  * @file block_preconditioner.hpp
  * @brief Block-diagonal preconditioner for the Stokes saddle-point system.
  */
-#ifndef INCNS_OPERATORS_BLOCK_PRECONDITIONER_HPP
-#define INCNS_OPERATORS_BLOCK_PRECONDITIONER_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -52,5 +51,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_BLOCK_PRECONDITIONER_HPP

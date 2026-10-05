@@ -2,8 +2,7 @@
  * @file mesh_size_coefficient.hpp
  * @brief Per-element mesh-size coefficient gamma(x) = scale * h_K.
  */
-#ifndef INCNS_MESH_MESH_SIZE_COEFFICIENT_HPP
-#define INCNS_MESH_MESH_SIZE_COEFFICIENT_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -47,5 +46,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_MESH_MESH_SIZE_COEFFICIENT_HPP

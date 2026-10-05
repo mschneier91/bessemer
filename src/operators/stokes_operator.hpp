@@ -3,8 +3,7 @@
  * @brief The Stokes saddle-point blocks (mass, viscous, divergence), partially
  *        assembled.
  */
-#ifndef INCNS_OPERATORS_STOKES_OPERATOR_HPP
-#define INCNS_OPERATORS_STOKES_OPERATOR_HPP
+#pragma once
 
 #include "operators/grad_div_scale.hpp"
 #include "operators/rotational_convection.hpp"
@@ -291,5 +290,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_STOKES_OPERATOR_HPP

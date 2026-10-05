@@ -18,8 +18,7 @@
 // deliberately NOT in the mask -- it executes forall bodies on the host and is
 // bitwise reproducible, so the debug sweep keeps the strict bound too.
 
-#ifndef INCNS_TEST_REPRO_TOLERANCE_HPP
-#define INCNS_TEST_REPRO_TOLERANCE_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -42,5 +41,3 @@ inline double ReproTol(double host_tol)
 }
 
 } // namespace incns_test
-
-#endif // INCNS_TEST_REPRO_TOLERANCE_HPP

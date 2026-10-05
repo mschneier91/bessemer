@@ -3,8 +3,7 @@
  * @brief Fixed-linear-operator mass-inverse strategies for the Cahouet-Chabard
  *        preconditioner (SPEC_cahouet_chabard_mfem.md par.6.1; docs/precond_cc.md).
  */
-#ifndef INCNS_PRECOND_MASS_INVERSE_HPP
-#define INCNS_PRECOND_MASS_INVERSE_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -194,5 +193,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_MASS_INVERSE_HPP

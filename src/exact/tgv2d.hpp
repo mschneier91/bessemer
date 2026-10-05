@@ -2,8 +2,7 @@
  * @file tgv2d.hpp
  * @brief Analytic 2D Taylor-Green vortex (shared by solvers, drivers, tests).
  */
-#ifndef INCNS_EXACT_TGV2D_HPP
-#define INCNS_EXACT_TGV2D_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -119,5 +118,3 @@ inline double DissipationRate(double t, double nu)
 
 } // namespace tgv2d
 } // namespace incns
-
-#endif // INCNS_EXACT_TGV2D_HPP

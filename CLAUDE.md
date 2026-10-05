@@ -1069,6 +1069,8 @@ Launched by a human via the batch scheduler. See Guardrails.
 ## Coding conventions
 
 - C++17, MFEM style: `mfem::` types, RAII, no raw `new`/`delete` in new code.
+- **Every header uses `#pragma once`** — no `#ifndef`/`#define` include guards (human
+  decision 2026-10-05; all headers converted).
 - **Doxygen docstrings on every public API entity.** Each header carries an `@file`
   brief; every public class/struct, free function, enum, and data member gets a Doxygen
   comment (`/** @brief ... */` with `@param`/`@return`/`@pre`/`@tparam` as applicable;

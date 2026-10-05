@@ -2,8 +2,7 @@
  * @file device.hpp
  * @brief Process-wide MFEM device (backend) configuration.
  */
-#ifndef INCNS_UTIL_DEVICE_HPP
-#define INCNS_UTIL_DEVICE_HPP
+#pragma once
 
 #include <string>
 
@@ -38,5 +37,3 @@ namespace incns
 void ConfigureDevice(const std::string& backend);
 
 } // namespace incns
-
-#endif // INCNS_UTIL_DEVICE_HPP

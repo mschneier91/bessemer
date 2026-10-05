@@ -2,8 +2,7 @@
  * @file profiler.hpp
  * @brief Nested scoped wall-time profiler with MPI max/min reduction.
  */
-#ifndef INCNS_UTIL_PROFILER_HPP
-#define INCNS_UTIL_PROFILER_HPP
+#pragma once
 
 #include <mpi.h>
 
@@ -179,5 +178,3 @@ private:
 #else
 #define INCNS_PROFILE(name) ((void)sizeof(name))
 #endif
-
-#endif // INCNS_UTIL_PROFILER_HPP

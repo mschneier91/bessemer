@@ -3,8 +3,7 @@
  * @brief Global physical diagnostics of a velocity field (energy, dissipation,
  *        divergence) and an optional time-series CSV writer.
  */
-#ifndef INCNS_POST_DIAGNOSTICS_HPP
-#define INCNS_POST_DIAGNOSTICS_HPP
+#pragma once
 
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
@@ -87,5 +86,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_POST_DIAGNOSTICS_HPP

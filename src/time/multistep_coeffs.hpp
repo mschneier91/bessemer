@@ -2,8 +2,7 @@
  * @file multistep_coeffs.hpp
  * @brief Variable-step BDF and AB/EXT multistep coefficients.
  */
-#ifndef INCNS_TIME_MULTISTEP_COEFFS_HPP
-#define INCNS_TIME_MULTISTEP_COEFFS_HPP
+#pragma once
 
 #include <vector>
 
@@ -60,5 +59,3 @@ std::vector<double> ExtrapolationWeights(double t_target,
       const std::vector<double>& times);
 
 } // namespace incns
-
-#endif // INCNS_TIME_MULTISTEP_COEFFS_HPP

@@ -4,8 +4,7 @@
  *        space, computed on the device (static pressure for the rotational
  *        form).
  */
-#ifndef INCNS_POST_KINETIC_HEAD_HPP
-#define INCNS_POST_KINETIC_HEAD_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -80,5 +79,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_POST_KINETIC_HEAD_HPP

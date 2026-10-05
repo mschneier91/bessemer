@@ -3,8 +3,7 @@
  * @brief Velocity/pressure finite element spaces and block offsets for the
  *        coupled mixed method.
  */
-#ifndef INCNS_SPACES_MIXED_SPACES_HPP
-#define INCNS_SPACES_MIXED_SPACES_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -78,5 +77,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_SPACES_MIXED_SPACES_HPP

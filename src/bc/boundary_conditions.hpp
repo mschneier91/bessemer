@@ -2,8 +2,7 @@
  * @file boundary_conditions.hpp
  * @brief Per-attribute velocity boundary conditions (Dirichlet / outflow).
  */
-#ifndef INCNS_BC_BOUNDARY_CONDITIONS_HPP
-#define INCNS_BC_BOUNDARY_CONDITIONS_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -135,5 +134,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_BC_BOUNDARY_CONDITIONS_HPP

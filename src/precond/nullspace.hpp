@@ -10,8 +10,7 @@
  * periodic empty-boundary case). This header supplies the treatment: the l2
  * projector applied to RHS and iterates of singular solves.
  */
-#ifndef INCNS_PRECOND_NULLSPACE_HPP
-#define INCNS_PRECOND_NULLSPACE_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -121,5 +120,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_NULLSPACE_HPP

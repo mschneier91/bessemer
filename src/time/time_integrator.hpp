@@ -4,8 +4,7 @@
  *        (trapezoidal starter -> BDF2 -> BDF3-in-test-mode) and adaptive
  *        (BDF2 advancing, BDF3 LTE estimator, PI controller).
  */
-#ifndef INCNS_TIME_TIME_INTEGRATOR_HPP
-#define INCNS_TIME_TIME_INTEGRATOR_HPP
+#pragma once
 
 #include "bc/boundary_conditions.hpp"
 #include "operators/convection.hpp"
@@ -331,5 +330,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_TIME_TIME_INTEGRATOR_HPP

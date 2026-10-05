@@ -4,8 +4,7 @@
  *        variant) and its configuration (SPEC_cahouet_chabard_mfem.md par.2.3,
  *        par.6, par.7; docs/precond_cc.md).
  */
-#ifndef INCNS_PRECOND_CAHOUET_CHABARD_HPP
-#define INCNS_PRECOND_CAHOUET_CHABARD_HPP
+#pragma once
 
 #include "precond/lp_surrogate.hpp"
 #include "precond/mass_inverse.hpp"
@@ -229,5 +228,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_CAHOUET_CHABARD_HPP

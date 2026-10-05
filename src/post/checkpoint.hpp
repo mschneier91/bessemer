@@ -2,8 +2,7 @@
  * @file checkpoint.hpp
  * @brief Checkpoint/restart of the unsteady Stokes march (same-np contract).
  */
-#ifndef INCNS_POST_CHECKPOINT_HPP
-#define INCNS_POST_CHECKPOINT_HPP
+#pragma once
 
 #include "config/parameters.hpp"
 #include "time/time_integrator.hpp"
@@ -61,5 +60,3 @@ public:
 };
 
 } // namespace incns
-
-#endif // INCNS_POST_CHECKPOINT_HPP

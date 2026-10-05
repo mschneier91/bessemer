@@ -2,8 +2,7 @@
  * @file pressure_schur.hpp
  * @brief Sprint-1 pressure Schur complement approximation: scaled pressure mass.
  */
-#ifndef INCNS_OPERATORS_PRESSURE_SCHUR_HPP
-#define INCNS_OPERATORS_PRESSURE_SCHUR_HPP
+#pragma once
 
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
@@ -53,5 +52,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_PRESSURE_SCHUR_HPP

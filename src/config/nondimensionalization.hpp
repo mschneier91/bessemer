@@ -3,8 +3,7 @@
  * @brief Reference scales, the convective (Reynolds) scaling, and wrappers
  *        that map dimensional user data into nondimensional coefficients.
  */
-#ifndef INCNS_CONFIG_NONDIMENSIONALIZATION_HPP
-#define INCNS_CONFIG_NONDIMENSIONALIZATION_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -88,5 +87,3 @@ WrapDimensionalForcing(VectorFieldFn f, const Nondimensionalization& nd,
                        int dim);
 
 } // namespace incns
-
-#endif // INCNS_CONFIG_NONDIMENSIONALIZATION_HPP

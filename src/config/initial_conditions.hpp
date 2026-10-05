@@ -2,8 +2,7 @@
  * @file initial_conditions.hpp
  * @brief Named analytic initial-velocity registry for YAML decks.
  */
-#ifndef INCNS_CONFIG_INITIAL_CONDITIONS_HPP
-#define INCNS_CONFIG_INITIAL_CONDITIONS_HPP
+#pragma once
 
 #include "config/parameters.hpp"
 #include "mfem.hpp"
@@ -28,5 +27,3 @@ std::unique_ptr<mfem::VectorCoefficient>
 MakeInitialVelocity(const Parameters& params);
 
 } // namespace incns
-
-#endif // INCNS_CONFIG_INITIAL_CONDITIONS_HPP

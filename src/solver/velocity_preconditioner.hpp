@@ -2,8 +2,7 @@
  * @file velocity_preconditioner.hpp
  * @brief Choice of preconditioner for the velocity (momentum) block.
  */
-#ifndef INCNS_SOLVER_VELOCITY_PRECONDITIONER_HPP
-#define INCNS_SOLVER_VELOCITY_PRECONDITIONER_HPP
+#pragma once
 
 namespace incns
 {
@@ -59,5 +58,3 @@ enum class RotationVelocityPC
 };
 
 } // namespace incns
-
-#endif // INCNS_SOLVER_VELOCITY_PRECONDITIONER_HPP

@@ -2,8 +2,7 @@
  * @file rule_book.hpp
  * @brief Central owner of quadrature rules (per-integrator order and 1D type).
  */
-#ifndef INCNS_QUADRATURE_RULE_BOOK_HPP
-#define INCNS_QUADRATURE_RULE_BOOK_HPP
+#pragma once
 
 #include "mfem.hpp"
 
@@ -79,5 +78,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_QUADRATURE_RULE_BOOK_HPP

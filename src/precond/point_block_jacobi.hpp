@@ -3,8 +3,7 @@
  * @brief Matrix-free point-block Jacobi for the velocity block
  *        A = sigma M + nu K + N(omega).
  */
-#ifndef INCNS_PRECOND_POINT_BLOCK_JACOBI_HPP
-#define INCNS_PRECOND_POINT_BLOCK_JACOBI_HPP
+#pragma once
 
 #include "operators/rotational_convection.hpp"
 
@@ -167,5 +166,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_PRECOND_POINT_BLOCK_JACOBI_HPP

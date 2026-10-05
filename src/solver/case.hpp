@@ -3,8 +3,7 @@
  * @brief The public case surface: mesh + Parameters in, unsteady Stokes march
  *        with optional ParaView output out.
  */
-#ifndef INCNS_SOLVER_CASE_HPP
-#define INCNS_SOLVER_CASE_HPP
+#pragma once
 
 #include "bc/boundary_conditions.hpp"
 #include "config/parameters.hpp"
@@ -137,5 +136,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_SOLVER_CASE_HPP

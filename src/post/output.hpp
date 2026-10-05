@@ -2,8 +2,7 @@
  * @file output.hpp
  * @brief ParaView output writer (high-order + levels of detail).
  */
-#ifndef INCNS_POST_OUTPUT_HPP
-#define INCNS_POST_OUTPUT_HPP
+#pragma once
 
 #include "config/parameters.hpp"
 #include "mfem.hpp"
@@ -55,5 +54,3 @@ private:
 };
 
 } // namespace incns
-
-#endif // INCNS_POST_OUTPUT_HPP

@@ -2,8 +2,7 @@
  * @file grad_div_scale.hpp
  * @brief How the grad-div coefficient gamma is scaled (mesh size vs viscosity).
  */
-#ifndef INCNS_OPERATORS_GRAD_DIV_SCALE_HPP
-#define INCNS_OPERATORS_GRAD_DIV_SCALE_HPP
+#pragma once
 
 namespace incns
 {
@@ -26,5 +25,3 @@ enum class GradDivScale
 };
 
 } // namespace incns
-
-#endif // INCNS_OPERATORS_GRAD_DIV_SCALE_HPP
