@@ -11,12 +11,44 @@ namespace
 {
 
 /**
- * @brief Points MFEM's PA diagonal assembly (E-vector, then the element
- *        restriction's AbsMultTranspose, then P^T -- |P^T| on nonconforming
- *        meshes) at the rotation term's nodal skew.
+ * @brief Points MFEM's PA diagonal assembly at the rotation term's nodal skew,
+ *        so `skew_form_->AssembleDiagonal(s_)` produces the true-dof vector s.
  *
- * A separate form, because the rotation integrator's own AssembleDiagonalPA
- * must keep returning zeros for the real operator.
+ * **Why it is needed.** Point-block Jacobi needs the vector s: for every
+ * velocity node, the off-diagonal entries of the rotation term's small node
+ * block, summed over all elements touching that node and across MPI ranks.
+ * The integrator computes each element's contribution with AddNodalSkewPA,
+ * which fills an element-by-element (E-)vector. Turning that into one value
+ * per true dof takes three steps:
+ *  1. sum the element contributions into shared nodes -- the element
+ *     restriction's transpose, ignoring orientation signs (AbsMultTranspose);
+ *  2. sum shared nodes across ranks (P^T);
+ *  3. on nonconforming meshes, use |P^T| at hanging nodes.
+ * MFEM already does exactly this, on the device, in
+ * BilinearForm::AssembleDiagonal / ParBilinearForm::AssembleDiagonal: it calls
+ * each integrator's AssembleDiagonalPA, then performs those reductions. This
+ * proxy is an integrator whose "diagonal" is the nodal skew, put in a form of
+ * its own, so the reduction is MFEM's tested one rather than a
+ * reimplementation.
+ *
+ * **Why a separate integrator, not the rotation integrator's own
+ * AssembleDiagonalPA.** The rotation integrator also lives in the real
+ * velocity operator, and that operator's diagonal must be the true one, which
+ * for N is exactly zero. That diagonal feeds scalar Jacobi and point-block
+ * Jacobi's own d. If the rotation integrator returned s from
+ * AssembleDiagonalPA, the momentum diagonal would be wrong -- hence a second
+ * integrator object in a second form.
+ *
+ * **Alternative route** (same s, same preconditioner -- only how s is
+ * assembled changes): drop the proxy and do the reduction explicitly in
+ * UpdateSkew():
+ *  1. get the velocity space's lexicographic element restriction;
+ *  2. call rot.AddNodalSkewPA(s_e);
+ *  3. AbsMultTranspose into an L-vector;
+ *  4. P^T to true dofs, or |P^T| when nonconforming.
+ * About ten lines and one class and form fewer, at the cost of reimplementing
+ * the conforming/nonconforming, serial/parallel and device-prolongation cases
+ * AssembleDiagonal already handles.
  */
 class NodalSkewProxy : public BilinearFormIntegrator
 {
