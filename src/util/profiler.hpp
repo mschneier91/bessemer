@@ -105,13 +105,25 @@ private:
       double inclusive = 0.0;                      ///< Accumulated inclusive time.
       long long calls = 0;                         ///< Entry count.
 
-      /// @return The child with @p child_name, creating it if absent.
+      /**
+       * @brief Find a child region by name, creating it if absent.
+       * @param child_name Region label.
+       * @return The child with @p child_name.
+       */
       Node* FindOrAdd(const char* child_name);
    };
 
-   /// Depth-first flatten of the tree into parallel arrays (helper for Report):
-   /// each node's pointer, nesting depth, and the flat index of its parent
-   /// (-1 for a top-level region).
+   /**
+    * @brief Depth-first flatten of the tree into parallel arrays (helper for
+    *        Report): each node's pointer, nesting depth, and the flat index of
+    *        its parent (-1 for a top-level region).
+    * @param node         Subtree root to flatten (its children are visited).
+    * @param depth        Nesting depth of @p node's children.
+    * @param parent_index Flat index of @p node (-1 for the sentinel root).
+    * @param nodes        Output: node pointers, depth-first.
+    * @param depths       Output: matching nesting depths.
+    * @param parents      Output: matching parent flat indices.
+    */
    static void Flatten(const Node* node, int depth, int parent_index,
                        std::vector<const Node*>& nodes,
                        std::vector<int>& depths, std::vector<int>& parents);

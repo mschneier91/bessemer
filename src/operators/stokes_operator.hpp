@@ -222,8 +222,13 @@ public:
    const StokesOperatorOptions& Options() const { return opts_; }
 
 private:
-   /// Add the momentum integrators (diffusion, optional c0*mass, optional
-   /// grad-div) to @p form, using the current mass_coeff_.
+   /**
+    * @brief Add the momentum integrators (diffusion, optional c0*mass,
+    *        optional grad-div) to @p form, using the current mass_coeff_.
+    * @param form             Form to add to (it takes ownership).
+    * @param include_mass     Add c0*M (when mass_coeff > 0).
+    * @param include_grad_div Add the grad-div term (when grad_div > 0).
+    */
    void AddMomentumIntegrators(mfem::ParBilinearForm& form, bool include_mass,
                                bool include_grad_div);
    /// (Re)build the momentum block A = c0*M + nu*K (+ grad-div), its diagonal,

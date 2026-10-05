@@ -93,6 +93,8 @@ public:
     *
     * @c 3k: the (u.grad)u . v integrand is degree @c 3k-1 on an affine element,
     * and one extra degree costs nothing while covering the mildly-curved case.
+    * @param k Velocity polynomial order.
+    * @return The exactness order, 3k.
     */
    static int DealiasedOrder(int k) { return 3 * k; }
 
@@ -100,8 +102,8 @@ public:
    const mfem::IntegrationRule& Rule() const { return *rule_; }
 
 private:
-   MixedSpaces& spaces_;
-   const RuleBook& rules_;
+   MixedSpaces& spaces_;   ///< Mixed spaces (borrowed).
+   const RuleBook& rules_; ///< Quadrature source (borrowed).
    /// Non-owning; owned by the RuleBook, which outlives this object.
    const mfem::IntegrationRule* rule_ = nullptr;
    /// The nonlinear form carrying VectorConvectionNLFIntegrator.

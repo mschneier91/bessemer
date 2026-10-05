@@ -110,7 +110,12 @@ private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
 
-   /// Append a diagnostics row on the output interval (no-op if disabled).
+   /**
+    * @brief Append a diagnostics row on the output interval (no-op if
+    *        disabled).
+    * @param cycle Accepted-step count (the output cycle).
+    * @param time  Current simulation time.
+    */
    void MaybeLogDiagnostics(int cycle, double time);
 
    mfem::ParMesh& mesh_;      ///< Mesh (borrowed).

@@ -63,9 +63,16 @@ public:
          mfem::real_t alpha = 1.0)
       : w_(&w), alpha_(alpha) { }
 
-   /// Replace the lagged velocity; takes effect at UpdateVorticity().
+   /**
+    * @brief Replace the lagged velocity; takes effect at UpdateVorticity().
+    * @param w New lagged velocity (not owned; same mesh, order and FE
+    *          collection as the trial space -- any space object/ordering).
+    */
    void SetLaggedVelocity(const mfem::GridFunction& w) { w_ = &w; }
-   /// Replace alpha; takes effect at UpdateVorticity().
+   /**
+    * @brief Replace alpha; takes effect at UpdateVorticity().
+    * @param a New scalar multiplier.
+    */
    void SetAlpha(mfem::real_t a) { alpha_ = a; }
    /// @return The current alpha.
    mfem::real_t GetAlpha() const { return alpha_; }
@@ -179,7 +186,10 @@ private:
    const mfem::FiniteElementSpace* w_fes_ = nullptr; ///< Space w_restr_ is for.
    std::string trial_fec_;                  ///< Trial FE collection name.
    mfem::real_t alpha_;                     ///< Scalar multiplier.
-   int dim_ = 0, ne_ = 0, d1d_ = 0, q1d_ = 0; ///< PA geometry summary.
+   int dim_ = 0; ///< Spatial dimension (set by AssemblePA).
+   int ne_ = 0;  ///< Number of elements (set by AssemblePA).
+   int d1d_ = 0; ///< Dofs per direction, D1D (set by AssemblePA).
+   int q1d_ = 0; ///< Quadrature points per direction, Q1D (set by AssemblePA).
    const mfem::DofToQuad* maps_ = nullptr;  ///< Tensor maps (not owned).
    const mfem::GeometricFactors* geom_ = nullptr; ///< Jacobians (not owned).
    const mfem::IntegrationRule* pa_ir_ = nullptr; ///< Rule used at AssemblePA.
@@ -187,7 +197,10 @@ private:
    const mfem::Operator* w_restr_ = nullptr; ///< Lexicographic restriction of w.
    mfem::Vector w_e_;                       ///< E-vector buffer for w (reused).
    mfem::Vector pa_data_;                   ///< d_q, layout above.
-   mutable mfem::Vector diag_tmp0_, diag_tmp1_; ///< Diagnostic scratch (reused).
+   /// Diagnostic scratch: the rotation number mu_q per point (reused).
+   mutable mfem::Vector diag_tmp0_;
+   /// Diagnostic scratch: point volumes, then volume above threshold (reused).
+   mutable mfem::Vector diag_tmp1_;
 };
 
 /**

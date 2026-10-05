@@ -85,10 +85,13 @@ private:
    int n_;        ///< True dofs per component.
    bool by_vdim_; ///< True-dof layout: byVDIM a*dim+c, byNODES c*n+a.
    const mfem::Array<int>& ess_; ///< Essential true dofs (not owned).
-   mfem::Vector d_, s_;          ///< dim*n each, after the essential rule.
+   mfem::Vector
+   d_;              ///< Operator diagonal (dim*n), essential rule applied.
+   mfem::Vector s_;              ///< Nodal skew (dim*n), essential rule applied.
    std::unique_ptr<mfem::BilinearForm> skew_form_; ///< PA form, proxy integrator.
    std::unique_ptr<mfem::BatchedDirectSolver> blocks_inv_; ///< Batched inverse.
-   mutable mfem::Vector r_node_, z_node_; ///< Node-contiguous buffers (byNODES).
+   mutable mfem::Vector r_node_; ///< byNODES: residual gathered node-contiguous.
+   mutable mfem::Vector z_node_; ///< byNODES: correction before the scatter.
 };
 
 } // namespace incns

@@ -215,13 +215,29 @@ private:
       double c0 = -1.0;                     ///< Leading weight it was built with.
    };
 
-   /// @return The cached solver rebuilt if @p c0 differs from the cached one.
+   /**
+    * @brief The cached solver for a leading BDF weight, built on first use
+    *        and refreshed when @p c0 differs from the cached one.
+    * @param cache Solver cache (BDF2 or BDF3).
+    * @param c0    Leading BDF weight beta0/dt.
+    * @return The solver.
+    */
    StokesSolver& EnsureBdfSolver(SolverCache& cache, double c0);
 
-   /// Assemble the forcing functional F(t) on velocity true dofs.
+   /**
+    * @brief Assemble the forcing functional F(t) on velocity true dofs.
+    * @param t Time to evaluate the forcing at.
+    * @param F Output: true-dof functional.
+    */
    void AssembleForcing(double t, mfem::Vector& F);
 
-   /// Build the BDF right-hand side for weights @p c at time @p t_new.
+   /**
+    * @brief Build the BDF right-hand side for weights @p c at time @p t_new.
+    * @param c     BDF weights from the actual node times (c[0] leading).
+    * @param t_new Time the step solves for.
+    * @param b     Output: momentum right-hand side (true dofs, before
+    *              Dirichlet elimination).
+    */
    void AssembleBdfRhs(const std::vector<double>& c, double t_new,
                        mfem::Vector& b);
 
@@ -239,6 +255,8 @@ private:
     * history entry that does not exist yet.
     *
     * No-op when TimeIntegratorOptions::convection is false.
+    * @param t_new Time the step solves for.
+    * @param b     Momentum right-hand side (true dofs), modified in place.
     */
    void SubtractConvection(double t_new, mfem::Vector& b);
 
@@ -259,7 +277,13 @@ private:
    void StepFixed();    ///< Fixed-step BDF2/BDF3 step.
    void StepAdaptive(); ///< Adaptive attempt loop (BDF2 + BDF3 candidates).
 
-   /// Commit an accepted velocity/pressure into fields and history.
+   /**
+    * @brief Commit an accepted velocity/pressure into fields and history.
+    * @param t_new  Time of the accepted state.
+    * @param u_true Accepted velocity, true dofs (pushed onto the history).
+    * @param u_gf   Accepted velocity field (copied into Velocity()).
+    * @param p_gf   Accepted pressure field (copied into the pressure).
+    */
    void Commit(double t_new, const mfem::Vector& u_true,
                mfem::ParGridFunction& u_gf, mfem::ParGridFunction& p_gf);
 

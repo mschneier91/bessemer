@@ -161,8 +161,14 @@ public:
    bool HasSolverObject() const { return static_cast<bool>(cheb_); }
 
 private:
-   /// One seeded-random matvec vs. the diagonal multiply, globally reduced --
-   /// identical verdict on every rank.
+   /**
+    * @brief One seeded-random matvec vs. the diagonal multiply, globally
+    *        reduced -- identical verdict on every rank.
+    * @param mass The mass operator to probe.
+    * @param diag Its assembled diagonal.
+    * @param comm Communicator for the global reduction.
+    * @return True iff the operator acts as the diagonal multiply.
+    */
    static bool ProbeDiagonal(const mfem::Operator& mass,
                              const mfem::Vector& diag, MPI_Comm comm)
    {

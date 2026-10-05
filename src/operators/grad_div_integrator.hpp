@@ -47,8 +47,9 @@ protected:
 
 private:
 #ifndef MFEM_THREAD_SAFE
-   mfem::DenseMatrix dshape_, gshape_; ///< Full-assembly scratch.
-   mfem::Vector divshape_;             ///< Full-assembly scratch.
+   mfem::DenseMatrix dshape_; ///< Full-assembly scratch: reference gradients.
+   mfem::DenseMatrix gshape_; ///< Full-assembly scratch: physical gradients.
+   mfem::Vector divshape_;    ///< Full-assembly scratch: basis divergences.
 #endif
    // --- PA extension state ---
    /// Quadrature data, (nq, dim*dim + 1, ne): adj(J) columns then alpha.
@@ -56,7 +57,10 @@ private:
    const mfem::DofToQuad* maps_ =
       nullptr;        ///< Tensor basis maps (not owned).
    const mfem::GeometricFactors* geom_ = nullptr; ///< Jacobians (not owned).
-   int dim_ = 0, ne_ = 0, dofs1D_ = 0, quad1D_ = 0; ///< PA geometry summary.
+   int dim_ = 0;    ///< Spatial dimension (set by AssemblePA).
+   int ne_ = 0;     ///< Number of elements (set by AssemblePA).
+   int dofs1D_ = 0; ///< Dofs per direction, D1D (set by AssemblePA).
+   int quad1D_ = 0; ///< Quadrature points per direction, Q1D (set by AssemblePA).
 
 public:
    /**

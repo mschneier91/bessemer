@@ -221,7 +221,11 @@ private:
    std::unique_ptr<LpSurrogate> lp_;    ///< Inner Poisson PC (LOR-AMG).
    std::unique_ptr<mfem::CGSolver> inner_cg_; ///< The inner CG (fixed iters).
 
-   mutable mfem::Vector z_mass_, rhs_, w_; ///< Pressure-sized scratch (device).
+   mutable mfem::Vector z_mass_; ///< M_p^{-1} r, the viscous part (device).
+   mutable mfem::Vector
+   rhs_;    ///< Inner-solve right-hand side, projected (device).
+   mutable mfem::Vector
+   w_;      ///< (B M_v^{-1} B^T)^{-1} r, the mass part (device).
 };
 
 } // namespace incns

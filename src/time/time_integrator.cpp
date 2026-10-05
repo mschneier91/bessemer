@@ -15,15 +15,27 @@ using namespace mfem;
 
 namespace
 {
-// 1/2 |u_h|^2 at a point: the kinetic-energy density the rotational form
-// folds into the pressure (P = p + 1/2|u|^2).
+/**
+ * @brief 1/2 |u_h|^2 at a point: the kinetic-energy density the rotational
+ *        form folds into the pressure (P = p + 1/2|u|^2).
+ */
 class HalfSpeedSquared : public Coefficient
 {
-   const GridFunction& u_;
-   Vector U_;
+   const GridFunction& u_; ///< The velocity field (not owned).
+   Vector U_;              ///< Scratch: u_h at the current point.
 
 public:
+   /**
+    * @brief Coefficient for the field @p u.
+    * @param u Velocity GridFunction (must outlive the coefficient).
+    */
    explicit HalfSpeedSquared(const GridFunction& u) : u_(u) { }
+   /**
+    * @brief Evaluate 1/2 |u_h|^2.
+    * @param T  Element transformation (its element selects u's dofs).
+    * @param ip Point in the reference element.
+    * @return 1/2 |u_h(x)|^2.
+    */
    real_t Eval(ElementTransformation& T, const IntegrationPoint& ip) override
    {
       u_.GetVectorValue(T, ip, U_);

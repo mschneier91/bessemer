@@ -17,19 +17,33 @@ using namespace mfem;
 namespace
 {
 
-// Points MFEM's PA diagonal assembly (E-vector, then the element restriction's
-// AbsMultTranspose, then P^T -- |P^T| on nonconforming meshes) at the rotation
-// term's nodal skew. A separate form, because the rotation integrator's own
-// AssembleDiagonalPA must keep returning zeros for the real operator.
+/**
+ * @brief Points MFEM's PA diagonal assembly (E-vector, then the element
+ *        restriction's AbsMultTranspose, then P^T -- |P^T| on nonconforming
+ *        meshes) at the rotation term's nodal skew.
+ *
+ * A separate form, because the rotation integrator's own AssembleDiagonalPA
+ * must keep returning zeros for the real operator.
+ */
 class NodalSkewProxy : public BilinearFormIntegrator
 {
+   /// The rotation integrator whose nodal skew is assembled (not owned).
    const VectorRotationalConvectionIntegrator& rot_;
 
 public:
+   /**
+    * @brief Proxy for @p r's nodal skew.
+    * @param r Assembled rotation integrator; must outlive the proxy.
+    */
    explicit NodalSkewProxy(const VectorRotationalConvectionIntegrator& r)
       : rot_(r) { }
    using BilinearFormIntegrator::AssemblePA;
-   void AssemblePA(const FiniteElementSpace&) override { } // nothing to set up
+   /// Nothing to set up: the data lives in the rotation integrator.
+   void AssemblePA(const FiniteElementSpace&) override { }
+   /**
+    * @brief Adds the rotation term's nodal skew instead of a diagonal.
+    * @param s_e Velocity E-vector (accumulated into).
+    */
    void AssembleDiagonalPA(Vector& s_e) override { rot_.AddNodalSkewPA(s_e); }
 };
 
