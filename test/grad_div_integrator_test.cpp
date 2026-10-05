@@ -1,4 +1,4 @@
-// VDD -- VectorDivDivIntegrator validation (vecdivdiv_spec.md par.7):
+// GradDivIntegrator validation (vecdivdiv_spec.md par.7):
 //  7.2 full-assembly element matrices equal ElasticityIntegrator(lambda, mu=0)
 //      on CURVED meshes, 2D+3D (locks the math before any PA work);
 //  7.1 PA operator action equals the fully assembled action, dim x order x
@@ -12,7 +12,7 @@
 
 #include <gtest/gtest.h>
 
-#include "operators/vecdivdiv_integrator.hpp"
+#include "operators/grad_div_integrator.hpp"
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
 
@@ -23,8 +23,8 @@
 using namespace mfem;
 using incns::Rule1D;
 using incns::RuleBook;
-using incns::VectorDivDivComponentIntegrator;
-using incns::VectorDivDivIntegrator;
+using incns::GradDivComponentIntegrator;
+using incns::GradDivIntegrator;
 
 namespace
 {
@@ -66,7 +66,7 @@ double Norm(const Vector& v)
 
 // 7.2 -- element matrices equal the lambda-part of elasticity, forced same
 // rule, curved 2D and 3D. Pins conventions (byNODES blocks, weights, adjugate).
-TEST(VecDivDiv, ElmatMatchesElasticity)
+TEST(GradDivIntegrator, ElmatMatchesElasticity)
 {
    RuleBook rules;
    for (int dim : {2, 3})
@@ -80,7 +80,7 @@ TEST(VecDivDiv, ElmatMatchesElasticity)
 
       FunctionCoefficient q(Coef);
       ConstantCoefficient zero(0.0);
-      VectorDivDivIntegrator vdd(q);
+      GradDivIntegrator vdd(q);
       ElasticityIntegrator ela(q, zero); // lambda = q, mu = 0
       vdd.SetIntRule(&ir);
       ela.SetIntRule(&ir);
@@ -102,7 +102,7 @@ TEST(VecDivDiv, ElmatMatchesElasticity)
 // 7.1 + 7.3 + 7.5 -- PA action vs fully assembled action on curved parallel
 // meshes: dim {2,3} x order sweep x coefficient {none, constant, function},
 // with both the standard GL rule and the collocated GLL rule (Q1D == D1D).
-TEST(VecDivDiv, PaMatchesFullAssembly)
+TEST(GradDivIntegrator, PaMatchesFullAssembly)
 {
    RuleBook rules;
    for (int dim : {2, 3})
@@ -126,12 +126,12 @@ TEST(VecDivDiv, PaMatchesFullAssembly)
                const IntegrationRule& ir =
                   gll ? rules.Get(geom, 2 * p - 1, Rule1D::GaussLobatto)
                   : rules.Get(geom, 2 * p + dim - 1);
-               auto make = [&]() -> VectorDivDivIntegrator *
+               auto make = [&]() -> GradDivIntegrator *
                {
-                  VectorDivDivIntegrator* i =
-                  (cv == 0) ? new VectorDivDivIntegrator()
-                  : (cv == 1) ? new VectorDivDivIntegrator(qconst)
-                  : new VectorDivDivIntegrator(qfun);
+                  GradDivIntegrator* i =
+                  (cv == 0) ? new GradDivIntegrator()
+                  : (cv == 1) ? new GradDivIntegrator(qconst)
+                  : new GradDivIntegrator(qfun);
                   i->SetIntRule(&ir);
                   return i;
                };
@@ -171,7 +171,7 @@ TEST(VecDivDiv, PaMatchesFullAssembly)
 // 7.4 -- PA diagonal (sum-factorized path) equals the assembled matrix
 // diagonal: curved meshes, function coefficient, GL and collocated GLL rules,
 // dim {2,3} x p sweep.
-TEST(VecDivDiv, DiagonalMatchesAssembled)
+TEST(GradDivIntegrator, DiagonalMatchesAssembled)
 {
    RuleBook rules;
    for (int dim : {2, 3})
@@ -191,8 +191,8 @@ TEST(VecDivDiv, DiagonalMatchesAssembled)
             FunctionCoefficient q(Coef);
 
             ParBilinearForm pa(&fes), fa(&fes);
-            auto* ipa = new VectorDivDivIntegrator(q);
-            auto* ifa = new VectorDivDivIntegrator(q);
+            auto* ipa = new GradDivIntegrator(q);
+            auto* ifa = new GradDivIntegrator(q);
             ipa->SetIntRule(&ir);
             ifa->SetIntRule(&ir);
             pa.AddDomainIntegrator(ipa);
@@ -223,14 +223,14 @@ TEST(VecDivDiv, DiagonalMatchesAssembled)
 // E-vector, before any assembly to true dofs can average a defect away.
 namespace
 {
-struct DirectDiagonalProbe : VectorDivDivIntegrator
+struct DirectDiagonalProbe : GradDivIntegrator
 {
-   using VectorDivDivIntegrator::VectorDivDivIntegrator;
-   using VectorDivDivIntegrator::AssembleDiagonalPADirect;
+   using GradDivIntegrator::GradDivIntegrator;
+   using GradDivIntegrator::AssembleDiagonalPADirect;
 };
 } // namespace
 
-TEST(VecDivDiv, SumFactorizedDiagonalMatchesDirect)
+TEST(GradDivIntegrator, SumFactorizedDiagonalMatchesDirect)
 {
    RuleBook rules;
    for (int dim : {2, 3})
@@ -273,7 +273,7 @@ TEST(VecDivDiv, SumFactorizedDiagonalMatchesDirect)
 // block ordering is the byNODES vector true-dof ordering the LOR-AMG merge
 // relies on. Also checks each block's AssemblyLevel::ELEMENT action against
 // its FULL matrix. Q1 is the LOR use; p = 2, 3 guard the tensor indexing.
-TEST(VecDivDiv, ComponentEaMatchesVectorAssembly)
+TEST(GradDivIntegrator, ComponentEaMatchesVectorAssembly)
 {
    RuleBook rules;
    for (int dim : {2, 3})
@@ -292,7 +292,7 @@ TEST(VecDivDiv, ComponentEaMatchesVectorAssembly)
          Array<int> empty;
 
          // Reference: the vector operator, legacy full assembly.
-         auto* ref_integ = new VectorDivDivIntegrator(q);
+         auto* ref_integ = new GradDivIntegrator(q);
          ref_integ->SetIntRule(&ir);
          ParBilinearForm ref(&vfes);
          ref.AddDomainIntegrator(ref_integ);
@@ -302,7 +302,7 @@ TEST(VecDivDiv, ComponentEaMatchesVectorAssembly)
          ref.FormSystemMatrix(empty, K_ref);
 
          // Blocks: the parent supplies the coefficient and the rule.
-         VectorDivDivIntegrator parent(q);
+         GradDivIntegrator parent(q);
          parent.SetIntRule(&ir);
          // Lifetimes (both bit here): the handle from FormSystemMatrix owns
          // each block matrix and OperatorHandle copies do NOT, so the handle
@@ -322,9 +322,9 @@ TEST(VecDivDiv, ComponentEaMatchesVectorAssembly)
                fa.SetAssemblyLevel(AssemblyLevel::FULL);
                ea.SetAssemblyLevel(AssemblyLevel::ELEMENT);
                fa.AddDomainIntegrator(
-                    new VectorDivDivComponentIntegrator(parent, i, j));
+                    new GradDivComponentIntegrator(parent, i, j));
                ea.AddDomainIntegrator(
-                    new VectorDivDivComponentIntegrator(parent, i, j));
+                    new GradDivComponentIntegrator(parent, i, j));
                fa.Assemble();
                ea.Assemble();
                K_blocks.emplace_back(Operator::Hypre_ParCSR);

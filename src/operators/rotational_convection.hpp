@@ -196,7 +196,7 @@ private:
  *        \varphi_a \varphi_b [\omega_q]_{\times,ij} @f$ (row/test component
  *        i, column/trial component j); the diagonal blocks are zero.
  *
- * Exists for the same reason as VectorDivDivComponentIntegrator: MFEM's EA
+ * Exists for the same reason as GradDivComponentIntegrator: MFEM's EA
  * extension sizes element matrices by the scalar dof count and ignores vdim,
  * so a vector integrator cannot serve AssemblyLevel::ELEMENT / FULL. Assemble
  * each block on a scalar space (FULL builds the sparse matrix on the device

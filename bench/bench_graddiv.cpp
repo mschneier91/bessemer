@@ -1,12 +1,12 @@
 // Micro-benchmark (vecdivdiv_spec.md par.8): AddMult throughput of
-//   (a) incns::VectorDivDivIntegrator PA   (fused sum-factorized, this work)
+//   (a) incns::GradDivIntegrator PA   (fused sum-factorized, this work)
 //   (b) mfem::ElasticityIntegrator(Q, mu=0) PA (the status quo it replaces)
 //   (c) mfem::VectorDiffusionIntegrator PA (structural upper bound)
 // on 3D hexes. CPU numbers now; GPU acceptance (>= 5x over (b) at p >= 4)
 // re-measured at PSC. Not a ctest -- run manually:
 //   mpirun -np 1 build/cpu/bench/bench_graddiv
 
-#include "operators/vecdivdiv_integrator.hpp"
+#include "operators/grad_div_integrator.hpp"
 #include "mfem.hpp"
 
 #include <chrono>
@@ -69,9 +69,9 @@ int main(int argc, char** argv)
          std::printf("p = %d, %lld dofs (%d^3 hexes):\n", p,
                      static_cast<long long>(ndof), n);
       }
-      bench("VectorDivDiv (this work)", [&]()
+      bench("GradDiv (this work)", [&]()
       {
-         auto* i = new incns::VectorDivDivIntegrator(one);
+         auto* i = new incns::GradDivIntegrator(one);
          i->SetIntRule(&ir);
          return i;
       });

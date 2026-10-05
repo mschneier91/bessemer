@@ -247,7 +247,7 @@ src/
   spaces/       velocity/pressure ParFESpaces, block offsets
   quadrature/   RuleBook -- owns the integration rules (GL default, GLL option)
   operators/    Stokes blocks [A Bᵀ; B 0] (PA), grad-div, block preconditioner,
-                and the sum-factorized VectorDivDivIntegrator
+                and the sum-factorized GradDivIntegrator
   precond/      Cahouet-Chabard Schur preconditioner (BM⁻¹Bᵀ, L_p, block shapes)
   time/         BDF/AB coefficients, in-repo stepper, adaptive controller
   solver/       one implicit saddle-point solve; the unified Case
@@ -304,7 +304,7 @@ baselines are unchanged or explicitly re-blessed.
   diagnostics, LOR-AMG, Δt-refresh) done.
 - **Cahouet–Chabard preconditioner:** implemented, validated across the (ν, σ, h,
   p) grid, and the case-level default.
-- **Sum-factorized grad–div** (`VectorDivDivIntegrator`): in, ~5–25× over the
+- **Sum-factorized grad–div** (`GradDivIntegrator`): in, ~5–25× over the
   elasticity-based path it replaces.
 - **Next:** GPU port (at a DOE/leadership system), then Sprint 2 — Navier–Stokes
   (convection, dealiasing) behind an explicit sign-off, beginning with a

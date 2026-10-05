@@ -1003,19 +1003,19 @@ fine end and the order assert fails for the wrong reason.
     rotation-number kernels (incl. the shared-memory tiles sized by `DofQuadLimits`);
   - `src/precond/point_block_jacobi.cpp` — essential-dof rule, block fill, byNODES
     gather/scatter, and the `BatchedDirectSolver` (cuBLAS/MAGMA/native) inverse path;
-  - `src/operators/vecdivdiv_integrator.cpp` — `VectorDivDivComponentIntegrator::AssembleEA`
+  - `src/operators/grad_div_integrator.cpp` — `GradDivComponentIntegrator::AssembleEA`
     (added 2026-09-30). This TU has **no** `#error` nvcc guard (by decision), so confirm
     from the build log that it is compiled by nvcc;
   - `VectorRotationalConvectionComponentIntegrator::AssembleEA` in
     `rotational_convection.cpp` (added 2026-10-05);
-  - `vecdivdiv::DiagonalSumFactorized` (the grad-div PA diagonal, sum-factorized
+  - `graddiv::DiagonalSumFactorized` (the grad-div PA diagonal, sum-factorized
     2026-10-05): its 3D shared tiles are ~48.6 KB at CUDA's MAX_D1D = MAX_Q1D = 14, right
     at the 48 KB static limit -- confirm it launches at the largest size in use.
 
   Steps: `cmake --preset cuda && cmake --build --preset cuda` (clean, `-Werror`); then the
   fast tier with **≥1 GPU per rank** (4 GPUs for np4 — see Environment & build), paying
   particular attention to `rotational_convection_test` (its `A2_DeterminismGpu` runs ONLY
-  on a GPU and is skipped everywhere else), `point_block_jacobi_test`, `vecdivdiv_test`,
+  on a GPU and is skipped everywhere else), `point_block_jacobi_test`, `grad_div_integrator_test`,
   `nse_mms_test`, `tgv_nse_test`. GPU runs need human approval, and on a cluster the batch
   script is drafted, not submitted (Guardrails). When it is green, record the result here
   and delete this item.
@@ -1092,7 +1092,7 @@ Launched by a human via the batch scheduler. See Guardrails.
   expensive GPU bug found so far (2026-07-21: 38 of 62 tests segfaulting on an H100, one
   root cause). Every TU is compiled by `mpicxx`/g++ — leaving `__CUDACC__` undefined —
   **except** the short, explicit nvcc list in `src/CMakeLists.txt` (currently
-  `vecdivdiv_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`). Outside that list, two consequences, both silent:
+  `grad_div_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`). Outside that list, two consequences, both silent:
   - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
     host-only.
   - `forall`'s CUDA dispatch is `#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)`
@@ -1112,13 +1112,13 @@ Launched by a human via the batch scheduler. See Guardrails.
   (`pressure_schur.cpp`, `precond/mass_inverse.hpp`).
 
   **If a kernel genuinely cannot be expressed that way** (sum factorization, `MFEM_SHARED`
-  tiles — e.g. `vecdivdiv_integrator.cpp`), that TU must be compiled by nvcc:
+  tiles — e.g. `grad_div_integrator.cpp`), that TU must be compiled by nvcc:
   `set_source_files_properties(... PROPERTIES LANGUAGE CUDA)` + `--expt-extended-lambda` +
   `CMAKE_CUDA_ARCHITECTURES`. A bessemer-specific file defining device kernels opens with
   `#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)` / `#error` so this failure becomes a
   compile error instead of a runtime segfault. **Exception — code written to go upstream
   into MFEM carries no such guard** (MFEM would not; human decision, 2026-09-30). That is
-  currently `vecdivdiv_integrator.cpp`: its only protection is the `LANGUAGE CUDA` entry in
+  currently `grad_div_integrator.cpp`: its only protection is the `LANGUAGE CUDA` entry in
   `src/CMakeLists.txt`, so never drop it from that list, and on a CUDA build confirm it
   still compiles through nvcc (a missing entry compiles clean and segfaults on the GPU).
 - **Device-resident vectors in the solve path.** Any `Vector`/`BlockVector` an operator

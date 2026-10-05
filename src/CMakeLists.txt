@@ -10,7 +10,7 @@ add_library(incns STATIC
   bc/boundary_conditions.cpp
   operators/stokes_operator.cpp
   operators/convection.cpp
-  operators/vecdivdiv_integrator.cpp
+  operators/grad_div_integrator.cpp
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
@@ -36,7 +36,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # --- The nvcc TUs -------------------------------------------------------------
 # Keep this list minimal: a file belongs here only if it *defines* device
 # kernels that cannot be expressed as device-aware mfem::Vector operations.
-# vecdivdiv_integrator.cpp -- sum-factorized grad-div built on forall_2D with
+# grad_div_integrator.cpp -- sum-factorized grad-div built on forall_2D with
 # MFEM_SHARED tiles; rotational_convection.cpp -- the lagged-vorticity
 # rotational term's setup/apply/nodal-skew kernels (same tile machinery);
 # point_block_jacobi.cpp -- essential-dof rule, block fill and byNODES
@@ -46,12 +46,12 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
 # by a host compiler the kernels do not fail to build -- they quietly become
 # host loops iterating over device pointers, which segfaults with "Invalid
-# permissions" at run time. vecdivdiv_integrator.cpp carries NO #error guard
+# permissions" at run time. grad_div_integrator.cpp carries NO #error guard
 # for this (it is written to go upstream into MFEM, which would not carry one),
 # so this LANGUAGE CUDA property is the only thing preventing that -- keep it.
 # The bessemer-specific entries open with the #error guard (CLAUDE.md).
 if(USE_CUDA)
-  set_source_files_properties(operators/vecdivdiv_integrator.cpp
+  set_source_files_properties(operators/grad_div_integrator.cpp
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp
                               PROPERTIES LANGUAGE CUDA)

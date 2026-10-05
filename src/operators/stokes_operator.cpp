@@ -1,7 +1,7 @@
 #include "operators/stokes_operator.hpp"
 
 #include "operators/convection.hpp" // DealiasedOrder
-#include "operators/vecdivdiv_integrator.hpp"
+#include "operators/grad_div_integrator.hpp"
 
 #include "mesh/mesh_size_coefficient.hpp"
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
@@ -195,12 +195,12 @@ void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
    if (include_grad_div && opts_.grad_div > 0.0)
    {
       // gamma (div u, div v) via the in-repo sum-factorized
-      // VectorDivDivIntegrator -- replaces ElasticityIntegrator(lambda, mu=0),
-      // elmat-identical (pinned by vecdivdiv_test) but with fused O(p^4)
+      // GradDivIntegrator -- replaces ElasticityIntegrator(lambda, mu=0),
+      // elmat-identical (pinned by grad_div_integrator_test) but with fused O(p^4)
       // tensor PA kernels instead of elasticity's dense non-tensor path.
       // Stiffness-type integrand -> the 2k + dim - 1 default rule. gamma never
       // enters the Schur block (pressure_schur stays nu*M_p^{-1}).
-      auto* gdi = new VectorDivDivIntegrator(*gamma_);
+      auto* gdi = new GradDivIntegrator(*gamma_);
       gdi->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
       form.AddDomainIntegrator(gdi);
    }

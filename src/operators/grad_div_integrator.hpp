@@ -1,5 +1,5 @@
 /**
- * @file vecdivdiv_integrator.hpp
+ * @file grad_div_integrator.hpp
  * @brief Sum-factorized grad-div integrator (Q div u, div v) for [H1]^d vector
  *        fields (vecdivdiv_spec.md; out-of-tree against installed MFEM).
  */
@@ -28,11 +28,11 @@ namespace incns
  * elements (quads/hexes); full assembly works on any H1 element. Scalar
  * Coefficient only (grad-div's coefficient is physically scalar). The operator
  * is symmetric, so the PA transpose forwards to the primal apply. Element
- * assembly is per component block: see VectorDivDivComponentIntegrator.
+ * assembly is per component block: see GradDivComponentIntegrator.
  */
-class VectorDivDivIntegrator : public mfem::BilinearFormIntegrator
+class GradDivIntegrator : public mfem::BilinearFormIntegrator
 {
-   friend class VectorDivDivComponentIntegrator; // reads Q at assembly
+   friend class GradDivComponentIntegrator; // reads Q at assembly
 
 protected:
    mfem::Coefficient* Q = nullptr; ///< Scalar coefficient (null = 1).
@@ -63,7 +63,7 @@ public:
     * @brief Grad-div with unit coefficient.
     * @param ir Optional integration rule (RuleBook-owned in this codebase).
     */
-   VectorDivDivIntegrator(const mfem::IntegrationRule* ir = nullptr)
+   GradDivIntegrator(const mfem::IntegrationRule* ir = nullptr)
       : mfem::BilinearFormIntegrator(ir) { }
 
    /**
@@ -71,8 +71,8 @@ public:
     * @param q  Scalar coefficient (borrowed; may be negative/sign-changing).
     * @param ir Optional integration rule (RuleBook-owned in this codebase).
     */
-   VectorDivDivIntegrator(mfem::Coefficient& q,
-                          const mfem::IntegrationRule* ir = nullptr)
+   GradDivIntegrator(mfem::Coefficient& q,
+                     const mfem::IntegrationRule* ir = nullptr)
       : mfem::BilinearFormIntegrator(ir), Q(&q) { }
 
    /**
@@ -135,7 +135,7 @@ public:
 };
 
 /**
- * @brief One (i, j) block of a VectorDivDivIntegrator, viewing grad-div as a
+ * @brief One (i, j) block of a GradDivIntegrator, viewing grad-div as a
  *        dim x dim block operator, assembled on a SCALAR H1 space:
  *        @f$ K^{ij}_{ab} = (Q\,\partial_j \phi_b, \partial_i \phi_a) @f$
  *        (row/test component i, column/trial component j).
@@ -148,16 +148,16 @@ public:
  * assemble each block on a scalar space -- AssemblyLevel::FULL builds the
  * sparse matrix on the device from AssembleEA -- then merge the dim^2 blocks
  * with HypreParMatrixFromBlocks, whose per-rank block ordering equals the
- * true-dof ordering of a byNODES vector space (pinned by vecdivdiv_test).
+ * true-dof ordering of a byNODES vector space (pinned by grad_div_integrator_test).
  *
  * Intended for low order -- the Q1 LOR rediscretization that feeds LOR-AMG.
  * The kernel is a direct O(nd^2 nq) sum per element, not sum-factorized, so
  * it is not meant for high-order element matrices. Quads/hexes only, like the
  * PA path. K^{ji} = (K^{ij})^T; only the diagonal blocks are symmetric.
  */
-class VectorDivDivComponentIntegrator : public mfem::BilinearFormIntegrator
+class GradDivComponentIntegrator : public mfem::BilinearFormIntegrator
 {
-   const VectorDivDivIntegrator& parent_; ///< Coefficient source (not owned).
+   const GradDivIntegrator& parent_; ///< Coefficient source (not owned).
    const int i_block_; ///< Row (test) component.
    const int j_block_; ///< Column (trial) component.
 
@@ -171,8 +171,8 @@ public:
     * The integration rule is this integrator's own if set, else the parent's,
     * else the DiffusionIntegrator default -- the same fallback as the parent.
     */
-   VectorDivDivComponentIntegrator(const VectorDivDivIntegrator& parent,
-                                   int i_block, int j_block)
+   GradDivComponentIntegrator(const GradDivIntegrator& parent,
+                              int i_block, int j_block)
       : parent_(parent), i_block_(i_block), j_block_(j_block) { }
 
    /**

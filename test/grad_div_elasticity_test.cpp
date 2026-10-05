@@ -1,19 +1,19 @@
-// VectorDivDivIntegrator vs ElasticityIntegrator(lambda = q, mu = 0): the
+// GradDivIntegrator vs ElasticityIntegrator(lambda = q, mu = 0): the
 // grad-div element matrices must be identical, since the lambda part of linear
 // elasticity IS grad-div. Self-contained on purpose -- MFEM and the integrator
 // header only, no bessemer test helpers.
 
 #include <gtest/gtest.h>
 
-#include "operators/vecdivdiv_integrator.hpp"
+#include "operators/grad_div_integrator.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
 
 using namespace mfem;
-using incns::VectorDivDivIntegrator;
+using incns::GradDivIntegrator;
 
-TEST(VecDivDivElasticity, ElementMatricesMatch)
+TEST(GradDivElasticity, ElementMatricesMatch)
 {
    for (int dim : {2, 3})
    {
@@ -37,7 +37,7 @@ TEST(VecDivDivElasticity, ElementMatricesMatch)
          // Spatially varying coefficient; the same rule for both integrators.
          FunctionCoefficient q([](const Vector & x) { return 1.0 + x(0) * x(1); });
          ConstantCoefficient zero(0.0);
-         VectorDivDivIntegrator divdiv(q);
+         GradDivIntegrator divdiv(q);
          ElasticityIntegrator elasticity(q, zero); // lambda = q, mu = 0
          const IntegrationRule& ir =
             IntRules.Get(fes.GetFE(0)->GetGeomType(), 2 * p + dim - 1);
