@@ -15,6 +15,9 @@ STRIP_FROM_PATH        = src
 # "Doxygen on every public API entity" convention is actually enforced by a run.
 EXTRACT_ALL            = NO
 EXTRACT_STATIC         = YES
+# Private members too: CLAUDE.md requires every data member documented, and
+# without this Doxygen never looks at (or warns about) private ones.
+EXTRACT_PRIVATE        = YES
 HIDE_UNDOC_MEMBERS     = NO
 WARN_IF_UNDOCUMENTED   = YES
 WARN_NO_PARAMDOC       = YES
@@ -26,6 +29,8 @@ MARKDOWN_SUPPORT       = YES
 BUILTIN_STL_SUPPORT    = YES
 
 GENERATE_HTML          = YES
+# Render @f$ formulas in the browser (MathJax) -- no LaTeX install needed.
+USE_MATHJAX            = YES
 GENERATE_LATEX         = NO
 
 # Graphviz diagrams if `dot` is available; harmless when it is not.

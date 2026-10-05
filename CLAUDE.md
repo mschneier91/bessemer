@@ -1065,6 +1065,10 @@ Launched by a human via the batch scheduler. See Guardrails.
   `///` briefs for members and trivial accessors). Struct/enum members use `///` (or
   trailing `///<`) so Doxygen actually captures them — a plain `//` does not. `.cpp`
   implementation comments stay plain `//` (they document *how*, not the API).
+  **Private members count too**, and a trailing `///<` documents only the LAST name of a
+  multi-variable declaration (`int a_, b_; ///<` leaves `a_` bare) — one per line. The
+  check: `scripts/docs.sh` must print no warnings (the `Doxyfile` has `EXTRACT_PRIVATE =
+  YES`, and `USE_MATHJAX = YES` so `@f$` formulas render without a LaTeX install).
 - **Modular:** one concern per file, small classes, no god-class. A new module lands with
   its unit test in the same change.
 - **Quad/hex only:** assert element geometry is `Geometry::SQUARE` / `Geometry::CUBE`;
