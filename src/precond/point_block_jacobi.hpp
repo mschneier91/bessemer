@@ -9,7 +9,7 @@
 
 #include "operators/rotational_convection.hpp"
 
-#include "mfem.hpp"
+#include <mfem.hpp>
 
 #include <memory>
 

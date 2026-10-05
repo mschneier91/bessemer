@@ -1009,7 +1009,8 @@ fine end and the order assert fails for the wrong reason.
   - `src/operators/rotational_convection.cpp` — setup, apply, nodal-skew and
     rotation-number kernels (incl. the shared-memory tiles sized by `DofQuadLimits`);
   - `src/precond/point_block_jacobi.cpp` — essential-dof rule, closed-form block inverse,
-    fused block apply (rewritten 2026-10-05);
+    fused block apply (rewritten 2026-10-05). No `#error` nvcc guard (by decision), so
+    confirm from the build log that it is compiled by nvcc;
   - `src/post/kinetic_head.cpp` — the static-pressure ½|u|² kernel (2026-10-05; 3D shared
     tiles ~45 KB at CUDA's limit of 14);
   - `src/operators/grad_div_integrator.cpp` — `GradDivComponentIntegrator::AssembleEA`
@@ -1131,10 +1132,12 @@ Launched by a human via the batch scheduler. See Guardrails.
   `CMAKE_CUDA_ARCHITECTURES`. A bessemer-specific file defining device kernels opens with
   `#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)` / `#error` so this failure becomes a
   compile error instead of a runtime segfault. **Exception — code written to go upstream
-  into MFEM carries no such guard** (MFEM would not; human decision, 2026-09-30). That is
-  currently `grad_div_integrator.cpp`: its only protection is the `LANGUAGE CUDA` entry in
-  `src/CMakeLists.txt`, so never drop it from that list, and on a CUDA build confirm it
-  still compiles through nvcc (a missing entry compiles clean and segfaults on the GPU).
+  into MFEM carries no such guard** (MFEM would not; human decision, 2026-09-30) — that is
+  `grad_div_integrator.cpp` — and neither does `point_block_jacobi.cpp` (human decision
+  2026-10-05; it also includes MFEM as `<mfem.hpp>`). For these two the only protection
+  is the `LANGUAGE CUDA` entry in `src/CMakeLists.txt`, so never drop them from that list,
+  and on a CUDA build confirm they still compile through nvcc (a missing entry compiles
+  clean and segfaults on the GPU).
 - **Device-resident vectors in the solve path.** Any `Vector`/`BlockVector` an operator
   applies to (or that a device kernel writes) must live in the **device memory space**, or
   every apply forces a silent host↔device copy (a fallback that stays correct but kills GPU

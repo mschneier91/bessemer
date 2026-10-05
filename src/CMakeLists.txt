@@ -48,10 +48,11 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
 # by a host compiler the kernels do not fail to build -- they quietly become
 # host loops iterating over device pointers, which segfaults with "Invalid
-# permissions" at run time. grad_div_integrator.cpp carries NO #error guard
-# for this (it is written to go upstream into MFEM, which would not carry one),
-# so this LANGUAGE CUDA property is the only thing preventing that -- keep it.
-# The bessemer-specific entries open with the #error guard (CLAUDE.md).
+# permissions" at run time. grad_div_integrator.cpp (written to go upstream
+# into MFEM, which would not carry one) and point_block_jacobi.cpp carry NO
+# #error guard for this (human decisions 2026-09-30, 2026-10-05), so for them
+# this LANGUAGE CUDA property is the only thing preventing that -- keep it.
+# The other entries open with the #error guard (CLAUDE.md).
 if(USE_CUDA)
   set_source_files_properties(operators/grad_div_integrator.cpp
                               operators/rotational_convection.cpp

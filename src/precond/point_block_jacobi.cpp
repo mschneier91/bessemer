@@ -1,13 +1,6 @@
 #include "precond/point_block_jacobi.hpp"
 
-#include "mfem/general/forall.hpp"
-
-// This TU defines device kernels (mfem::forall); see src/CMakeLists.txt's
-// nvcc list. A host compiler would build them as host loops over device
-// pointers -- this line turns a lost entry there into a compile error.
-#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)
-#error "point_block_jacobi.cpp defines device kernels and must be compiled by nvcc -- see the nvcc TU list in src/CMakeLists.txt"
-#endif
+#include <mfem/general/forall.hpp>
 
 namespace incns
 {
