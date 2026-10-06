@@ -551,6 +551,16 @@ What landed (`physics.convective_form: rotational`, NSE only):
   mass-dominated block (component-wise smoothing cannot handle the skew inter-component
   coupling) — exactly PBJ's regime. Plain LOR-AMG still wins where viscosity dominates. A
   combined PC (LOR-AMG on σM+νK plus PBJ for N) is the obvious next experiment, not built.
+- **Always dealiased with Gauss–Legendre (human decision 2026-10-05).** The rotational term
+  is integrated at the RuleBook's order-3p GL rule, never GLL-collocated or default rules:
+  under-integrating the nonlinear term has gone badly on energy in practice. Point-block
+  Jacobi is then not an exact inverse (GL nodal blocks are not exactly diagonal) — still
+  valid, and B2/B3 test it with Gauss rules. Kernel specializations therefore cover ONLY
+  that rule for p = 1..5: (D1D, Q1D) = (2,2), (3,4), (4,5), (5,7), (6,8), generated from
+  Q1D = (3p+2)/2; every other size runs the generic fallback (correct, ~2.5× slower;
+  `MFEM_REPORT_KERNELS=1` lists fallbacks). `RotConv.DealiasedRuleIsSpecialized` asks the
+  dispatch table whether the solver's actual rule is covered, so changing the dealiasing
+  order without the list fails a test instead of silently slowing runs down.
 - **Pressure: decision 3(a) below is what was implemented.** The solve yields the Bernoulli
   head P; `Pressure()` returns static `p = P − I(½|u|²)` (nodal interpolant, mean-normalized
   with the null space); P stays internal as the Krylov warm start. `I(½|u|²)` is computed

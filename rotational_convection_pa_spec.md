@@ -285,6 +285,11 @@ then `EvalTranspose{2,3}d` and `WriteDofs{2,3}d` (they accumulate into `y`). `si
 
 ### 5.6 Kernel specializations and device limits
 
+> **Implementation note (bessemer, 2026-10-05):** first registered as listed below (p = 1..8,
+> every rule), then narrowed by human decision to the one rule production uses -- the
+> dealiased Gauss-Legendre order-3p rule -- for p = 1..5 only. Other sizes run the generic
+> fallback. See CLAUDE.md "Convective form".
+
 Register specializations with `MFEM_REGISTER_KERNELS` (pattern: `VectorMassIntegrator::VectorMassAddMultPA` in `bilininteg_vecmass_pa.cpp`), for the apply and setup kernels, for every `(dim, d1d, q1d)` the application uses. All kernel templates and all `Specialization<...>::Add()` calls are in `rotational_convection.cpp`. At minimum for `p = 1..8` (`d1d = p + 1`):
 - `q1d = p + 1` (GLL collocated, and Gauss with `p + 1` points),
 - `q1d` of the default rule (table below),

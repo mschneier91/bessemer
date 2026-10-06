@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "mesh/periodic_box.hpp"
+#include "operators/convection.hpp"
 #include "operators/rotational_convection.hpp"
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
@@ -885,5 +886,27 @@ TEST(RotConv, LorRigidRotation)
          M.Mult(z, y_ref);
          y -= y_ref;
          EXPECT_LE(Norm(y), 1e-12 * Norm(y_ref));
+      }
+}
+
+// The solver integrates the rotation term at the RuleBook's dealiased
+// Gauss-Legendre rule (Convection::DealiasedOrder, see StokesOperator). Every
+// such size for p = 1..5 must hit a compile-time-specialized kernel, so a
+// change to the dealiasing order (or to the specialization list) cannot
+// silently drop production runs onto the slower generic fallback.
+TEST(RotConv, DealiasedRuleIsSpecialized)
+{
+   RuleBook rules;
+   for (int dim : {2, 3})
+      for (int p = 1; p <= 5; ++p)
+      {
+         const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+         const IntegrationRule& ir =
+            rules.Get(geom, incns::Convection::DealiasedOrder(p));
+         const int q1d = static_cast<int>(
+                            std::lround(std::pow(ir.GetNPoints(), 1.0 / dim)));
+         EXPECT_TRUE(VectorRotationalConvectionIntegrator::HasSpecialization(
+                        dim, p + 1, q1d))
+               << "dim=" << dim << " p=" << p << " q1d=" << q1d;
       }
 }

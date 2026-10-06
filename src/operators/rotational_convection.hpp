@@ -162,6 +162,16 @@ public:
    /// @return The mesh of the last AssemblePA() (null before it).
    const mfem::Mesh* GetAssembledMesh() const { return pa_mesh_; }
 
+   /**
+    * @brief Whether (dim, d1d, q1d) has compile-time-specialized apply and
+    *        setup kernels (others run the slower generic fallback).
+    * @param dim Spatial dimension.
+    * @param d1d Dofs per direction (order + 1).
+    * @param q1d Quadrature points per direction.
+    * @return True if specialized.
+    */
+   static bool HasSpecialization(int dim, int d1d, int q1d);
+
    /// Apply kernel signature: ne, sign, B, d, x, y, d1d, q1d.
    using ApplyType = void (*)(int, mfem::real_t, const mfem::Array<mfem::real_t>&,
                               const mfem::Vector&, const mfem::Vector&,

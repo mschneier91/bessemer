@@ -6,6 +6,7 @@
 #include <cmath>
 #include <set>
 #include <tuple>
+#include <utility>
 
 // This TU defines device kernels (forall_2D + MFEM_SHARED tiles). A host
 // compiler would build them as host loops over device pointers, which
@@ -276,13 +277,16 @@ VectorRotationalConvectionIntegrator::RotConvSetupPA::Fallback(int dim, int,
    MFEM_ABORT("VectorRotationalConvectionIntegrator: unsupported dim");
 }
 
-// Specializations (spec 5.6) for p = 1..8 (D1D = p + 1), both dims, at every
-// Q1D a production rule can produce -- measured on the installed MFEM:
-// collocated/Gauss p+1; VectorConvectionNLFIntegrator::GetRule at mesh order
-// 1 and 2 (2D and 3D); the 3/2 rule ceil(3(p+1)/2); the RuleBook's
-// dealiased order 3p (Convection::DealiasedOrder); and Gauss p+2 (Q1D = D1D+1,
-// a common choice -- measured ~2.5x slower through the generic fallback at
-// p = 4..6 before it was added). Union per D1D below.
+// Specializations: the DEALIASED Gauss-Legendre rule only, p = 1..5 (human
+// decision 2026-10-05: the rotational term is always over-integrated with
+// Gauss-Legendre -- under-integrating the nonlinear term has gone badly on
+// energy). The solver's rule is the RuleBook's order-3p GL rule
+// (Convection::DealiasedOrder), ceil((3p+1)/2) = (3p+2)/2 points per
+// direction, so the list is generated from that formula: (D1D, Q1D) = (2,2),
+// (3,4), (4,5), (5,7), (6,8). Every other rule or order still runs, through
+// the generic fallback kernel (correct, ~2.5x slower measured);
+// MFEM_REPORT_KERNELS=1 prints each fallback. HasSpecialization() lets a test
+// pin the solver's actual rule to this list.
 namespace
 {
 template <int DIM, int D1D, int Q1D>
@@ -294,54 +298,39 @@ void AddRotConvSpecialization()
    rotconv::Specialized().insert(std::make_tuple(DIM, D1D, Q1D));
 }
 
-template <int DIM>
-void AddRotConvSpecializations()
+// Order p at the dealiased rule: D1D = p + 1, Q1D = (3p + 2) / 2.
+template <int DIM, int P>
+void AddDealiasedSpecialization()
 {
-   AddRotConvSpecialization<DIM, 2, 2>();   // p = 1
-   AddRotConvSpecialization<DIM, 2, 3>();
-   AddRotConvSpecialization<DIM, 2, 4>();
-   AddRotConvSpecialization<DIM, 3, 3>();   // p = 2
-   AddRotConvSpecialization<DIM, 3, 4>();
-   AddRotConvSpecialization<DIM, 3, 5>();
-   AddRotConvSpecialization<DIM, 4, 4>();   // p = 3
-   AddRotConvSpecialization<DIM, 4, 5>();
-   AddRotConvSpecialization<DIM, 4, 6>();
-   AddRotConvSpecialization<DIM, 4, 7>();
-   AddRotConvSpecialization<DIM, 5, 5>();   // p = 4
-   AddRotConvSpecialization<DIM, 5, 6>();
-   AddRotConvSpecialization<DIM, 5, 7>();
-   AddRotConvSpecialization<DIM, 5, 8>();
-   AddRotConvSpecialization<DIM, 6, 6>();   // p = 5
-   AddRotConvSpecialization<DIM, 6, 7>();
-   AddRotConvSpecialization<DIM, 6, 8>();
-   AddRotConvSpecialization<DIM, 6, 9>();
-   AddRotConvSpecialization<DIM, 6, 10>();
-   AddRotConvSpecialization<DIM, 7, 7>();   // p = 6
-   AddRotConvSpecialization<DIM, 7, 8>();
-   AddRotConvSpecialization<DIM, 7, 10>();
-   AddRotConvSpecialization<DIM, 7, 11>();
-   AddRotConvSpecialization<DIM, 8, 8>();   // p = 7
-   AddRotConvSpecialization<DIM, 8, 9>();
-   AddRotConvSpecialization<DIM, 8, 11>();
-   AddRotConvSpecialization<DIM, 8, 12>();
-   AddRotConvSpecialization<DIM, 8, 13>();
-   AddRotConvSpecialization<DIM, 9, 9>();   // p = 8
-   AddRotConvSpecialization<DIM, 9, 10>();
-   AddRotConvSpecialization<DIM, 9, 13>();
-   AddRotConvSpecialization<DIM, 9, 14>();
+   constexpr int D1D = P + 1;
+   constexpr int Q1D = (3 * P + 2) / 2;
+   AddRotConvSpecialization<DIM, D1D, Q1D>();
+}
+
+template <int DIM, int... P>
+void AddDealiasedSpecializations(std::integer_sequence<int, P...>)
+{
+   const int expand[] = {(AddDealiasedSpecialization<DIM, P>(), 0)...};
+   static_cast<void>(expand);
 }
 
 struct RotConvRegistrar
 {
    RotConvRegistrar()
    {
-      AddRotConvSpecializations<2>();
-      AddRotConvSpecializations<3>();
+      AddDealiasedSpecializations<2>(std::integer_sequence<int, 1, 2, 3, 4, 5> {});
+      AddDealiasedSpecializations<3>(std::integer_sequence<int, 1, 2, 3, 4, 5> {});
    }
 };
 const RotConvRegistrar rotconv_registrar;
 } // namespace
 /// \endcond
+
+bool VectorRotationalConvectionIntegrator::HasSpecialization(int dim, int d1d,
+      int q1d)
+{
+   return rotconv::Specialized().count(std::make_tuple(dim, d1d, q1d)) > 0;
+}
 
 const IntegrationRule& VectorRotationalConvectionIntegrator::GetRule(
    const FiniteElement& fe, const ElementTransformation& T)
