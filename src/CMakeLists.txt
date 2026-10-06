@@ -4,6 +4,7 @@ add_library(incns STATIC
   mesh/periodic_box.cpp
   mesh/case_mesh.cpp
   amr/amr_parameters.cpp
+  amr/gradient_indicator.cpp
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp
@@ -44,7 +45,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # rotational term's setup/apply/nodal-skew kernels (same tile machinery);
 # point_block_jacobi.cpp -- essential-dof rule, closed-form nodal block
 # inverses and the fused block apply for the velocity point-block Jacobi; kinetic_head.cpp
-# -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure).
+# -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure);
+# amr/gradient_indicator.cpp -- the per-element AMR indicator reduction.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
@@ -60,6 +62,7 @@ if(USE_CUDA)
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp
+                              amr/gradient_indicator.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()
