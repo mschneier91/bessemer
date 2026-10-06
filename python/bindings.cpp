@@ -9,6 +9,7 @@
 #include "bc/boundary_conditions.hpp"
 #include "config/nondimensionalization.hpp"
 #include "config/parameters.hpp"
+#include "mesh/case_mesh.hpp"
 #include "mesh/periodic_box.hpp"
 #include "solver/case.hpp"
 #include "util/device.hpp"
@@ -112,8 +113,7 @@ public:
    {
       ConfigureDevice(params_.device); // before any mesh/space allocation
       params_.Normalize(); // idempotent; the case requires it before the mesh
-      serial_ = MakeBoxMesh(params_.mesh);
-      pmesh_ = std::make_unique<ParMesh>(MPI_COMM_WORLD, serial_);
+      pmesh_ = MakeCaseMesh(params_); // nonconforming-ready when AMR is on
       case_ = std::make_unique<Case>(*pmesh_, params_);
       bc_ = std::make_unique<BoundaryConditions>(case_->Spaces().Velocity());
    }
@@ -311,7 +311,6 @@ private:
    }
 
    Parameters params_;
-   Mesh serial_;
    std::unique_ptr<ParMesh> pmesh_;
    std::unique_ptr<Case> case_;
    std::unique_ptr<BoundaryConditions> bc_;

@@ -76,6 +76,8 @@ private:
    const mfem::ElementRestriction* p_restr_ = nullptr;
    mutable mfem::Vector u_e_;  ///< Velocity E-vector buffer (reused).
    mutable mfem::Vector ke_e_; ///< Kinetic-head E-vector buffer (reused).
+   /// True-dof scratch for the conforming projection on NC (AMR) meshes.
+   mutable mfem::Vector ke_true_;
 };
 
 } // namespace incns

@@ -48,6 +48,17 @@ public:
     */
    Case(mfem::ParMesh& mesh, const Parameters& params);
 
+   /**
+    * @brief Tear down, then drop the mesh's cached geometric factors.
+    *
+    * MFEM caches geometric factors on the mesh keyed by IntegrationRule
+    * pointer, and requires each rule to outlive its cache entry. The rules
+    * belong to this Case's RuleBook but the mesh is borrowed and may outlive
+    * the Case; a later rule allocated at a freed address would otherwise hit
+    * a stale entry (wrong factors, NaNs).
+    */
+   ~Case();
+
    /// @return The mixed spaces (e.g. to build a BoundaryConditions over).
    MixedSpaces& Spaces() { return spaces_; }
 

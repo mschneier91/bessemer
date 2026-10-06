@@ -5,12 +5,13 @@
 
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
-#include "mesh/periodic_box.hpp"
+#include "mesh/case_mesh.hpp"
 #include "solver/case.hpp"
 #include "util/device.hpp"
 #include "mfem.hpp"
 
 #include <iostream>
+#include <memory>
 
 using namespace mfem;
 
@@ -31,8 +32,9 @@ int main(int argc, char* argv[])
    const incns::Parameters params = incns::Parameters::LoadYAML(argv[1]);
    incns::ConfigureDevice(params.device);
 
-   Mesh serial = incns::MakeBoxMesh(params.mesh);
-   ParMesh mesh(MPI_COMM_WORLD, serial);
+   // The one mesh factory: nonconforming-ready when params.amr is enabled.
+   std::unique_ptr<ParMesh> pmesh = incns::MakeCaseMesh(params);
+   ParMesh& mesh = *pmesh;
 
    incns::Case flow_case(mesh, params);
    auto u0 = incns::MakeInitialVelocity(params);

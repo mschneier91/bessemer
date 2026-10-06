@@ -105,6 +105,10 @@ void StokesTimeIntegrator::SetInitialVelocity(VectorCoefficient& u0)
 
    Vector u_true(spaces_.Velocity().GetTrueVSize());
    u_.GetTrueDofs(u_true);
+   // Nonconforming (AMR) mesh: ProjectCoefficient writes the nodal value at
+   // hanging nodes, not the constrained interpolant -- make u_ conforming
+   // (P R u). Conforming meshes skip it to stay bitwise unchanged.
+   if (!spaces_.Velocity().Conforming()) { u_.SetFromTrueDofs(u_true); }
    hist_.clear();
    hist_times_.clear();
    hist_.push_front(std::move(u_true));

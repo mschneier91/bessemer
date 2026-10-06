@@ -2,6 +2,8 @@
 # test never edits it to run a case. Sprint 1.1 seeds it with mesh + spaces.
 add_library(incns STATIC
   mesh/periodic_box.cpp
+  mesh/case_mesh.cpp
+  amr/amr_parameters.cpp
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp

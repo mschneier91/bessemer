@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "amr/amr_parameters.hpp"
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
 #include "operators/convection.hpp" // ConvectiveForm
@@ -113,6 +114,9 @@ struct Parameters
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;
+
+   /// Adaptive mesh refinement (deck section `amr:`; off by default).
+   AmrParameters amr;
 
    // --- time integration ------------------------------------------------------
    double dt = 1e-2;     ///< Fixed step size / adaptive initial guess.

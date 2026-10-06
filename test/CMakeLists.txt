@@ -113,6 +113,8 @@ incns_add_mpi_test(nullspace_test nullspace_test.cpp)
 incns_add_mpi_test(mixed_poisson_test mixed_poisson_test.cpp)
 incns_add_mpi_test(lp_surrogate_test lp_surrogate_test.cpp)
 incns_add_mpi_test(cahouet_chabard_test cahouet_chabard_test.cpp)
+# AMR (amr_spec.md): the solver on nonconforming meshes, then the AMR modules.
+incns_add_mpi_test(nc_stokes_test nc_stokes_test.cpp)
 incns_add_mpi_test(cc_robustness_test cc_robustness_test.cpp
   INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
 target_link_libraries(cc_robustness_test PRIVATE yaml-cpp::yaml-cpp)

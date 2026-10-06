@@ -7,12 +7,13 @@
 
 #include "config/parameters.hpp"
 #include "exact/tgv2d.hpp"
-#include "mesh/periodic_box.hpp"
+#include "mesh/case_mesh.hpp"
 #include "solver/case.hpp"
 #include "util/device.hpp"
 #include "mfem.hpp"
 
 #include <iostream>
+#include <memory>
 
 using namespace mfem;
 
@@ -32,8 +33,9 @@ int main(int argc, char* argv[])
    params.Normalize(); // dimensionless inputs: records Re, no rescaling
    incns::ConfigureDevice(params.device);
 
-   Mesh serial = incns::MakeBoxMesh(params.mesh);
-   ParMesh mesh(MPI_COMM_WORLD, serial);
+   // The one mesh factory: nonconforming-ready when params.amr is enabled.
+   std::unique_ptr<ParMesh> pmesh = incns::MakeCaseMesh(params);
+   ParMesh& mesh = *pmesh;
 
    incns::Case tgv(mesh, params);
    const double nu = params.nu;

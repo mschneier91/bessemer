@@ -251,6 +251,29 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(output, "interval", p.output.interval);
    Maybe(output, "diagnostics", p.output.diagnostics);
 
+   const YAML::Node amr = root["amr"];
+   Maybe(amr, "enabled", p.amr.enabled);
+   Maybe(amr, "interval", p.amr.interval);
+   Maybe(amr, "initial_passes", p.amr.initial_passes);
+   Maybe(amr, "passes_per_event", p.amr.passes_per_event);
+   Maybe(amr, "anisotropic", p.amr.anisotropic);
+   Maybe(amr, "aniso_ratio", p.amr.aniso_ratio);
+   if (amr && amr["threshold_mode"])
+   {
+      const std::string tm = amr["threshold_mode"].as<std::string>();
+      if (tm == "relative") { p.amr.threshold_mode = AmrThreshold::Relative; }
+      else if (tm == "absolute") { p.amr.threshold_mode = AmrThreshold::Absolute; }
+      else { MFEM_ABORT("parameters: unknown amr.threshold_mode '" << tm << "'"); }
+   }
+   Maybe(amr, "theta", p.amr.theta);
+   Maybe(amr, "tolerance", p.amr.tolerance);
+   Maybe(amr, "min_size", p.amr.min_size);
+   Maybe(amr, "max_elements", p.amr.max_elements);
+   Maybe(amr, "nc_limit", p.amr.nc_limit);
+   Maybe(amr, "rebalance", p.amr.rebalance);
+   Maybe(amr, "project_history", p.amr.project_history);
+   Maybe(amr, "write_indicator", p.amr.write_indicator);
+
    const YAML::Node chk = root["checkpoint"];
    Maybe(chk, "enabled", p.checkpoint.enabled);
    Maybe(chk, "path", p.checkpoint.path);
@@ -263,6 +286,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
    MFEM_VERIFY(p.dt > 0.0 && p.t_final > 0.0, "parameters: bad time settings");
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
+   p.amr.Validate();
    p.Normalize();
    return p;
 }
@@ -289,6 +313,7 @@ void Parameters::Normalize()
 
       const double U_over_L = nondim.U_ref / nondim.L_ref;
       for (int d = 0; d < 3; ++d) { mesh.lengths[d] /= nondim.L_ref; }
+      amr.min_size /= nondim.L_ref;
       dt *= U_over_L;
       t_final *= U_over_L;
       nu = 1.0 / nondim.Re;

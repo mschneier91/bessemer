@@ -21,6 +21,14 @@ Case::Case(ParMesh& mesh, const Parameters& params)
                "mesh and the case (LoadYAML does it automatically)");
 }
 
+Case::~Case()
+{
+   diag_log_.reset();
+   output_.reset();
+   integrator_.reset(); // every operator holding a factor pointer goes first
+   mesh_.DeleteGeometricFactors();
+}
+
 void Case::SetBoundaryConditions(BoundaryConditions& bc)
 {
    MFEM_VERIFY(!integrator_, "case: BCs must be set before stepping");

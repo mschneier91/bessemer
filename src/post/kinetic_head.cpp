@@ -230,15 +230,27 @@ KineticHeadInterpolator::KineticHeadInterpolator(
 void KineticHeadInterpolator::Interpolate(const ParGridFunction& u,
       ParGridFunction& ke) const
 {
-   if (!device_path_)
+   if (!device_path_) { InterpolateHost(u, ke); }
+   else
    {
-      InterpolateHost(u, ke);
-      return;
+      u_restr_->Mult(u, u_e_);
+      if (dim_ == 2) { kinetic_head::Eval2D(ne_, d1d_, q1d_, B_, u_e_, ke_e_); }
+      else { kinetic_head::Eval3D(ne_, d1d_, q1d_, B_, u_e_, ke_e_); }
+      p_restr_->MultLeftInverse(ke_e_, ke);
    }
-   u_restr_->Mult(u, u_e_);
-   if (dim_ == 2) { kinetic_head::Eval2D(ne_, d1d_, q1d_, B_, u_e_, ke_e_); }
-   else { kinetic_head::Eval3D(ne_, d1d_, q1d_, B_, u_e_, ke_e_); }
-   p_restr_->MultLeftInverse(ke_e_, ke);
+   // Nonconforming (AMR) mesh: both paths write the nodal value of 1/2|u|^2 at
+   // hanging pressure nodes, which is not the constrained interpolant of the
+   // master values -- so ke would not lie in the conforming space. Restrict to
+   // true dofs and prolongate back (P R ke). A no-op on conforming meshes,
+   // which skip it to stay bitwise unchanged.
+   const ParFiniteElementSpace& pfes = *ke.ParFESpace();
+   if (!pfes.Conforming())
+   {
+      ke_true_.SetSize(pfes.GetTrueVSize());
+      ke_true_.UseDevice(true);
+      ke.GetTrueDofs(ke_true_);
+      ke.SetFromTrueDofs(ke_true_);
+   }
 }
 
 void KineticHeadInterpolator::InterpolateHost(const ParGridFunction& u,
