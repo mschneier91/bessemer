@@ -112,6 +112,13 @@ public:
     */
    bool PressureNullspaceExists() const;
 
+   /**
+    * @brief Rebuild the dof-dependent data after the velocity space changed
+    *        (adaptive refinement): the essential true-dof list. The attribute
+    *        classification is topological and survives refinement unchanged.
+    */
+   void Update() { UpdateEssentialTrueDofs(); }
+
 private:
    /// Recompute the essential true-dof list from the Dirichlet markers.
    void UpdateEssentialTrueDofs();

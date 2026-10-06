@@ -6,6 +6,7 @@ add_library(incns STATIC
   amr/amr_parameters.cpp
   amr/gradient_indicator.cpp
   amr/refinement_marker.cpp
+  amr/mesh_adapter.cpp
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp

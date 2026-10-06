@@ -39,4 +39,20 @@ MixedSpaces::MixedSpaces(ParMesh& mesh, int order_u, int order_p)
    block_true_offsets_.PartialSum();
 }
 
+void MixedSpaces::Update()
+{
+   vfes_->Update();
+   pfes_->Update();
+   block_true_offsets_[0] = 0;
+   block_true_offsets_[1] = vfes_->GetTrueVSize();
+   block_true_offsets_[2] = pfes_->GetTrueVSize();
+   block_true_offsets_.PartialSum();
+}
+
+void MixedSpaces::UpdatesFinished()
+{
+   vfes_->UpdatesFinished();
+   pfes_->UpdatesFinished();
+}
+
 } // namespace incns

@@ -59,6 +59,19 @@ public:
     */
    const mfem::Array<int>& BlockTrueOffsets() const { return block_true_offsets_; }
 
+   /**
+    * @brief After the mesh changed (adaptive refinement or rebalancing):
+    *        update both spaces and recompute the block offsets.
+    *
+    * MFEM then holds a transfer operator per space: call Update() on every
+    * GridFunction living on these spaces BEFORE UpdatesFinished(), and after
+    * EACH mesh change (refinement and rebalancing are two changes).
+    */
+   void Update();
+
+   /// Release the spaces' transfer operators (every GridFunction updated).
+   void UpdatesFinished();
+
    /// @return Global velocity true-dof count (collective reduction).
    HYPRE_BigInt GlobalVelocityTDofs() const { return vfes_->GlobalTrueVSize(); }
    /// @return Global pressure true-dof count (collective reduction).
