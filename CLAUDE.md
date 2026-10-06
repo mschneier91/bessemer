@@ -584,8 +584,9 @@ What landed (`physics.convective_form: rotational`, NSE only):
   conditions act on P, not p, in this mode — a modelling difference, not a bug.
 - Tests: `rotational_convection_test` (cut to two self-contained tests 2026-10-05, human
   decision -- MFEM + the integrator header only: PA apply and legacy full assembly vs an
-  MFEM-only `VectorMassIntegrator` reference before/after `UpdateVorticity`, and
-  specialization + bitwise determinism; the transpose, diagonal, component-EA and LOR checks
+  MFEM-only `VectorMassIntegrator` reference before/after `UpdateVorticity` (p ≤ 3 only:
+  the dense reference costs ~p⁹ and was very slow at p = 4, 5 on a GPU node), and
+  specialization + bitwise determinism (p = 1..5); the transpose, diagonal, component-EA and LOR checks
   of the spec's Part A were dropped, so `VectorRotationalConvectionComponentIntegrator::
   AssembleEA` is now UNTESTED) / `point_block_jacobi_test` (spec Part B);
   `nse_mms_test` Rotational* (temporal order vs a same-mesh fine-dt reference — the MMS is

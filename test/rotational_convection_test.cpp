@@ -165,7 +165,7 @@ std::string Label(int dim, int p)
 
 // Right values: the integrator computes alpha ((curl w) x u, v).
 //
-// For dim = 2, 3 and p = 1..5, at the order-3p Gauss-Legendre rule the solver
+// For dim = 2, 3 and p = 1..3, at the order-3p Gauss-Legendre rule the solver
 // uses, on a curved 3x3 (2D) or 2x2x2 (3D) mesh split across the ranks, with
 // x a random true-dof vector:
 //  1. Reference: y_ref = R x, with R assembled by MFEM's own
@@ -179,15 +179,15 @@ std::string Label(int dim, int p)
 //  4. Update: w is replaced by a second field and UpdateVorticity() is called
 //     on the already-assembled PA operator, as every time step does; N x
 //     equals the reference rebuilt for the new w.
-// Cost: steps 1 and 3 assemble dense element matrices on the host. That is
-// almost the whole runtime (2.8 s at np 1 on a desktop CPU, nearly all of it
-// 3D p = 4, 5) and does not get faster on a GPU; the PA applies take under
-// a millisecond.
+// Why p <= 3: steps 1 and 3 assemble dense element matrices, whose cost grows
+// like p^9 in 3D (p = 4 and 5 took 0.5 s and 2.3 s on a desktop CPU, and far
+// longer on a GPU node), while the PA applies take under a millisecond. The
+// p = 4, 5 kernels still run in SpecializedAndDeterministic.
 TEST(RotationalConvection, MatchesMfemReference)
 {
    for (int dim : {2, 3})
    {
-      for (int p = 1; p <= 5; ++p)
+      for (int p = 1; p <= 3; ++p)
       {
          SCOPED_TRACE(Label(dim, p));
          Problem pb(dim, p);
@@ -233,12 +233,13 @@ TEST(RotationalConvection, MatchesMfemReference)
    }
 }
 
-// Correct GPU execution. For the same dim, p, rule and mesh as above:
+// Correct GPU execution. For dim = 2, 3 and every specialized order p = 1..5,
+// with the same rule and mesh as above:
 //  1. Specialized: the kernel dispatch table has a compile-time
 //     specialization for (dim, D1D = p + 1, Q1D = the order-3p rule's points
 //     per direction). Without one the kernels run a generic version sized for
 //     the largest supported order: still correct, so no value check notices,
-//     but ~2.5x slower.
+//     but slower (~2.5x on a CPU, worse on a GPU).
 //  2. Deterministic: 100 repeats of UpdateVorticity() + apply, with the same w
 //     and x, are bitwise identical to the first apply. On a GPU, a missing
 //     MFEM_SYNC_THREAD or a shared-memory race makes results vary from run to
