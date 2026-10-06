@@ -562,9 +562,10 @@ What landed (`physics.convective_form: rotational`, NSE only):
   valid, and B2/B3 test it with Gauss rules. Kernel specializations therefore cover ONLY
   that rule for p = 1..5: (D1D, Q1D) = (2,2), (3,4), (4,5), (5,7), (6,8), generated from
   Q1D = (3p+2)/2; every other size runs the generic fallback (correct, ~2.5× slower;
-  `MFEM_REPORT_KERNELS=1` lists fallbacks). `RotConv.DealiasedRuleIsSpecialized` asks the
-  dispatch table whether the solver's actual rule is covered, so changing the dealiasing
-  order without the list fails a test instead of silently slowing runs down.
+  `MFEM_REPORT_KERNELS=1` lists fallbacks). `RotationalConvection.SpecializedAndDeterministic`
+  asks the dispatch table whether the order-3p GL rule is covered for p = 1..5. It hard-codes
+  3p (the test is self-contained, so it does not ask `Convection::DealiasedOrder`): if the
+  dealiasing order changes, update that test and the specialization list together.
 - **Pressure: decision 3(a) below is what was implemented.** The solve yields the Bernoulli
   head P; `Pressure()` returns static `p = P − I(½|u|²)` (nodal interpolant, mean-normalized
   with the null space); P stays internal as the Krylov warm start. `I(½|u|²)` is computed
@@ -573,7 +574,12 @@ What landed (`physics.convective_form: rotational`, NSE only):
   p = 6). Every step, NOT lazily: `OutputWriter` holds `Pressure()` by reference and reads it
   at each save, so a lazily-updated field would be written stale. Do-nothing OUTFLOW
   conditions act on P, not p, in this mode — a modelling difference, not a bug.
-- Tests: `rotational_convection_test` / `point_block_jacobi_test` (spec Parts A/B);
+- Tests: `rotational_convection_test` (cut to two self-contained tests 2026-10-05, human
+  decision -- MFEM + the integrator header only: PA apply and legacy full assembly vs an
+  MFEM-only `VectorMassIntegrator` reference before/after `UpdateVorticity`, and
+  specialization + bitwise determinism; the transpose, diagonal, component-EA and LOR checks
+  of the spec's Part A were dropped, so `VectorRotationalConvectionComponentIntegrator::
+  AssembleEA` is now UNTESTED) / `point_block_jacobi_test` (spec Part B);
   `nse_mms_test` Rotational* (temporal order vs a same-mesh fine-dt reference — the MMS is
   NOT spatially exact in this form, P is outside the pressure space — at ν = 0.05 so a
   starter defect is not viscously damped; all velocity PCs × both Schur paths agree; static
@@ -1037,8 +1043,8 @@ fine end and the order assert fails for the wrong reason.
 
   Steps: `cmake --preset cuda && cmake --build --preset cuda` (clean, `-Werror`); then the
   fast tier with **≥1 GPU per rank** (4 GPUs for np4 — see Environment & build), paying
-  particular attention to `rotational_convection_test` (its `A2_DeterminismGpu` runs ONLY
-  on a GPU and is skipped everywhere else), `point_block_jacobi_test`, `grad_div_integrator_test`,
+  particular attention to `rotational_convection_test` (its determinism check is only
+  meaningful on a GPU; on a CPU it always holds), `point_block_jacobi_test`, `grad_div_integrator_test`,
   `nse_mms_test`, `tgv_nse_test`. GPU runs need human approval, and on a cluster the batch
   script is drafted, not submitted (Guardrails). When it is green, record the result here
   and delete this item.
