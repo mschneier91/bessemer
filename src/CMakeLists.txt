@@ -5,6 +5,7 @@ add_library(incns STATIC
   mesh/case_mesh.cpp
   amr/amr_parameters.cpp
   amr/gradient_indicator.cpp
+  amr/refinement_marker.cpp
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp
