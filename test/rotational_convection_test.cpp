@@ -1,16 +1,9 @@
 // VectorRotationalConvectionIntegrator, N(w): (u, v) -> alpha ((curl w) x u, v).
-// Two checks, at the order-3p Gauss-Legendre rule the solver dealiases the
-// term with, p = 1..5, on curved, partitioned 2D and 3D meshes. They run on
+// Two tests, described above each TEST: right values (MatchesMfemReference)
+// and correct GPU execution (SpecializedAndDeterministic). Both run on
 // whatever device the test main configures, so INCNS_DEVICE=cuda puts the
-// partial-assembly kernels on a GPU:
-//  - MatchesMfemReference: right values. The partial-assembly apply and the
-//    legacy full assembly equal a reference built from MFEM classes only, and
-//    the apply still does after the lagged velocity changes.
-//  - SpecializedAndDeterministic: runs as intended on a GPU. Every rule hits a
-//    compile-time-specialized kernel, and repeated setups + applies are
-//    bitwise identical (a missing MFEM_SYNC_THREAD or a shared-memory race
-//    shows up as run-to-run differences on a GPU; on a CPU it always holds).
-// Self-contained on purpose -- MFEM and the integrator header only.
+// partial-assembly kernels on a GPU. Self-contained on purpose -- MFEM and
+// the integrator header only.
 
 #include <gtest/gtest.h>
 
@@ -170,6 +163,26 @@ std::string Label(int dim, int p)
 
 } // namespace
 
+// Right values: the integrator computes alpha ((curl w) x u, v).
+//
+// For dim = 2, 3 and p = 1..5, at the order-3p Gauss-Legendre rule the solver
+// uses, on a curved 3x3 (2D) or 2x2x2 (3D) mesh split across the ranks, with
+// x a random true-dof vector:
+//  1. Reference: y_ref = R x, with R assembled by MFEM's own
+//     VectorMassIntegrator using the matrix coefficient alpha [curl w]_x
+//     (curl w from GridFunction::GetCurl). It shares no code with the
+//     integrator.
+//  2. Partial assembly: N x from the integrator's PA kernels -- the code that
+//     runs on the GPU -- equals y_ref to 1e-12 (relative, global norm).
+//  3. Full assembly: the integrator's legacy element matrices (the route
+//     MFEM's LOR assembly takes), assembled into a matrix, also give y_ref.
+//  4. Update: w is replaced by a second field and UpdateVorticity() is called
+//     on the already-assembled PA operator, as every time step does; N x
+//     equals the reference rebuilt for the new w.
+// Cost: steps 1 and 3 assemble dense element matrices on the host. That is
+// almost the whole runtime (2.8 s at np 1 on a desktop CPU, nearly all of it
+// 3D p = 4, 5) and does not get faster on a GPU; the PA applies take under
+// a millisecond.
 TEST(RotationalConvection, MatchesMfemReference)
 {
    for (int dim : {2, 3})
@@ -220,6 +233,17 @@ TEST(RotationalConvection, MatchesMfemReference)
    }
 }
 
+// Correct GPU execution. For the same dim, p, rule and mesh as above:
+//  1. Specialized: the kernel dispatch table has a compile-time
+//     specialization for (dim, D1D = p + 1, Q1D = the order-3p rule's points
+//     per direction). Without one the kernels run a generic version sized for
+//     the largest supported order: still correct, so no value check notices,
+//     but ~2.5x slower.
+//  2. Deterministic: 100 repeats of UpdateVorticity() + apply, with the same w
+//     and x, are bitwise identical to the first apply. On a GPU, a missing
+//     MFEM_SYNC_THREAD or a shared-memory race makes results vary from run to
+//     run, which a single comparison at 1e-12 can miss. On a CPU this always
+//     holds.
 TEST(RotationalConvection, SpecializedAndDeterministic)
 {
    for (int dim : {2, 3})
@@ -227,8 +251,6 @@ TEST(RotationalConvection, SpecializedAndDeterministic)
       for (int p = 1; p <= 5; ++p)
       {
          SCOPED_TRACE(Label(dim, p));
-         // Without a specialization the kernels fall back to a generic
-         // version sized for the largest supported order (~2.5x slower).
          const int q1d = IntRules.Get(Geometry::SEGMENT, 3 * p).GetNPoints();
          EXPECT_TRUE(VectorRotationalConvectionIntegrator::HasSpecialization(
                         dim, p + 1, q1d)) << "q1d=" << q1d;
