@@ -53,7 +53,8 @@ enum class RotationVelocityPC
    /// rotation included) applied once. Cheapest.
    PbjOnly,
    /// GMRES on the full velocity block preconditioned by point-block Jacobi,
-   /// loose tolerance -- for runs with a large volume at rotation number > 1.
+   /// loose tolerance -- for runs where |omega| dt exceeds about 1 over a
+   /// sizable part of the domain.
    PbjKrylov
 };
 

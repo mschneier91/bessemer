@@ -4,9 +4,8 @@
 //     VectorConvectionNLFIntegrator (shares no code with the new kernels),
 //     plus the sign-flipped residual proving u x omega would be caught;
 //  A2 operator properties: skew-symmetry/energy, transpose, diagonal, update
-//     semantics on a prebuilt operator, rotation-number diagnostic, GPU
-//     determinism;
-//  A3 serial versus parallel (y^T N x, x^T N x = 0, diagnostics).
+//     semantics on a prebuilt operator, GPU determinism;
+//  A3 serial versus parallel (y^T N x, x^T N x = 0).
 // Sweep: dim {2,3} x p {1..4} x rule {R1 default, R2 GLL collocated, R3 Gauss
 // 3/2, R4 Gauss p+1} x mesh {M2 curved, M3 periodic}. Every case runs on a
 // partitioned ParMesh, so np = 2, 4 also exercise shared dofs. Repo
@@ -31,7 +30,6 @@
 using namespace mfem;
 using incns::Rule1D;
 using incns::RuleBook;
-using incns::RotationNumberStats;
 using incns::VectorRotationalConvectionIntegrator;
 
 namespace
@@ -479,42 +477,6 @@ TEST(RotConv, A2_UpdateSemantics)
    }
 }
 
-// A2 -- rotation-number diagnostic. A rigid rotation has curl w_h = 2 Omega
-// exactly on any mesh of order <= p (P4), so with sigma = 2: max mu = |Omega|
-// and the volume fraction is 1 below |Omega| and 0 above. M2 only: the
-// rigid rotation is not periodic, so M3 would not represent it exactly.
-TEST(RotConv, A2_RotationNumber)
-{
-   RuleBook rules;
-   for (const Case& c : Sweep(false))
-   {
-      SCOPED_TRACE(c.Label());
-      g_dim = c.dim;
-      g_periodic = (c.mesh == MeshKind::M3);
-      Mesh serial = MakeMesh(c);
-      ParMesh mesh(MPI_COMM_WORLD, serial);
-      H1_FECollection fec(c.p, c.dim);
-      ParFiniteElementSpace fes(&mesh, &fec, c.dim, Ordering::byNODES);
-      const IntegrationRule& ir = PickRule(rules, c, mesh, *fes.GetTypicalFE());
-      ParGridFunction w(&fes);
-      Vector W;
-      Interpolate(w, rigid_fn, W);
-      Array<int> empty;
-      NForm n(fes, w, 1.7, ir, empty);
-
-      const real_t om = (c.dim == 2)
-                        ? kOmega2
-                        : std::sqrt(kOmega3[0] * kOmega3[0] + kOmega3[1] * kOmega3[1] +
-                                    kOmega3[2] * kOmega3[2]);
-      const RotationNumberStats lo = n.rot->GetRotationNumberStats(2.0, 0.9 * om);
-      const RotationNumberStats hi = n.rot->GetRotationNumberStats(2.0, 1.1 * om);
-      EXPECT_NEAR(lo.max_mu, om, 1e-12 * om);
-      EXPECT_NEAR(lo.vol_fraction, 1.0, 1e-12);
-      EXPECT_EQ(hi.vol_fraction, 0.0);
-      EXPECT_EQ(lo.threshold, 0.9 * om);
-   }
-}
-
 // A2 -- determinism (GPU only): 100 applies of the same input are bitwise
 // identical; a missing MFEM_SYNC_THREAD or a shared-memory race shows up here.
 TEST(RotConv, A2_DeterminismGpu)
@@ -551,9 +513,9 @@ TEST(RotConv, A2_DeterminismGpu)
    }
 }
 
-// A3 -- serial versus parallel: y^T N x and the diagnostics on a partitioned
-// copy of the same global mesh equal the serial values (stale shared dofs in
-// w, wrong reductions), and P^T N P stays skew across ranks.
+// A3 -- serial versus parallel: y^T N x on a partitioned copy of the same
+// global mesh equals the serial value (stale shared dofs in w, wrong
+// reductions), and P^T N P stays skew across ranks.
 TEST(RotConv, A3_SerialVersusParallel)
 {
    RuleBook rules;
@@ -586,9 +548,6 @@ TEST(RotConv, A3_SerialVersusParallel)
       Vector sNx(sx.Size());
       sop->Mult(sx, sNx);
       const real_t yNx_ser = sy * sNx;
-      const RotationNumberStats st_ser0 = srot->GetRotationNumberStats(2.0);
-      const RotationNumberStats st_ser = srot->GetRotationNumberStats(
-                                            2.0, 0.5 * st_ser0.max_mu);
 
       // Parallel.
       ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -603,13 +562,6 @@ TEST(RotConv, A3_SerialVersusParallel)
       n.op->Mult(X, NX);
       EXPECT_NEAR(Dot(Y, NX), yNx_ser, 1e-12 * std::fabs(yNx_ser));
       EXPECT_LE(std::fabs(Dot(X, NX)), 1e-12 * Norm(X) * Norm(NX));
-
-      const RotationNumberStats st = n.rot->GetRotationNumberStats(
-                                        2.0, 0.5 * st_ser0.max_mu);
-      EXPECT_NEAR(st.max_mu, st_ser.max_mu, 1e-12 * st_ser.max_mu);
-      EXPECT_NEAR(st.vol_fraction, st_ser.vol_fraction, 1e-12);
-      EXPECT_GT(st_ser.vol_fraction, 0.0); // threshold actually splits the domain
-      EXPECT_LT(st_ser.vol_fraction, 1.0);
    }
 }
 

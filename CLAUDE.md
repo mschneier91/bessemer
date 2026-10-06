@@ -513,7 +513,11 @@ gated on upstream MFEM exactly as recorded below (the TRAP still applies to it).
 What landed (`physics.convective_form: rotational`, NSE only):
 - `src/operators/rotational_convection.{hpp,cpp}` — `VectorRotationalConvectionIntegrator`,
   PA on quads/hexes, skew (Nᵀ = −N, exactly zero diagonal), `UpdateVorticity()` per step
-  (no reassembly), plus `AddNodalSkewPA` and `GetRotationNumberStats` (μ = |ω|/σ).
+  (no reassembly), plus `AddNodalSkewPA`. The spec's rotation-number diagnostic
+  (`GetRotationNumberStats`, μ = |ω|/σ) was built and then REMOVED (human decision
+  2026-10-05): its only job was deciding when to switch from the symmetric PC to
+  point-block Jacobi, and the planned velocity PCs are PBJ or p-multigrid. Tests and the
+  bench that need max|ω| compute it with MFEM's `GridFunction::GetCurl`.
 - `src/precond/point_block_jacobi.{hpp,cpp}` — `PointBlockJacobi`: inverts the nodal
   dim×dim blocks `diag(d) + [s]×` on the device, in CLOSED FORM into a persistent buffer,
   and applies them in ONE fused kernel straight on the true-dof layout (2026-10-05; it
@@ -577,8 +581,7 @@ What landed (`physics.convective_form: rotational`, NSE only):
   temporal order, energy harness — same bounds as the convective form); `deck_test`.
   **The TGV cannot see errors in N itself** (its convective term is a pure gradient, absorbed
   by the pressure) — the MMS is what pins N.
-- Not done (follow-ups): logging `GetRotationNumberStats` during runs (the spec's §8 monitor
-  for when to switch `rotation_pc`); a GPU run (see **PENDING GPU VALIDATION** under Test
+- Not done (follow-ups): a GPU run (see **PENDING GPU VALIDATION** under Test
   tiers → Conditional checks); iteration baselines for the
   rotational configurations on a real bluff-body case.
 
@@ -1016,8 +1019,8 @@ fine end and the order assert fails for the wrong reason.
   2026-10-02).** These device kernels were written and verified on the desktop (CPU build
   + debug device) only; **none has ever executed on a GPU**, and the debug device cannot
   catch a host-compiled kernel (see Coding conventions):
-  - `src/operators/rotational_convection.cpp` — setup, apply, nodal-skew and
-    rotation-number kernels (incl. the shared-memory tiles sized by `DofQuadLimits`);
+  - `src/operators/rotational_convection.cpp` — setup, apply and nodal-skew kernels
+    (incl. the shared-memory tiles sized by `DofQuadLimits`);
   - `src/precond/point_block_jacobi.cpp` — essential-dof rule, closed-form block inverse,
     fused block apply (rewritten 2026-10-05). No `#error` nvcc guard (by decision), so
     confirm from the build log that it is compiled by nvcc;

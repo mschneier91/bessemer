@@ -344,6 +344,29 @@ TEST(PointBlockJacobi, B2_BlocksMatchLegacyReference)
 namespace
 {
 
+// max |curl w| over the points of ir in every element, global over ranks,
+// from MFEM's GridFunction::GetCurl (2D: the scalar vorticity).
+real_t MaxVorticity(const ParGridFunction& w, const IntegrationRule& ir)
+{
+   ParMesh& mesh = *w.ParFESpace()->GetParMesh();
+   w.HostRead();
+   Vector curl;
+   real_t mx = 0.0;
+   for (int e = 0; e < mesh.GetNE(); ++e)
+   {
+      ElementTransformation& T = *mesh.GetElementTransformation(e);
+      for (int q = 0; q < ir.GetNPoints(); ++q)
+      {
+         T.SetIntPoint(&ir.IntPoint(q));
+         w.GetCurl(T, curl);
+         mx = std::max(mx, curl.Norml2());
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &mx, 1, MPITypeMap<real_t>::mpi_type, MPI_MAX,
+                 mesh.GetComm());
+   return mx;
+}
+
 // B3's system on a given communicator: A = sigma M + nu K + N, Dirichlet on
 // the whole boundary, PA, preconditioned GMRES(50) to 1e-10. Returns the
 // iteration counts at max|alpha omega| dt = 0, 100 (field 1) and 100 after
@@ -415,20 +438,17 @@ B3Counts RunB3(MPI_Comm comm, int dim)
       gmres.Mult(b, x);
       return gmres.GetConverged() ? gmres.GetNumIterations() : -1;
    };
-   // alpha giving max|alpha omega| dt = 100: the rotation number at alpha = 1
-   // with sigma = 1/dt is max|omega| dt.
-   auto alpha100 = [&]()
+   // alpha giving max|alpha omega| dt = 100 for the lagged field w.
+   auto alpha100 = [&](const ParGridFunction & w)
    {
-      rot->SetAlpha(1.0);
-      rot->UpdateVorticity();
-      return 100.0 / rot->GetRotationNumberStats(1.0 / dt).max_mu;
+      return 100.0 / (MaxVorticity(w, ir) * dt);
    };
 
    B3Counts c;
    c.zero = solve(0.0);
-   c.rot1 = solve(alpha100());
+   c.rot1 = solve(alpha100(w1));
    rot->SetLaggedVelocity(w2);
-   c.rot2 = solve(alpha100());
+   c.rot2 = solve(alpha100(w2));
    return c;
 }
 

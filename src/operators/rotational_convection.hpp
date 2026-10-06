@@ -15,27 +15,6 @@ namespace incns
 {
 
 /**
- * @brief What VectorRotationalConvectionIntegrator::GetRotationNumberStats()
- *        returns: where, and how strongly, the rotation term competes with
- *        the mass term of the velocity block.
- *
- * The rotation number at a quadrature point q is
- * @f$ \mu_q = |\omega_q| / \sigma @f$: the vorticity magnitude of the lagged
- * velocity there, divided by the velocity block's mass coefficient. See
- * GetRotationNumberStats() for the full definition and how to read it.
- */
-struct RotationNumberStats
-{
-   /// Largest mu_q over all quadrature points on all MPI ranks.
-   mfem::real_t max_mu;
-   /// Fraction of the domain volume (quadrature-weighted) where mu_q exceeds
-   /// @ref threshold, over all MPI ranks; in [0, 1].
-   mfem::real_t vol_fraction;
-   /// The threshold @ref vol_fraction was computed at.
-   mfem::real_t threshold;
-};
-
-/**
  * @brief @f$ a(u, v) = \alpha ((\nabla\times w)\times u, v) @f$: the rotational
  *        convection term with the vorticity lagged on a given velocity @a w.
  *
@@ -156,66 +135,6 @@ public:
    void AddNodalSkewPA(mfem::Vector& s_e) const;
 
    /**
-    * @brief Rotation-number statistics: how strongly, and over how much of the
-    *        domain, the rotation term competes with the mass term.
-    *
-    * **Definition.** At every quadrature point q,
-    * @f$ \mu_q = |\omega_q| / \sigma @f$, where
-    *  - @f$ \omega_q = (\nabla\times w)(x_q) @f$ is the vorticity of the
-    *    lagged velocity w, taken from the current quadrature data (so call
-    *    UpdateVorticity() first if w has changed). In 3D @f$ |\omega| @f$ is
-    *    the Euclidean norm of the vorticity vector; in 2D the absolute value
-    *    of the scalar (out-of-plane) vorticity. alpha is divided out: mu
-    *    describes the flow, not the multiplier (scale by |alpha| yourself if
-    *    alpha != 1 matters to you).
-    *  - @f$ \sigma @f$ is the mass coefficient of the velocity block
-    *    @f$ A = \sigma M + \nu K + N @f$: for BDF-k, sigma = beta_0 / dt --
-    *    1/dt for backward Euler, 3/(2 dt) for BDF2 (so mu = (2/3)|omega| dt).
-    *
-    * **What it measures.** At one velocity node the mass and rotation terms
-    * form the block @f$ \sigma m (I + [\omega/\sigma]_\times) @f$ (m the
-    * node's mass), whose eigenvalues are @f$ \sigma m (1 \pm i\mu) @f$ (plus
-    * @f$ \sigma m @f$ in 3D). So mu is the size of the rotation term relative
-    * to the mass (time-derivative) term -- a rotational analogue of a Courant
-    * number: |omega| dt is twice the angle, in radians, that the local
-    * rotation turns the flow through in one step. Viscosity is not included:
-    * where nu K dominates the block, mu overstates the rotation's importance.
-    *
-    * **What it tells you.** A preconditioner that ignores N (scalar Jacobi,
-    * or AMG built on sigma M + nu K) sees eigenvalues spread along
-    * @f$ 1 \pm i\mu @f$:
-    *  - mu << 1 everywhere: N is a small perturbation and any velocity
-    *    preconditioner is fine.
-    *  - mu around 1 or above somewhere: iterations climb. A GMRES model for a
-    *    spectrum on @f$ 1 \pm i\mu @f$ gives roughly 1.6 extra iterations
-    *    per digit of residual reduction at mu = 0.5, 2.6 at 1, 5 at 2, 12 at 5
-    *    and 46 at 20 -- for the part of the residual that lives where mu is
-    *    that large. Point-block Jacobi, which inverts the node blocks with N
-    *    included, removes most of that cost.
-    * The number of affected eigenvalues equals the number of dofs in the
-    * high-mu region, so @ref RotationNumberStats::vol_fraction "vol_fraction"
-    * predicts the cost better than max_mu: a large max_mu confined to a few
-    * cells costs little, while mu > 1 over a few percent of the volume is
-    * when point-block Jacobi pays off.
-    *
-    * **Cost and use.** One device pass over the quadrature data, two device
-    * reductions and one MPI_Allreduce: cheap, but not meant for every Krylov
-    * iteration. Log it every few time steps next to the outer iteration
-    * counts.
-    *
-    * @param sigma     The velocity block's mass coefficient (> 0).
-    * @param threshold mu value for the volume fraction (default 1: rotation as
-    *                  strong as the mass term).
-    * @return max_mu (largest mu_q over all quadrature points and ranks),
-    *         vol_fraction (quadrature-weighted fraction of the domain volume,
-    *         sum of w_q detJ_q, where mu_q > threshold, over all ranks), and
-    *         the threshold echoed back.
-    * @pre AssemblePA() has run, and alpha != 0.
-    */
-   RotationNumberStats GetRotationNumberStats(mfem::real_t sigma,
-         mfem::real_t threshold = 1.0) const;
-
-   /**
     * @brief Quadrature data, for tests. Column-major layout:
     *        3D (Q1D, Q1D, Q1D, 3, NE) = alpha w_q detJ_q omega_c;
     *        2D (Q1D, Q1D, NE) = alpha w_q detJ_q omega.
@@ -266,14 +185,10 @@ private:
    const mfem::DofToQuad* maps_ = nullptr;  ///< Tensor maps (not owned).
    const mfem::GeometricFactors* geom_ = nullptr; ///< Jacobians (not owned).
    const mfem::IntegrationRule* pa_ir_ = nullptr; ///< Rule used at AssemblePA.
-   const mfem::Mesh* pa_mesh_ = nullptr;    ///< For MPI reductions.
+   const mfem::Mesh* pa_mesh_ = nullptr;    ///< Mesh at AssemblePA.
    const mfem::Operator* w_restr_ = nullptr; ///< Lexicographic restriction of w.
    mfem::Vector w_e_;                       ///< E-vector buffer for w (reused).
    mfem::Vector pa_data_;                   ///< d_q, layout above.
-   /// Diagnostic scratch: the rotation number mu_q per point (reused).
-   mutable mfem::Vector diag_tmp0_;
-   /// Diagnostic scratch: point volumes, then volume above threshold (reused).
-   mutable mfem::Vector diag_tmp1_;
 };
 
 /**

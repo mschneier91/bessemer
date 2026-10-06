@@ -17,6 +17,7 @@
 #include "precond/point_block_jacobi.hpp"
 #include "mfem.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +63,29 @@ Mesh MakeCurvedMesh(int n, int order) // M2 (spec App. B), 3D
    });
    return mesh;
 }
+
+// max |curl w| over the points of ir in every element, global over ranks,
+// from MFEM's GridFunction::GetCurl (2D: the scalar vorticity).
+real_t MaxVorticity(const ParGridFunction& w, const IntegrationRule& ir)
+{
+   ParMesh& mesh = *w.ParFESpace()->GetParMesh();
+   w.HostRead();
+   Vector curl;
+   real_t mx = 0.0;
+   for (int e = 0; e < mesh.GetNE(); ++e)
+   {
+      ElementTransformation& T = *mesh.GetElementTransformation(e);
+      for (int q = 0; q < ir.GetNPoints(); ++q)
+      {
+         T.SetIntPoint(&ir.IntPoint(q));
+         w.GetCurl(T, curl);
+         mx = std::max(mx, curl.Norml2());
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &mx, 1, MPITypeMap<real_t>::mpi_type, MPI_MAX,
+                 mesh.GetComm());
+   return mx;
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -89,17 +113,7 @@ int main(int argc, char** argv)
    w.SetFromTrueDofs(W);
    bgf.GetTrueDofs(b);
 
-   // max|omega| for alpha = 1 (sigma = 1 makes the rotation number |omega| dt).
-   real_t om_max;
-   {
-      ParBilinearForm nf(&fes);
-      auto* r = new VectorRotationalConvectionIntegrator(w, 1.0);
-      r->SetIntRule(&ir);
-      nf.AddDomainIntegrator(r);
-      nf.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      nf.Assemble();
-      om_max = r->GetRotationNumberStats(1.0).max_mu;
-   }
+   const real_t om_max = MaxVorticity(w, ir);
 
    ParLORDiscretization lor_disc(fes);
    ParGridFunction w_lor(&lor_disc.GetParFESpace());
