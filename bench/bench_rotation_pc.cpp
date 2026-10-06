@@ -2,8 +2,10 @@
 // rotation term (rotational_convection_pa_spec.md Table A2 setup).
 //
 // A = sigma M + nu K + N(omega), 3D, p = 4, curved mesh M2 (3x3x3), Dirichlet
-// on the whole boundary, Gauss p+1 rule, sigma = 1/dt (dt = 1). GMRES(50) to
-// 1e-10 on a hashed-noise right-hand side, preconditioned by:
+// on the whole boundary, each term at the solver's Gauss-Legendre rule (mass
+// order 2p, diffusion 2p + 2, N the dealiased 3p its kernels are specialized
+// for), sigma = 1/dt (dt = 1). GMRES(50) to 1e-10 on a hashed-noise
+// right-hand side, preconditioned by:
 //   jacobi    scalar Jacobi (sees nothing of N)
 //   lor       LOR-AMG on sigma M + nu K (today's LOR path; sees nothing of N)
 //   lor+N     LOR-AMG on sigma M + nu K + N (w copied to the LOR space)
@@ -13,6 +15,7 @@
 //
 // Usage: mpirun -np <=4 build/cpu/bench/bench_rotation_pc [p] [n]
 
+#include "operators/convection.hpp"
 #include "operators/rotational_convection.hpp"
 #include "precond/point_block_jacobi.hpp"
 #include "mfem.hpp"
@@ -99,7 +102,11 @@ int main(int argc, char** argv)
    ParMesh mesh(MPI_COMM_WORLD, serial);
    H1_FECollection fec(p, 3);
    ParFiniteElementSpace fes(&mesh, &fec, 3, Ordering::byNODES);
-   const IntegrationRule& ir = IntRules.Get(Geometry::CUBE, 2 * p + 1);
+   // The solver's rules (StokesOperator).
+   const IntegrationRule& ir_mass = IntRules.Get(Geometry::CUBE, 2 * p);
+   const IntegrationRule& ir_diff = IntRules.Get(Geometry::CUBE, 2 * p + 2);
+   const IntegrationRule& ir_rot =
+      IntRules.Get(Geometry::CUBE, incns::Convection::DealiasedOrder(p));
    Array<int> ess, bdr(mesh.bdr_attributes.Max());
    bdr = 1;
    fes.GetEssentialTrueDofs(bdr, ess);
@@ -113,7 +120,7 @@ int main(int argc, char** argv)
    w.SetFromTrueDofs(W);
    bgf.GetTrueDofs(b);
 
-   const real_t om_max = MaxVorticity(w, ir);
+   const real_t om_max = MaxVorticity(w, ir_rot);
 
    ParLORDiscretization lor_disc(fes);
    ParGridFunction w_lor(&lor_disc.GetParFESpace());
@@ -123,7 +130,7 @@ int main(int argc, char** argv)
    if (Mpi::Root())
    {
       std::printf("3D p=%d n=%d (%d^3 elements), %lld velocity dofs, curved M2, "
-                  "Dirichlet, Gauss p+1 rule, GMRES(50) to 1e-10, np=%d\n", p, n,
+                  "Dirichlet, solver rules, GMRES(50) to 1e-10, np=%d\n", p, n,
                   n, static_cast<long long>(fes.GlobalTrueVSize()),
                   Mpi::WorldSize());
       std::printf("%-12s %-10s %8s %8s %8s %8s\n", "nu dt/h^2", "|w| dt",
@@ -141,9 +148,9 @@ int main(int argc, char** argv)
          auto* m = new VectorMassIntegrator(sigma);
          auto* k = new VectorDiffusionIntegrator(nu);
          auto* r = new VectorRotationalConvectionIntegrator(w, alpha);
-         m->SetIntRule(&ir);
-         k->SetIntRule(&ir);
-         r->SetIntRule(&ir);
+         m->SetIntRule(&ir_mass);
+         k->SetIntRule(&ir_diff);
+         r->SetIntRule(&ir_rot);
          a.AddDomainIntegrator(m);
          a.AddDomainIntegrator(k);
          a.AddDomainIntegrator(r);

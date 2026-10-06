@@ -284,7 +284,8 @@ VectorRotationalConvectionIntegrator::RotConvSetupPA::Fallback(int dim, int,
 // (Convection::DealiasedOrder), ceil((3p+1)/2) = (3p+2)/2 points per
 // direction, so the list is generated from that formula: (D1D, Q1D) = (2,2),
 // (3,4), (4,5), (5,7), (6,8). Every other rule or order still runs, through
-// the generic fallback kernel (correct, ~2.5x slower measured);
+// the generic fallback kernel: correct, ~2.5x slower on a CPU (measured), and
+// much worse on a GPU, where its 32-point tiles make the setup kernel spill;
 // MFEM_REPORT_KERNELS=1 prints each fallback. HasSpecialization() lets a test
 // pin the solver's actual rule to this list.
 namespace

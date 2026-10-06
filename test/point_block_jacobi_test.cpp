@@ -1,16 +1,20 @@
 // PointBlockJacobi -- rotational_convection_pa_spec.md Part B tests (par.7.6):
-//  B1 exactness under GLL collocation (sigma M + N is then block diagonal),
-//     with no / all-component / component-0 essential dofs, byNODES + byVDIM;
-//  B2 nodal blocks vs a legacy-assembled reference built only from MFEM
-//     classes, Gauss rule, nu > 0 (B1 cannot see the AddNodalSkewPA
-//     contraction: under collocation the interpolation is the identity);
+//  B1 PBJ applies the exact inverse of every nodal block of a legacy-assembled
+//     reference, with no / all-component / component-0 essential dofs,
+//     byNODES + byVDIM;
+//  B2 the nodal blocks diag(d) + [s]_x themselves vs that reference;
 //  B3 GMRES iterations at max|omega| dt = 100 vs 0, after changing w, and the
 //     partitioned count vs a serial (MPI_COMM_SELF) solve of the same system.
+// Every operator is integrated at the solver's rules (SolverRules below), so
+// the rotation term always runs its compile-time-specialized kernels -- the
+// configuration that runs in production, on a GPU too. (The spec's B1 used
+// GLL collocation, where PBJ is exact; the solver never uses that rule for N.)
 // Mesh M2 (spec App. B), alpha = 1.7, sigma = 3 unless stated; gtest loops +
 // SCOPED_TRACE replace the spec's Catch2 GENERATE/CAPTURE.
 
 #include <gtest/gtest.h>
 
+#include "operators/convection.hpp"
 #include "operators/rotational_convection.hpp"
 #include "precond/point_block_jacobi.hpp"
 #include "quadrature/rule_book.hpp"
@@ -21,10 +25,10 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace mfem;
 using incns::PointBlockJacobi;
-using incns::Rule1D;
 using incns::RuleBook;
 using incns::VectorRotationalConvectionIntegrator;
 
@@ -127,11 +131,6 @@ Mesh MakeCurvedMesh(int dim, int n, int mesh_order)
    return mesh;
 }
 
-real_t Norm(const Vector& v)
-{
-   return std::sqrt(InnerProduct(MPI_COMM_WORLD, v, v));
-}
-
 void Interpolate(ParGridFunction& gf, void (*fn)(const Vector&, Vector&))
 {
    VectorFunctionCoefficient vc(gf.ParFESpace()->GetVDim(), fn);
@@ -180,16 +179,99 @@ real_t Entry(const SparseMatrix& S, int i, int j)
    return 0.0;
 }
 
+const real_t kAlpha = 1.7;
+
+// The rules StokesOperator integrates each velocity-block term with:
+// Gauss-Legendre of order 2p for the mass, 2p + dim - 1 for the diffusion and
+// Convection::DealiasedOrder(p) = 3p for the rotation term (the dealiased rule
+// its kernels are specialized for, p <= 5).
+struct SolverRules
+{
+   const IntegrationRule* mass;
+   const IntegrationRule* diffusion;
+   const IntegrationRule* rotation;
+};
+
+SolverRules GetSolverRules(RuleBook& rules, int dim, int p)
+{
+   const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+   return {&rules.Get(geom, 2 * p), &rules.Get(geom, 2 * p + dim - 1),
+           &rules.Get(geom, incns::Convection::DealiasedOrder(p))};
+}
+
+// sigma M + nu K + N assembled the legacy way from MFEM classes only, N as
+// VectorMassIntegrator(alpha [curl w]_x), each term at its solver rule. Its
+// GetDiag block (owned rows and columns) holds every nodal block.
+std::unique_ptr<HypreParMatrix> Reference(ParFiniteElementSpace& fes,
+      ParGridFunction& w, Coefficient& sigma,
+      Coefficient& nu, const SolverRules& r)
+{
+   w.HostRead();
+   CurlGridFunctionCoefficient curl(&w);
+   SkewFromOmega skew(fes.GetMesh()->Dimension(), curl, kAlpha);
+   ParBilinearForm legacy(&fes);
+   auto* m = new VectorMassIntegrator(sigma);
+   auto* k = new VectorDiffusionIntegrator(nu);
+   auto* n = new VectorMassIntegrator(skew);
+   m->SetIntRule(r.mass);
+   k->SetIntRule(r.diffusion);
+   n->SetIntRule(r.rotation);
+   legacy.AddDomainIntegrator(m);
+   legacy.AddDomainIntegrator(k);
+   legacy.AddDomainIntegrator(n);
+   legacy.Assemble();
+   legacy.Finalize();
+   return std::unique_ptr<HypreParMatrix>(legacy.ParallelAssemble());
+}
+
+// What the solver builds: the symmetric PA form sigma M + nu K (its diagonal
+// is what PBJ gets), the PA form of N, and PBJ on N's integrator.
+struct PbjSetup
+{
+   PbjSetup(ParFiniteElementSpace& fes, ParGridFunction& w, Coefficient& sigma,
+            Coefficient& nu, const SolverRules& r, const Array<int>& ess)
+      : sym(&fes), nform(&fes)
+   {
+      auto* m = new VectorMassIntegrator(sigma);
+      auto* k = new VectorDiffusionIntegrator(nu);
+      m->SetIntRule(r.mass);
+      k->SetIntRule(r.diffusion);
+      sym.AddDomainIntegrator(m);
+      sym.AddDomainIntegrator(k);
+      rot = new VectorRotationalConvectionIntegrator(w, kAlpha);
+      rot->SetIntRule(r.rotation);
+      nform.AddDomainIntegrator(rot);
+      for (ParBilinearForm* f : {&sym, &nform})
+      {
+         f->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+         f->Assemble();
+      }
+      pbj = std::make_unique<PointBlockJacobi>(fes, *rot, ess);
+      Vector diag(fes.GetTrueVSize());
+      sym.AssembleDiagonal(diag);
+      pbj->SetDiagonal(diag);
+      pbj->UpdateSkew();
+   }
+
+   ParBilinearForm sym;
+   ParBilinearForm nform;
+   VectorRotationalConvectionIntegrator* rot = nullptr; // owned by nform
+   std::unique_ptr<PointBlockJacobi> pbj;
+};
+
 } // namespace
 
-// B1 -- GLL collocation, nu = 0: the constrained PA operator sigma M + N is
-// exactly block diagonal (P7), so point-block Jacobi is its exact inverse.
-// Catches a transposed block, a wrong DenseTensor fill, byNODES gather/
-// scatter errors, the skew assembly path, and the essential-dof rule.
-TEST(PointBlockJacobi, B1_ExactUnderCollocation)
+// B1 -- PBJ applies the exact inverse of every nodal block of the solver's
+// operator sigma M + nu K + N, at the solver's rules. For a random r,
+// z = PBJ r; then at every node a, B_a z_a = r_a, where B_a is the dim x dim
+// block of the legacy reference (MFEM classes only) with, for an essential
+// component c, row and column c replaced by the identity (the constrained
+// operator's rows). Catches a wrong d or s, a transposed block, byNODES /
+// byVDIM indexing errors and the essential-dof rule.
+TEST(PointBlockJacobi, B1_InvertsReferenceBlocks)
 {
    RuleBook rules;
-   ConstantCoefficient sigma(3.0);
+   ConstantCoefficient sigma(3.0), nu(0.05);
    for (int dim : {2, 3})
       for (int p = 1; p <= 4; ++p)
          for (Ordering::Type ord : {Ordering::byNODES, Ordering::byVDIM})
@@ -205,46 +287,56 @@ TEST(PointBlockJacobi, B1_ExactUnderCollocation)
                ParMesh mesh(MPI_COMM_WORLD, serial);
                H1_FECollection fec(p, dim);
                ParFiniteElementSpace fes(&mesh, &fec, dim, ord);
-               const Geometry::Type geom =
-                  (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-               const IntegrationRule& gll =
-                  rules.Get(geom, 2 * p - 1, Rule1D::GaussLobatto);
+               const SolverRules sr = GetSolverRules(rules, dim, p);
                Array<int> ess;
                BoundaryDofs(fes, em, ess);
-
                ParGridFunction w(&fes);
                Interpolate(w, vel_fn);
-               ParBilinearForm a(&fes);
-               auto* mass = new VectorMassIntegrator(sigma);
-               mass->SetIntRule(&gll);
-               auto* rot = new VectorRotationalConvectionIntegrator(w, 1.7);
-               rot->SetIntRule(&gll);
-               a.AddDomainIntegrator(mass);
-               a.AddDomainIntegrator(rot);
-               a.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-               a.Assemble();
-               OperatorPtr A;
-               a.FormSystemMatrix(ess, A);
 
-               PointBlockJacobi pbj(fes, *rot, ess);
-               Vector diag(fes.GetTrueVSize());
-               a.AssembleDiagonal(diag);
-               pbj.SetDiagonal(diag);
-               pbj.UpdateSkew();
+               PbjSetup setup(fes, w, sigma, nu, sr, ess);
+               Vector r(fes.GetTrueVSize()), z(r.Size());
+               r.Randomize(17);
+               setup.pbj->Mult(r, z);
 
-               Vector x(fes.GetTrueVSize()), Ax(x.Size()), z(x.Size());
-               x.Randomize(17);
-               A->Mult(x, Ax);
-               pbj.Mult(Ax, z);
-               z -= x;
-               EXPECT_LE(Norm(z), 1e-12 * Norm(x));
+               std::unique_ptr<HypreParMatrix> L = Reference(fes, w, sigma, nu, sr);
+               SparseMatrix Ld;
+               L->GetDiag(Ld);
+               std::vector<bool> is_ess(r.Size(), false);
+               const int* E = ess.HostRead(); // PBJ read it on the device
+               for (int k = 0; k < ess.Size(); ++k) { is_ess[E[k]] = true; }
+               const int n = r.Size() / dim;
+               const bool bv = (ord == Ordering::byVDIM);
+               const real_t* R = r.HostRead();
+               const real_t* Z = z.HostRead();
+               real_t err = 0.0, scale = 0.0;
+               for (int a = 0; a < n; ++a)
+                  for (int i = 0; i < dim; ++i)
+                  {
+                     const int row = TrueIdx(i, a, n, dim, bv);
+                     real_t Bz = 0.0;
+                     for (int j = 0; j < dim; ++j)
+                     {
+                        const int col = TrueIdx(j, a, n, dim, bv);
+                        const real_t Bij = (is_ess[row] || is_ess[col])
+                                           ? (i == j ? 1.0 : 0.0)
+                                           : Entry(Ld, row, col);
+                        Bz += Bij * Z[col];
+                     }
+                     err = std::max(err, std::fabs(Bz - R[row]));
+                     scale = std::max(scale, std::fabs(R[row]));
+                  }
+               MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPITypeMap<real_t>::mpi_type,
+                             MPI_MAX, MPI_COMM_WORLD);
+               MPI_Allreduce(MPI_IN_PLACE, &scale, 1,
+                             MPITypeMap<real_t>::mpi_type, MPI_MAX, MPI_COMM_WORLD);
+               EXPECT_LE(err, 1e-12 * scale);
             }
 }
 
-// B2 -- with a Gauss rule and nu > 0 the operator is not block diagonal, but
-// its nodal blocks must equal diag(d) + [s]_x: compare every node and
-// component pair against legacy assembly of VectorMassIntegrator(sigma) +
-// VectorDiffusionIntegrator(nu) + VectorMassIntegrator(SkewFromOmega(curl w)).
+// B2 -- the nodal blocks themselves: PBJ's diag(d) + [s]_x equals the
+// legacy reference's dim x dim block at every node and component pair, at the
+// solver's rules (the operator is not block diagonal there, so this checks
+// the AddNodalSkewPA contraction directly).
 TEST(PointBlockJacobi, B2_BlocksMatchLegacyReference)
 {
    RuleBook rules;
@@ -262,55 +354,20 @@ TEST(PointBlockJacobi, B2_BlocksMatchLegacyReference)
             ParMesh mesh(MPI_COMM_WORLD, serial);
             H1_FECollection fec(p, dim);
             ParFiniteElementSpace fes(&mesh, &fec, dim, ord);
-            const Geometry::Type geom =
-               (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-            const IntegrationRule& ir = rules.Get(geom, 2 * p + 1); // R4
+            const SolverRules sr = GetSolverRules(rules, dim, p);
             ParGridFunction w(&fes);
             Interpolate(w, vel_fn);
-            const real_t alpha = 1.7;
 
-            // Legacy reference (MFEM classes only).
-            CurlGridFunctionCoefficient curl(&w);
-            SkewFromOmega skew(dim, curl, alpha);
-            ParBilinearForm legacy(&fes);
-            BilinearFormIntegrator* li[3] =
-            {
-               new VectorMassIntegrator(sigma), new VectorDiffusionIntegrator(nu),
-               new VectorMassIntegrator(skew)
-            };
-            for (auto* i : li) { i->SetIntRule(&ir); legacy.AddDomainIntegrator(i); }
-            legacy.Assemble();
-            legacy.Finalize();
-            std::unique_ptr<HypreParMatrix> L(legacy.ParallelAssemble());
+            std::unique_ptr<HypreParMatrix> L = Reference(fes, w, sigma, nu, sr);
             SparseMatrix Ld;
             L->GetDiag(Ld);
-
-            // Point-block Jacobi from the PA forms.
-            ParBilinearForm sym(&fes), nform(&fes);
-            auto* m = new VectorMassIntegrator(sigma);
-            auto* k = new VectorDiffusionIntegrator(nu);
-            m->SetIntRule(&ir);
-            k->SetIntRule(&ir);
-            sym.AddDomainIntegrator(m);
-            sym.AddDomainIntegrator(k);
-            sym.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-            sym.Assemble();
-            auto* rot = new VectorRotationalConvectionIntegrator(w, alpha);
-            rot->SetIntRule(&ir);
-            nform.AddDomainIntegrator(rot);
-            nform.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-            nform.Assemble();
             Array<int> empty;
-            PointBlockJacobi pbj(fes, *rot, empty);
-            Vector diag(fes.GetTrueVSize());
-            sym.AssembleDiagonal(diag);
-            pbj.SetDiagonal(diag);
-            pbj.UpdateSkew();
+            PbjSetup setup(fes, w, sigma, nu, sr, empty);
 
             const int n = fes.GetTrueVSize() / dim;
             const bool bv = (ord == Ordering::byVDIM);
-            const real_t* d = pbj.GetDiagonal().HostRead();
-            const real_t* s = pbj.GetSkew().HostRead();
+            const real_t* d = setup.pbj->GetDiagonal().HostRead();
+            const real_t* s = setup.pbj->GetSkew().HostRead();
             auto block = [&](int i, int j, int a) -> real_t
             {
                if (i == j) { return d[TrueIdx(i, a, n, dim, bv)]; }
@@ -367,8 +424,8 @@ real_t MaxVorticity(const ParGridFunction& w, const IntegrationRule& ir)
    return mx;
 }
 
-// B3's system on a given communicator: A = sigma M + nu K + N, Dirichlet on
-// the whole boundary, PA, preconditioned GMRES(50) to 1e-10. Returns the
+// B3's system on a given communicator: A = sigma M + nu K + N at the solver's
+// rules, Dirichlet on the whole boundary, PA, preconditioned GMRES(50) to 1e-10. Returns the
 // iteration counts at max|alpha omega| dt = 0, 100 (field 1) and 100 after
 // switching w to field 2; -1 for a solve that did not converge.
 struct B3Counts { int zero, rot1, rot2; };
@@ -382,8 +439,7 @@ B3Counts RunB3(MPI_Comm comm, int dim)
    ParMesh mesh(comm, serial);
    H1_FECollection fec(p, dim);
    ParFiniteElementSpace fes(&mesh, &fec, dim, Ordering::byNODES);
-   const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-   const IntegrationRule& ir = rules.Get(geom, 2 * p + 1); // R4
+   const SolverRules sr = GetSolverRules(rules, dim, p);
 
    // dt = 1, sigma = 1/dt (as Table A2), nu dt / h^2 = 0.01 with h = 1/n.
    const real_t dt = 1.0, h = 1.0 / n;
@@ -403,9 +459,9 @@ B3Counts RunB3(MPI_Comm comm, int dim)
    auto* m = new VectorMassIntegrator(sigma);
    auto* k = new VectorDiffusionIntegrator(nu);
    auto* rot = new VectorRotationalConvectionIntegrator(w1, 1.0);
-   m->SetIntRule(&ir);
-   k->SetIntRule(&ir);
-   rot->SetIntRule(&ir);
+   m->SetIntRule(sr.mass);
+   k->SetIntRule(sr.diffusion);
+   rot->SetIntRule(sr.rotation);
    a.AddDomainIntegrator(m);
    a.AddDomainIntegrator(k);
    a.AddDomainIntegrator(rot);
@@ -441,7 +497,7 @@ B3Counts RunB3(MPI_Comm comm, int dim)
    // alpha giving max|alpha omega| dt = 100 for the lagged field w.
    auto alpha100 = [&](const ParGridFunction & w)
    {
-      return 100.0 / (MaxVorticity(w, ir) * dt);
+      return 100.0 / (MaxVorticity(w, *sr.rotation) * dt);
    };
 
    B3Counts c;

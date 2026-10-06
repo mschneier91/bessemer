@@ -542,14 +542,16 @@ What landed (`physics.convective_form: rotational`, NSE only):
   permutation, checked). `solver.rotation_lor: true` (with LOR-AMG and `rotation_pc:
   symmetric`) puts N into the LOR-AMG operator, re-assembled + AMG re-setup every step.
   **MEASURED — leave it off** (`bench/bench_rotation_pc`, 3D p=4, 3³ curved, Dirichlet,
-  GMRES(50) to 1e-10 on the velocity block alone; np1, np4 within the AMG noise):
+  every term at the solver's rule, GMRES(50) to 1e-10 on the velocity block alone; np1,
+  np4 within ±1 except lor+N, which is erratic across rank counts; re-measured 2026-10-05
+  after moving the bench to the solver's rules, conclusions unchanged):
   ```
   ν dt/h²  |ω|dt   jacobi   lor   lor+N   pbj
-  0.01     1         33      47     35     25
-  0.01     10       179     365   fail     38
-  0.01     100     1844    fail   fail     47     (np4: lor+N 487)
-  1        100      206     146    143    129     (np4: lor+N 195)
-  100      any     75-90     29     29  75-89
+  0.01     1         33      46     35     25
+  0.01     10       177     354   fail     39
+  0.01     100     1827    fail   fail     49     (np4: lor+N 476)
+  1        100      205     144     98    129     (np4: lor+N 638)
+  100      any     75-90     29     29  75-90
   ```
   N in the LOR helps only near |ω|dt ≈ 1 and BREAKS AMG where rotation dominates a
   mass-dominated block (component-wise smoothing cannot handle the skew inter-component
@@ -559,10 +561,16 @@ What landed (`physics.convective_form: rotational`, NSE only):
   is integrated at the RuleBook's order-3p GL rule, never GLL-collocated or default rules:
   under-integrating the nonlinear term has gone badly on energy in practice. Point-block
   Jacobi is then not an exact inverse (GL nodal blocks are not exactly diagonal) — still
-  valid, and B2/B3 test it with Gauss rules. Kernel specializations therefore cover ONLY
-  that rule for p = 1..5: (D1D, Q1D) = (2,2), (3,4), (4,5), (5,7), (6,8), generated from
-  Q1D = (3p+2)/2; every other size runs the generic fallback (correct, ~2.5× slower;
-  `MFEM_REPORT_KERNELS=1` lists fallbacks). `RotationalConvection.SpecializedAndDeterministic`
+  valid. Kernel specializations therefore cover ONLY that rule for p = 1..5: (D1D, Q1D) =
+  (2,2), (3,4), (4,5), (5,7), (6,8), generated from Q1D = (3p+2)/2; every other size runs
+  the generic fallback. It is correct, ~2.5× slower ON A CPU, and almost certainly far
+  worse on a GPU (its tiles are sized for 32 points per direction, so the setup kernel
+  holds 2×9×32 doubles per thread and spills; unmeasured). Hence **every test and bench
+  that uses the rotation term runs it at the solver's rule** (2026-10-05:
+  `point_block_jacobi_test` B1–B3 and `bench_rotation_pc` were moved off GLL / Gauss p+1
+  rules; the spec's B1 exactness-under-GLL-collocation check became "PBJ inverts the
+  reference nodal blocks"). Verify with `MFEM_REPORT_KERNELS=1`: no `RotConv` fallback may
+  appear. `RotationalConvection.SpecializedAndDeterministic`
   asks the dispatch table whether the order-3p GL rule is covered for p = 1..5. It hard-codes
   3p (the test is self-contained, so it does not ask `Convection::DealiasedOrder`): if the
   dealiasing order changes, update that test and the specialization list together.
