@@ -9,12 +9,15 @@ using namespace mfem;
 
 OutputWriter::OutputWriter(ParMesh& mesh, ParGridFunction& u,
                            ParGridFunction& p, const OutputParameters& out,
-                           int order_u, const Nondimensionalization& nd)
+                           int order_u, const Nondimensionalization& nd,
+                           bool restart)
    : out_(out), nd_(nd)
 {
    MPI_Comm_rank(mesh.GetComm(), &rank_);
    pv_ = std::make_unique<ParaViewDataCollection>(out_.name, &mesh);
    pv_->SetPrefixPath(out_.path);
+   // Restart mode keeps the .pvd entries with times before the next save.
+   pv_->UseRestartMode(restart);
    // High-order output is non-negotiable (see class docs): the LOD refinement
    // must be at least k_u or high-order fields render as low-order mush.
    pv_->SetHighOrderOutput(true);
@@ -22,6 +25,11 @@ OutputWriter::OutputWriter(ParMesh& mesh, ParGridFunction& u,
    pv_->SetDataFormat(VTKFormat::BINARY);
    pv_->RegisterField("velocity", &u);
    pv_->RegisterField("pressure", &p);
+}
+
+void OutputWriter::RegisterExtra(const std::string& name, ParGridFunction* gf)
+{
+   pv_->RegisterField(name, gf);
 }
 
 void OutputWriter::MaybeSave(int cycle, double time)

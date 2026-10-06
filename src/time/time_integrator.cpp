@@ -149,9 +149,33 @@ void StokesTimeIntegrator::SetHistory(const std::vector<Vector>& states,
    u_.SetFromTrueDofs(hist_[0]);
    if (pressure) { p_.SetFromTrueDofs(*pressure); }
    else { p_ = 0.0; }
-   // A restored pressure is the STATIC one (what Pressure() wrote); it only
-   // seeds p_ as a Krylov warm start, so the 1/2|u|^2 offset costs nothing.
-   if (rotational_) { p_static_ = p_; }
+   // p_ is the solver's variable (the Bernoulli head in the rotational form);
+   // the reported static pressure follows from it and u_.
+   if (rotational_) { UpdateStaticPressure(); }
+}
+
+IntegratorState StokesTimeIntegrator::ExportState() const
+{
+   IntegratorState s;
+   s.u_hist.assign(hist_.begin(), hist_.end());
+   s.times.assign(hist_times_.begin(), hist_times_.end());
+   s.completed_steps = step_count_;
+   s.next_dt = dt_;
+   s.pressure.SetSize(spaces_.Pressure().GetTrueVSize());
+   s.pressure.UseDevice(true);
+   p_.GetTrueDofs(s.pressure);
+   s.has_controller = (controller_ != nullptr);
+   if (controller_) { s.controller = controller_->ExportState(); }
+   return s;
+}
+
+void StokesTimeIntegrator::ImportState(const IntegratorState& s)
+{
+   SetHistory(s.u_hist, s.times, s.completed_steps, s.next_dt,
+              s.pressure.Size() ? &s.pressure : nullptr);
+   MFEM_VERIFY(s.has_controller == (controller_ != nullptr),
+               "time_integrator: the state's adaptive mode does not match");
+   if (controller_) { controller_->ImportState(s.controller); }
 }
 
 void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)

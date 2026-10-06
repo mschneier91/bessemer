@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "amr/refinement_marker.hpp"
 #include "bc/boundary_conditions.hpp"
 #include "config/parameters.hpp"
 #include "post/checkpoint.hpp"
@@ -16,9 +17,24 @@
 #include "mfem.hpp"
 
 #include <memory>
+#include <vector>
 
 namespace incns
 {
+
+/// What one AMR event (or initial pass) did; identical on every rank.
+struct AdaptStats
+{
+   double time = 0.0;          ///< Simulation time of the event.
+   int cycle = 0;              ///< Accepted-step count at the event.
+   int passes = 0;             ///< Refinement passes that marked something.
+   MarkStats first_pass;       ///< Marking statistics of the first pass.
+   long long ne_before = 0;    ///< Global elements before.
+   long long ne_after = 0;     ///< Global elements after.
+   int projection_iterations = 0; ///< History-projection FGMRES iterations.
+   double seconds = 0.0;       ///< Wall time of the whole event.
+   bool rebuilt = false;       ///< The integrator was rebuilt.
+};
 
 /**
  * @brief One unsteady Stokes case, driven by a Parameters block.
@@ -116,9 +132,42 @@ public:
    /// @return Divergence norm ||div u||_L2 of the current velocity (global).
    double DivergenceNorm();
 
+   /**
+    * @brief Run one adaptation event now (Step() runs them every
+    *        amr.interval accepted steps): indicator, marking, refinement,
+    *        exact state transfer, optional divergence projection of the
+    *        history, and a rebuild of the integrator and output. Collective.
+    * @param force_rebuild Rebuild and re-import even when nothing is marked
+    *        (test hook: exercises the export/rebuild/import path alone).
+    * @return What the event did (also appended to AdaptHistory()).
+    * @pre amr.enabled, and the startup ramp is over (2 accepted steps).
+    */
+   AdaptStats Adapt(bool force_rebuild = false);
+
+   /// @return Every AMR event and initial pass so far, in order.
+   const std::vector<AdaptStats>& AdaptHistory() const { return adapt_log_; }
+
 private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
+
+   /// (Re)build the time integrator from the parameters on the current mesh.
+   void BuildIntegrator();
+
+   /**
+    * @brief (Re)build the ParaView writer (no-op when output is disabled).
+    * @param restart Continue the existing collection (after an AMR event).
+    */
+   void BuildOutput(bool restart);
+
+   /// amr.initial_passes: refine on the analytic initial condition.
+   void InitialRefinement();
+
+   /// @return Is an adaptation event due after the step just taken?
+   bool AdaptDue() const;
+
+   /// amr.write_indicator: recompute the eta / level cell data.
+   void UpdateAmrCellData();
 
    /**
     * @brief Append a diagnostics row on the output interval (no-op if
@@ -144,6 +193,13 @@ private:
    std::unique_ptr<DiagnosticsLog> diag_log_;         ///< Built when enabled.
    int cycle_ = 0; ///< Accepted-step counter for output.
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
+   std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.
+   /// amr.write_indicator: piecewise-constant space and fields for the
+   /// indicator and the refinement depth (rebuilt after each event).
+   std::unique_ptr<mfem::L2_FECollection> amr_fec_;
+   std::unique_ptr<mfem::ParFiniteElementSpace> amr_fes_; ///< P0 space.
+   std::unique_ptr<mfem::ParGridFunction> amr_eta_;   ///< eta_K at the event.
+   std::unique_ptr<mfem::ParGridFunction> amr_level_; ///< Refinement depth.
 };
 
 } // namespace incns

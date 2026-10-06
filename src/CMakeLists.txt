@@ -7,6 +7,7 @@ add_library(incns STATIC
   amr/gradient_indicator.cpp
   amr/refinement_marker.cpp
   amr/mesh_adapter.cpp
+  amr/history_projection.cpp
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp

@@ -32,10 +32,21 @@ public:
     * @param order_u Velocity order k_u; the levels of detail are >= this.
     * @param nd      Reference scales; recorded in a scales.yaml sidecar next
     *                to the collection (fields are written nondimensional).
+    * @param restart Continue an existing collection (keep its earlier time
+    *                steps): used when the writer is rebuilt after an AMR
+    *                event changed the mesh and the fields.
     */
    OutputWriter(mfem::ParMesh& mesh, mfem::ParGridFunction& u,
                 mfem::ParGridFunction& p, const OutputParameters& out,
-                int order_u, const Nondimensionalization& nd);
+                int order_u, const Nondimensionalization& nd,
+                bool restart = false);
+
+   /**
+    * @brief Also write @p gf (e.g. AMR cell data) at every save.
+    * @param name Field name in the collection.
+    * @param gf   Field (borrowed; must outlive this writer).
+    */
+   void RegisterExtra(const std::string& name, mfem::ParGridFunction* gf);
 
    /**
     * @brief Save a snapshot if the cycle is on the configured interval

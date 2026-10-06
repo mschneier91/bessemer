@@ -13,6 +13,7 @@
 #include "solver/stokes_solver.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "time/adaptive_controller.hpp"
+#include "time/integrator_state.hpp"
 #include "mfem.hpp"
 
 #include <deque>
@@ -151,11 +152,30 @@ public:
     * @param completed_steps Steps completed before the checkpoint (drives the
     *                        startup-vs-BDF dispatch exactly as live stepping).
     * @param next_dt         Step size to attempt next (adaptive continuation).
-    * @param pressure        Optional pressure true dofs (Krylov warm start).
+    * @param pressure        Optional true dofs of the solver's pressure
+    *                        variable (the Bernoulli head in the rotational
+    *                        form) -- the Krylov warm start. Pressure() is
+    *                        recomputed from it.
     */
    void SetHistory(const std::vector<mfem::Vector>& states,
                    const std::vector<double>& times, int completed_steps,
                    double next_dt, const mfem::Vector* pressure = nullptr);
+
+   /**
+    * @brief The full marching state (history, times, counters, next dt, the
+    *        solver pressure, adaptive controller memory).
+    * @return A copy; ImportState() on a fresh integrator continues the march
+    *         exactly as this one would.
+    */
+   IntegratorState ExportState() const;
+
+   /**
+    * @brief Restore a state from ExportState() (or a checkpoint): SetHistory
+    *        plus the adaptive controller's memory. The history vectors must
+    *        live on this integrator's spaces (an AMR event transfers them).
+    * @param state State to continue from.
+    */
+   void ImportState(const IntegratorState& state);
 
    /**
     * @brief Install the adaptive dt ceiling hook (stability, not accuracy).

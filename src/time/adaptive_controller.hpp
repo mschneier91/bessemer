@@ -113,6 +113,34 @@ public:
     */
    void RestorePrevScaledError(double prev_es) { prev_es_ = prev_es; }
 
+   /// Everything the controller remembers between steps (not the ceiling).
+   struct State
+   {
+      std::vector<StepAttempt> history; ///< Every attempt so far.
+      double next_dt = 0.0;             ///< Proposed next step size.
+      double prev_es = -1.0;            ///< PI memory (last accepted es).
+      int total_rejections = 0;         ///< Rejection count.
+      int consecutive_rejections = 0;   ///< Rejections since last accept.
+   };
+
+   /// @return A copy of the controller's memory (AMR events rebuild the
+   ///         integrator and carry this across).
+   State ExportState() const
+   {
+      return {history_, next_dt_, prev_es_, total_rejections_,
+              consecutive_rejections_};
+   }
+
+   /// @param s Memory to restore (from ExportState()).
+   void ImportState(const State& s)
+   {
+      history_ = s.history;
+      next_dt_ = s.next_dt;
+      prev_es_ = s.prev_es;
+      total_rejections_ = s.total_rejections;
+      consecutive_rejections_ = s.consecutive_rejections;
+   }
+
 private:
    AdaptiveControllerOptions opts_;   ///< Options.
    DtCeilingFn ceiling_;              ///< dt cap hook (inert by default).

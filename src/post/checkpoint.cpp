@@ -76,17 +76,20 @@ void Checkpoint::Write(const std::string& dir,
    if (rank == 0) { std::filesystem::create_directories(dir); }
    MPI_Barrier(comm); // directory exists before any rank writes
 
-   const auto& hist = integrator.History();
-   const auto& times = integrator.HistoryTimes();
+   // One definition of the marching state (shared with AMR events). Its
+   // pressure is the solver's own variable -- the Bernoulli head in the
+   // rotational form, the physical pressure otherwise -- so a restart's warm
+   // start is exactly the uninterrupted run's.
+   const IntegratorState state = integrator.ExportState();
+   const auto& hist = state.u_hist;
+   const auto& times = state.times;
    MFEM_VERIFY(!hist.empty(), "checkpoint: nothing to write (no history)");
 
    for (std::size_t j = 0; j < hist.size(); ++j)
    {
       WriteVector(BinPath(dir, "u_hist" + std::to_string(j), rank), hist[j]);
    }
-   Vector p_true(integrator.Pressure().ParFESpace()->GetTrueVSize());
-   integrator.Pressure().GetTrueDofs(p_true);
-   WriteVector(BinPath(dir, "pressure", rank), p_true);
+   WriteVector(BinPath(dir, "pressure", rank), state.pressure);
 
    if (rank == 0)
    {
@@ -95,19 +98,18 @@ void Checkpoint::Write(const std::string& dir,
       meta << std::setprecision(17);
       meta << "# incns rolling checkpoint (same-np restart contract)\n"
            << "np: " << nranks << "\n"
-           << "t: " << integrator.Time() << "\n"
-           << "next_dt: " << integrator.CurrentDt() << "\n"
-           << "completed_steps: " << integrator.StepCount() << "\n"
+           << "t: " << state.times[0] << "\n"
+           << "next_dt: " << state.next_dt << "\n"
+           << "completed_steps: " << state.completed_steps << "\n"
            << "history_times: [";
       for (std::size_t j = 0; j < times.size(); ++j)
       {
          meta << (j ? ", " : "") << times[j];
       }
       meta << "]\n";
-      if (integrator.Controller())
+      if (state.has_controller)
       {
-         meta << "adaptive_prev_es: "
-              << integrator.Controller()->PrevScaledError() << "\n";
+         meta << "adaptive_prev_es: " << state.controller.prev_es << "\n";
       }
       // Reference scales, so a consumer can re-dimensionalize the state.
       meta << "Re: " << params.nondim.Re << "\nL_ref: " << params.nondim.L_ref
@@ -131,31 +133,36 @@ void Checkpoint::Read(const std::string& dir, StokesTimeIntegrator& integrator)
                << " but restarting at np = " << nranks
                << " -- same-np restart only");
 
-   std::vector<double> times;
+   IntegratorState state;
    for (const auto& tn : meta["history_times"])
    {
-      times.push_back(tn.as<double>());
+      state.times.push_back(tn.as<double>());
    }
-   const int completed = meta["completed_steps"].as<int>();
-   const double next_dt = meta["next_dt"].as<double>();
+   state.completed_steps = meta["completed_steps"].as<int>();
+   state.next_dt = meta["next_dt"].as<double>();
 
    const int n_u = integrator.Velocity().ParFESpace()->GetTrueVSize();
    const int n_p = integrator.Pressure().ParFESpace()->GetTrueVSize();
-   std::vector<Vector> states(times.size());
-   for (std::size_t j = 0; j < times.size(); ++j)
+   state.u_hist.resize(state.times.size());
+   for (std::size_t j = 0; j < state.times.size(); ++j)
    {
       ReadVector(BinPath(dir, "u_hist" + std::to_string(j), rank), n_u,
-                 states[j]);
+                 state.u_hist[j]);
    }
-   Vector p_true;
-   ReadVector(BinPath(dir, "pressure", rank), n_p, p_true);
+   ReadVector(BinPath(dir, "pressure", rank), n_p, state.pressure);
 
-   integrator.SetHistory(states, times, completed, next_dt, &p_true);
-   if (integrator.Controller() && meta["adaptive_prev_es"])
+   // The controller's step record is not persisted: a restart starts a fresh
+   // record, with the PI memory restored so the next step matches.
+   state.has_controller = (integrator.Controller() != nullptr);
+   if (state.has_controller)
    {
-      integrator.Controller()->RestorePrevScaledError(
-                   meta["adaptive_prev_es"].as<double>());
+      state.controller = integrator.Controller()->ExportState();
+      if (meta["adaptive_prev_es"])
+      {
+         state.controller.prev_es = meta["adaptive_prev_es"].as<double>();
+      }
    }
+   integrator.ImportState(state);
 }
 
 } // namespace incns

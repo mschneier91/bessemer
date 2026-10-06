@@ -1,5 +1,8 @@
 #include "solver/case.hpp"
 
+#include "amr/gradient_indicator.hpp"
+#include "amr/history_projection.hpp"
+#include "amr/mesh_adapter.hpp"
 #include "util/profiler.hpp"
 
 namespace incns
@@ -49,11 +52,8 @@ void Case::SetForcing(VectorCoefficient& f)
    forcing_ = &f;
 }
 
-void Case::EnsureSetup()
+void Case::BuildIntegrator()
 {
-   if (integrator_) { return; }
-   INCNS_PROFILE("case::setup");
-
    // The Case dispatches on the equation set. Both are available as of Sprint
    // 2.2: NavierStokes just adds the dealiased, AB/EXT-extrapolated convection
    // term to the right-hand side -- the implicit block solve is identical.
@@ -82,6 +82,31 @@ void Case::EnsureSetup()
    opts.print_level = params_.print_level;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
+}
+
+void Case::BuildOutput(bool restart)
+{
+   output_.reset();
+   if (!params_.output.enabled) { return; }
+   output_ = std::make_unique<OutputWriter>(mesh_, integrator_->Velocity(),
+             integrator_->Pressure(), params_.output,
+             params_.order_u, params_.nondim, restart);
+   if (amr_eta_)
+   {
+      output_->RegisterExtra("amr_eta", amr_eta_.get());
+      output_->RegisterExtra("amr_level", amr_level_.get());
+   }
+}
+
+void Case::EnsureSetup()
+{
+   if (integrator_) { return; }
+   INCNS_PROFILE("case::setup");
+
+   // amr.initial_passes refine on the analytic initial condition BEFORE any
+   // operator exists (nothing to transfer: the IC is re-projected).
+   InitialRefinement();
+   BuildIntegrator();
 
    if (Mpi::Root() && params_.print_level >= 0)
    {
@@ -110,12 +135,13 @@ void Case::EnsureSetup()
       cycle_ = integrator_->StepCount(); // output/checkpoint cycles continue
    }
 
+   if (params_.amr.enabled && params_.amr.write_indicator)
+   {
+      UpdateAmrCellData();
+   }
    if (params_.output.enabled)
    {
-      output_ = std::make_unique<OutputWriter>(mesh_, integrator_->Velocity(),
-                integrator_->Pressure(),
-                params_.output, params_.order_u,
-                params_.nondim);
+      BuildOutput(/*restart=*/false);
       output_->MaybeSave(0, 0.0); // initial state
 
       if (params_.output.diagnostics)
@@ -139,6 +165,9 @@ void Case::Step()
    EnsureSetup();
    integrator_->Step();
    ++cycle_;
+   // An adaptation event comes BEFORE output and checkpoint: both then see the
+   // refined mesh with the (exactly transferred) state.
+   if (AdaptDue()) { Adapt(); }
    if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
    MaybeLogDiagnostics(cycle_, integrator_->Time());
    if (params_.checkpoint.enabled &&
@@ -222,6 +251,194 @@ double Case::DivergenceNorm()
 {
    EnsureSetup();
    return incns::DivergenceNorm(integrator_->Velocity(), rules_);
+}
+
+bool Case::AdaptDue() const
+{
+   const AmrParameters& a = params_.amr;
+   return a.enabled && a.interval > 0 && cycle_ > 0 && cycle_ % a.interval == 0
+          && integrator_->StepCount() >= 2 && !integrator_->Done();
+}
+
+void Case::InitialRefinement()
+{
+   const AmrParameters& a = params_.amr;
+   if (!a.enabled || a.initial_passes == 0 || !params_.restart_from.empty() ||
+       !initial_)
+   {
+      return;
+   }
+   INCNS_PROFILE("amr::initial");
+   const RefinementMarker marker(a);
+   for (int pass = 0; pass < a.initial_passes; ++pass)
+   {
+      AdaptStats st;
+      const double t0 = MPI_Wtime();
+      st.ne_before = mesh_.GetGlobalNE();
+      Array<Refinement> refs;
+      {
+         // The analytic IC on the current mesh, made conforming.
+         ParGridFunction u0(&spaces_.Velocity());
+         initial_->SetTime(0.0);
+         u0.ProjectCoefficient(*initial_);
+         Vector t;
+         u0.GetTrueDofs(t);
+         u0.SetFromTrueDofs(t);
+         GradientIndicator ind(spaces_.Velocity(), rules_);
+         Vector g;
+         ind.Compute(u0, g);
+         marker.Mark(mesh_, g, refs, &st.first_pass);
+      }
+      if (st.first_pass.marked == 0) { break; }
+      MeshAdapter::Refine(mesh_, spaces_, bc_, refs, a.nc_limit, a.rebalance,
+                          {});
+      st.passes = 1;
+      st.ne_after = mesh_.GetGlobalNE();
+      st.seconds = MPI_Wtime() - t0;
+      adapt_log_.push_back(st);
+      if (Mpi::Root() && params_.print_level >= 0)
+      {
+         mfem::out << "[amr] initial pass " << pass + 1 << ": marked "
+                   << st.first_pass.marked << ", elements " << st.ne_before
+                   << " -> " << st.ne_after << std::endl;
+      }
+   }
+}
+
+AdaptStats Case::Adapt(bool force_rebuild)
+{
+   EnsureSetup();
+   const AmrParameters& a = params_.amr;
+   MFEM_VERIFY(a.enabled, "case: Adapt() needs amr.enabled (the mesh must be "
+               "built nonconforming-ready by MakeCaseMesh)");
+   MFEM_VERIFY(integrator_->StepCount() >= 2, "case: no adaptation inside the "
+               "startup ramp (the restored history would skip it)");
+   INCNS_PROFILE("amr::event");
+   const double t0 = MPI_Wtime();
+   AdaptStats st;
+   st.time = integrator_->Time();
+   st.cycle = cycle_;
+   st.ne_before = mesh_.GetGlobalNE();
+   const RefinementMarker marker(a);
+
+   // First pass marks on the live velocity: if nothing is marked, nothing
+   // is torn down.
+   Array<Refinement> refs;
+   {
+      GradientIndicator ind(spaces_.Velocity(), rules_);
+      Vector g;
+      ind.Compute(integrator_->Velocity(), g);
+      marker.Mark(mesh_, g, refs, &st.first_pass);
+   }
+   if (st.first_pass.marked == 0 && !force_rebuild)
+   {
+      st.ne_after = st.ne_before;
+      st.seconds = MPI_Wtime() - t0;
+      adapt_log_.push_back(st);
+      return st;
+   }
+
+   // In-memory checkpoint; then everything mesh-dependent goes before the
+   // mesh changes (operators hold pointers into the mesh's geometric data).
+   IntegratorState state = integrator_->ExportState();
+   output_.reset();
+   integrator_.reset();
+
+   // The state as fields on the current spaces, carried across refinement.
+   std::vector<std::unique_ptr<ParGridFunction>> hist_gf;
+   std::vector<ParGridFunction*> fields;
+   for (const Vector& u : state.u_hist)
+   {
+      hist_gf.push_back(std::make_unique<ParGridFunction>(&spaces_.Velocity()));
+      hist_gf.back()->SetFromTrueDofs(u);
+      fields.push_back(hist_gf.back().get());
+   }
+   ParGridFunction p_gf(&spaces_.Pressure());
+   p_gf.SetFromTrueDofs(state.pressure);
+   fields.push_back(&p_gf);
+
+   bool refined = false;
+   for (int pass = 0; pass < a.passes_per_event; ++pass)
+   {
+      if (pass > 0)
+      {
+         // Later passes mark on the transferred newest velocity.
+         GradientIndicator ind(spaces_.Velocity(), rules_);
+         Vector g;
+         ind.Compute(*hist_gf.front(), g);
+         MarkStats ms;
+         marker.Mark(mesh_, g, refs, &ms);
+         if (ms.marked == 0) { break; }
+      }
+      if (refs.Size() == 0 && pass == 0 && st.first_pass.marked == 0) { break; }
+      MeshAdapter::Refine(mesh_, spaces_, bc_, refs, a.nc_limit, a.rebalance,
+                          fields);
+      refined = true;
+      ++st.passes;
+   }
+
+   // Back to true dofs on the (possibly) refined spaces.
+   for (std::size_t j = 0; j < state.u_hist.size(); ++j)
+   {
+      state.u_hist[j].SetSize(spaces_.Velocity().GetTrueVSize());
+      hist_gf[j]->GetTrueDofs(state.u_hist[j]);
+   }
+   state.pressure.SetSize(spaces_.Pressure().GetTrueVSize());
+   p_gf.GetTrueDofs(state.pressure);
+   hist_gf.clear();
+
+   if (refined && a.project_history)
+   {
+      HistoryProjectionOptions po;
+      po.rtol = params_.krylov_rtol;
+      po.max_iter = params_.max_iter;
+      po.kdim = params_.kdim;
+      po.print_level = params_.print_level;
+      st.projection_iterations =
+         ProjectHistoryDivergenceFree(spaces_, rules_, *bc_, state, po);
+   }
+
+   BuildIntegrator();
+   integrator_->ImportState(state);
+   st.rebuilt = true;
+   if (a.write_indicator) { UpdateAmrCellData(); }
+   BuildOutput(/*restart=*/true);
+
+   st.ne_after = mesh_.GetGlobalNE();
+   st.seconds = MPI_Wtime() - t0;
+   adapt_log_.push_back(st);
+   if (Mpi::Root() && params_.print_level >= 0)
+   {
+      mfem::out << "[amr] event at t = " << st.time << " (cycle " << st.cycle
+                << "): marked " << st.first_pass.marked << " (dirs "
+                << st.first_pass.per_dir[0] << "/" << st.first_pass.per_dir[1]
+                << "/" << st.first_pass.per_dir[2] << "), elements "
+                << st.ne_before << " -> " << st.ne_after << ", "
+                << st.seconds << " s" << std::endl;
+   }
+   return st;
+}
+
+void Case::UpdateAmrCellData()
+{
+   if (!amr_fec_) { amr_fec_ = std::make_unique<L2_FECollection>(0, mesh_.Dimension()); }
+   amr_level_.reset();
+   amr_eta_.reset();
+   amr_fes_ = std::make_unique<ParFiniteElementSpace>(&mesh_, amr_fec_.get());
+   amr_eta_ = std::make_unique<ParGridFunction>(amr_fes_.get());
+   amr_level_ = std::make_unique<ParGridFunction>(amr_fes_.get());
+   GradientIndicator ind(spaces_.Velocity(), rules_);
+   Vector g, eta;
+   ind.Compute(integrator_->Velocity(), g);
+   GradientIndicator::Eta(g, mesh_.Dimension(), eta);
+   // One dof per element (L2, order 0): element e's value is dof e.
+   double* E = amr_eta_->HostWrite();
+   double* Lv = amr_level_->HostWrite();
+   for (int e = 0; e < mesh_.GetNE(); ++e)
+   {
+      E[e] = eta(e);
+      Lv[e] = mesh_.ncmesh ? mesh_.ncmesh->GetElementDepth(e) : 0.0;
+   }
 }
 
 } // namespace incns
