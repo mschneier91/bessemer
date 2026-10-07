@@ -166,6 +166,26 @@ public:
    bool Done() const { return case_->Done(); }
    int StepCount() { return case_->Integrator().StepCount(); }
    int Iterations() { return case_->Integrator().LastIterations(); }
+   // Global element count (grows with AMR events). Collective, like every
+   // scalar status call: SPMD drivers call it on every rank.
+   long long ElementCount() { return pmesh_->GetGlobalNE(); }
+   // Lift/drag on the forces.attributes body (John's volume formulation);
+   // collective. Force and coefficients C = 2F/(U^2 A).
+   std::vector<double> Forces()
+   {
+      const Vector F = case_->BodyForceVector();
+      return std::vector<double>(F.GetData(), F.GetData() + F.Size());
+   }
+   // The body: a selection like no_slip's (attribute | face name | list).
+   void SetForceBody(const py::object& sel)
+   {
+      case_->SetForceBody(ResolveSelection(sel));
+   }
+   std::vector<double> ForceCoefficients()
+   {
+      const Vector C = case_->ForceCoefficients();
+      return std::vector<double>(C.GetData(), C.GetData() + C.Size());
+   }
 
    // Scalar diagnostic: global L2 error of the velocity vs an analytic field,
    // evaluated at the current time with an elevated Gauss-Legendre rule.
@@ -425,6 +445,34 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("atol", &AdaptiveControllerOptions::atol)
    .def_readwrite("rtol", &AdaptiveControllerOptions::rtol);
 
+   py::enum_<AmrThreshold>(m, "AmrThreshold")
+   .value("Relative", AmrThreshold::Relative)
+   .value("Absolute", AmrThreshold::Absolute);
+
+   py::class_<AmrParameters>(m, "AmrParameters")
+   .def_readwrite("enabled", &AmrParameters::enabled)
+   .def_readwrite("interval", &AmrParameters::interval)
+   .def_readwrite("initial_passes", &AmrParameters::initial_passes)
+   .def_readwrite("passes_per_event", &AmrParameters::passes_per_event)
+   .def_readwrite("anisotropic", &AmrParameters::anisotropic)
+   .def_readwrite("aniso_ratio", &AmrParameters::aniso_ratio)
+   .def_readwrite("threshold_mode", &AmrParameters::threshold_mode)
+   .def_readwrite("theta", &AmrParameters::theta)
+   .def_readwrite("tolerance", &AmrParameters::tolerance)
+   .def_readwrite("min_size", &AmrParameters::min_size)
+   .def_readwrite("max_elements", &AmrParameters::max_elements)
+   .def_readwrite("nc_limit", &AmrParameters::nc_limit)
+   .def_readwrite("rebalance", &AmrParameters::rebalance)
+   .def_readwrite("project_history", &AmrParameters::project_history)
+   .def_readwrite("write_indicator", &AmrParameters::write_indicator);
+
+   py::class_<ForceParameters>(m, "ForceParameters")
+   .def_readwrite("enabled", &ForceParameters::enabled)
+   .def_readwrite("attributes", &ForceParameters::attributes)
+   .def_readwrite("reference_velocity", &ForceParameters::reference_velocity)
+   .def_readwrite("reference_area", &ForceParameters::reference_area)
+   .def_readwrite("interval", &ForceParameters::interval);
+
    py::class_<OutputParameters>(m, "OutputParameters")
    .def_readwrite("enabled", &OutputParameters::enabled)
    .def_readwrite("path", &OutputParameters::path)
@@ -516,6 +564,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("t_final", &Parameters::t_final)
    .def_readwrite("time_order", &Parameters::time_order)
    .def_readwrite("adaptive", &Parameters::adaptive)
+   .def_readwrite("cfl_max", &Parameters::cfl_max)
    .def_readwrite("krylov_rtol", &Parameters::krylov_rtol)
    .def_readwrite("krylov_atol", &Parameters::krylov_atol)
    .def_readwrite("max_iter", &Parameters::max_iter)
@@ -533,6 +582,8 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("controller", &Parameters::controller)
    .def_readwrite("output", &Parameters::output)
    .def_readwrite("checkpoint", &Parameters::checkpoint)
+   .def_readwrite("amr", &Parameters::amr)
+   .def_readwrite("forces", &Parameters::forces)
    .def_readwrite("nondim", &Parameters::nondim)
    .def_property(
    "reynolds", [](const Parameters & p) { return 1.0 / p.nu; },
@@ -570,5 +621,14 @@ PYBIND11_MODULE(_core, m)
    .def_property_readonly("time_dimensional", &PyCase::TimeDimensional)
    .def_property_readonly("done", &PyCase::Done)
    .def_property_readonly("step_count", &PyCase::StepCount)
-   .def_property_readonly("iterations", &PyCase::Iterations);
+   .def_property_readonly("iterations", &PyCase::Iterations)
+   .def_property_readonly("element_count", &PyCase::ElementCount)
+   .def("set_force_body", &PyCase::SetForceBody, py::arg("selection"),
+        "Select the lift/drag body (attribute, box face name, or a list); "
+        "enables forces.")
+   .def("forces", &PyCase::Forces,
+        "Force of the fluid on the forces.attributes body (drag = x, lift = "
+        "y), by John's volume-integral formulation. Collective.")
+   .def("force_coefficients", &PyCase::ForceCoefficients,
+        "C = 2 F / (U^2 A) with the forces.reference_* scales. Collective.");
 }

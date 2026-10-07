@@ -5,6 +5,9 @@
 #include "amr/mesh_adapter.hpp"
 #include "util/profiler.hpp"
 
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 
 namespace incns
@@ -84,6 +87,12 @@ void Case::BuildIntegrator()
    opts.print_level = params_.print_level;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
+   body_force_.reset();
+   if (params_.forces.enabled)
+   {
+      body_force_ = std::make_unique<BodyForce>(spaces_.Velocity(),
+                    params_.forces.attributes);
+   }
 }
 
 void Case::BuildOutput(bool restart)
@@ -184,6 +193,9 @@ void Case::Step()
    EnsureSetup();
    integrator_->Step();
    ++cycle_;
+   // Forces use the step's own residual: log them before an event rebuilds
+   // the integrator.
+   MaybeLogForces();
    // An adaptation event comes BEFORE output and checkpoint: both then see the
    // refined mesh with the (exactly transferred) state.
    if (AdaptDue()) { Adapt(); }
@@ -441,6 +453,61 @@ AdaptStats Case::Adapt(bool force_rebuild)
    return st;
 }
 
+void Case::SetForceBody(const std::vector<int>& attributes)
+{
+   MFEM_VERIFY(!attributes.empty(), "case: SetForceBody() needs an attribute");
+   params_.forces.enabled = true;
+   params_.forces.attributes = attributes;
+   if (integrator_) // already set up: rebuild on the current space
+   {
+      body_force_ = std::make_unique<BodyForce>(spaces_.Velocity(), attributes);
+   }
+}
+
+Vector Case::BodyForceVector()
+{
+   EnsureSetup();
+   MFEM_VERIFY(body_force_, "case: BodyForceVector() needs forces.enabled");
+   Vector r;
+   integrator_->MomentumResidual(r);
+   return body_force_->Force(r);
+}
+
+Vector Case::ForceCoefficients()
+{
+   return BodyForce::Coefficients(BodyForceVector(),
+                                  params_.forces.reference_velocity,
+                                  params_.forces.reference_area);
+}
+
+void Case::MaybeLogForces()
+{
+   if (!body_force_ || params_.forces.interval == 0 ||
+       cycle_ % params_.forces.interval != 0) { return; }
+   const Vector F = BodyForceVector();
+   const Vector C = BodyForce::Coefficients(F, params_.forces.reference_velocity,
+                    params_.forces.reference_area);
+   if (!Mpi::Root()) { return; }
+   const std::string path =
+      params_.output.path + "/" + params_.output.name + "_forces.csv";
+   const bool fresh = !std::filesystem::exists(path)
+                      || cycle_ == params_.forces.interval;
+   if (fresh) { std::filesystem::create_directories(params_.output.path); }
+   std::ofstream f(path, fresh ? std::ios::trunc : std::ios::app);
+   if (fresh)
+   {
+      f << "t";
+      const char* ax = "xyz";
+      for (int d = 0; d < F.Size(); ++d) { f << ",F" << ax[d]; }
+      for (int d = 0; d < F.Size(); ++d) { f << ",C" << ax[d]; }
+      f << "\n";
+   }
+   f << std::setprecision(16) << integrator_->Time();
+   for (int d = 0; d < F.Size(); ++d) { f << "," << F(d); }
+   for (int d = 0; d < F.Size(); ++d) { f << "," << C(d); }
+   f << "\n";
+}
+
 void Case::WriteCheckpoint(const std::string& dir)
 {
    EnsureSetup();
@@ -450,7 +517,10 @@ void Case::WriteCheckpoint(const std::string& dir)
 void Case::SetupCfl()
 {
    cfl_.reset();
-   if (params_.cfl_max <= 0.0 || params_.equation != Equation::NavierStokes)
+   // Only the IMEX convective form treats convection explicitly; the
+   // rotational form is semi-implicit and has no convective CFL limit.
+   if (params_.cfl_max <= 0.0 || params_.equation != Equation::NavierStokes ||
+       params_.convective_form != ConvectiveForm::Convective)
    {
       return;
    }

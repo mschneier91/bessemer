@@ -3,6 +3,7 @@
 add_library(incns STATIC
   mesh/periodic_box.cpp
   mesh/case_mesh.cpp
+  mesh/cylinder_channel.cpp
   amr/amr_parameters.cpp
   amr/gradient_indicator.cpp
   amr/refinement_marker.cpp
@@ -31,6 +32,7 @@ add_library(incns STATIC
   config/initial_conditions.cpp
   post/output.cpp
   post/checkpoint.cpp
+  post/body_force.cpp
   post/diagnostics.cpp
   precond/cahouet_chabard.cpp
   precond/point_block_jacobi.cpp

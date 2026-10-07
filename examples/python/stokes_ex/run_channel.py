@@ -5,6 +5,10 @@ bound in Python for them (no field). Only the manufactured forcing and initial
 condition are supplied here. Exact solution u = g(t) y(1-y) (zero on the walls,
 consistent with no-slip), p = 0.
 
+It also measures the lift/drag of the bottom wall (John's volume formulation,
+case.set_force_body / case.forces): the exact force of the fluid on the wall
+y = 0 is (nu g(t) L, 0) with L = 2 the wall length.
+
 Run:  mpirun -np 4 python examples/python/stokes_ex/run_channel.py
 """
 
@@ -36,13 +40,20 @@ def main():
     case.set_initial_velocity(u_exact)
     case.set_forcing(forcing)
     # No set_dirichlet_field: the no-slip walls need no field.
+    case.set_force_body("ymin")            # the body: the bottom wall
     case.run()
 
     err = case.velocity_l2_error(u_exact)
+    t = case.time
+    fx, fy = case.forces()                 # collective
+    fx_ex = NU * (1.0 + t + 0.5 * t * t) * 2.0
     if incns.on_root():
-        print(f"channel_noslip: ranks={incns.size()} t={case.time:.4f} "
-              f"steps={case.step_count} err={err:.3e}")
+        print(f"channel_noslip: ranks={incns.size()} t={t:.4f} "
+              f"steps={case.step_count} err={err:.3e} "
+              f"wall force ({fx:.12f}, {fy:.3e}) exact ({fx_ex:.12f}, 0)")
         assert err < 1e-8, f"channel not reproduced: err={err}"
+        assert abs(fx - fx_ex) < 1e-8 * fx_ex, f"wall drag {fx} != {fx_ex}"
+        assert abs(fy) < 1e-8 * fx_ex, f"wall lift {fy} != 0"
         print("channel_noslip: PASSED")
 
 

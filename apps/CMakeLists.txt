@@ -13,3 +13,8 @@ target_link_libraries(taylor_green PRIVATE incns)
 # 3D unsteady-Stokes MMS driver, for CPU-vs-GPU timing (self-validating).
 add_executable(unsteady_mms_3d unsteady_mms_3d.cpp)
 target_link_libraries(unsteady_mms_3d PRIVATE incns)
+
+# DFG flow-around-a-cylinder benchmark: lift/drag (John's volume formulation),
+# the curved cylinder-channel mesh, optional AMR.
+add_executable(dfg_cylinder dfg_cylinder.cpp)
+target_link_libraries(dfg_cylinder PRIVATE incns)

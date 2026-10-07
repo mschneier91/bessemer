@@ -146,6 +146,7 @@ void StokesTimeIntegrator::SetHistory(const std::vector<Vector>& states,
    t_ = times[0];
    step_count_ = completed_steps;
    dt_ = next_dt;
+   last_solver_ = nullptr; // no step taken from this state yet
    u_.SetFromTrueDofs(hist_[0]);
    if (pressure) { p_.SetFromTrueDofs(*pressure); }
    else { p_ = 0.0; }
@@ -176,6 +177,31 @@ void StokesTimeIntegrator::ImportState(const IntegratorState& s)
    MFEM_VERIFY(s.has_controller == (controller_ != nullptr),
                "time_integrator: the state's adaptive mode does not match");
    if (controller_) { controller_->ImportState(s.controller); }
+}
+
+void StokesTimeIntegrator::MomentumResidual(Vector& r) const
+{
+   MFEM_VERIFY(last_solver_, "time_integrator: MomentumResidual() needs a "
+               "step since construction / the last state import");
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+   Vector u_true(n_u), p_true(spaces_.Pressure().GetTrueVSize()), tmp(n_u);
+   u_true.UseDevice(true);
+   p_true.UseDevice(true);
+   tmp.UseDevice(true);
+   u_.GetTrueDofs(u_true);
+   p_.GetTrueDofs(p_true); // physical p on both Schur paths (P if rotational)
+   StokesOperator& op = last_solver_->Blocks();
+   r.SetSize(n_u);
+   r.UseDevice(true);
+   op.MomentumUnconstrained().Mult(u_true, r);           // A u
+   if (op.Rotation())
+   {
+      op.RotationUnconstrained().Mult(u_true, tmp);      // + N u
+      r += tmp;
+   }
+   op.DivergenceUnconstrained().MultTranspose(p_true, tmp);
+   r -= tmp;                                             // - B^T p
+   r -= last_b_;                                         // - b
 }
 
 void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
@@ -416,11 +442,13 @@ void StokesTimeIntegrator::StepStartup()
       }
    }
 
+   last_b_ = b; // raw (pre-elimination) RHS, for MomentumResidual
    solver->SolveTrue(b, u_, p_);
    last_iterations_ = solver->Iterations();
    MFEM_VERIFY(solver->Converged(),
                "time_integrator: implicit solve did not converge at t = "
                << t_new);
+   last_solver_ = solver;
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
@@ -449,11 +477,13 @@ void StokesTimeIntegrator::StepFixed()
       UpdateLaggedVelocity(t_new);
       solver.UpdateRotation();
    }
+   last_b_ = b; // raw (pre-elimination) RHS, for MomentumResidual
    solver.SolveTrue(b, u_, p_);
    last_iterations_ = solver.Iterations();
    MFEM_VERIFY(solver.Converged(),
                "time_integrator: implicit solve did not converge at t = "
                << t_new);
+   last_solver_ = &solver;
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
@@ -519,6 +549,8 @@ void StokesTimeIntegrator::StepAdaptive()
       dt_ = controller_->NextDt();
       if (accepted)
       {
+         last_solver_ = &s2; // the BDF2 step is the one that advances
+         last_b_ = b2;
          Commit(t_new, u2_true, u2_scratch_, p2_scratch_);
          return;
       }

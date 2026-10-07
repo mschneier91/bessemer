@@ -54,4 +54,16 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
     PASS_REGULAR_EXPRESSION "channel_noslip: PASSED"
     DEPENDS incns_pymodule)
+
+  # The MMS through adaptive mesh refinement (anisotropic events), from Python.
+  add_test(
+    NAME py_stokes_amr_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+            ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run_amr.py)
+  set_tests_properties(py_stokes_amr_np${np} PROPERTIES
+    LABELS "fast"
+    PROCESSORS ${np}
+    ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
+    PASS_REGULAR_EXPRESSION "stokes_amr: PASSED"
+    DEPENDS incns_pymodule)
 endforeach()

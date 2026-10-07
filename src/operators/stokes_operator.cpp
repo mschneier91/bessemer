@@ -113,6 +113,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       div_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       div_form_.Assemble();
       div_form_.FormRectangularSystemMatrix(ess_tdofs_, ess_p_tdofs_, B_);
+      Array<int> no_u, no_p;
+      div_form_.FormRectangularSystemMatrix(no_u, no_p, Bunc_);
    }
 
    // --- FROZEN LOR source, built ONCE at the reference mass factor c0_ref*M +
@@ -220,6 +222,10 @@ void StokesOperator::BuildMomentum()
    momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
    momentum_form_->Assemble();
    momentum_form_->FormSystemMatrix(ess_tdofs_, K_);
+   {
+      Array<int> no_ess;
+      momentum_form_->FormSystemMatrix(no_ess, Aunc_);
+   }
    momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
    momentum_form_->AssembleDiagonal(momentum_diag_);
 

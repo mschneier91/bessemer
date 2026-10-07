@@ -1,5 +1,6 @@
 #include "amr/gradient_indicator.hpp"
 
+#include "util/profiler.hpp"
 #include "mfem/general/forall.hpp"
 
 #include <cmath>
@@ -79,6 +80,7 @@ GradientIndicator::GradientIndicator(const ParFiniteElementSpace& vfes,
 
 void GradientIndicator::Compute(const ParGridFunction& u, Vector& g) const
 {
+   INCNS_PROFILE("amr::indicator");
    MFEM_VERIFY(u.ParFESpace() == &vfes_,
                "gradient_indicator: u must live on the indicator's space");
    restr_->Mult(u, ue_);

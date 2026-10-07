@@ -205,6 +205,19 @@ public:
    /// @return The current step size (varies in adaptive mode).
    double CurrentDt() const { return dt_; }
 
+   /**
+    * @brief The discrete momentum residual of the last accepted step, on
+    *        velocity true dofs, before Dirichlet elimination:
+    *        r = A u + N u - B^T p - b, with A, N, B the UNCONSTRAINED blocks of
+    *        the solver that took the step and b its raw right-hand side (BDF
+    *        history, forcing, explicit convection). Zero at the free dofs (to
+    *        Krylov tolerance); at Dirichlet dofs it is minus the reaction
+    *        force -- what post/body_force turns into lift and drag.
+    * @param r Output (resized).
+    * @pre At least one step since construction or the last ImportState().
+    */
+   void MomentumResidual(mfem::Vector& r) const;
+
    /// @return Velocity true-dof history, newest first (checkpointing).
    const std::deque<mfem::Vector>& History() const { return hist_; }
 
@@ -342,6 +355,10 @@ private:
 
    std::deque<mfem::Vector> hist_; ///< Velocity true-dof history, newest first.
    std::deque<double> hist_times_; ///< Times of the history entries.
+
+   /// Solver of the last accepted step (MomentumResidual); not owned.
+   StokesSolver* last_solver_ = nullptr;
+   mfem::Vector last_b_;      ///< Its raw momentum right-hand side.
 
    double t_ = 0.0;           ///< Current time.
    double dt_ = 0.0;          ///< Current step size (varies in adaptive mode).

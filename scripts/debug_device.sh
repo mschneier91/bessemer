@@ -12,7 +12,9 @@
 # separate build is needed -- it reuses build/cpu. It is much slower (mprotect on
 # every access), so this is a diagnostic sweep, not part of the agentic loop.
 #
-# STATUS (2026-10-05): GREEN -- 74/74 (every fast-tier test at np 1 and 2).
+# STATUS (2026-10-06): GREEN -- 94/94 (every fast-tier test at np 1 and 2, ~10
+# min at -j6). Tests that solve on refined PERIODIC nonconforming meshes skip
+# those solves here only (an MFEM debug-device false positive, see CLAUDE.md).
 # The last failure was an intermittent page-protection fault from wrapping
 # hypre-malloc'd vectors (see CLAUDE.md, "Never hand MFEM device paths a
 # hypre-malloc'd buffer"), so a red sweep now means a REGRESSION. Green here is

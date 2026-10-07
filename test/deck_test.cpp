@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <vector>
 
 using namespace mfem;
 using incns::MakeBoxMesh;
@@ -172,4 +173,71 @@ TEST(Deck, RotationalFormKeys)
                          << "Case did not pass the convective form through";
    EXPECT_LT(rel, 1e-2) << "rotational and convective TGV disagree beyond "
                         << "discretization error";
+}
+
+// The `amr:` section and `time.cfl_max` parse; unstated keys keep their
+// defaults; min_size is normalized by L_ref in dimensional mode.
+TEST(Deck, AmrKeys)
+{
+   const Parameters defaults = Parameters::LoadYAML(INCNS_TGV_DECK);
+   EXPECT_FALSE(defaults.amr.enabled);
+   EXPECT_EQ(defaults.cfl_max, 0.0);
+
+   const std::string path =
+      "deck_amr_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   {
+      std::ofstream f(path);
+      f << "nondimensionalization:\n  mode: dimensional\n  L_ref: 2.0\n"
+        << "  U_ref: 1.0\n"
+        << "physics:\n  nu: 0.01\n"
+        << "time:\n  dt: 0.01\n  t_final: 1.0\n  cfl_max: 0.8\n"
+        << "amr:\n  enabled: true\n  interval: 20\n  initial_passes: 2\n"
+        << "  passes_per_event: 3\n  anisotropic: true\n  aniso_ratio: 0.4\n"
+        << "  threshold_mode: absolute\n  tolerance: 0.02\n  min_size: 0.1\n"
+        << "  max_elements: 5000\n  nc_limit: 2\n  rebalance: false\n"
+        << "  project_history: false\n  write_indicator: true\n";
+   }
+   const Parameters p = Parameters::LoadYAML(path);
+   std::remove(path.c_str());
+   EXPECT_TRUE(p.amr.enabled);
+   EXPECT_EQ(p.amr.interval, 20);
+   EXPECT_EQ(p.amr.initial_passes, 2);
+   EXPECT_EQ(p.amr.passes_per_event, 3);
+   EXPECT_TRUE(p.amr.anisotropic);
+   EXPECT_DOUBLE_EQ(p.amr.aniso_ratio, 0.4);
+   EXPECT_EQ(p.amr.threshold_mode, incns::AmrThreshold::Absolute);
+   EXPECT_DOUBLE_EQ(p.amr.tolerance, 0.02);
+   EXPECT_DOUBLE_EQ(p.amr.min_size, 0.05); // 0.1 / L_ref
+   EXPECT_EQ(p.amr.max_elements, 5000);
+   EXPECT_EQ(p.amr.nc_limit, 2);
+   EXPECT_FALSE(p.amr.rebalance);
+   EXPECT_FALSE(p.amr.project_history);
+   EXPECT_TRUE(p.amr.write_indicator);
+   EXPECT_DOUBLE_EQ(p.cfl_max, 0.8);
+}
+
+TEST(Deck, ForcesKeys)
+{
+   const Parameters defaults = Parameters::LoadYAML(INCNS_TGV_DECK);
+   EXPECT_FALSE(defaults.forces.enabled);
+
+   const std::string path =
+      "deck_forces_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   {
+      std::ofstream f(path);
+      f << "nondimensionalization:\n  mode: dimensional\n  L_ref: 2.0\n"
+        << "  U_ref: 4.0\n"
+        << "physics:\n  nu: 0.01\n"
+        << "mesh:\n  dim: 3\n  elements: [2, 2, 2]\n  lengths: [1, 1, 1]\n"
+        << "time:\n  dt: 0.01\n  t_final: 1.0\n"
+        << "forces:\n  enabled: true\n  attributes: [4, 7]\n"
+        << "  reference_velocity: 2.0\n  reference_area: 0.5\n  interval: 0\n";
+   }
+   const Parameters p = Parameters::LoadYAML(path);
+   std::remove(path.c_str());
+   EXPECT_TRUE(p.forces.enabled);
+   EXPECT_EQ(p.forces.attributes, (std::vector<int> {4, 7}));
+   EXPECT_DOUBLE_EQ(p.forces.reference_velocity, 0.5); // 2.0 / U_ref
+   EXPECT_DOUBLE_EQ(p.forces.reference_area, 0.125);   // 0.5 / L_ref^2 (3D)
+   EXPECT_EQ(p.forces.interval, 0);
 }

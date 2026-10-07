@@ -4,6 +4,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
+
 namespace incns
 {
 
@@ -275,6 +277,16 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(amr, "project_history", p.amr.project_history);
    Maybe(amr, "write_indicator", p.amr.write_indicator);
 
+   const YAML::Node forces = root["forces"];
+   Maybe(forces, "enabled", p.forces.enabled);
+   if (forces && forces["attributes"])
+   {
+      p.forces.attributes = forces["attributes"].as<std::vector<int>>();
+   }
+   Maybe(forces, "reference_velocity", p.forces.reference_velocity);
+   Maybe(forces, "reference_area", p.forces.reference_area);
+   Maybe(forces, "interval", p.forces.interval);
+
    const YAML::Node chk = root["checkpoint"];
    Maybe(chk, "enabled", p.checkpoint.enabled);
    Maybe(chk, "path", p.checkpoint.path);
@@ -289,6 +301,11 @@ Parameters Parameters::LoadYAML(const std::string& path)
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();
+   MFEM_VERIFY(!p.forces.enabled || !p.forces.attributes.empty(),
+               "parameters: forces.enabled needs forces.attributes");
+   MFEM_VERIFY(p.forces.reference_velocity > 0.0 &&
+               p.forces.reference_area > 0.0 && p.forces.interval >= 0,
+               "parameters: bad forces reference scales or interval");
    p.Normalize();
    return p;
 }
@@ -316,6 +333,10 @@ void Parameters::Normalize()
       const double U_over_L = nondim.U_ref / nondim.L_ref;
       for (int d = 0; d < 3; ++d) { mesh.lengths[d] /= nondim.L_ref; }
       amr.min_size /= nondim.L_ref;
+      // Force coefficients use nondimensional references: U / U_ref and the
+      // area (a length in 2D) / L_ref^(dim - 1).
+      forces.reference_velocity /= nondim.U_ref;
+      forces.reference_area /= std::pow(nondim.L_ref, mesh.dim - 1);
       dt *= U_over_L;
       t_final *= U_over_L;
       nu = 1.0 / nondim.Re;

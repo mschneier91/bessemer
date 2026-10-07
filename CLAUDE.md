@@ -118,6 +118,14 @@ run them** (see Guardrails).
 ```
 src/
   mesh/periodic_box.{hpp,cpp}       # periodic quad/hex mesh factory
+  mesh/case_mesh.{hpp,cpp}          # THE mesh factory: MakeCaseMesh/PartitionMesh (NC-ready when AMR is on)
+  mesh/cylinder_channel.{hpp,cpp}   # DFG cylinder-channel quad mesh (O-grid ring, exact curved nodes)
+  amr/                              # adaptive mesh refinement (see "Adaptive mesh refinement")
+    amr_parameters.{hpp,cpp}        # AmrParameters (deck `amr:`)
+    gradient_indicator.{hpp,cpp}    # directional velocity-gradient indicator G_{K,d} (nvcc TU)
+    refinement_marker.{hpp,cpp}     # thresholds, directions, caps, 3D anisotropic conflicts
+    mesh_adapter.{hpp,cpp}          # refine/rebalance in place + exact field transfer; RefinementRecord
+    history_projection.{hpp,cpp}    # project transferred history onto the refined div-free subspace
   spaces/mixed_spaces.{hpp,cpp}     # velocity/pressure ParFESpaces, block offsets
   operators/
     stokes_operator.{hpp,cpp}       # block [A Bᵀ; B 0], PA; optional grad–div on A
@@ -135,7 +143,10 @@ src/
     multistep_coeffs.{hpp,cpp}      # BDF + AB/EXT coefficients, variable-step aware
     time_integrator.{hpp,cpp}       # in-repo stepper (NOT mfem::ODESolver)
     adaptive_controller.{hpp,cpp}   # LTE estimate, PI controller, mixed abs/rel tol; records step history
+    integrator_state.hpp            # IntegratorState: the marching state (checkpoint + AMR events)
+    cfl.{hpp,cpp}                   # directional convective CFL rate (dt ceiling; nvcc TU)
   post/pressure_mean.{hpp,cpp}      # mass-weighted mean-zero projection
+  post/body_force.{hpp,cpp}         # lift/drag by John's volume-integral (residual) formulation
   post/output.{hpp,cpp}             # ParaViewDataCollection writer — high-order output + LOD
   quadrature/rule_book.{hpp,cpp}    # OWNS IntegrationRules (program lifetime); per-integrator order AND 1D type (GL default, GLL mass option)
   util/profiler.{hpp,cpp}           # nested scoped wall-time profiler (INCNS_PROFILE)
@@ -150,6 +161,7 @@ src/
 apps/
   run_case.cpp                      # generic YAML-driven driver (no recompile per case)
   taylor_green.cpp                  # example in-code driver (analytic IC, periodic)
+  dfg_cylinder.cpp                  # DFG flow-around-a-cylinder benchmark (c_D, c_L, dp)
 cases/*.yaml                        # input decks (params, mesh, BCs, output)
 environments/<machine>/             # per-machine spack.yaml + committed spack.lock
 python/                             # pybind11 bindings (module `incns`) + examples
@@ -692,6 +704,131 @@ by the 2026-10-02 decision above), so `StokesSolver`, the
 preconditioners, and the Schur block must not need edits. Per 2.0, any *default* change
 (e.g. making skew the default) needs measured NSE evidence, not a preference.
 
+## Adaptive mesh refinement (AMR) — DONE 2026-10-06
+
+Refinement-only h-adaptivity, isotropic or anisotropic, for Stokes and NSE (both convective
+forms), per `amr_spec.md` (human request 2026-10-06: "spec out AMR with the anisotropic
+option, gradient-type criterion, no derefinement", then "go do all of this"; decisions D1–D8
+taken at the spec's proposals). Off by default: with `amr.enabled: false` no code path,
+result or baseline changes.
+
+- **Mesh.** `MakeCaseMesh` (src/mesh/case_mesh) is the only mesh factory (run_case,
+  taylor_green and the Python bindings use it). AMR on: `EnsureNCMesh()` BEFORE partitioning
+  (MFEM cannot make a conforming ParMesh nonconforming) and METIS's partition passed
+  explicitly (an NC ParMesh otherwise uses NCMesh's SFC partition, shifting per-np iteration
+  counts). Hanging nodes are handled by MFEM's prolongation P; every existing operator and
+  preconditioner works on NC meshes unchanged (nc_stokes_test: steady MMS exact on NC
+  meshes on every solver path).
+- **Indicator** (amr/gradient_indicator, nvcc TU): G_{K,d} = RMS of du/dxi_d over K — the
+  velocity change across K along its d-th edge — and eta_K = |G_K| (= h|grad u| on cubes).
+  Splitting K in d halves G_{K,d}: anisotropy falls out of the indicator.
+- **Marking** (amr/refinement_marker): `theta * max eta` (relative) or a tolerance
+  (absolute); directions {d : G_d >= aniso_ratio * max G} (anisotropic) or all; `min_size`
+  per direction (child extent); `max_elements` by threshold bisection (largest eta first);
+  3D at np > 1: anisotropic entries in conflict across a face are upgraded to XYZ
+  (`ParMesh::AnisotropicConflict`; MFEM's parallel anisotropic hex refinement requires it).
+  `nc_limit` default 1 (2:1).
+- **An event = in-memory checkpoint + restart.** `Case::Adapt()` (every `amr.interval`
+  accepted steps, never in the startup ramp, before output/checkpoint): mark on the live
+  velocity (nothing marked -> nothing torn down); export `IntegratorState`; destroy the
+  integrator and output BEFORE the mesh changes; `MeshAdapter::Refine` carries the history
+  and the solver pressure across (EXACT: refinement nests the spaces); optional
+  `project_history` (M-orthogonal projection onto the refined discretely div-free subspace,
+  default on — removes the ~||B u||/dt pressure transient); rebuild the integrator, import;
+  ParaView output continues in restart mode. `amr.initial_passes` refine on the analytic IC
+  before the integrator exists.
+- **Checkpoint/restart of adapted runs — DEVIATION from amr_spec 5.6.** Not ParPrint: a
+  re-read mesh need not number its dofs like the original, so the saved true-dof vectors
+  would not line up. The Case logs every refinement batch (`RefinementRecord`: local refs,
+  nc_limit, rebalance); the checkpoint stores the log per rank; a restart replays it on the
+  initial box at the same np — identical mesh, partition and numbering (amr_checkpoint_test:
+  restart matches the uninterrupted run BITWISE at np 1/2/4 with rebalancing).
+- **Convective CFL ceiling (D6), `time.cfl_max`** (time/cfl, nvcc TU; NSE only; 0 = off):
+  directional rate c = k^2 max sum_d |(J^{-1}u)_d|. Adaptive: the controller's dt ceiling is
+  cfl_max / c. Fixed step: setup and every event abort if c dt > cfl_max (dt never changes
+  silently). Refinement lowers the stable step of the explicit convective form.
+- **Rank dependence.** Adapted meshes can differ between np = 1 and np > 1: 3D anisotropic
+  conflicts are resolved by serial NCMesh internally but upgraded to XYZ in parallel, and the
+  NC-limit enforcement differs (amr_flow_test A1: isotropic 736 elements at np 1, 624 at
+  np 2/4). Cross-np comparisons on adapted meshes are not exact.
+- **Tests** (all fast tier, np 1/2/4): nc_stokes_test (S1–S4), amr_indicator_test,
+  amr_marker_test, amr_transfer_test, amr_event_test (MMS exact through events, no-op event
+  bitwise, projection, initial passes), cfl_test, amr_checkpoint_test, amr_flow_test (TGV
+  with events at least as accurate as without, at nu = 0.2; anisotropic layer resolved with
+  56 vs 736 elements), deck_test AmrKeys, py_stokes_amr (Python).
+- **Observation, not AMR:** the convective-form NSE TGV at nu = 0.05 on [0,2pi]^2 is
+  pre-asymptotic on coarse Q3 meshes — uniform 4x4 -> 8x8 RAISES the t = 0.4 velocity error
+  (0.012 -> 0.024) before 16x16 drops it (0.0027); Stokes converges at h^4 there and nu = 0.2
+  converges monotonically. Existing TGV oracles run at nu = 1, so they never saw it. Worth a
+  look before trusting coarse-mesh convective-form runs at moderate Re.
+
+## Lift and drag (John's volume-integral formulation) — DONE 2026-10-06
+
+Human request 2026-10-06 ("add in the ability to do lift and drag calculations using the
+weak formulation from Volker John's work"). `src/post/body_force`, deck section `forces:`
+(`enabled`, `attributes` = the body's boundary attributes, `reference_velocity`,
+`reference_area` — both nondimensionalized with U_ref, L_ref^(dim−1) — and `interval`),
+`Case::BodyForceVector()` / `ForceCoefficients()` / `SetForceBody(attrs)` (pick the body
+after the mesh exists), CSV log `<output.path>/<output.name>_forces.csv` (t, F, C) every
+`interval` accepted steps (0 = no log; tests use 0 so nothing lands in the working
+directory), Python `case.set_force_body("ymin")` (attribute, box face name or list) /
+`case.forces()` / `case.force_coefficients()`.
+
+- **Formulation.** F_i = −[(∂_t u, v_i) + ν(∇u, ∇v_i) + n(u; v_i) − (p, ∇·v_i) − (f, v_i)]
+  with v_i = e_i on the body S and 0 on the rest of the boundary (John 2004, IJNMF 44;
+  John & Matthies 2001). Integration by parts makes it ∫_S σn for the exact solution; for
+  the discrete solution it is superconvergent where the boundary-traction integral is not,
+  and it is how the DFG reference values were computed. Discrete v_i: e_i at the velocity
+  nodes on S, 0 elsewhere (John's choice).
+- **Evaluated as the residual of the step that produced (u, p), not re-integrated.**
+  `StokesTimeIntegrator::MomentumResidual` forms r = A u + N u − Bᵀp − b with the
+  UNCONSTRAINED momentum/divergence operators (`StokesOperator::MomentumUnconstrained`,
+  `DivergenceUnconstrained`: assembled without Dirichlet elimination) and the step's raw,
+  pre-elimination RHS b — so the scheme's own BDF time derivative, viscous, grad-div,
+  convection (extrapolated, inside b) or rotation (N), and forcing all enter exactly as the
+  step solved them; F_i = −r·v_i. r vanishes at every free dof to Krylov tolerance, so the
+  force depends only on v_i's boundary values (the discrete form of the continuous
+  identity; `body_force_test` F2 checks this for convective, rotational and grad-div).
+  Rotational form: the solver pressure is the Bernoulli head P = p + ½|u|², equal to p on a
+  no-slip body, so nothing changes.
+- **The trapezoidal starter step's force is not the force at t¹** (its pressure is a time
+  average); `body_force_test` F1 asserts from the second step on. Startup transients in a
+  forces log are expected.
+- **Mesh:** `src/mesh/cylinder_channel` builds the DFG geometry (channel [0,2.2]×[0,0.41],
+  cylinder r = 0.05 at (0.2, 0.2)) as a quad mesh: 3×3 blocks, an O-grid ring around the
+  cylinder, curved nodes placed by the exact transfinite ring map (area and perimeter
+  exact to the geometry order — `cylinder_mesh_test`). It refines correctly under NC AMR.
+- **Benchmark driver:** `apps/dfg_cylinder` (2D-1 steady Re 20, 2D-2 periodic Re 100;
+  ramped parabolic inflow, do-nothing outflow) prints c_D, c_L and Δp, and the 2D-1
+  relative errors against John's reference values (c_D = 5.57953523384,
+  c_L = 0.010618948146, Δp = 0.11752016697). Options: mesh resolution (`-ns -nr -nd`),
+  form (`-rot`, `-pbj` = PBJ-Krylov velocity PC), `-gd` grad-div, `-cfl`, `-dout`
+  (Dirichlet outflow), AMR (`-ip`, `-ai`). 2D-2 is expensive-tier: launch by hand.
+- **Measured 2026-10-06** (np 4, default mesh = 208 Q3/Q2 elements, marched from rest to
+  t = 8, relative errors vs John):
+  ```
+  form                       c_D      c_L      dp       steps  wall
+  convective (CFL 0.6)       1.05e-4  2.79e-3  4.06e-3  2922   9 min
+  rotational, PBJ            9.45e-4  5.32e-2  5.72e-3   472   24 s
+  rotational, PBJ, c_gd 1    1.03e-4  1.13e-2  5.74e-3   428   1.7 min
+  ```
+  **The rotational form without grad-div is the outlier, and it is the discretization, not
+  the force:** refining the cylinder region 4x leaves its c_D error at 7.2e-4; imposing the
+  developed profile at the outlet instead of do-nothing (which acts on the Bernoulli head
+  in that form) changes nothing; grad-div (c_gd 0.1 / 1 / 10: c_D 2.3e-4 / 1.0e-4 / 4.7e-4)
+  restores the convective form's accuracy. This is the known accuracy loss of the rotation
+  form (Bernoulli-pressure error amplified by 1/ν; Layton, Manica, Neda, Olshanskii &
+  Rebholz, JCP 2009), which grad-div is the standard remedy for. **Use grad-div with the
+  rotational form when forces matter.** The convective form's c_L is still oscillating by
+  ±1% at t = 8 (a slowly damped transient).
+- **Tests:** `body_force_test` (F1: exact wall force of a manufactured channel flow at every
+  step from the second — 2D/3D, Stokes/NSE, and an AMR-refined NC mesh with hanging nodes
+  on the body; F2: interior-extension independence), `cylinder_mesh_test` (M1 geometry,
+  M2 partition + NC refinement), both fast tier at np 1/2/4 and green on the debug device;
+  `deck_test` ForcesKeys; `py_channel_noslip` (Python: the exact wall drag through
+  `set_force_body("ymin")`, 1.547000000000 vs 1.547); `dfg_cylinder_slow_test` (slow tier,
+  np 4: DFG 2D-1 against John's values, ceilings in `test/baselines.yaml` `dfg_2d1`).
+
 ## Environment & build
 
 Dependencies (MFEM, hypre, METIS, MPI, yaml-cpp; pybind11 if Python is built) come from
@@ -1048,7 +1185,13 @@ fine end and the order assert fails for the wrong reason.
     `rotational_convection.cpp` (added 2026-10-05);
   - `graddiv::DiagonalSumFactorized` (the grad-div PA diagonal, sum-factorized
     2026-10-05): its 3D shared tiles are ~48.6 KB at CUDA's MAX_D1D = MAX_Q1D = 14, right
-    at the 48 KB static limit -- confirm it launches at the largest size in use.
+    at the 48 KB static limit -- confirm it launches at the largest size in use;
+  - `src/amr/gradient_indicator.cpp` (AMR indicator reduction) and `src/time/cfl.cpp`
+    (CFL rate), both 2026-10-06, both with the `#error` nvcc guard;
+  - AMR on PERIODIC meshes has no debug-device coverage (the MFEM debug-device false
+    positive below; `amr_test::DebugDeviceSkipsPeriodicNcSolves`): `amr_checkpoint_test`
+    2D and `amr_flow_test` T1 skip there -- run them on the GPU. Also watch the NC
+    prolongation P (a hypre matrix on NC meshes, applied every operator apply).
 
   Steps: `cmake --preset cuda && cmake --build --preset cuda` (clean, `-Werror`); then the
   fast tier with **≥1 GPU per rank** (4 GPUs for np4 — see Environment & build), paying
@@ -1118,6 +1261,12 @@ Launched by a human via the batch scheduler. See Guardrails.
 - **Time integration is in-repo** — never reach for `mfem::ODESolver` or built-in steppers.
 - **Convection stays over-integrated** — its integrator keeps its own higher-order rule;
   do not collapse it to the default quadrature.
+- **The RuleBook must outlive the MESH's use of its rules too** (found 2026-10-06): MFEM
+  caches geometric factors on the mesh keyed by `IntegrationRule*` and requires each rule to
+  outlive its entry. A RuleBook destroyed while the mesh lives on leaves dangling keys; a
+  later rule allocated at the same address hits the stale entry (wrong factors, NaNs — it
+  surfaced as order-dependent NaNs on the debug device). `Case::~Case` therefore calls
+  `mesh.DeleteGeometricFactors()`; in tests, declare the RuleBook BEFORE the mesh.
 - **Quadrature via the rule book.** Integrators take their `IntegrationRule` from the
   `RuleBook`; never hardcode a rule at the call site, and **never pass the address of a
   temporary/local `IntegrationRule` to an integrator.** MFEM integrators hold *non-owning*
@@ -1137,7 +1286,8 @@ Launched by a human via the batch scheduler. See Guardrails.
   root cause). Every TU is compiled by `mpicxx`/g++ — leaving `__CUDACC__` undefined —
   **except** the short, explicit nvcc list in `src/CMakeLists.txt` (currently
   `grad_div_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`,
-  `kinetic_head.cpp`). Outside that list, two consequences, both silent:
+  `kinetic_head.cpp`, `amr/gradient_indicator.cpp`, `time/cfl.cpp`). Outside that list,
+  two consequences, both silent:
   - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
     host-only.
   - `forall`'s CUDA dispatch is `#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)`
@@ -1178,8 +1328,9 @@ Launched by a human via the batch scheduler. See Guardrails.
   there), so there is no cost to doing it always. The fitness function that catches misses is
   the **debug device** (`scripts/debug_device.sh`, `INCNS_DEVICE=debug`): MFEM's mprotect-
   guarded backend that *faults* on un-annotated host access of device memory instead of
-  copying — run it (no GPU needed) and fix what it flags. **Status 2026-10-05: the whole
-  sweep is GREEN (74/74, np 1 and 2), so a failure there is now a regression** — re-run it
+  copying — run it (no GPU needed) and fix what it flags. **Status 2026-10-06: the whole
+  sweep is GREEN (94/94, np 1 and 2; refined-periodic NC solves skip there, see the MFEM
+  false positive below), so a failure there is now a regression** — re-run it
   after any change to device-side code.
 - **Never hand MFEM device paths a hypre-malloc'd buffer — use `ParallelAssemble(Vector&)`.**
   Root-caused 2026-10-05 (intermittent `nse_mms_test` crash at np = 2 on the debug device,
@@ -1194,6 +1345,19 @@ Launched by a human via the batch scheduler. See Guardrails.
   into MFEM-owned vectors: `form.ParallelAssemble(tv)` (done in `AssembleForcing`,
   `StokesSolver::Solve`, `MassWeightedMean`). Do not reintroduce
   `std::unique_ptr<HypreParVector>(form.ParallelAssemble())`.
+- **MFEM debug-device false positive with BlockVector blocks (found 2026-10-06, AMR).**
+  Pure-MFEM reproduction, no mesh: a `BlockVector` valid on the host, one block that spans
+  >= 1 page (512 doubles) read on the device through the block alias, then the whole vector
+  read on the device -> "illegal memory access" in `MemoryManager::GetDevicePtr` (the alias
+  read page-protected the host pages without marking the base device-valid; the full
+  host->device copy then reads them). 400-double blocks pass, 1032 fail. ASan/UBSan are
+  clean and real GPUs keep the same validity flags without page protection, so it is a
+  debug-device artifact. bessemer hits it on NONCONFORMING meshes, whose restriction /
+  CPU-hypre prolongation touch BlockVector blocks on the host; walled meshes mostly escape
+  (the constrained operators copy into their own temporaries), refined PERIODIC meshes do
+  not. Tests that solve on refined periodic meshes skip on the debug device only
+  (`amr_test::DebugDeviceSkipsPeriodicNcSolves`); everything else runs there. Candidate for
+  an upstream MFEM report.
 - **A green debug device does NOT mean GPU-ready.** It has a structural blind spot: at
   `forall.hpp`, `if (Device::Allows(Backend::DEBUG_DEVICE)) { goto backend_cpu; }` — running
   a forall on the host over "device" memory is the *intended, working* path there, since the

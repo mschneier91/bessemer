@@ -184,6 +184,21 @@ public:
    mfem::Operator& ViscousUnconstrained() { return *Kunc_.Ptr(); }
 
    /**
+    * @brief The momentum block A = mass_coeff*M + nu*K (+ grad-div) on true
+    *        dofs, UNCONSTRAINED -- its Dirichlet rows are the reaction forces
+    *        (body-force evaluation, post/body_force).
+    * @return Unconstrained operator (rebuilt with the momentum block).
+    */
+   mfem::Operator& MomentumUnconstrained() { return *Aunc_.Ptr(); }
+
+   /**
+    * @brief The divergence block B (velocity -> pressure true dofs) with NO
+    *        Dirichlet columns eliminated; MultTranspose applies B^T.
+    * @return Unconstrained rectangular operator.
+    */
+   mfem::Operator& DivergenceUnconstrained() { return *Bunc_.Ptr(); }
+
+   /**
     * @brief The divergence block @c B (velocity true dofs -> pressure true
     *        dofs), with the convention @c (B u)_i = (div u, q_i).
     * @return Rectangular operator; MultTranspose applies @c B^T.
@@ -268,6 +283,8 @@ private:
    mfem::OperatorPtr K_; ///< True-dof momentum operator.
    mfem::OperatorPtr Kunc_; ///< True-dof unconstrained viscous operator.
    mfem::OperatorPtr B_; ///< True-dof divergence operator.
+   mfem::OperatorPtr Aunc_; ///< Momentum block, unconstrained (reactions).
+   mfem::OperatorPtr Bunc_; ///< Divergence block, unconstrained.
    /// Rotation-term PA form (lagged velocity only); Delta-t independent, so
    /// built once -- the vorticity is updated in place every step.
    std::unique_ptr<mfem::ParBilinearForm> rot_form_;

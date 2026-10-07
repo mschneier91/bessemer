@@ -121,6 +121,21 @@ incns_add_mpi_test(amr_transfer_test amr_transfer_test.cpp)
 incns_add_mpi_test(amr_event_test amr_event_test.cpp)
 incns_add_mpi_test(cfl_test cfl_test.cpp)
 incns_add_mpi_test(amr_checkpoint_test amr_checkpoint_test.cpp)
+incns_add_mpi_test(amr_flow_test amr_flow_test.cpp)
+# Lift/drag (post/body_force) and the DFG cylinder-channel mesh.
+incns_add_mpi_test(body_force_test body_force_test.cpp)
+incns_add_mpi_test(cylinder_mesh_test cylinder_mesh_test.cpp)
+# The DFG 2D-1 benchmark (c_D, c_L, dp vs John's reference values): `slow`
+# label, np = 4 only, on demand (`scripts/test.sh cpu -L slow`).
+add_executable(dfg_cylinder_slow_test dfg_cylinder_slow_test.cpp)
+target_link_libraries(dfg_cylinder_slow_test PRIVATE incns incns_test_main
+  yaml-cpp::yaml-cpp)
+target_compile_definitions(dfg_cylinder_slow_test PRIVATE
+  INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
+add_test(NAME dfg_cylinder_slow_np4
+  COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:dfg_cylinder_slow_test>)
+set_tests_properties(dfg_cylinder_slow_np4 PROPERTIES
+  LABELS "slow" PROCESSORS 4 TIMEOUT 3600)
 incns_add_mpi_test(cc_robustness_test cc_robustness_test.cpp
   INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
 target_link_libraries(cc_robustness_test PRIVATE yaml-cpp::yaml-cpp)

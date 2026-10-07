@@ -10,6 +10,7 @@
 #include "mesh/periodic_box.hpp"
 #include "operators/convection.hpp" // ConvectiveForm
 #include "operators/grad_div_scale.hpp"
+#include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
@@ -118,14 +119,19 @@ struct Parameters
    /// Adaptive mesh refinement (deck section `amr:`; off by default).
    AmrParameters amr;
 
+   /// Lift/drag on a body (deck section `forces:`; off by default).
+   ForceParameters forces;
+
    // --- time integration ------------------------------------------------------
    double dt = 1e-2;     ///< Fixed step size / adaptive initial guess.
    double t_final = 1.0; ///< End time.
    int time_order = 2;   ///< BDF order: 2 production, 3 test-only.
    bool adaptive = false; ///< Adaptive stepping (BDF2 advance, BDF3 estimator).
    AdaptiveControllerOptions controller; ///< Adaptive tolerances/constants.
-   /// Convective CFL limit for Navier-Stokes (deck `time.cfl_max`; 0 = off):
-   /// the directional CFL number c*dt (see time/cfl.hpp) may not exceed it.
+   /// Convective CFL limit for Navier-Stokes with the (IMEX, explicit)
+   /// convective form (deck `time.cfl_max`; 0 = off; ignored by the
+   /// semi-implicit rotational form): the directional CFL number c*dt (see
+   /// time/cfl.hpp) may not exceed it.
    /// Adaptive mode caps the step; fixed-step mode aborts at setup or after
    /// an AMR event that would exceed it (it never changes dt silently).
    double cfl_max = 0.0;

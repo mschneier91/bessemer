@@ -10,6 +10,7 @@
 #include "config/parameters.hpp"
 #include "post/checkpoint.hpp"
 #include "post/diagnostics.hpp"
+#include "post/body_force.hpp"
 #include "post/output.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -163,6 +164,30 @@ public:
     */
    void WriteCheckpoint(const std::string& dir);
 
+   /**
+    * @brief Select the body for lift/drag after construction (enables
+    *        forces) -- for drivers that resolve the attributes from the mesh,
+    *        e.g. a box face by name. Overrides forces.attributes.
+    * @param attributes Boundary attributes forming the body (non-empty).
+    */
+   void SetForceBody(const std::vector<int>& attributes);
+
+   /**
+    * @brief Force of the fluid on the body (forces.attributes) at the last
+    *        step, by John's volume-integral formulation (post/body_force).
+    *        Collective.
+    * @return F, size dim (drag = x, lift = y).
+    * @pre forces.enabled, and a step taken since setup / the last AMR event.
+    */
+   mfem::Vector BodyForceVector();
+
+   /**
+    * @brief Force coefficients C = 2 F / (U^2 A) with the forces.* reference
+    *        scales. Collective.
+    * @return C, size dim.
+    */
+   mfem::Vector ForceCoefficients();
+
 private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
@@ -185,9 +210,9 @@ private:
    /// amr.write_indicator: recompute the eta / level cell data.
    void UpdateAmrCellData();
 
-   /// time.cfl_max with Navier-Stokes: (re)build the CFL estimator on the
-   /// current mesh; adaptive mode installs the dt ceiling, fixed-step mode
-   /// verifies the current dt.
+   /// time.cfl_max with the convective NSE form: (re)build the CFL estimator
+   /// on the current mesh; adaptive mode installs the dt ceiling, fixed-step
+   /// mode verifies the current dt.
    void SetupCfl();
 
    /**
@@ -220,6 +245,10 @@ private:
    /// Every refinement batch applied to the mesh, in order (initial passes,
    /// events, a restart's replay) -- what a checkpoint stores to rebuild it.
    std::vector<RefinementRecord> refine_log_;
+   /// Lift/drag evaluator on the current velocity space (forces.enabled).
+   std::unique_ptr<BodyForce> body_force_;
+   /// Write a forces CSV row on the forces interval (rank 0).
+   void MaybeLogForces();
    /// amr.write_indicator: piecewise-constant space and fields for the
    /// indicator and the refinement depth (rebuilt after each event).
    std::unique_ptr<mfem::L2_FECollection> amr_fec_;

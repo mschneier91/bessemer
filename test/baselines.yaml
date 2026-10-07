@@ -113,3 +113,35 @@ convergence_rates: {}
 
 # Divergence norms (filled in 1.10). ||div u|| ceilings, gamma=0 vs gamma>0.
 divergence: {}
+
+# DFG benchmark 2D-1 (steady flow around a cylinder, Re = 20) --
+# test/dfg_cylinder_slow_test (slow tier, np 4). `reference`: John's values
+# (literature, not measured here). Per run: the configuration and the
+# relative-error ceilings, ~2x the errors measured 2026-10-06 (desktop, np 4) on
+# the default cylinder-channel mesh (208 Q3/Q2 elements), marched to t_final:
+#   convective:          c_D 1.047e-4, c_L 2.789e-3, dp 4.058e-3 (2922 steps, 9 min)
+#   rotational_grad_div: c_D 1.025e-4, c_L 1.133e-2, dp 5.735e-3 (428 steps, 1.7 min)
+# For comparison (not tested): rotational WITHOUT grad-div c_D 9.45e-4,
+# c_L 5.32e-2, and refining the cylinder region 4x leaves c_D at 7.2e-4 --
+# the rotation form's known accuracy loss, which grad-div removes.
+dfg_2d1:
+  reference:
+    c_d: 5.57953523384
+    c_l: 0.010618948146
+    dp: 0.11752016697
+  convective:
+    rotational: false
+    grad_div: 0.0
+    cfl_max: 0.6
+    t_final: 8.0
+    max_rel_err_c_d: 2.0e-4
+    max_rel_err_c_l: 6.0e-3
+    max_rel_err_dp: 8.0e-3
+  rotational_grad_div:
+    rotational: true
+    grad_div: 1.0
+    cfl_max: 0.0
+    t_final: 8.0
+    max_rel_err_c_d: 2.0e-4
+    max_rel_err_c_l: 2.5e-2
+    max_rel_err_dp: 1.2e-2

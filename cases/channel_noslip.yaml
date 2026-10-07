@@ -29,3 +29,8 @@ solver:
 
 boundary_conditions:
   - {select: [ymin, ymax], type: no_slip}   # walls: u = 0, no field needed
+
+# Lift/drag of the bottom wall: run_channel.py selects the body by face name
+# (case.set_force_body("ymin")); interval 0 = no CSV log, read it from Python.
+forces:
+  interval: 0

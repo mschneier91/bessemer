@@ -1,5 +1,7 @@
 #include "amr/refinement_marker.hpp"
 
+#include "util/profiler.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -71,6 +73,7 @@ int RefinementMarker::ResolveAnisotropicConflicts(ParMesh& mesh,
 void RefinementMarker::Mark(ParMesh& mesh, const Vector& g,
                             Array<Refinement>& refs, MarkStats* stats) const
 {
+   INCNS_PROFILE("amr::mark");
    const int dim = mesh.Dimension(), ne = mesh.GetNE();
    const MPI_Comm comm = mesh.GetComm();
    MFEM_VERIFY(g.Size() == dim * ne, "refinement_marker: indicator size "
