@@ -4,10 +4,12 @@
  */
 #pragma once
 
+#include "amr/mesh_adapter.hpp"
 #include "config/parameters.hpp"
 #include "time/time_integrator.hpp"
 
 #include <string>
+#include <vector>
 
 namespace incns
 {
@@ -41,9 +43,21 @@ public:
     * @param dir        Checkpoint directory (created if absent).
     * @param integrator Source of the state.
     * @param params     Case parameters (reference scales recorded).
+    * @param refinements AMR refinement history of the run, in order (null or
+    *                   empty when the mesh was never refined). Written per
+    *                   rank; a restart replays it on the initial mesh to
+    *                   recover the adapted mesh with identical numbering.
     */
    static void Write(const std::string& dir, StokesTimeIntegrator& integrator,
-                     const Parameters& params);
+                     const Parameters& params,
+                     const std::vector<RefinementRecord>* refinements = nullptr);
+
+   /**
+    * @brief The AMR refinement history stored with a checkpoint. Collective.
+    * @param dir Checkpoint directory.
+    * @return The records in order; empty when the run never refined.
+    */
+   static std::vector<RefinementRecord> ReadRefinements(const std::string& dir);
 
    /**
     * @brief Restore a marching state written by Write(). Collective.

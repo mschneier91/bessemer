@@ -14,6 +14,21 @@
 namespace amr_test
 {
 
+/**
+ * MFEM debug-device false positive (pure-MFEM reproduction in CLAUDE.md): a
+ * host-valid BlockVector whose block spans >= 1 page, read on the device
+ * through the block alias and then read whole on the device, faults in
+ * MemoryManager::GetDevicePtr. Solves on REFINED PERIODIC meshes hit it: with
+ * no essential dofs the constrained operators hand BlockVector blocks straight
+ * to the NC prolongation (a CPU-hypre matrix that reads them on the host).
+ * ASan is clean and other backends are unaffected, so those cases skip on the
+ * debug device only.
+ */
+inline bool DebugDeviceSkipsPeriodicNcSolves()
+{
+   return mfem::Device::Allows(mfem::Backend::DEBUG_DEVICE);
+}
+
 inline incns::BoxSpec Box(int dim, int n, bool periodic, double length = 1.0)
 {
    incns::BoxSpec s;

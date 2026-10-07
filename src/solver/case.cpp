@@ -105,6 +105,22 @@ void Case::EnsureSetup()
    if (integrator_) { return; }
    INCNS_PROFILE("case::setup");
 
+   // Restart of an adapted run: replay its refinement history on the initial
+   // mesh -- same deterministic operations, same np, so the same mesh,
+   // partition and dof numbering as when the checkpoint was written.
+   if (!params_.restart_from.empty())
+   {
+      std::vector<RefinementRecord> recs =
+         Checkpoint::ReadRefinements(params_.restart_from);
+      MFEM_VERIFY(recs.empty() || params_.amr.enabled, "case: the checkpoint "
+                  "holds an adapted mesh; restart it with amr.enabled");
+      for (const RefinementRecord& r : recs)
+      {
+         MeshAdapter::Refine(mesh_, spaces_, bc_, r.refs, r.nc_limit,
+                             r.rebalance, {});
+      }
+      refine_log_ = std::move(recs);
+   }
    // amr.initial_passes refine on the analytic initial condition BEFORE any
    // operator exists (nothing to transfer: the IC is re-projected).
    InitialRefinement();
@@ -176,7 +192,7 @@ void Case::Step()
    if (params_.checkpoint.enabled &&
        cycle_ % params_.checkpoint.interval == 0)
    {
-      Checkpoint::Write(params_.checkpoint.path, *integrator_, params_);
+      WriteCheckpoint(params_.checkpoint.path);
    }
 
    // Bad-reference-scale guard (dimensional mode): with a well-chosen U_ref
@@ -295,6 +311,7 @@ void Case::InitialRefinement()
       if (st.first_pass.marked == 0) { break; }
       MeshAdapter::Refine(mesh_, spaces_, bc_, refs, a.nc_limit, a.rebalance,
                           {});
+      refine_log_.push_back({refs, a.nc_limit, a.rebalance});
       st.passes = 1;
       st.ne_after = mesh_.GetGlobalNE();
       st.seconds = MPI_Wtime() - t0;
@@ -376,6 +393,7 @@ AdaptStats Case::Adapt(bool force_rebuild)
       if (refs.Size() == 0 && pass == 0 && st.first_pass.marked == 0) { break; }
       MeshAdapter::Refine(mesh_, spaces_, bc_, refs, a.nc_limit, a.rebalance,
                           fields);
+      refine_log_.push_back({refs, a.nc_limit, a.rebalance});
       refined = true;
       ++st.passes;
    }
@@ -421,6 +439,12 @@ AdaptStats Case::Adapt(bool force_rebuild)
                 << st.seconds << " s" << std::endl;
    }
    return st;
+}
+
+void Case::WriteCheckpoint(const std::string& dir)
+{
+   EnsureSetup();
+   Checkpoint::Write(dir, *integrator_, params_, &refine_log_);
 }
 
 void Case::SetupCfl()

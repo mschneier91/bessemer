@@ -15,6 +15,23 @@ namespace incns
 {
 
 /**
+ * @brief One refinement batch exactly as MeshAdapter::Refine applied it, with
+ *        rank-LOCAL element indices.
+ *
+ * Replaying a run's records in order on the same initial mesh at the same rank
+ * count reproduces the refined mesh, its partition AND its entity/dof
+ * numbering exactly (the same sequence of deterministic MFEM operations) --
+ * which is how a checkpoint restores an adapted mesh without relying on a
+ * printed mesh being renumbered the same way on reload.
+ */
+struct RefinementRecord
+{
+   mfem::Array<mfem::Refinement> refs; ///< Local refinements of the batch.
+   int nc_limit = 1;                   ///< NC limit it was applied with.
+   bool rebalance = false;             ///< Whether it was rebalanced after.
+};
+
+/**
  * @brief Refine (and optionally rebalance) a mesh in place, updating the
  *        mixed spaces, the boundary conditions and a set of fields.
  *

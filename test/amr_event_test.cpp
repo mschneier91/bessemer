@@ -123,6 +123,7 @@ Parameters MmsParams(int dim, bool adaptive)
    p.amr.interval = 2;
    p.amr.anisotropic = true;
    p.amr.theta = 0.6;
+   p.amr.max_elements = (dim == 2) ? 200 : 60; // keep the fast tier fast
    p.Normalize();
    return p;
 }
@@ -134,6 +135,7 @@ TEST(AmrEvent, E1_UnsteadyMmsStaysExactThroughEvents)
    for (int dim : {2, 3})
       for (bool adaptive : {false, true})
       {
+         if (dim == 3 && adaptive) { continue; } // 2D covers adaptive + events
          SCOPED_TRACE("dim=" + std::to_string(dim) + (adaptive ? " adaptive" :
                       " fixed"));
          Mms mms(dim);

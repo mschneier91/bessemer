@@ -155,6 +155,14 @@ public:
     */
    double ConvectiveCflNumber();
 
+   /**
+    * @brief Write a rolling checkpoint of the current state, including the
+    *        AMR refinement history (Step() calls this on the configured
+    *        interval). Collective.
+    * @param dir Checkpoint directory.
+    */
+   void WriteCheckpoint(const std::string& dir);
+
 private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
@@ -209,6 +217,9 @@ private:
    std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.
    /// Convective CFL estimator on the current mesh (time.cfl_max, NSE only).
    std::unique_ptr<ConvectiveCfl> cfl_;
+   /// Every refinement batch applied to the mesh, in order (initial passes,
+   /// events, a restart's replay) -- what a checkpoint stores to rebuild it.
+   std::vector<RefinementRecord> refine_log_;
    /// amr.write_indicator: piecewise-constant space and fields for the
    /// indicator and the refinement depth (rebuilt after each event).
    std::unique_ptr<mfem::L2_FECollection> amr_fec_;

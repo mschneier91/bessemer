@@ -62,9 +62,67 @@ void ReadVector(const std::string& path, int expected_size, Vector& v)
 
 } // namespace
 
+namespace
+{
+
+// Per-rank refinement history: int64 count, then per record int32 nc_limit,
+// int32 rebalance, int64 n, and n (int32 index, int32 type) pairs.
+void WriteRefinements(const std::string& path,
+                      const std::vector<RefinementRecord>& recs)
+{
+   std::ofstream f(path, std::ios::binary);
+   MFEM_VERIFY(f.good(), "checkpoint: cannot open " << path << " for writing");
+   const std::int64_t nrec = static_cast<std::int64_t>(recs.size());
+   f.write(reinterpret_cast<const char*>(&nrec), sizeof(nrec));
+   for (const RefinementRecord& r : recs)
+   {
+      const std::int32_t hdr[2] = {r.nc_limit, r.rebalance ? 1 : 0};
+      const std::int64_t n = r.refs.Size();
+      f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+      f.write(reinterpret_cast<const char*>(&n), sizeof(n));
+      for (int i = 0; i < r.refs.Size(); ++i)
+      {
+         const std::int32_t e[2] = {r.refs[i].index, r.refs[i].GetType()};
+         f.write(reinterpret_cast<const char*>(e), sizeof(e));
+      }
+   }
+   MFEM_VERIFY(f.good(), "checkpoint: write failed for " << path);
+}
+
+std::vector<RefinementRecord> ReadRefinementFile(const std::string& path)
+{
+   std::ifstream f(path, std::ios::binary);
+   MFEM_VERIFY(f.good(), "checkpoint: cannot open " << path
+               << " (missing AMR history or wrong rank count?)");
+   std::int64_t nrec = 0;
+   f.read(reinterpret_cast<char*>(&nrec), sizeof(nrec));
+   std::vector<RefinementRecord> recs(static_cast<std::size_t>(nrec));
+   for (RefinementRecord& r : recs)
+   {
+      std::int32_t hdr[2] = {0, 0};
+      std::int64_t n = 0;
+      f.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
+      f.read(reinterpret_cast<char*>(&n), sizeof(n));
+      r.nc_limit = hdr[0];
+      r.rebalance = (hdr[1] != 0);
+      r.refs.SetSize(static_cast<int>(n));
+      for (int i = 0; i < r.refs.Size(); ++i)
+      {
+         std::int32_t e[2] = {0, 0};
+         f.read(reinterpret_cast<char*>(e), sizeof(e));
+         r.refs[i] = Refinement(e[0], static_cast<char>(e[1]));
+      }
+   }
+   MFEM_VERIFY(f.good(), "checkpoint: short read from " << path);
+   return recs;
+}
+
+} // namespace
+
 void Checkpoint::Write(const std::string& dir,
                        StokesTimeIntegrator& integrator,
-                       const Parameters& params)
+                       const Parameters& params,
+                       const std::vector<RefinementRecord>* refinements)
 {
    INCNS_PROFILE("checkpoint::write");
 
@@ -90,6 +148,11 @@ void Checkpoint::Write(const std::string& dir,
       WriteVector(BinPath(dir, "u_hist" + std::to_string(j), rank), hist[j]);
    }
    WriteVector(BinPath(dir, "pressure", rank), state.pressure);
+   const bool refined = refinements && !refinements->empty();
+   if (refined)
+   {
+      WriteRefinements(BinPath(dir, "amr_refinements", rank), *refinements);
+   }
 
    if (rank == 0)
    {
@@ -111,11 +174,29 @@ void Checkpoint::Write(const std::string& dir,
       {
          meta << "adaptive_prev_es: " << state.controller.prev_es << "\n";
       }
+      if (refined)
+      {
+         meta << "amr_refinements: " << refinements->size() << "\n";
+      }
       // Reference scales, so a consumer can re-dimensionalize the state.
       meta << "Re: " << params.nondim.Re << "\nL_ref: " << params.nondim.L_ref
            << "\nU_ref: " << params.nondim.U_ref << "\n";
    }
    MPI_Barrier(comm); // checkpoint complete on return, on every rank
+}
+
+std::vector<RefinementRecord> Checkpoint::ReadRefinements(
+   const std::string& dir)
+{
+   int rank = 0;
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   const YAML::Node meta = YAML::LoadFile(dir + "/meta.yaml");
+   if (!meta["amr_refinements"]) { return {}; }
+   std::vector<RefinementRecord> recs =
+      ReadRefinementFile(BinPath(dir, "amr_refinements", rank));
+   MFEM_VERIFY(recs.size() == meta["amr_refinements"].as<std::size_t>(),
+               "checkpoint: refinement history length mismatch");
+   return recs;
 }
 
 void Checkpoint::Read(const std::string& dir, StokesTimeIntegrator& integrator)
