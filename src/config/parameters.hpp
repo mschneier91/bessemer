@@ -12,6 +12,7 @@
 #include "operators/grad_div_scale.hpp"
 #include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
+#include "precond/rotational_schur.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
 
@@ -153,6 +154,17 @@ struct Parameters
    /// Rotational form + LOR-AMG velocity PC: put the rotation term into the
    /// LOR operator too, re-set-up every step (deck `solver.rotation_lor`).
    bool rotation_in_lor = false;
+   /// Rotational form, CC Schur path: the pressure Schur PC -- deck
+   /// `solver.rotation_schur: cc|tensor|auto`, or a map with `mode`,
+   /// `criterion: max_mu|volume_fraction`, `mu_on`, `mu_off`, `vol_on`,
+   /// `vol_off`, `inner_iterations`. Default cc (today's preconditioner)
+   /// until calibrated; see precond/rotational_schur.hpp.
+   RotationalSchurPreconditioner::Options rotation_schur;
+   /// Rotational form: write the per-step rotation log (rotation number,
+   /// viscous ratio, Schur mode, iteration counts, timings) to
+   /// `<output.path>/<output.name>_rotation.csv` every this many steps (deck
+   /// `solver.rotation_log_interval`; 0 = off).
+   int rotation_log_interval = 0;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
    /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
    /// the right default for the adaptive-primary workflow. `mass` remains

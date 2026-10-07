@@ -139,6 +139,9 @@ src/
     block_stokes_pc.hpp             # block Diag/Tri shapes on [A Bᵀ; B 0] (p̃ = −p convention)
     nullspace.hpp                   # l2 𝟙-projector, k_reproj wrapper (detection stays in bc/)
     lp_surrogate.hpp                # LOR-AMG L_p inner PC + BC logic (symmetric relaxation)
+    point_block_jacobi.{hpp,cpp}    # nodal-block Jacobi for the rotation term (nvcc TU)
+    rotational_schur.{hpp,cpp}      # rotation-aware Schur PC: CC / Olshanskii tensor / Auto (nvcc TU)
+    viscous_ratio.{hpp,cpp}         # viscous-ratio diagnostic v-hat_max of the velocity block
   time/
     multistep_coeffs.{hpp,cpp}      # BDF + AB/EXT coefficients, variable-step aware
     time_integrator.{hpp,cpp}       # in-repo stepper (NOT mfem::ODESolver)
@@ -708,6 +711,75 @@ by the 2026-10-02 decision above), so `StokesSolver`, the
 preconditioners, and the Schur block must not need edits. Per 2.0, any *default* change
 (e.g. making skew the default) needs measured NSE evidence, not a preference.
 
+## Rotation-aware Schur preconditioner (Part C) — DONE 2026-10-06
+
+Human request 2026-10-06: implement `rotational_schur_velocity_mg_spec.md` **except the
+p-multigrid velocity block** ("only have point block jacobi is fine"). Built: Part C (the
+Schur preconditioner, S1–S3), Part D Level 0 (= the existing `pbj_krylov`, unchanged), the
+viscous-ratio diagnostic and the per-step log (spec 7.3, 9). NOT built: `OrderInterpolator`,
+`DampedSmoother`, `RotationalVelocityMultigrid`, `--velocity-block mg_vcycle`, and V1's
+interpolator checks, V2, V3.
+
+- **What it does.** With the rotational form, A = σM + νK + N(ω*). Cahouet–Chabard ignores N
+  and degrades as the rotation number μ = |αω*|/σ grows (3D, S3: 38 → 309 → 878 outer
+  iterations at μ ≈ 1.8 / 18 / 59). The tensor mode replaces CC's Laplacian part by
+  L_T = −∇·(T∇), T = (σI + [αω*]×)⁻¹ (Olshanskii 1999) — the inverse of A's zero-order
+  symbol — applied by a FIXED number of FGMRES iterations preconditioned by CC's own LOR-AMG
+  L_p V-cycle, plus CC's ν M_p⁻¹ term. `Auto` switches per time step with hysteresis on max μ
+  (default on above 20, off below 10) or on the volume fraction above mu_on.
+- **Deck:** `solver.rotation_schur: cc|tensor|auto` (scalar) or a map with `mode`,
+  `criterion: max_mu|volume_fraction`, `mu_on`, `mu_off`, `vol_on`, `vol_off`,
+  `inner_iterations`; `solver.rotation_log_interval: N` writes
+  `<output.path>/<output.name>_rotation.csv` (step, t, dt, σ, μ_max, volume fraction, v̂_max,
+  Schur mode, switches, outer iterations, velocity-PC applications / inner iterations / cap
+  hits, Schur applications, Schur / velocity / solve / step wall time). Python:
+  `p.rotation_schur` (`RotationSchurOptions`), `p.rotation_log_interval`. **Default `cc`** —
+  bitwise today's path (the rotational Schur object is not even constructed); tensor/auto
+  require the CC Schur path and the rotational form (verified at setup).
+- **Deviations from the spec, all deliberate:**
+  - **2D as well as 3D** (scalar vorticity; T = [[σ, o], [−o, σ]]/(σ²+o²)) — the DFG
+    benchmarks are 2D.
+  - **CC mode is bessemer's consistent CC** (B M_v⁻¹ Bᵀ, 10 inner CG), called unchanged; the
+    spec's CC is the L_p form. The tensor mode reuses CC's M_p⁻¹ and LOR-AMG V-cycle.
+  - **The inner FGMRES runs on σL_T with the UNSCALED Laplacian V-cycle, then multiplies by
+    σ.** σL_T is exactly L_p at ω* = 0, and this keeps the constrained (outflow Dirichlet)
+    pressure rows consistent with CC; scaling the preconditioner by σ as the spec does leaves
+    them off by σ (found by S2: tensor(ω = 0) vs CC differed by 2e-3 until fixed).
+  - **`inner_iterations` default 10, not 3.** The spec's 3 was calibrated with EXACT Laplacian
+    solves; with one V-cycle per iteration, 3 loses to bessemer's (stronger) CC at small μ.
+    Measured (S3; outer iterations, CC / tensor with 3, 5, 10 inner; identical at np 1/4):
+    ```
+    3D mu 1.8:   38 / 59, 45, 37      2D mu 1.6:   30 / 24, 21, 20
+    3D mu 18:   309 / 181, 136, 97    2D mu 16:    99 / 91, 75, 49
+    3D mu 59:   878 / 298, 206, 145   2D mu 52:   115 / 110, 108, 102
+    ```
+    A 10-iteration tensor application costs about one CC application (10 V-cycles each).
+    **2D CC is far more robust to rotation than 3D CC** (99 at μ 16 vs 309), so the tensor's
+    payoff is mainly 3D.
+  - **The rotation-number statistics live in `RotationNumber` (rotational_schur.cpp)**, not on
+    the rotation integrator (its `GetRotationNumberStats` was removed 2026-10-05; this switch
+    is now the only consumer). Sampled at the Gauss–Legendre 2k_u rule; c_p of the viscous
+    ratio reproduces the spec's 3D calibration exactly (20.22, 29.53, 40.92 for p = 3, 4, 5).
+- **Orientation is load-bearing.** T (not Tᵀ = ω → −ω) is the right tensor: (B A⁻¹ Bᵀ)ₚq ≈
+  (A₀⁻¹∇p, ∇q). With Tᵀ the 3D μ 1.8 count is 137 instead of 37; the S3 small-μ bound
+  (tensor ≤ CC + 3) is the regression guard. The PA path projects T through
+  `ProjectTranspose` — `RotatingDarcyTensor::Project` must honor its `transpose` flag (S1's
+  PA-vs-legacy check catches a mishandled one).
+- **MFEM traps (spec 5.7) that apply:** never hand `RotatingDarcyTensor` to a LOR form (batched
+  LOR assembly reads only scalar coefficients — silently coefficient 1); MFEM Krylov solvers
+  forward `SetOperator` to their preconditioner (the inner FGMRES wraps the AMG in a
+  SetOperator-proof `FixedSolver`); PA `DiffusionIntegrator` takes the nonsymmetric path for a
+  dim² coefficient and its `MultTranspose` aborts (only FGMRES/GMRES touch L_T).
+- **Tests** (fast tier, np 1/2/4, green on the debug device): `rotational_schur_test` (S1:
+  PA vs legacy, null spaces, nonsymmetry, Fill inverse, ω = 0 → L_p/σ, in-place re-assembly;
+  S2: Auto hysteresis on both criteria, CC mode bitwise CC, tensor(ω = 0) = CC to 1e-11,
+  remove_mean, SetOperator never forwarded; RotationNumber vs a host reference — all 2D and
+  3D), `rotational_schur_solver_test` (S3 through StokesSolver, Auto picking the mode, the
+  Case's rotation log), `viscous_ratio_test`, `nse_mms_test` RotationalPreconditionersAgree
+  (tensor and auto march to the same answer as every other PC), `deck_test` RotationSchurKeys.
+- **Not yet calibrated:** the Auto thresholds (spec's 20/10) — see the DFG 2D-3 study below
+  for the first bessemer data. `rotational_schur.cpp`'s kernels have not run on a GPU.
+
 ## Adaptive mesh refinement (AMR) — DONE 2026-10-06
 
 Refinement-only h-adaptivity, isotropic or anisotropic, for Stokes and NSE (both convective
@@ -1192,6 +1264,9 @@ fine end and the order assert fails for the wrong reason.
     at the 48 KB static limit -- confirm it launches at the largest size in use;
   - `src/amr/gradient_indicator.cpp` (AMR indicator reduction) and `src/time/cfl.cpp`
     (CFL rate), both 2026-10-06, both with the `#error` nvcc guard;
+  - `src/precond/rotational_schur.cpp` (2026-10-06, `#error` guard): the rotating-Darcy
+    tensor at the quadrature points (`RotatingDarcyTensor::Project`) and the rotation-number
+    statistics kernel; run `rotational_schur_test` and `rotational_schur_solver_test`;
   - AMR on PERIODIC meshes has no debug-device coverage (the MFEM debug-device false
     positive below; `amr_test::DebugDeviceSkipsPeriodicNcSolves`): `amr_checkpoint_test`
     2D and `amr_flow_test` T1 skip there -- run them on the GPU. Also watch the NC
@@ -1290,7 +1365,8 @@ Launched by a human via the batch scheduler. See Guardrails.
   root cause). Every TU is compiled by `mpicxx`/g++ — leaving `__CUDACC__` undefined —
   **except** the short, explicit nvcc list in `src/CMakeLists.txt` (currently
   `grad_div_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`,
-  `kinetic_head.cpp`, `amr/gradient_indicator.cpp`, `time/cfl.cpp`). Outside that list,
+  `kinetic_head.cpp`, `amr/gradient_indicator.cpp`, `time/cfl.cpp`,
+  `precond/rotational_schur.cpp`). Outside that list,
   two consequences, both silent:
   - `MFEM_HOST_DEVICE` expands to **nothing** (`config/config.hpp`), so the lambda is
     host-only.

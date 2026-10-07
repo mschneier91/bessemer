@@ -67,6 +67,17 @@ void Case::BuildIntegrator()
    opts.convective_form = params_.convective_form;
    opts.rotation_pc = params_.rotation_pc;
    opts.rotation_in_lor = params_.rotation_in_lor;
+   {
+      const bool rotational =
+         (params_.equation == Equation::NavierStokes &&
+          params_.convective_form == ConvectiveForm::Rotational);
+      MFEM_VERIFY(rotational || params_.rotation_schur.mode ==
+                  RotationalSchurPreconditioner::Mode::CahouetChabard,
+                  "case: solver.rotation_schur tensor/auto needs the rotational "
+                  "form (physics.convective_form: rotational)");
+      opts.rotation_schur = params_.rotation_schur;
+      opts.rotation_diagnostics = rotational && params_.rotation_log_interval > 0;
+   }
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;
@@ -191,11 +202,15 @@ void Case::MaybeLogDiagnostics(int cycle, double time)
 void Case::Step()
 {
    EnsureSetup();
+   const double t_prev = integrator_->Time();
+   const double wall0 = MPI_Wtime();
    integrator_->Step();
+   const double step_wall = MPI_Wtime() - wall0;
    ++cycle_;
-   // Forces use the step's own residual: log them before an event rebuilds
-   // the integrator.
+   // Forces and the rotation log use the step's own solver: log them before
+   // an event rebuilds the integrator.
    MaybeLogForces();
+   MaybeLogRotation(integrator_->Time() - t_prev, step_wall);
    // An adaptation event comes BEFORE output and checkpoint: both then see the
    // refined mesh with the (exactly transferred) state.
    if (AdaptDue()) { Adapt(); }
@@ -506,6 +521,37 @@ void Case::MaybeLogForces()
    for (int d = 0; d < F.Size(); ++d) { f << "," << F(d); }
    for (int d = 0; d < F.Size(); ++d) { f << "," << C(d); }
    f << "\n";
+}
+
+void Case::MaybeLogRotation(double dt, double step_wall)
+{
+   if (params_.rotation_log_interval == 0 ||
+       cycle_ % params_.rotation_log_interval != 0) { return; }
+   const StokesSolver* solver = integrator_->LastSolver();
+   if (!solver || !solver->HasRotation()) { return; }
+   const SolveStats& s = solver->Stats();
+   if (!Mpi::Root()) { return; }
+   const std::string path =
+      params_.output.path + "/" + params_.output.name + "_rotation.csv";
+   const bool fresh = !rotation_log_started_;
+   if (fresh) { std::filesystem::create_directories(params_.output.path); }
+   std::ofstream f(path, fresh ? std::ios::trunc : std::ios::app);
+   if (fresh)
+   {
+      f << "step,t,dt,sigma,mu_max,vol_fraction,vhat_max,schur_tensor,"
+        "schur_switches,outer_iterations,vel_applications,vel_inner_iterations,"
+        "vel_cap_hits,schur_applications,schur_time,vel_time,solve_time,"
+        "step_time\n";
+      rotation_log_started_ = true;
+   }
+   f << std::setprecision(10) << cycle_ << "," << integrator_->Time() << ","
+     << dt << "," << s.sigma << "," << s.rotation.max_mu << ","
+     << s.rotation.vol_fraction << "," << s.vhat_max << ","
+     << (s.tensor_active ? 1 : 0) << "," << s.schur_switches << ","
+     << s.outer_iterations << "," << s.vel_applications << ","
+     << s.vel_inner_iterations << "," << s.vel_cap_hits << ","
+     << s.schur_applications << "," << s.schur_time << "," << s.vel_time
+     << "," << s.solve_time << "," << step_wall << "\n";
 }
 
 void Case::WriteCheckpoint(const std::string& dir)

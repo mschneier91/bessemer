@@ -36,6 +36,28 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    return so;
 }
 
+void MonitoredSolver::Mult(const Vector& x, Vector& y) const
+{
+   const double t0 = MPI_Wtime();
+   s_.Mult(x, y);
+   const double dt = MPI_Wtime() - t0;
+   if (vel_)
+   {
+      ++stats_.vel_applications;
+      stats_.vel_time += dt;
+      if (it_)
+      {
+         stats_.vel_inner_iterations += it_->GetNumIterations();
+         if (!it_->GetConverged()) { ++stats_.vel_cap_hits; }
+      }
+   }
+   else
+   {
+      ++stats_.schur_applications;
+      stats_.schur_time += dt;
+   }
+}
+
 StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc,
                            const StokesSolverOptions& opts)
@@ -95,6 +117,44 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                   cc, spaces_.Velocity(), spaces_.Pressure(), rules_,
                   op_.Divergence(), op_.Mass(), op_.MassDiagonal(),
                   bc_.OutflowAttributes(), nullspace_);
+   }
+
+   // Rotation term: the rotation-number statistics and viscous ratio (Auto
+   // switching / per-step log) and the rotation-aware Schur PC.
+   if (op_.Rotation())
+   {
+      using RSP = RotationalSchurPreconditioner;
+      const int dim = spaces_.Dim();
+      const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+      const bool switching = (opts_.rotation_schur.mode == RSP::Mode::Auto);
+      if (opts_.rotation_diagnostics || switching)
+      {
+         // The spec's sample rule: Gauss-Legendre of order 2 k_u.
+         rot_number_ = std::make_unique<RotationNumber>(
+                          spaces_.Velocity(),
+                          rules_.Get(geom, 2 * spaces_.OrderU()));
+      }
+      if (opts_.rotation_diagnostics)
+      {
+         vratio_ = std::make_unique<ViscousRatioDiagnostic>(spaces_.Velocity(),
+                   rules_);
+      }
+      if (opts_.rotation_schur.mode != RSP::Mode::CahouetChabard)
+      {
+         MFEM_VERIFY(cc_mode_, "stokes_solver: rotation_schur tensor/auto needs "
+                     "the Cahouet-Chabard Schur path (solver.schur: cc)");
+         RSP::Options ro = opts_.rotation_schur;
+         ro.remove_mean = cc_pc_->Singular();
+         // L_T on the pressure space at the viscous-rule convention 2k + dim-1,
+         // with the Laplacian's own Dirichlet (outflow) dofs; the tensor mode
+         // reuses CC's mass inverse and LOR-AMG L_p V-cycle (spec 0).
+         rot_schur_ = std::make_unique<RSP>(
+                         spaces_.Pressure(), cc_pc_->Laplacian().EssentialTrueDofs(),
+                         rules_.Get(geom, 2 * spaces_.OrderP() + dim - 1),
+                         *opts_.lagged_velocity, op_.Rotation()->GetAlpha(),
+                         cc_pc_->NuPc(), *cc_pc_, cc_pc_->PressureMassInverse(),
+                         cc_pc_->Laplacian(), ro);
+      }
    }
 
    BuildVelocityPreconditioner();
@@ -190,19 +250,29 @@ void StokesSolver::BuildVelocityPreconditioner()
    }
 
    // PbjOnly leaves vel_prec_ empty: point-block Jacobi is the velocity PC.
+   // Both blocks go through MonitoredSolver (counts and wall time only -- no
+   // numerics; see SolveStats).
+   prec_.reset(); // it borrows the monitors being replaced
    Solver& vel = vel_prec_ ? *vel_prec_ : *pbj_;
+   vel_mon_ = std::make_unique<MonitoredSolver>(vel, stats_, true);
    if (cc_mode_)
    {
       // Block Diag/LowerTri/UpperTri on the symmetric system; the minus of the
-      // pressure row lives inside BlockStokesPC (exactly once).
+      // pressure row lives inside BlockStokesPC (exactly once). With the
+      // rotation term the Schur PC may be the rotation-aware one.
+      Solver& schur = rot_schur_ ? static_cast<Solver&>(*rot_schur_)
+                      : static_cast<Solver&>(*cc_pc_);
+      schur_mon_ = std::make_unique<MonitoredSolver>(schur, stats_, false);
       prec_ = std::make_unique<BlockStokesPC>(
-                 spaces_.BlockTrueOffsets(), vel, *cc_pc_,
+                 spaces_.BlockTrueOffsets(), *vel_mon_, *schur_mon_,
                  op_.Divergence(), opts_.cc.block_shape);
    }
    else
    {
+      schur_mon_ = std::make_unique<MonitoredSolver>(*pressure_block_, stats_,
+                   false);
       prec_ = std::make_unique<StokesBlockPreconditioner>(
-                 spaces_.BlockTrueOffsets(), vel, *pressure_block_);
+                 spaces_.BlockTrueOffsets(), *vel_mon_, *schur_mon_);
    }
    fgmres_.SetPreconditioner(*prec_);
 }
@@ -216,6 +286,7 @@ void StokesSolver::Refresh(double c0)
    // underlying pointer moved). B, B^T, the Schur block structure, and the
    // FGMRES object all persist untouched.
    op_.SetMassCoeff(c0);
+   opts_.mass_coeff = c0; // sigma of the rotation statistics / Schur update
    block_op_.SetBlock(0, 0, &op_.FullMomentum());
 
    // CC Schur block: sigma tracks the BDF factor; everything structural inside
@@ -243,6 +314,24 @@ void StokesSolver::UpdateRotation()
    op_.Rotation()->UpdateVorticity();
    if (pbj_) { pbj_->UpdateSkew(); }
    if (lor_rot_) { lor_rot_->SetOperator(op_.AssembleLorMomentum()); }
+
+   // Diagnostics and the Schur mode of this step (sigma = 0, steady: none).
+   const double sigma = opts_.mass_coeff;
+   stats_.sigma = sigma;
+   if (sigma <= 0.0) { return; }
+   if (rot_number_)
+   {
+      stats_.rotation = rot_number_->Compute(*opts_.lagged_velocity,
+                                             op_.Rotation()->GetAlpha(), sigma,
+                                             opts_.rotation_schur.mu_on);
+   }
+   if (vratio_) { stats_.vhat_max = vratio_->VHatMax(sigma, opts_.nu); }
+   if (rot_schur_)
+   {
+      rot_schur_->Update(sigma, stats_.rotation);
+      stats_.tensor_active = rot_schur_->TensorActive();
+      stats_.schur_switches = rot_schur_->NumSwitches();
+   }
 }
 
 void StokesSolver::Solve(VectorCoefficient& forcing, ParGridFunction& u,
@@ -332,12 +421,19 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
       // Converged() = false) rather than be silently projected away.
    }
 
+   // Per-solve counters (the rotation fields persist from UpdateRotation).
+   stats_.vel_applications = stats_.vel_inner_iterations = 0;
+   stats_.vel_cap_hits = stats_.schur_applications = 0;
+   stats_.vel_time = stats_.schur_time = 0.0;
+   const double t0 = MPI_Wtime();
    {
       INCNS_PROFILE("fgmres");
       fgmres_.Mult(b, x);
    }
+   stats_.solve_time = MPI_Wtime() - t0;
    iterations_ = fgmres_.GetNumIterations();
    converged_ = fgmres_.GetConverged();
+   stats_.outer_iterations = iterations_;
 
    u.SetFromTrueDofs(x.GetBlock(0));
    if (cc_mode_) { x.GetBlock(1).Neg(); } // p = -p~: the ONE output sign flip

@@ -11,6 +11,8 @@
 #include "precond/block_stokes_pc.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/point_block_jacobi.hpp"
+#include "precond/rotational_schur.hpp"
+#include "precond/viscous_ratio.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -61,6 +63,15 @@ struct StokesSolverOptions
    int pbj_krylov_kdim = 20;      ///< PbjKrylov: inner GMRES restart.
    double pbj_krylov_rtol = 1e-2; ///< PbjKrylov: inner relative tolerance.
    int pbj_krylov_max_iter = 30;  ///< PbjKrylov: inner iteration cap.
+   /// Pressure Schur preconditioner with the rotation term (CC path only):
+   /// Cahouet-Chabard (default), Olshanskii's rotating-Darcy tensor, or Auto
+   /// switching on the rotation number (precond/rotational_schur.hpp).
+   /// remove_mean is set from the null-space detection, not from here.
+   RotationalSchurPreconditioner::Options rotation_schur;
+   /// With the rotation term: compute the rotation-number statistics and the
+   /// viscous ratio every UpdateRotation() (for the per-step log; Auto
+   /// computes the statistics regardless).
+   bool rotation_diagnostics = false;
    /// With rotation_pc == Symmetric and a LOR-AMG velocity PC: build the AMG
    /// on the LOR operator INCLUDING the rotation term, re-assembled and
    /// re-set-up every UpdateRotation() (cost: one LOR assembly + AMG setup
@@ -71,6 +82,66 @@ struct StokesSolverOptions
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart (Krylov subspace) size.
    int print_level = -1;         ///< mfem::IterativeSolver print level.
+};
+
+/**
+ * @brief What the last solve of a StokesSolver did, for the per-step log of
+ *        the rotational form (spec section 9). Counters cover the last
+ *        SolveTrue(); the rotation fields the last UpdateRotation().
+ */
+struct SolveStats
+{
+   int outer_iterations = 0;     ///< Outer FGMRES iterations.
+   int vel_applications = 0;     ///< Velocity-block PC applications.
+   /// Inner iterations of an iterative velocity PC (PbjKrylov), summed.
+   int vel_inner_iterations = 0;
+   /// Applications of an iterative velocity PC that hit its iteration cap.
+   int vel_cap_hits = 0;
+   double vel_time = 0.0;        ///< Wall time in the velocity PC [s].
+   int schur_applications = 0;   ///< Pressure Schur PC applications.
+   double schur_time = 0.0;      ///< Wall time in the Schur PC [s].
+   double solve_time = 0.0;      ///< Wall time of the whole solve [s].
+   double sigma = 0.0;           ///< beta0/dt at the last UpdateRotation.
+   /// Rotation-number statistics (rotation term; zero if not computed).
+   RotationNumberStats rotation;
+   double vhat_max = 0.0;        ///< Viscous ratio (zero if not computed).
+   bool tensor_active = false;   ///< Rotational Schur in tensor mode.
+   int schur_switches = 0;       ///< Rotational Schur mode switches so far.
+};
+
+/**
+ * @brief Forwards Mult to a solver, counting applications and wall time and,
+ *        when the solver is an mfem::IterativeSolver, its iterations and the
+ *        applications that did not converge (hit the cap). No numerics.
+ */
+class MonitoredSolver : public mfem::Solver
+{
+public:
+   /**
+    * @brief Wrap a solver.
+    * @param s     The solver (borrowed).
+    * @param stats Counters to accumulate into (borrowed).
+    * @param vel   True for the velocity block, false for the Schur block.
+    */
+   MonitoredSolver(mfem::Solver& s, SolveStats& stats, bool vel)
+      : mfem::Solver(s.Height(), s.Width()), s_(s), stats_(stats), vel_(vel),
+        it_(dynamic_cast<mfem::IterativeSolver*>(&s)) {}
+
+   /**
+    * @brief y = S(x), with the bookkeeping.
+    * @param x Input.
+    * @param y Output.
+    */
+   void Mult(const mfem::Vector& x, mfem::Vector& y) const override;
+
+   /// Ignored: the wrapped solver keeps its own operator.
+   void SetOperator(const mfem::Operator&) override {}
+
+private:
+   mfem::Solver& s_;              ///< Wrapped solver (borrowed).
+   SolveStats& stats_;            ///< Counters (borrowed).
+   bool vel_;                     ///< Velocity (true) or Schur (false).
+   mfem::IterativeSolver* it_;    ///< s_ as an iterative solver, or null.
 };
 
 /**
@@ -156,11 +227,19 @@ public:
 
    /**
     * @brief Recompute the rotation term from the lagged velocity's current
-    *        values (and the point-block Jacobi skew, if in use). Call once
-    *        per step after updating the lagged velocity, before SolveTrue.
-    *        No-op without a rotation term.
+    *        values (and the point-block Jacobi skew, if in use); compute the
+    *        rotation-number statistics when needed and let the rotational
+    *        Schur preconditioner pick this step's mode. Call once per step
+    *        after updating the lagged velocity (and after Refresh), before
+    *        SolveTrue. No-op without a rotation term.
     */
    void UpdateRotation();
+
+   /// @return What the last solve / rotation update did (see SolveStats).
+   const SolveStats& Stats() const { return stats_; }
+
+   /// @return True if the momentum block carries the rotation term.
+   bool HasRotation() const { return opts_.lagged_velocity != nullptr; }
 
    /// @return FGMRES iterations of the last Solve().
    int Iterations() const { return iterations_; }
@@ -204,6 +283,19 @@ private:
    /// CC Schur PC (CahouetChabard mode only; null on the Mass path). Declared
    /// before prec_ (the block wrapper borrows it).
    std::unique_ptr<CahouetChabardSchurPC> cc_pc_;
+   /// Rotation-number statistics of the lagged velocity (rotation term with
+   /// Auto switching or diagnostics; null otherwise).
+   std::unique_ptr<RotationNumber> rot_number_;
+   /// Viscous-ratio diagnostic (rotation diagnostics only; null otherwise).
+   std::unique_ptr<ViscousRatioDiagnostic> vratio_;
+   /// Rotation-aware Schur PC (rotation term, CC path, mode != CC; null
+   /// otherwise -- the plain CC PC is then used directly). Borrows cc_pc_.
+   std::unique_ptr<RotationalSchurPreconditioner> rot_schur_;
+   SolveStats stats_; ///< Counters of the last solve (see Stats()).
+   /// Monitoring wrappers around the velocity and Schur PCs (borrowed by
+   /// prec_; rebuilt with it).
+   std::unique_ptr<MonitoredSolver> vel_mon_;
+   std::unique_ptr<MonitoredSolver> schur_mon_; ///< See vel_mon_.
    /// Block preconditioner: StokesBlockPreconditioner (Mass) or BlockStokesPC
    /// (CC shapes) behind the common Solver interface.
    std::unique_ptr<mfem::Solver> prec_;

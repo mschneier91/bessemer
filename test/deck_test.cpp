@@ -175,6 +175,48 @@ TEST(Deck, RotationalFormKeys)
                         << "discretization error";
 }
 
+// The rotational Schur keys: `solver.rotation_schur` as a scalar mode or as a
+// map with the switch options, and `solver.rotation_log_interval`; unstated
+// ones keep the defaults (cc, spec thresholds, 10 inner iterations, no log).
+TEST(Deck, RotationSchurKeys)
+{
+   using RSP = incns::RotationalSchurPreconditioner;
+   const Parameters defaults = Parameters::LoadYAML(INCNS_TGV_DECK);
+   EXPECT_EQ(defaults.rotation_schur.mode, RSP::Mode::CahouetChabard);
+   EXPECT_EQ(defaults.rotation_schur.inner_iterations, 10);
+   EXPECT_EQ(defaults.rotation_log_interval, 0);
+
+   const std::string path =
+      "deck_rotschur_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   {
+      std::ofstream f(path);
+      f << "equation: navier_stokes\n"
+        << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
+        << "solver:\n  rotation_schur: tensor\n  rotation_log_interval: 5\n";
+   }
+   Parameters p = Parameters::LoadYAML(path);
+   EXPECT_EQ(p.rotation_schur.mode, RSP::Mode::Tensor);
+   EXPECT_EQ(p.rotation_log_interval, 5);
+   {
+      std::ofstream f(path);
+      f << "equation: navier_stokes\n"
+        << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
+        << "solver:\n  rotation_schur:\n    mode: auto\n"
+        << "    criterion: volume_fraction\n    mu_on: 30\n    mu_off: 12\n"
+        << "    vol_on: 2.0e-3\n    vol_off: 5.0e-4\n"
+        << "    inner_iterations: 4\n";
+   }
+   p = Parameters::LoadYAML(path);
+   std::remove(path.c_str());
+   EXPECT_EQ(p.rotation_schur.mode, RSP::Mode::Auto);
+   EXPECT_EQ(p.rotation_schur.criterion, RSP::Criterion::VolumeFraction);
+   EXPECT_DOUBLE_EQ(p.rotation_schur.mu_on, 30.0);
+   EXPECT_DOUBLE_EQ(p.rotation_schur.mu_off, 12.0);
+   EXPECT_DOUBLE_EQ(p.rotation_schur.vol_on, 2.0e-3);
+   EXPECT_DOUBLE_EQ(p.rotation_schur.vol_off, 5.0e-4);
+   EXPECT_EQ(p.rotation_schur.inner_iterations, 4);
+}
+
 // The `amr:` section and `time.cfl_max` parse; unstated keys keep their
 // defaults; min_size is normalized by L_ref in dimensional mode.
 TEST(Deck, AmrKeys)

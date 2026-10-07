@@ -111,7 +111,7 @@ public:
             mark(dirichlet_attrs);
             break;
       }
-      mfem::Array<int> ess_tdofs;
+      mfem::Array<int>& ess_tdofs = ess_tdofs_;
       if (max_attr > 0) { pfes.GetEssentialTrueDofs(marker, ess_tdofs); }
 
       // Consistency: Dirichlet dofs remove the constant mode -- a singular
@@ -165,7 +165,12 @@ public:
    /// @return True if the application is Ortho-wrapped (singular operator).
    bool Singular() const { return singular_; }
 
+   /// @return The Dirichlet (essential) true dofs of L_p -- the outflow
+   ///         pressure dofs under LpBC::Auto; empty when all-Neumann.
+   const mfem::Array<int>& EssentialTrueDofs() const { return ess_tdofs_; }
+
 private:
+   mfem::Array<int> ess_tdofs_;  ///< Dirichlet true dofs of L_p.
    mfem::ParBilinearForm form_;  ///< HO Diffusion form (LOR source; owned).
    /// LOR-AMG on the rediscretized L_p (owned; must outlive applications).
    std::unique_ptr<mfem::LORSolver<mfem::HypreBoomerAMG>> lor_;

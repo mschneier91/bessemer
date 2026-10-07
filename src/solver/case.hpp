@@ -249,6 +249,17 @@ private:
    std::unique_ptr<BodyForce> body_force_;
    /// Write a forces CSV row on the forces interval (rank 0).
    void MaybeLogForces();
+
+   /**
+    * @brief Append the step's rotation diagnostics to
+    *        `<output.path>/<output.name>_rotation.csv` every
+    *        solver.rotation_log_interval steps (rotational form only; rank 0
+    *        writes, the statistics are already global).
+    * @param dt        Size of the step just taken.
+    * @param step_wall Wall time of the step [s].
+    */
+   void MaybeLogRotation(double dt, double step_wall);
+   bool rotation_log_started_ = false; ///< Header written (file truncated).
    /// amr.write_indicator: piecewise-constant space and fields for the
    /// indicator and the refinement depth (rebuilt after each event).
    std::unique_ptr<mfem::L2_FECollection> amr_fec_;

@@ -164,6 +164,51 @@ Parameters Parameters::LoadYAML(const std::string& path)
       }
       else { MFEM_ABORT("parameters: unknown solver.rotation_pc '" << rp << "'"); }
    }
+   if (solver && solver["rotation_schur"])
+   {
+      using RSP = RotationalSchurPreconditioner;
+      const YAML::Node rs = solver["rotation_schur"];
+      auto mode = [](const std::string & m)
+      {
+         if (m == "cc") { return RSP::Mode::CahouetChabard; }
+         if (m == "tensor") { return RSP::Mode::Tensor; }
+         if (m == "auto") { return RSP::Mode::Auto; }
+         MFEM_ABORT("parameters: unknown solver.rotation_schur mode '" << m
+                    << "' (cc|tensor|auto)");
+         return RSP::Mode::CahouetChabard;
+      };
+      RSP::Options& o = p.rotation_schur;
+      if (rs.IsScalar()) { o.mode = mode(rs.as<std::string>()); }
+      else
+      {
+         if (rs["mode"]) { o.mode = mode(rs["mode"].as<std::string>()); }
+         if (rs["criterion"])
+         {
+            const std::string c = rs["criterion"].as<std::string>();
+            if (c == "max_mu") { o.criterion = RSP::Criterion::MaxMu; }
+            else if (c == "volume_fraction")
+            {
+               o.criterion = RSP::Criterion::VolumeFraction;
+            }
+            else
+            {
+               MFEM_ABORT("parameters: unknown solver.rotation_schur.criterion '"
+                          << c << "' (max_mu|volume_fraction)");
+            }
+         }
+         Maybe(rs, "mu_on", o.mu_on);
+         Maybe(rs, "mu_off", o.mu_off);
+         Maybe(rs, "vol_on", o.vol_on);
+         Maybe(rs, "vol_off", o.vol_off);
+         Maybe(rs, "inner_iterations", o.inner_iterations);
+      }
+      MFEM_VERIFY(o.mu_off <= o.mu_on && o.vol_off <= o.vol_on &&
+                  o.inner_iterations >= 1, "parameters: bad "
+                  "solver.rotation_schur thresholds / inner_iterations");
+   }
+   Maybe(solver, "rotation_log_interval", p.rotation_log_interval);
+   MFEM_VERIFY(p.rotation_log_interval >= 0,
+               "parameters: solver.rotation_log_interval must be >= 0");
    if (solver && solver["schur"])
    {
       const std::string sm = solver["schur"].as<std::string>();

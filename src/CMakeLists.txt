@@ -36,6 +36,8 @@ add_library(incns STATIC
   post/diagnostics.cpp
   precond/cahouet_chabard.cpp
   precond/point_block_jacobi.cpp
+  precond/rotational_schur.cpp
+  precond/viscous_ratio.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
@@ -53,7 +55,9 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # inverses and the fused block apply for the velocity point-block Jacobi; kinetic_head.cpp
 # -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure);
 # amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
-# time/cfl.cpp -- the per-element directional convective CFL rate.
+# time/cfl.cpp -- the per-element directional convective CFL rate;
+# precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
+# points and the rotation-number statistics.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
@@ -71,6 +75,7 @@ if(USE_CUDA)
                               post/kinetic_head.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
+                              precond/rotational_schur.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()

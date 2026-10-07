@@ -55,6 +55,12 @@ struct TimeIntegratorOptions
    /// Rotational form + LOR-AMG velocity PC: include the rotation term in the
    /// LOR operator, re-set-up every step (StokesSolverOptions::rotation_in_lor).
    bool rotation_in_lor = false;
+   /// Rotational form, CC path: the pressure Schur PC mode (CC / tensor /
+   /// auto) and its switch options (StokesSolverOptions::rotation_schur).
+   RotationalSchurPreconditioner::Options rotation_schur;
+   /// Rotational form: compute the rotation number and viscous ratio every
+   /// step (StokesSolverOptions::rotation_diagnostics).
+   bool rotation_diagnostics = false;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
@@ -198,6 +204,11 @@ public:
 
    /// @return FGMRES iterations of the most recent implicit solve.
    int LastIterations() const { return last_iterations_; }
+
+   /// @return The solver of the step that produced the current solution
+   ///         (null before the first step / after a state import) -- for
+   ///         its SolveStats.
+   const StokesSolver* LastSolver() const { return last_solver_; }
 
    /// @return Completed (accepted) steps.
    int StepCount() const { return step_count_; }

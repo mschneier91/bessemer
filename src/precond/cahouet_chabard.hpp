@@ -199,6 +199,17 @@ public:
    /// @return The resolved nu_pc scaling of the mass term.
    double NuPc() const { return nu_pc_; }
 
+   /// @return The current sigma (gamma0/dt).
+   double Sigma() const { return sigma_; }
+
+   /// @return The fixed pressure-mass inverse M_p^-1 of the mass term (for
+   ///         the rotational Schur preconditioner's tensor mode).
+   mfem::Solver& PressureMassInverse() const { return *mp_inv_; }
+
+   /// @return The inner Poisson preconditioner (LOR-AMG V-cycle on the
+   ///         UNSCALED L_p; for the rotational Schur preconditioner).
+   LpSurrogate& Laplacian() const { return *lp_; }
+
 private:
    CahouetChabardConfig cfg_;   ///< Configuration (copied).
    bool singular_;              ///< Resolved nullspace flag.

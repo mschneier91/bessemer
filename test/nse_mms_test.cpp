@@ -73,6 +73,8 @@ struct MmsConfig
    incns::VelocityPreconditioner velocity_prec =
       incns::VelocityPreconditioner::Jacobi;
    bool rotation_in_lor = false; ///< Rotation term in the LOR-AMG operator.
+   /// Rotational Schur PC (CC path): mode and switch options.
+   incns::RotationalSchurPreconditioner::Options rotation_schur;
 };
 
 struct MmsResult
@@ -113,6 +115,7 @@ MmsResult NseMmsRun(int dim, int n, int ku, double nu, double dt,
    opts.schur = cfg.schur;
    opts.velocity_prec = cfg.velocity_prec;
    opts.rotation_in_lor = cfg.rotation_in_lor;
+   opts.rotation_schur = cfg.rotation_schur;
    opts.rtol = 1e-12;
    opts.max_iter = 5000;
    opts.kdim = 400;
@@ -452,6 +455,23 @@ TEST(NseMms, RotationalPreconditionersAgree)
       runs.push_back(NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing,
                                cfg));
    }
+   // The rotation-aware Schur PC (rotational_schur_velocity_mg_spec.md Part
+   // C) on the CC path with PBJ-GMRES: always the rotating-Darcy tensor, and
+   // Auto with thresholds low enough that it switches to the tensor on the
+   // first BDF step (max mu here is ~0.3).
+   {
+      using RSP = incns::RotationalSchurPreconditioner;
+      MmsConfig cfg = Rotational(RotationVelocityPC::PbjKrylov,
+                                 SchurBlockType::CahouetChabard);
+      cfg.rotation_schur.mode = RSP::Mode::Tensor;
+      runs.push_back(NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing,
+                               cfg));
+      cfg.rotation_schur.mode = RSP::Mode::Auto;
+      cfg.rotation_schur.mu_on = 1e-3;
+      cfg.rotation_schur.mu_off = 1e-4;
+      runs.push_back(NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing,
+                               cfg));
+   }
    const Vector& ref = runs.front().u_true;
    const double ref_norm = std::sqrt(InnerProduct(MPI_COMM_WORLD, ref, ref));
    for (std::size_t i = 1; i < runs.size(); ++i)
@@ -460,7 +480,8 @@ TEST(NseMms, RotationalPreconditionersAgree)
       d -= ref;
       const double rel = std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d)) / ref_norm;
       EXPECT_LE(rel, 1e-9) << "configuration " << i << " (schur x pc, row-major;"
-                           << " 6, 7 = LOR-AMG with N on Mass, CC)";
+                           << " 6, 7 = LOR-AMG with N on Mass, CC; 8, 9 = "
+                           << "rotational Schur tensor, auto)";
    }
 }
 

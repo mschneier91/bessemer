@@ -466,6 +466,26 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("project_history", &AmrParameters::project_history)
    .def_readwrite("write_indicator", &AmrParameters::write_indicator);
 
+   // Rotation-aware pressure Schur PC (rotational form, CC path).
+   using RSP = RotationalSchurPreconditioner;
+   py::enum_<RSP::Mode>(m, "RotationSchurMode")
+   .value("CahouetChabard", RSP::Mode::CahouetChabard)
+   .value("Tensor", RSP::Mode::Tensor)
+   .value("Auto", RSP::Mode::Auto);
+
+   py::enum_<RSP::Criterion>(m, "RotationSchurCriterion")
+   .value("MaxMu", RSP::Criterion::MaxMu)
+   .value("VolumeFraction", RSP::Criterion::VolumeFraction);
+
+   py::class_<RSP::Options>(m, "RotationSchurOptions")
+   .def_readwrite("mode", &RSP::Options::mode)
+   .def_readwrite("criterion", &RSP::Options::criterion)
+   .def_readwrite("mu_on", &RSP::Options::mu_on)
+   .def_readwrite("mu_off", &RSP::Options::mu_off)
+   .def_readwrite("vol_on", &RSP::Options::vol_on)
+   .def_readwrite("vol_off", &RSP::Options::vol_off)
+   .def_readwrite("inner_iterations", &RSP::Options::inner_iterations);
+
    py::class_<ForceParameters>(m, "ForceParameters")
    .def_readwrite("enabled", &ForceParameters::enabled)
    .def_readwrite("attributes", &ForceParameters::attributes)
@@ -572,6 +592,8 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("velocity_prec", &Parameters::velocity_prec)
    .def_readwrite("amg_reuse", &Parameters::amg_reuse)
    .def_readwrite("rotation_pc", &Parameters::rotation_pc)
+   .def_readwrite("rotation_schur", &Parameters::rotation_schur)
+   .def_readwrite("rotation_log_interval", &Parameters::rotation_log_interval)
    .def_readwrite("rotation_in_lor", &Parameters::rotation_in_lor)
    .def_readwrite("schur", &Parameters::schur)
    .def_readwrite("cc", &Parameters::cc)
