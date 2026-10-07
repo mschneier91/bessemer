@@ -13,6 +13,7 @@
 #include "post/output.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
+#include "time/cfl.hpp"
 #include "time/time_integrator.hpp"
 #include "mfem.hpp"
 
@@ -147,6 +148,13 @@ public:
    /// @return Every AMR event and initial pass so far, in order.
    const std::vector<AdaptStats>& AdaptHistory() const { return adapt_log_; }
 
+   /**
+    * @brief The directional convective CFL number of the current velocity at
+    *        the current step size, c * dt (see time/cfl.hpp). Collective.
+    * @return The CFL number (0 for a zero velocity).
+    */
+   double ConvectiveCflNumber();
+
 private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
@@ -168,6 +176,11 @@ private:
 
    /// amr.write_indicator: recompute the eta / level cell data.
    void UpdateAmrCellData();
+
+   /// time.cfl_max with Navier-Stokes: (re)build the CFL estimator on the
+   /// current mesh; adaptive mode installs the dt ceiling, fixed-step mode
+   /// verifies the current dt.
+   void SetupCfl();
 
    /**
     * @brief Append a diagnostics row on the output interval (no-op if
@@ -194,6 +207,8 @@ private:
    int cycle_ = 0; ///< Accepted-step counter for output.
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
    std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.
+   /// Convective CFL estimator on the current mesh (time.cfl_max, NSE only).
+   std::unique_ptr<ConvectiveCfl> cfl_;
    /// amr.write_indicator: piecewise-constant space and fields for the
    /// indicator and the refinement depth (rebuilt after each event).
    std::unique_ptr<mfem::L2_FECollection> amr_fec_;

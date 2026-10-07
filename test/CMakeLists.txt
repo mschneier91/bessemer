@@ -119,6 +119,7 @@ incns_add_mpi_test(amr_indicator_test amr_indicator_test.cpp)
 incns_add_mpi_test(amr_marker_test amr_marker_test.cpp)
 incns_add_mpi_test(amr_transfer_test amr_transfer_test.cpp)
 incns_add_mpi_test(amr_event_test amr_event_test.cpp)
+incns_add_mpi_test(cfl_test cfl_test.cpp)
 incns_add_mpi_test(cc_robustness_test cc_robustness_test.cpp
   INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
 target_link_libraries(cc_robustness_test PRIVATE yaml-cpp::yaml-cpp)

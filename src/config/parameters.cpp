@@ -127,6 +127,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(time, "adaptive", p.adaptive);
    Maybe(time, "atol", p.controller.atol);
    Maybe(time, "rtol", p.controller.rtol);
+   Maybe(time, "cfl_max", p.cfl_max);
 
    const YAML::Node solver = root["solver"];
    Maybe(solver, "rtol", p.krylov_rtol);
@@ -284,6 +285,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
    MFEM_VERIFY(p.nu > 0.0, "parameters: nu must be positive");
    MFEM_VERIFY(p.order_u >= 1 && p.order_p >= 1, "parameters: bad orders");
    MFEM_VERIFY(p.dt > 0.0 && p.t_final > 0.0, "parameters: bad time settings");
+   MFEM_VERIFY(p.cfl_max >= 0.0, "parameters: time.cfl_max must be >= 0");
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();

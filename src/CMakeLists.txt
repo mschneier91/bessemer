@@ -25,6 +25,7 @@ add_library(incns STATIC
   time/multistep_coeffs.cpp
   time/time_integrator.cpp
   time/adaptive_controller.cpp
+  time/cfl.cpp
   config/parameters.cpp
   config/nondimensionalization.cpp
   config/initial_conditions.cpp
@@ -49,7 +50,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # point_block_jacobi.cpp -- essential-dof rule, closed-form nodal block
 # inverses and the fused block apply for the velocity point-block Jacobi; kinetic_head.cpp
 # -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure);
-# amr/gradient_indicator.cpp -- the per-element AMR indicator reduction.
+# amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
+# time/cfl.cpp -- the per-element directional convective CFL rate.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
@@ -66,6 +68,7 @@ if(USE_CUDA)
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp
                               amr/gradient_indicator.cpp
+                              time/cfl.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()

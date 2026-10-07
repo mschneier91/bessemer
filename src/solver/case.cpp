@@ -5,6 +5,8 @@
 #include "amr/mesh_adapter.hpp"
 #include "util/profiler.hpp"
 
+#include <limits>
+
 namespace incns
 {
 
@@ -135,6 +137,7 @@ void Case::EnsureSetup()
       cycle_ = integrator_->StepCount(); // output/checkpoint cycles continue
    }
 
+   SetupCfl();
    if (params_.amr.enabled && params_.amr.write_indicator)
    {
       UpdateAmrCellData();
@@ -400,6 +403,7 @@ AdaptStats Case::Adapt(bool force_rebuild)
 
    BuildIntegrator();
    integrator_->ImportState(state);
+   SetupCfl();
    st.rebuilt = true;
    if (a.write_indicator) { UpdateAmrCellData(); }
    BuildOutput(/*restart=*/true);
@@ -417,6 +421,44 @@ AdaptStats Case::Adapt(bool force_rebuild)
                 << st.seconds << " s" << std::endl;
    }
    return st;
+}
+
+void Case::SetupCfl()
+{
+   cfl_.reset();
+   if (params_.cfl_max <= 0.0 || params_.equation != Equation::NavierStokes)
+   {
+      return;
+   }
+   cfl_ = std::make_unique<ConvectiveCfl>(spaces_.Velocity(), rules_);
+   if (params_.adaptive)
+   {
+      // Stability ceiling for the accuracy-driven controller: the largest dt
+      // whose CFL number stays within cfl_max for the current velocity.
+      integrator_->SetDtCeiling([this](double)
+      {
+         const double c = cfl_->Rate(integrator_->Velocity());
+         return c > 0.0 ? params_.cfl_max / c
+                : std::numeric_limits<double>::infinity();
+      });
+   }
+   else
+   {
+      const double cfl = ConvectiveCflNumber();
+      MFEM_VERIFY(cfl <= params_.cfl_max, "case: the convective CFL number "
+                  << cfl << " at dt = " << integrator_->CurrentDt()
+                  << " exceeds time.cfl_max = " << params_.cfl_max
+                  << " (after an AMR event, smaller elements lower the stable "
+                  "step) -- reduce dt or use adaptive stepping");
+   }
+}
+
+double Case::ConvectiveCflNumber()
+{
+   EnsureSetup();
+   ConvectiveCfl local(spaces_.Velocity(), rules_);
+   const ConvectiveCfl& c = cfl_ ? *cfl_ : local;
+   return c.Rate(integrator_->Velocity()) * integrator_->CurrentDt();
 }
 
 void Case::UpdateAmrCellData()

@@ -124,6 +124,11 @@ struct Parameters
    int time_order = 2;   ///< BDF order: 2 production, 3 test-only.
    bool adaptive = false; ///< Adaptive stepping (BDF2 advance, BDF3 estimator).
    AdaptiveControllerOptions controller; ///< Adaptive tolerances/constants.
+   /// Convective CFL limit for Navier-Stokes (deck `time.cfl_max`; 0 = off):
+   /// the directional CFL number c*dt (see time/cfl.hpp) may not exceed it.
+   /// Adaptive mode caps the step; fixed-step mode aborts at setup or after
+   /// an AMR event that would exceed it (it never changes dt silently).
+   double cfl_max = 0.0;
 
    // --- Krylov ----------------------------------------------------------------
    double krylov_rtol = 1e-10; ///< FGMRES relative tolerance.
