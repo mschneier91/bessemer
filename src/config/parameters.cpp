@@ -207,6 +207,9 @@ Parameters Parameters::LoadYAML(const std::string& path)
                   "solver.rotation_schur thresholds / inner_iterations");
    }
    Maybe(solver, "rotation_log_interval", p.rotation_log_interval);
+   Maybe(solver, "rotation_picard", p.rotation_picard);
+   MFEM_VERIFY(p.rotation_picard >= 0,
+               "parameters: solver.rotation_picard must be >= 0");
    MFEM_VERIFY(p.rotation_log_interval >= 0,
                "parameters: solver.rotation_log_interval must be >= 0");
    if (solver && solver["schur"])

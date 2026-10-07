@@ -77,6 +77,7 @@ void Case::BuildIntegrator()
                   "form (physics.convective_form: rotational)");
       opts.rotation_schur = params_.rotation_schur;
       opts.rotation_diagnostics = rotational && params_.rotation_log_interval > 0;
+      opts.rotation_picard = rotational ? params_.rotation_picard : 0;
    }
    opts.nu = params_.nu;
    opts.dt = params_.dt;
@@ -212,8 +213,14 @@ void Case::Step()
    MaybeLogForces();
    MaybeLogRotation(integrator_->Time() - t_prev, step_wall);
    // An adaptation event comes BEFORE output and checkpoint: both then see the
-   // refined mesh with the (exactly transferred) state.
-   if (AdaptDue()) { Adapt(); }
+   // refined mesh with the (exactly transferred) state. The rebuilt integrator
+   // has no step of its own yet, so the force of the step just taken is
+   // cached first (BodyForceVector returns it until the next step).
+   if (AdaptDue())
+   {
+      if (body_force_) { force_cache_ = BodyForceVector(); }
+      Adapt();
+   }
    if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
    MaybeLogDiagnostics(cycle_, integrator_->Time());
    if (params_.checkpoint.enabled &&
@@ -483,6 +490,13 @@ Vector Case::BodyForceVector()
 {
    EnsureSetup();
    MFEM_VERIFY(body_force_, "case: BodyForceVector() needs forces.enabled");
+   // Right after an AMR event the rebuilt integrator has not stepped yet: the
+   // force of the step that produced the current state was cached before the
+   // event (Step()).
+   if (!integrator_->LastSolver() && force_cache_.Size() > 0)
+   {
+      return force_cache_;
+   }
    Vector r;
    integrator_->MomentumResidual(r);
    return body_force_->Force(r);

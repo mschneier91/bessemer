@@ -39,6 +39,9 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                opts_.convective_form == ConvectiveForm::Convective,
                "time_integrator: a convective form other than Convective "
                "needs convection (the Navier-Stokes equation)");
+   MFEM_VERIFY(opts_.rotation_picard >= 0 &&
+               (opts_.rotation_picard == 0 || !opts_.adaptive),
+               "time_integrator: rotation_picard sweeps are fixed-step only");
 
    // NSE (2.2): the dealiased convection operator, built only when asked -- the
    // Stokes path then allocates nothing and is bit-for-bit unchanged. IMEX, so
@@ -453,6 +456,9 @@ void StokesTimeIntegrator::StepStartup()
                "time_integrator: implicit solve did not converge at t = "
                << t_new);
    last_solver_ = solver;
+   // Not on the trapezoidal starter: its explicit half of N was built from
+   // w* = u^0 into b, so re-solving with a new w* would mix two linearizations.
+   if (step_count_ > 0) { PicardSweeps(*solver, b, t_new); }
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
@@ -488,10 +494,30 @@ void StokesTimeIntegrator::StepFixed()
                "time_integrator: implicit solve did not converge at t = "
                << t_new);
    last_solver_ = &solver;
+   PicardSweeps(solver, b, t_new);
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
    Commit(t_new, u_true, u_, p_);
+}
+
+void StokesTimeIntegrator::PicardSweeps(StokesSolver& solver, const Vector& b,
+                                        double t_new)
+{
+   if (!rotational_ || opts_.rotation_picard <= 0) { return; }
+   INCNS_PROFILE("time_integrator::picard");
+   for (int k = 0; k < opts_.rotation_picard; ++k)
+   {
+      // w* <- u^{n+1}: the rotation term moves to the new time level. The RHS
+      // b (history + forcing) does not depend on w*; SolveTrue re-eliminates
+      // the Dirichlet data with the updated N, warm-started from u^{n+1}.
+      w_star_ = u_;
+      solver.UpdateRotation();
+      solver.SolveTrue(b, u_, p_);
+      last_iterations_ += solver.Iterations();
+      MFEM_VERIFY(solver.Converged(), "time_integrator: Picard sweep " << k + 1
+                  << " did not converge at t = " << t_new);
+   }
 }
 
 void StokesTimeIntegrator::StepAdaptive()

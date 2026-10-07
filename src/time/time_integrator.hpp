@@ -61,6 +61,13 @@ struct TimeIntegratorOptions
    /// Rotational form: compute the rotation number and viscous ratio every
    /// step (StokesSolverOptions::rotation_diagnostics).
    bool rotation_diagnostics = false;
+   /// Rotational form, fixed steps (EXPERIMENTAL): after each BDF solve, set
+   /// w* = u^{n+1} and solve the step again, this many times (Picard sweeps
+   /// on the rotation term; converged sweeps = fully implicit BDF2 for the
+   /// rotational form). 0 (default) = the semi-implicit lagged-vorticity
+   /// scheme. The lag makes VORTICITY transport explicit (CFL-limited); the
+   /// sweeps move it to the new time level.
+   int rotation_picard = 0;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
@@ -267,6 +274,15 @@ private:
     * @return The solver.
     */
    StokesSolver& EnsureBdfSolver(SolverCache& cache, double c0);
+
+   /**
+    * @brief Rotational form with rotation_picard > 0: re-solve the step just
+    *        solved with w* = u^{n+1}, rotation_picard times (no-op otherwise).
+    * @param solver The solver of the step.
+    * @param b      The step's raw right-hand side.
+    * @param t_new  The step's end time (for messages).
+    */
+   void PicardSweeps(StokesSolver& solver, const mfem::Vector& b, double t_new);
 
    /**
     * @brief Assemble the forcing functional F(t) on velocity true dofs.

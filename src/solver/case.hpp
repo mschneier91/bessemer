@@ -247,6 +247,9 @@ private:
    std::vector<RefinementRecord> refine_log_;
    /// Lift/drag evaluator on the current velocity space (forces.enabled).
    std::unique_ptr<BodyForce> body_force_;
+   /// The force of the step taken just before an AMR event (the rebuilt
+   /// integrator cannot form that step's residual); empty otherwise.
+   mfem::Vector force_cache_;
    /// Write a forces CSV row on the forces interval (rank 0).
    void MaybeLogForces();
 

@@ -75,6 +75,7 @@ struct MmsConfig
    bool rotation_in_lor = false; ///< Rotation term in the LOR-AMG operator.
    /// Rotational Schur PC (CC path): mode and switch options.
    incns::RotationalSchurPreconditioner::Options rotation_schur;
+   int picard = 0; ///< Rotational form: Picard sweeps per step (fixed dt).
 };
 
 struct MmsResult
@@ -116,6 +117,7 @@ MmsResult NseMmsRun(int dim, int n, int ku, double nu, double dt,
    opts.velocity_prec = cfg.velocity_prec;
    opts.rotation_in_lor = cfg.rotation_in_lor;
    opts.rotation_schur = cfg.rotation_schur;
+   opts.rotation_picard = cfg.picard;
    opts.rtol = 1e-12;
    opts.max_iter = 5000;
    opts.kdim = 400;
@@ -421,6 +423,42 @@ void RotationalTemporalOrder(int dim, int n, int ku, double nu)
 TEST(NseMms, RotationalTemporalOrder2D) { RotationalTemporalOrder(2, 3, 3, 0.05); }
 
 TEST(NseMms, RotationalTemporalOrder3D) { RotationalTemporalOrder(3, 2, 2, 0.05); }
+
+// The experimental Picard sweeps (solver.rotation_picard): re-solving each
+// BDF step with w* = u^{n+1} keeps the march second order (converged sweeps
+// are fully implicit BDF2) -- e(0.02) / e(0.01) against a dt = 0.0025
+// reference on the same mesh (measured 2026-10-06 with three levels against
+// dt/16: rates 2.16, 2.14) -- and the sweeps genuinely change the answer (the
+// rotation term is re-linearized, not just re-solved with the same w*).
+TEST(NseMms, RotationalPicardSweeps)
+{
+   const double nu = 0.05, t_final = 0.1;
+   std::unique_ptr<VectorFunctionCoefficient> u_exact, forcing;
+   Fields2D(nu, u_exact, forcing);
+   MmsConfig swept = Rotational();
+   swept.picard = 2;
+   auto run = [&](double dt, const MmsConfig & cfg)
+   {
+      return NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing, cfg).u_true;
+   };
+   const Vector ref = run(0.0025, swept);
+   double e[2];
+   const double dts[2] = {0.02, 0.01};
+   for (int i = 0; i < 2; ++i)
+   {
+      Vector d = run(dts[i], swept);
+      d -= ref;
+      e[i] = std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d));
+   }
+   ASSERT_GT(e[1], 1e-10) << "difference at the solver floor -- vacuous rate";
+   EXPECT_GT(Rate(e[0], e[1], 2.0), 1.7) << "e=" << e[0] << " -> " << e[1];
+
+   Vector d = run(0.02, swept);
+   const Vector lagged = run(0.02, Rotational());
+   d -= lagged;
+   EXPECT_GT(std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d) /
+                       InnerProduct(MPI_COMM_WORLD, lagged, lagged)), 1e-8);
+}
 
 // Every velocity-block PC (symmetric / point-block Jacobi once / PBJ-GMRES)
 // on both Schur paths solves the SAME discrete system: the outer FGMRES

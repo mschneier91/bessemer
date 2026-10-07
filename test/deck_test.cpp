@@ -176,8 +176,9 @@ TEST(Deck, RotationalFormKeys)
 }
 
 // The rotational Schur keys: `solver.rotation_schur` as a scalar mode or as a
-// map with the switch options, and `solver.rotation_log_interval`; unstated
-// ones keep the defaults (cc, spec thresholds, 10 inner iterations, no log).
+// map with the switch options, `solver.rotation_log_interval` and the
+// experimental `solver.rotation_picard`; unstated ones keep the defaults (cc,
+// spec thresholds, 10 inner iterations, no log, no sweeps).
 TEST(Deck, RotationSchurKeys)
 {
    using RSP = incns::RotationalSchurPreconditioner;
@@ -185,6 +186,7 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_EQ(defaults.rotation_schur.mode, RSP::Mode::CahouetChabard);
    EXPECT_EQ(defaults.rotation_schur.inner_iterations, 10);
    EXPECT_EQ(defaults.rotation_log_interval, 0);
+   EXPECT_EQ(defaults.rotation_picard, 0);
 
    const std::string path =
       "deck_rotschur_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
@@ -192,11 +194,13 @@ TEST(Deck, RotationSchurKeys)
       std::ofstream f(path);
       f << "equation: navier_stokes\n"
         << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
-        << "solver:\n  rotation_schur: tensor\n  rotation_log_interval: 5\n";
+        << "solver:\n  rotation_schur: tensor\n  rotation_log_interval: 5\n"
+        << "  rotation_picard: 2\n";
    }
    Parameters p = Parameters::LoadYAML(path);
    EXPECT_EQ(p.rotation_schur.mode, RSP::Mode::Tensor);
    EXPECT_EQ(p.rotation_log_interval, 5);
+   EXPECT_EQ(p.rotation_picard, 2);
    {
       std::ofstream f(path);
       f << "equation: navier_stokes\n"

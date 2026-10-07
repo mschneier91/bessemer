@@ -7,7 +7,8 @@
 //     computed force must match at every step from the second on (the
 //     trapezoidal starter's pressure is a time average). Stokes and
 //     convective NSE ((u.grad)u = 0 here), 2D and 3D, and an AMR-refined NC
-//     mesh with hanging nodes on the body.
+//     mesh with hanging nodes on the body and refinement events during the
+//     march (the force queried right after an event).
 //  F2 choice independence: F computed with v_i and with v_i + w (w any vector
 //     vanishing at the Dirichlet dofs) agree to Krylov tolerance -- the
 //     residual of the scheme vanishes at every free dof, so only v_i's
@@ -102,8 +103,12 @@ void RunExactForce(int dim, bool nse, bool amr)
    if (amr)
    {
       p.amr.enabled = true;
-      p.amr.interval = 0;
-      p.amr.initial_passes = 2; // refine where the IC varies: at the walls
+      // Refine where the IC varies (at the walls), and once more during the
+      // march (step 3): right after an event the rebuilt integrator has not
+      // stepped, and the force must still be available (Case caches the
+      // pre-event step's force).
+      p.amr.interval = 3;
+      p.amr.initial_passes = 2;
       p.amr.theta = 0.5;
    }
    ChannelFlow flow_ex(dim);

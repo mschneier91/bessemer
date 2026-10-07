@@ -165,6 +165,10 @@ struct Parameters
    /// `<output.path>/<output.name>_rotation.csv` every this many steps (deck
    /// `solver.rotation_log_interval`; 0 = off).
    int rotation_log_interval = 0;
+   /// Rotational form, fixed steps, EXPERIMENTAL: Picard sweeps per step on
+   /// the rotation term (deck `solver.rotation_picard`; 0 = the semi-implicit
+   /// scheme). See TimeIntegratorOptions::rotation_picard.
+   int rotation_picard = 0;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
    /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
    /// the right default for the adaptive-primary workflow. `mass` remains
