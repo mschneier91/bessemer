@@ -583,9 +583,10 @@ What landed (`physics.convective_form: rotational`, NSE only):
   rules; the spec's B1 exactness-under-GLL-collocation check became "PBJ inverts the
   reference nodal blocks"). Verify with `MFEM_REPORT_KERNELS=1`: no `RotConv` fallback may
   appear. `RotationalConvection.SpecializedAndDeterministic`
-  asks the dispatch table whether the order-3p GL rule is covered for p = 1..5. It hard-codes
-  3p (the test is self-contained, so it does not ask `Convection::DealiasedOrder`): if the
-  dealiasing order changes, update that test and the specialization list together.
+  asks the dispatch table whether the order-3p GL rule is covered for p = 1..5. It and
+  `point_block_jacobi_test` hard-code 3p (both are self-contained, so neither asks
+  `Convection::DealiasedOrder`): if the dealiasing order changes, update both tests and the
+  specialization list together.
 - **Pressure: decision 3(a) below is what was implemented.** The solve yields the Bernoulli
   head P; `Pressure()` returns static `p = P − I(½|u|²)` (nodal interpolant, mean-normalized
   with the null space); P stays internal as the Krylov warm start. `I(½|u|²)` is computed
@@ -600,7 +601,10 @@ What landed (`physics.convective_form: rotational`, NSE only):
   the dense reference costs ~p⁹ and was very slow at p = 4, 5 on a GPU node), and
   specialization + bitwise determinism (p = 1..5); the transpose, diagonal, component-EA and LOR checks
   of the spec's Part A were dropped, so `VectorRotationalConvectionComponentIntegrator::
-  AssembleEA` is now UNTESTED) / `point_block_jacobi_test` (spec Part B);
+  AssembleEA` is now UNTESTED) / `point_block_jacobi_test` (spec Part B; self-contained
+  since 2026-10-06, human decision -- MFEM, the rotational integrator and PBJ only: rules
+  from MFEM's `IntRules` at the solver's orders 2p / 2p+dim−1 / 3p, no RuleBook, no
+  `Convection`);
   `nse_mms_test` Rotational* (temporal order vs a same-mesh fine-dt reference — the MMS is
   NOT spatially exact in this form, P is outside the pressure space — at ν = 0.05 so a
   starter defect is not viscously damped; all velocity PCs × both Schur paths agree; static

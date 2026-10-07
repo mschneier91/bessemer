@@ -11,13 +11,13 @@
 // GLL collocation, where PBJ is exact; the solver never uses that rule for N.)
 // Mesh M2 (spec App. B), alpha = 1.7, sigma = 3 unless stated; gtest loops +
 // SCOPED_TRACE replace the spec's Catch2 GENERATE/CAPTURE.
+// Self-contained on purpose: MFEM, the rotational-form integrator and the
+// preconditioner under test only (references and rules come from MFEM).
 
 #include <gtest/gtest.h>
 
-#include "operators/convection.hpp"
 #include "operators/rotational_convection.hpp"
 #include "precond/point_block_jacobi.hpp"
-#include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
 
 #include <algorithm>
@@ -29,7 +29,6 @@
 
 using namespace mfem;
 using incns::PointBlockJacobi;
-using incns::RuleBook;
 using incns::VectorRotationalConvectionIntegrator;
 
 namespace
@@ -181,10 +180,12 @@ real_t Entry(const SparseMatrix& S, int i, int j)
 
 const real_t kAlpha = 1.7;
 
-// The rules StokesOperator integrates each velocity-block term with:
-// Gauss-Legendre of order 2p for the mass, 2p + dim - 1 for the diffusion and
-// Convection::DealiasedOrder(p) = 3p for the rotation term (the dealiased rule
-// its kernels are specialized for, p <= 5).
+// The rules the solver integrates each velocity-block term with, all
+// Gauss-Legendre (MFEM's IntRules, the same rules the solver's RuleBook hands
+// out): order 2p for the mass, 2p + dim - 1 for the diffusion and 3p for the
+// rotation term -- the dealiased rule its kernels are specialized for, p <= 5.
+// Hard-coded like rotational_convection_test: if the solver's dealiasing order
+// changes, update both tests and the kernel specialization list together.
 struct SolverRules
 {
    const IntegrationRule* mass;
@@ -192,11 +193,11 @@ struct SolverRules
    const IntegrationRule* rotation;
 };
 
-SolverRules GetSolverRules(RuleBook& rules, int dim, int p)
+SolverRules GetSolverRules(int dim, int p)
 {
    const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
-   return {&rules.Get(geom, 2 * p), &rules.Get(geom, 2 * p + dim - 1),
-           &rules.Get(geom, incns::Convection::DealiasedOrder(p))};
+   return {&IntRules.Get(geom, 2 * p), &IntRules.Get(geom, 2 * p + dim - 1),
+           &IntRules.Get(geom, 3 * p)};
 }
 
 // sigma M + nu K + N assembled the legacy way from MFEM classes only, N as
@@ -270,7 +271,6 @@ struct PbjSetup
 // byVDIM indexing errors and the essential-dof rule.
 TEST(PointBlockJacobi, B1_InvertsReferenceBlocks)
 {
-   RuleBook rules;
    ConstantCoefficient sigma(3.0), nu(0.05);
    for (int dim : {2, 3})
       for (int p = 1; p <= 4; ++p)
@@ -287,7 +287,7 @@ TEST(PointBlockJacobi, B1_InvertsReferenceBlocks)
                ParMesh mesh(MPI_COMM_WORLD, serial);
                H1_FECollection fec(p, dim);
                ParFiniteElementSpace fes(&mesh, &fec, dim, ord);
-               const SolverRules sr = GetSolverRules(rules, dim, p);
+               const SolverRules sr = GetSolverRules(dim, p);
                Array<int> ess;
                BoundaryDofs(fes, em, ess);
                ParGridFunction w(&fes);
@@ -339,7 +339,6 @@ TEST(PointBlockJacobi, B1_InvertsReferenceBlocks)
 // the AddNodalSkewPA contraction directly).
 TEST(PointBlockJacobi, B2_BlocksMatchLegacyReference)
 {
-   RuleBook rules;
    ConstantCoefficient sigma(3.0), nu(0.05);
    for (int dim : {2, 3})
       for (int p = 1; p <= 4; ++p)
@@ -354,7 +353,7 @@ TEST(PointBlockJacobi, B2_BlocksMatchLegacyReference)
             ParMesh mesh(MPI_COMM_WORLD, serial);
             H1_FECollection fec(p, dim);
             ParFiniteElementSpace fes(&mesh, &fec, dim, ord);
-            const SolverRules sr = GetSolverRules(rules, dim, p);
+            const SolverRules sr = GetSolverRules(dim, p);
             ParGridFunction w(&fes);
             Interpolate(w, vel_fn);
 
@@ -432,14 +431,13 @@ struct B3Counts { int zero, rot1, rot2; };
 
 B3Counts RunB3(MPI_Comm comm, int dim)
 {
-   RuleBook rules;
    g_dim = dim;
    const int p = 4, n = 3;
    Mesh serial = MakeCurvedMesh(dim, n, p);
    ParMesh mesh(comm, serial);
    H1_FECollection fec(p, dim);
    ParFiniteElementSpace fes(&mesh, &fec, dim, Ordering::byNODES);
-   const SolverRules sr = GetSolverRules(rules, dim, p);
+   const SolverRules sr = GetSolverRules(dim, p);
 
    // dt = 1, sigma = 1/dt (as Table A2), nu dt / h^2 = 0.01 with h = 1/n.
    const real_t dt = 1.0, h = 1.0 / n;
