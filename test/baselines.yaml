@@ -132,7 +132,7 @@ dfg_2d1:
   convective:
     rotational: false
     grad_div: 0.0
-    cfl_max: 0.6
+    cfl_max: 0.24   # Nek-scale CFL (2026-10-07); = 0.6 in the old k^2 measure
     t_final: 8.0
     max_rel_err_c_d: 2.0e-4
     max_rel_err_c_l: 6.0e-3

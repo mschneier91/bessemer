@@ -75,11 +75,14 @@ struct MmsConfig
    bool rotation_in_lor = false; ///< Rotation term in the LOR-AMG operator.
    /// Rotational Schur PC (CC path): mode and switch options.
    incns::RotationalSchurPreconditioner::Options rotation_schur;
-   int picard = 0; ///< Rotational form: Picard sweeps per step (fixed dt).
+   int ext_order = 2; ///< Extrapolation order of the nonlinear term.
+   bool adaptive = false; ///< Error-controlled steps (atol below, rtol ~0).
+   double atol = 1e-6;    ///< Adaptive absolute tolerance.
 };
 
 struct MmsResult
 {
+   int steps = 0;      // accepted steps taken
    double u_err = 0.0; // final velocity L2 error
    double p_err = 0.0; // final static-pressure L2 error (zero-mean matched);
    // only when an exact pressure is given
@@ -117,7 +120,10 @@ MmsResult NseMmsRun(int dim, int n, int ku, double nu, double dt,
    opts.velocity_prec = cfg.velocity_prec;
    opts.rotation_in_lor = cfg.rotation_in_lor;
    opts.rotation_schur = cfg.rotation_schur;
-   opts.rotation_picard = cfg.picard;
+   opts.ext_order = cfg.ext_order;
+   opts.adaptive = cfg.adaptive;
+   opts.controller.atol = cfg.atol;
+   opts.controller.rtol = 1e-14; // pure absolute control
    opts.rtol = 1e-12;
    opts.max_iter = 5000;
    opts.kdim = 400;
@@ -126,7 +132,8 @@ MmsResult NseMmsRun(int dim, int n, int ku, double nu, double dt,
 
    // Step to t_final. Guard the loop count so a stalled march fails loudly
    // rather than spinning.
-   const int max_steps = static_cast<int>(std::ceil(t_final / dt)) + 2;
+   const int max_steps = cfg.adaptive ? 100000
+                         : static_cast<int>(std::ceil(t_final / dt)) + 2;
    int steps = 0;
    while (stepper.Time() < t_final - 1e-12 && steps < max_steps)
    {
@@ -139,6 +146,7 @@ MmsResult NseMmsRun(int dim, int n, int ku, double nu, double dt,
    irs[geom] = &rules.Get(geom, 2 * ku + 4);
    u_exact.SetTime(stepper.Time());
    MmsResult r;
+   r.steps = steps;
    r.u_err = stepper.Velocity().ComputeL2Error(u_exact, irs);
    r.u_true.SetSize(spaces.Velocity().GetTrueVSize());
    stepper.Velocity().GetTrueDofs(r.u_true);
@@ -283,6 +291,32 @@ TEST(NseMms, TemporalOrder2D)
 // ---------------------------------------------------------------------------
 // 3D: the case the user requires for sign-off.
 // ---------------------------------------------------------------------------
+// BDF2/EXT3 (time.ext_order: 3, Nek's choice). These fields are quadratic in
+// t, which BDF2 differentiates EXACTLY, so the only temporal error is the
+// extrapolation of the convection term (degree 4 in t): EXT2 -> order 2,
+// EXT3 -> order 3. Observing ~3 proves EXT3 is genuinely used and correctly
+// weighted (variable-step weights; EXT1/EXT2 ramp on the first two steps).
+TEST(NseMms, Ext3TemporalOrder2D)
+{
+   const double nu = 0.7, t_final = 0.2;
+   std::unique_ptr<VectorFunctionCoefficient> u_exact, forcing;
+   Fields2D(nu, u_exact, forcing);
+   MmsConfig ext3;
+   ext3.ext_order = 3;
+   const double e1 = NseMmsError(2, 3, 3, nu, 0.02, t_final, *u_exact, *forcing,
+                                 ext3);
+   const double e2 = NseMmsError(2, 3, 3, nu, 0.01, t_final, *u_exact, *forcing,
+                                 ext3);
+   const double e3 = NseMmsError(2, 3, 3, nu, 0.005, t_final, *u_exact,
+                                 *forcing, ext3);
+   ReportRates("2D BDF2/EXT3", e1, e2, e3);
+   ASSERT_GT(e3, kNoiseFloor) << "finest error at noise level -- vacuous rate";
+   EXPECT_GT(Rate(e1, e2, 2.0), 2.6) << "e(0.02)=" << e1 << " e(0.01)=" << e2;
+   EXPECT_GT(Rate(e2, e3, 2.0), 2.6) << "e(0.01)=" << e2 << " e(0.005)=" << e3;
+   // ... and it is a different (better) answer than EXT2 at the same dt.
+   EXPECT_LT(e2, NseMmsError(2, 3, 3, nu, 0.01, t_final, *u_exact, *forcing));
+}
+
 TEST(NseMms, TemporalOrder3D)
 {
    const double nu = 1.3, t_final = 0.2;
@@ -424,40 +458,56 @@ TEST(NseMms, RotationalTemporalOrder2D) { RotationalTemporalOrder(2, 3, 3, 0.05)
 
 TEST(NseMms, RotationalTemporalOrder3D) { RotationalTemporalOrder(3, 2, 2, 0.05); }
 
-// The experimental Picard sweeps (solver.rotation_picard): re-solving each
-// BDF step with w* = u^{n+1} keeps the march second order (converged sweeps
-// are fully implicit BDF2) -- e(0.02) / e(0.01) against a dt = 0.0025
-// reference on the same mesh (measured 2026-10-06 with three levels against
-// dt/16: rates 2.16, 2.14) -- and the sweeps genuinely change the answer (the
-// rotation term is re-linearized, not just re-solved with the same w*).
-TEST(NseMms, RotationalPicardSweeps)
+// Error-controlled adaptive steps on NSE: the embedded estimator must SEE the
+// convective splitting error. These fields are quadratic in t, so BDF2 and
+// BDF3 are both exact on the linear part and the only true error is the
+// extrapolation of convection. If the auxiliary BDF3 candidate used EXT2 like
+// the advancing step (the bug fixed 2026-10-07), that error would be identical
+// in both candidates and cancel: the estimate would miss it, dt would grow
+// too fast, and the error would not follow the tolerance. With BDF3/EXT3 it
+// does. Convective form only: the rotational MMS has an O(h^k) spatial floor
+// (~6e-4, P outside the pressure space) that would swamp the check; the
+// rotational path differs only in setting each candidate's own w*.
+void AdaptiveSeesConvection(ConvectiveForm form)
 {
-   const double nu = 0.05, t_final = 0.1;
+   SCOPED_TRACE(form == ConvectiveForm::Rotational ? "rotational" : "convective");
+   const double nu = 0.05, t_final = 0.2;
    std::unique_ptr<VectorFunctionCoefficient> u_exact, forcing;
    Fields2D(nu, u_exact, forcing);
-   MmsConfig swept = Rotational();
-   swept.picard = 2;
-   auto run = [&](double dt, const MmsConfig & cfg)
-   {
-      return NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing, cfg).u_true;
-   };
-   const Vector ref = run(0.0025, swept);
+   MmsConfig cfg;
+   cfg.form = form;
+   cfg.adaptive = true;
    double e[2];
-   const double dts[2] = {0.02, 0.01};
+   int steps[2];
+   const double tols[2] = {1e-4, 1e-6};
    for (int i = 0; i < 2; ++i)
    {
-      Vector d = run(dts[i], swept);
-      d -= ref;
-      e[i] = std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d));
+      cfg.atol = tols[i];
+      const MmsResult r = NseMmsRun(2, 3, 3, nu, 0.002, t_final, *u_exact,
+                                    *forcing, cfg);
+      e[i] = r.u_err;
+      steps[i] = r.steps;
    }
-   ASSERT_GT(e[1], 1e-10) << "difference at the solver floor -- vacuous rate";
-   EXPECT_GT(Rate(e[0], e[1], 2.0), 1.7) << "e=" << e[0] << " -> " << e[1];
+   if (mfem::Mpi::Root())
+   {
+      std::cout << "[ NSE MMS  ] adaptive form=" << static_cast<int>(form)
+                << ": tol 1e-4 -> " << steps[0] << " steps, err " << e[0]
+                << "; tol 1e-6 -> " << steps[1] << " steps, err " << e[1]
+                << std::endl;
+   }
+   // A 100x tighter tolerance must buy more steps and a clearly smaller error
+   // (the per-step LTE ~ dt^3 => ~4.6x more steps, ~20x smaller error), and
+   // the error must stay near the tolerance. Measured 2026-10-07 (np 2):
+   // fixed 14 / 39 steps, err 1.4e-5 / 7.8e-7; with the old EXT2 candidate
+   // 10 / 20 steps, err 4.7e-5 / 6.9e-6 (7x the tolerance).
+   EXPECT_GT(steps[1], 2 * steps[0]);
+   EXPECT_LT(e[1], 0.2 * e[0]);
+   for (int i = 0; i < 2; ++i) { EXPECT_LE(e[i], 2.0 * tols[i]) << "tol " << tols[i]; }
+}
 
-   Vector d = run(0.02, swept);
-   const Vector lagged = run(0.02, Rotational());
-   d -= lagged;
-   EXPECT_GT(std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d) /
-                       InnerProduct(MPI_COMM_WORLD, lagged, lagged)), 1e-8);
+TEST(NseMms, AdaptiveEstimatorSeesConvection)
+{
+   AdaptiveSeesConvection(ConvectiveForm::Convective);
 }
 
 // Every velocity-block PC (symmetric / point-block Jacobi once / PBJ-GMRES)

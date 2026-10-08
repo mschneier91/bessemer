@@ -21,11 +21,11 @@
 //
 // Usage: mpirun -np <=4 build/cpu/apps/dfg_cylinder [-c 1|2|3] [-o 3]
 //        [-ns 4] [-nr 3] [-nd 16] [-dt 0.01] [-tf T] [-fixed]
-//        [-rot [-pbj] [-schur cc|tensor|auto] [-rlog N] [-picard K]]
+//        [-rot [-pbj] [-schur cc|tensor|auto] [-rlog N]]
 //        [-gd c_gd]
 //        [-ip N] [-ai N | -at T] [-maxe N] [-theta t] [-aniso] [-cfl c]
-//        [-rtol r] [-apc loramg|jacobi_chebyshev|jacobi_pcg] [-dout]
-//        [-out dir]
+//        [-rtol r] [-apc loramg|jacobi_chebyshev|jacobi_pcg] [-ext 2|3]
+//        [-cflt c [-dtmax d]] [-dout] [-out dir]
 //
 // Case 3 ends with one machine-readable "RESULT key=value ..." line (errors
 // against John's values, wall time, steps, final element count, the largest
@@ -77,8 +77,9 @@ double PointValue(ParMesh& mesh, ParGridFunction& p, double x, double y)
    return buf[1] > 0.0 ? buf[0] / buf[1] : std::nan("");
 }
 
-// Maximum of samples f(t) located by a parabola through the discrete maximum
-// and its two neighbours (uniform steps). Returns {t*, f*}.
+// Maximum of samples f(t) located by the parabola through the discrete
+// maximum and its two neighbours (any spacing -- CFL-controlled steps vary).
+// Returns {t*, f*}.
 std::pair<double, double> PeakOf(const std::vector<double>& t,
                                  const std::vector<double>& f)
 {
@@ -87,12 +88,14 @@ std::pair<double, double> PeakOf(const std::vector<double>& t,
    const std::size_t k = static_cast<std::size_t>(
                             std::max_element(f.begin(), f.end()) - f.begin());
    if (k == 0 || k + 1 >= n) { return {t[k], f[k]}; }
-   const double h = 0.5 * (t[k + 1] - t[k - 1]);
-   const double b = 0.5 * (f[k + 1] - f[k - 1]);
-   const double a = 0.5 * (f[k - 1] - 2.0 * f[k] + f[k + 1]);
+   const double t0 = t[k - 1], t1 = t[k], t2 = t[k + 1];
+   const double d01 = (f[k] - f[k - 1]) / (t1 - t0);
+   const double d12 = (f[k + 1] - f[k]) / (t2 - t1);
+   const double a = (d12 - d01) / (t2 - t0); // second divided difference
    if (a >= 0.0) { return {t[k], f[k]}; }
-   const double x = -b / (2.0 * a);
-   return {t[k] + x * h, f[k] - b* b / (4.0 * a)};
+   // f(t) = f0 + d01 (t - t0) + a (t - t0)(t - t1); f'(t*) = 0.
+   const double ts = 0.5 * (t0 + t1) - d01 / (2.0 * a);
+   return {ts, f[k - 1] + d01* (ts - t0) + a* (ts - t0)* (ts - t1)};
 }
 
 } // namespace
@@ -104,9 +107,12 @@ int main(int argc, char* argv[])
 
    int bench = 1, order = 3, n_side = 4, n_ring = 3, n_down = 16;
    int initial_passes = 0, amr_interval = 0, max_elements = 20000;
-   int rotation_log = 0, picard = 0;
-   double t_final = -1.0, dt = 0.01, cfl = 0.6, grad_div = 0.0;
+   int rotation_log = 0, ext = 2;
+   // cfl: Nek-scale CFL ceiling (time/cfl.hpp); 0.24 = the 0.6 this app used
+   // in the old k^2 measure.
+   double t_final = -1.0, dt = 0.01, cfl = 0.24, grad_div = 0.0;
    double amr_time = 0.0, theta = 0.3, rtol = 1e-10;
+   double cfl_target = 0.0, dt_max = 0.0;
    bool rotational = false, pbj = false, dirichlet_out = false, fixed = false;
    bool aniso = false;
    const char* schur = "cc";
@@ -132,6 +138,12 @@ int main(int argc, char* argv[])
    args.AddOption(&aniso, "-aniso", "--anisotropic", "-iso", "--isotropic",
                   "AMR: anisotropic or isotropic refinement.");
    args.AddOption(&rtol, "-rtol", "--rtol", "Outer FGMRES relative tolerance.");
+   args.AddOption(&ext, "-ext", "--ext-order",
+                  "Extrapolation order of the nonlinear term: 2 or 3.");
+   args.AddOption(&cfl_target, "-cflt", "--cfl-target",
+                  "CFL-controlled steps at this CFL number (0 = off); -dt is "
+                  "the first step.");
+   args.AddOption(&dt_max, "-dtmax", "--dt-max", "CFL mode: dt cap (0 = none).");
    args.AddOption(&apc, "-apc", "--a-pc",
                   "Velocity-block PC of the CC path (convective form, or "
                   "rotational without -pbj): loramg|jacobi_chebyshev|"
@@ -153,9 +165,6 @@ int main(int argc, char* argv[])
                   "Rotational form: pressure Schur PC cc|tensor|auto.");
    args.AddOption(&rotation_log, "-rlog", "--rotation-log",
                   "Rotational form: per-step rotation log every N steps.");
-   args.AddOption(&picard, "-picard", "--rotation-picard",
-                  "Rotational form, fixed steps: Picard sweeps per step "
-                  "(experimental; 0 = semi-implicit).");
    args.AddOption(&grad_div, "-gd", "--grad-div",
                   "Grad-div scale c_gd (gamma = c_gd h_K; 0 = off).");
    args.AddOption(&dirichlet_out, "-dout", "--dirichlet-outflow", "-nout",
@@ -197,7 +206,6 @@ int main(int argc, char* argv[])
                  "jacobi_pcg");
    }
    p.rotation_log_interval = rotational ? rotation_log : 0;
-   p.rotation_picard = rotational ? picard : 0;
    p.nu = 1e-3;
    p.grad_div = grad_div;
    p.order_u = order;
@@ -205,12 +213,15 @@ int main(int argc, char* argv[])
    p.mesh.dim = 2;
    p.dt = dt;
    p.t_final = t_final;
-   p.adaptive = !fixed;
+   p.adaptive = !fixed && cfl_target <= 0.0;
+   p.cfl_target = cfl_target;
+   p.dt_max = dt_max;
+   p.ext_order = ext;
    p.controller.atol = 1e-6;
    p.controller.rtol = 1e-5;
    // Fixed steps never change dt, and the study runs the convective form past
    // its CFL limit on purpose: the ceiling only steers adaptive runs.
-   p.cfl_max = fixed ? 0.0 : cfl;
+   p.cfl_max = (fixed || cfl_target > 0.0) ? 0.0 : cfl;
    p.krylov_rtol = rtol;
    p.forces.enabled = true;
    p.forces.attributes = {incns::kCylinderBody};
@@ -352,7 +363,7 @@ int main(int argc, char* argv[])
                   "err_cl=%.3e err_tcl=%.3e err_dp=%.3e cfl_max=%.3f "
                   "outer_mean=%.2f outer_max=%d vel_inner_mean=%.2f "
                   "cap_hits=%lld tensor_frac=%.3f mu_max=%.3f rtol=%g "
-                  "picard=%d\n",
+                  "ext=%d cfl_target=%g\n",
                   rotational ? "rotational" : "convective",
                   rotational ? schur : "-", (rotational && pbj) ? "pbj_krylov"
                   : apc,
@@ -362,7 +373,8 @@ int main(int argc, char* argv[])
                   std::abs(clm - cl_ref) / cl_ref, std::abs(tcl - tcl_ref),
                   std::abs(dp - dp_ref) / std::abs(dp_ref), cfl_seen,
                   outer_sum / n, outer_max, inner_sum / n, cap_hits,
-                  tensor_steps / n, max_mu, rtol, rotational ? picard : 0);
+                  tensor_steps / n, max_mu, rtol, ext,
+                  cfl_target);
    }
    std::fflush(stdout);
    return diverged ? 2 : 0;

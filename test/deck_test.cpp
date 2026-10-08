@@ -176,10 +176,9 @@ TEST(Deck, RotationalFormKeys)
 }
 
 // The rotational Schur keys: `solver.rotation_schur` as a scalar mode or as a
-// map with the switch options, `solver.rotation_log_interval`, the
-// experimental `solver.rotation_picard`, and the CC velocity-PC keys
-// `solver.a_pc` / `a_pcg_rtol` / `a_pcg_max_iter`; unstated ones keep the
-// defaults (cc, spec thresholds, 10 inner iterations, no log, no sweeps,
+// map with the switch options, `solver.rotation_log_interval`, and the CC
+// velocity-PC keys `solver.a_pc` / `a_pcg_rtol` / `a_pcg_max_iter`; unstated
+// ones keep the defaults (cc, spec thresholds, 10 inner iterations, no log,
 // JacobiPCG at the case level).
 TEST(Deck, RotationSchurKeys)
 {
@@ -188,7 +187,6 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_EQ(defaults.rotation_schur.mode, RSP::Mode::CahouetChabard);
    EXPECT_EQ(defaults.rotation_schur.inner_iterations, 10);
    EXPECT_EQ(defaults.rotation_log_interval, 0);
-   EXPECT_EQ(defaults.rotation_picard, 0);
    // The case-level velocity-PC default (low-level CahouetChabardConfig
    // keeps LOR-AMG for the solver unit tests' baselines).
    EXPECT_EQ(defaults.cc.a_pc, incns::APC::JacobiPCG);
@@ -201,13 +199,12 @@ TEST(Deck, RotationSchurKeys)
       f << "equation: navier_stokes\n"
         << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
         << "solver:\n  rotation_schur: tensor\n  rotation_log_interval: 5\n"
-        << "  rotation_picard: 2\n  a_pc: jacobi_chebyshev\n"
+        << "  a_pc: jacobi_chebyshev\n"
         << "  a_pcg_rtol: 0.05\n  a_pcg_max_iter: 20\n";
    }
    Parameters p = Parameters::LoadYAML(path);
    EXPECT_EQ(p.rotation_schur.mode, RSP::Mode::Tensor);
    EXPECT_EQ(p.rotation_log_interval, 5);
-   EXPECT_EQ(p.rotation_picard, 2);
    EXPECT_EQ(p.cc.a_pc, incns::APC::JacobiChebyshev);
    EXPECT_DOUBLE_EQ(p.cc.a_pcg_rtol, 0.05);
    EXPECT_EQ(p.cc.a_pcg_max_iter, 20);
@@ -229,6 +226,43 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_DOUBLE_EQ(p.rotation_schur.vol_on, 2.0e-3);
    EXPECT_DOUBLE_EQ(p.rotation_schur.vol_off, 5.0e-4);
    EXPECT_EQ(p.rotation_schur.inner_iterations, 4);
+}
+
+// Time step control: `time.step_control: fixed|error|cfl` (`error` = the older
+// `adaptive: true`), `time.cfl_target`, `time.dt_max` (scaled like dt in
+// dimensional mode) and `time.ext_order`.
+TEST(Deck, StepControlKeys)
+{
+   const std::string path =
+      "deck_step_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   auto load = [&](const std::string & time_block)
+   {
+      {
+         std::ofstream f(path);
+         f << "equation: navier_stokes\n"
+           << "nondimensionalization:\n  mode: dimensional\n  L_ref: 2.0\n"
+           << "  U_ref: 4.0\n"
+           << "physics:\n  nu: 0.01\n"
+           << "time:\n  dt: 0.01\n  t_final: 1.0\n" << time_block;
+      }
+      Parameters p = Parameters::LoadYAML(path);
+      std::remove(path.c_str());
+      return p;
+   };
+   Parameters p = load("  step_control: cfl\n  cfl_target: 1.5\n"
+                       "  dt_max: 0.05\n  ext_order: 3\n");
+   EXPECT_FALSE(p.adaptive);
+   EXPECT_DOUBLE_EQ(p.cfl_target, 1.5);
+   EXPECT_DOUBLE_EQ(p.dt_max, 0.05 * 4.0 / 2.0); // * U_ref / L_ref
+   EXPECT_EQ(p.ext_order, 3);
+   p = load("  step_control: error\n");
+   EXPECT_TRUE(p.adaptive);
+   EXPECT_EQ(p.cfl_target, 0.0);
+   p = load("  adaptive: true\n"); // the older spelling still works
+   EXPECT_TRUE(p.adaptive);
+   p = load("  step_control: fixed\n");
+   EXPECT_FALSE(p.adaptive);
+   EXPECT_EQ(p.cfl_target, 0.0);
 }
 
 // The `amr:` section and `time.cfl_max` parse; unstated keys keep their

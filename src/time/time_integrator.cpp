@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace incns
@@ -39,9 +40,14 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                opts_.convective_form == ConvectiveForm::Convective,
                "time_integrator: a convective form other than Convective "
                "needs convection (the Navier-Stokes equation)");
-   MFEM_VERIFY(opts_.rotation_picard >= 0 &&
-               (opts_.rotation_picard == 0 || !opts_.adaptive),
-               "time_integrator: rotation_picard sweeps are fixed-step only");
+   MFEM_VERIFY(opts_.ext_order == 2 || opts_.ext_order == 3,
+               "time_integrator: ext_order must be 2 or 3");
+   MFEM_VERIFY(opts_.cfl_target >= 0.0 && opts_.dt_max >= 0.0 &&
+               opts_.cfl_growth >= 1.0 && opts_.cfl_hysteresis >= 0.0,
+               "time_integrator: bad CFL step-control settings");
+   MFEM_VERIFY(!(opts_.adaptive && opts_.cfl_target > 0.0),
+               "time_integrator: choose error-controlled (adaptive) OR "
+               "CFL-controlled steps, not both");
 
    // NSE (2.2): the dealiased convection operator, built only when asked -- the
    // Stokes path then allocates nothing and is bit-for-bit unchanged. IMEX, so
@@ -215,9 +221,49 @@ void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
    controller_->SetDtCeiling(std::move(ceiling));
 }
 
+void StokesTimeIntegrator::SetStepSize(double dt)
+{
+   MFEM_VERIFY(dt > 0.0, "time_integrator: step size must be positive");
+   MFEM_VERIFY(step_count_ == 0 || opts_.cfl_target > 0.0, "time_integrator: "
+               "a fixed-step march never changes dt after it has started");
+   dt_ = dt;
+}
+
+std::size_t StokesTimeIntegrator::ExtrapolationOrder() const
+{
+   const std::size_t want = static_cast<std::size_t>(
+                               std::max(opts_.ext_order, opts_.order == 3 ? 3 : 2));
+   return std::min<std::size_t>(hist_.size(), want);
+}
+
+void StokesTimeIntegrator::ChooseCflStep()
+{
+   MFEM_VERIFY(cfl_rate_, "time_integrator: CFL-controlled steps need "
+               "SetCflRate");
+   const double c = cfl_rate_();
+   double dt = dt_;
+   const double dt_cfl = (c > 0.0) ? opts_.cfl_target / c
+                         : std::numeric_limits<double>::infinity();
+   if (dt_cfl < dt)
+   {
+      dt = dt_cfl; // shrink at once: stability
+   }
+   else if (dt_cfl > dt * (1.0 + opts_.cfl_hysteresis))
+   {
+      dt = std::min(dt_cfl, dt * opts_.cfl_growth);
+   }
+   if (opts_.dt_max > 0.0) { dt = std::min(dt, opts_.dt_max); }
+   // Land on t_final: never overshoot, and avoid a sliver of a last step by
+   // splitting the remainder evenly when it is under two steps.
+   const double rest = opts_.t_final - t_;
+   if (rest <= dt) { dt = rest; }
+   else if (rest < 2.0 * dt) { dt = 0.5 * rest; }
+   dt_ = dt;
+}
+
 bool StokesTimeIntegrator::Done() const
 {
-   if (opts_.adaptive)
+   if (opts_.adaptive || opts_.cfl_target > 0.0)
    {
       return t_ >= opts_.t_final - 1e-12 * std::max(1.0, std::abs(opts_.t_final));
    }
@@ -285,7 +331,7 @@ void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
 }
 
 void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
-      double t_new, Vector& b)
+      double t_new, Vector& b, int ext)
 {
    // BDF-k: M sum_j c_j u^{n+1-j} + nu K u^{n+1} + B^T p = F^{n+1}
    // => A u^{n+1} - B^T p = F^{n+1} - M sum_{j>=1} c_j u^{n+1-j}.
@@ -302,19 +348,20 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    trap_->Blocks().Mass().Mult(combo, tmp);
    b -= tmp;
 
-   SubtractConvection(t_new, b);
+   SubtractConvection(t_new, b, ext);
 }
 
-void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b)
+void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b, int ext)
 {
    if (!convection_) { return; }
    INCNS_PROFILE("time_integrator::convection");
 
-   // Match the extrapolation order to the history actually available: EXT1 on
-   // the first step, EXT2 once two entries exist, capped at 3. A fixed EXT2
-   // would read hist_[1] before it exists during the startup ramp.
-   const std::size_t k =
-      std::min<std::size_t>(hist_.size(), (opts_.order == 3 ? 3 : 2));
+   // Match the extrapolation order to the history actually available (EXT1
+   // on the first step, EXT2 on the second, then ext_order): a fixed order
+   // would read history entries that do not exist yet during the startup ramp.
+   const std::size_t k = (ext > 0) ? std::min<std::size_t>(hist_.size(),
+                         static_cast<std::size_t>(ext))
+                         : ExtrapolationOrder();
    MFEM_VERIFY(k >= 1, "time_integrator: convection needs velocity history");
 
    std::vector<double> times(hist_times_.begin(), hist_times_.begin() + k);
@@ -335,14 +382,15 @@ void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b)
    }
 }
 
-void StokesTimeIntegrator::UpdateLaggedVelocity(double t_new)
+void StokesTimeIntegrator::UpdateLaggedVelocity(double t_new, int ext)
 {
    INCNS_PROFILE("time_integrator::lagged_velocity");
-   // Same order matching as SubtractConvection: EXT1 on the first step, EXT2
-   // once two history entries exist (3 in BDF3 test mode). The term does no
-   // work for ANY w* (skew), so the extrapolation affects accuracy only.
-   const std::size_t k =
-      std::min<std::size_t>(hist_.size(), (opts_.order == 3 ? 3 : 2));
+   // Same order matching as SubtractConvection (ExtrapolationOrder). The
+   // term does no work for ANY w* (skew), so the extrapolation affects
+   // accuracy only -- and stability of the (explicit) vorticity transport.
+   const std::size_t k = (ext > 0) ? std::min<std::size_t>(hist_.size(),
+                         static_cast<std::size_t>(ext))
+                         : ExtrapolationOrder();
    MFEM_VERIFY(k >= 1, "time_integrator: rotation needs velocity history");
    std::vector<double> times(hist_times_.begin(), hist_times_.begin() + k);
    const std::vector<double> g = ExtrapolationWeights(t_new, times);
@@ -374,8 +422,9 @@ void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
 
    hist_.push_front(u_true);
    hist_times_.push_front(t_new);
+   // BDF2 needs 2 levels; the BDF3 estimator / test mode and EXT3 need 3.
    const std::size_t needed =
-      (opts_.adaptive || opts_.order == 3) ? 3 : 2;
+      (opts_.adaptive || opts_.order == 3 || opts_.ext_order == 3) ? 3 : 2;
    while (hist_.size() > needed)
    {
       hist_.pop_back();
@@ -456,9 +505,7 @@ void StokesTimeIntegrator::StepStartup()
                "time_integrator: implicit solve did not converge at t = "
                << t_new);
    last_solver_ = solver;
-   // Not on the trapezoidal starter: its explicit half of N was built from
-   // w* = u^0 into b, so re-solving with a new w* would mix two linearizations.
-   if (step_count_ > 0) { PicardSweeps(*solver, b, t_new); }
+
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
@@ -494,30 +541,10 @@ void StokesTimeIntegrator::StepFixed()
                "time_integrator: implicit solve did not converge at t = "
                << t_new);
    last_solver_ = &solver;
-   PicardSweeps(solver, b, t_new);
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
    Commit(t_new, u_true, u_, p_);
-}
-
-void StokesTimeIntegrator::PicardSweeps(StokesSolver& solver, const Vector& b,
-                                        double t_new)
-{
-   if (!rotational_ || opts_.rotation_picard <= 0) { return; }
-   INCNS_PROFILE("time_integrator::picard");
-   for (int k = 0; k < opts_.rotation_picard; ++k)
-   {
-      // w* <- u^{n+1}: the rotation term moves to the new time level. The RHS
-      // b (history + forcing) does not depend on w*; SolveTrue re-eliminates
-      // the Dirichlet data with the updated N, warm-started from u^{n+1}.
-      w_star_ = u_;
-      solver.UpdateRotation();
-      solver.SolveTrue(b, u_, p_);
-      last_iterations_ += solver.Iterations();
-      MFEM_VERIFY(solver.Converged(), "time_integrator: Picard sweep " << k + 1
-                  << " did not converge at t = " << t_new);
-   }
 }
 
 void StokesTimeIntegrator::StepAdaptive()
@@ -531,10 +558,18 @@ void StokesTimeIntegrator::StepAdaptive()
       const double dt = std::min(dt_, opts_.t_final - t_);
       const double t_new = t_ + dt;
       bc_.SetTime(t_new);
-      // One w* per attempt, shared by both candidates (same history).
-      if (rotational_) { UpdateLaggedVelocity(t_new); }
+
+      // An EMBEDDED pair: the advancing BDF2 candidate uses the configured
+      // extrapolation (ext_order), the auxiliary order-3 candidate BDF3/EXT3
+      // -- a genuine third-order solution of the SAME step. With EXT2 in both
+      // (before 2026-10-07) the convective splitting error was identical in
+      // the two candidates and cancelled in their difference: the estimator
+      // was blind to it, the dominant error of CFL-limited NSE steps.
+      // Rotational form: each candidate gets its own w* (its solver caches the
+      // vorticity at UpdateRotation, so re-setting w* afterwards is safe).
 
       // BDF2 candidate -- the only one that may advance the solution.
+      if (rotational_) { UpdateLaggedVelocity(t_new); }
       std::vector<double> t2 = {t_new, hist_times_[0], hist_times_[1]};
       const std::vector<double> c2 = BdfWeights(t2);
       Vector b2(n_u);
@@ -556,7 +591,8 @@ void StokesTimeIntegrator::StepAdaptive()
                                };
       const std::vector<double> c3 = BdfWeights(t3);
       Vector b3(n_u);
-      AssembleBdfRhs(c3, t_new, b3);
+      AssembleBdfRhs(c3, t_new, b3, 3);
+      if (rotational_) { UpdateLaggedVelocity(t_new, 3); }
       u3_scratch_ = u_;
       p3_scratch_ = p_;
       StokesSolver& s3 = EnsureBdfSolver(bdf3_, c3[0]);
@@ -606,6 +642,7 @@ void StokesTimeIntegrator::Step()
       StepAdaptive();
       return;
    }
+   if (opts_.cfl_target > 0.0) { ChooseCflStep(); }
    StepFixed();
 }
 

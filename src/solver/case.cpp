@@ -77,7 +77,9 @@ void Case::BuildIntegrator()
                   "form (physics.convective_form: rotational)");
       opts.rotation_schur = params_.rotation_schur;
       opts.rotation_diagnostics = rotational && params_.rotation_log_interval > 0;
-      opts.rotation_picard = rotational ? params_.rotation_picard : 0;
+      opts.ext_order = params_.ext_order;
+      opts.cfl_target = params_.cfl_target;
+      opts.dt_max = params_.dt_max;
    }
    opts.nu = params_.nu;
    opts.dt = params_.dt;
@@ -586,11 +588,32 @@ void Case::SetupCfl()
    // of w* x u^{n+1} is (u^{n+1}.grad) w*). Measured on DFG 2D-3 (2026-10-06,
    // docs/imex_vs_semi_implicit.md): both lose stability at the same step;
    // the rotational one silently, with bounded but wrong forces.
-   if (params_.cfl_max <= 0.0 || params_.equation != Equation::NavierStokes)
+   const bool cfl_steps = params_.cfl_target > 0.0;
+   if ((params_.cfl_max <= 0.0 && !cfl_steps) ||
+       params_.equation != Equation::NavierStokes)
    {
       return;
    }
    cfl_ = std::make_unique<ConvectiveCfl>(spaces_.Velocity(), rules_);
+   if (cfl_steps)
+   {
+      // CFL-controlled steps: the integrator asks for the rate before every
+      // step. Before the first step (not after an AMR event -- the imported
+      // state carries its dt) the initial dt is capped to the target too.
+      integrator_->SetCflRate([this]()
+      {
+         return cfl_->Rate(integrator_->Velocity());
+      });
+      if (integrator_->StepCount() == 0)
+      {
+         const double c = cfl_->Rate(integrator_->Velocity());
+         if (c > 0.0 && params_.dt * c > params_.cfl_target)
+         {
+            integrator_->SetStepSize(params_.cfl_target / c);
+         }
+      }
+      return; // dt is controlled: the fixed-step abort below does not apply
+   }
    if (params_.adaptive)
    {
       // Stability ceiling for the accuracy-driven controller: the largest dt

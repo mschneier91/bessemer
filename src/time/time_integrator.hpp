@@ -17,6 +17,7 @@
 #include "mfem.hpp"
 
 #include <deque>
+#include <functional>
 #include <memory>
 
 namespace incns
@@ -37,6 +38,23 @@ struct TimeIntegratorOptions
    /// from the difference between the BDF2 and BDF3 solutions each step;
    /// control acts on VELOCITY only (index-2 DAE: pressure is algebraic).
    bool adaptive = false;
+   /// Extrapolation order of the explicit / lagged nonlinear term (2 or 3):
+   /// EXT2 or EXT3 for the IMEX convection and for the rotational form's w*.
+   /// BDF2/EXT3 (Nek5000's choice) has a stability region that covers part
+   /// of the imaginary axis, where Galerkin advection eigenvalues live; EXT2
+   /// barely does. Ramped up from the available history (EXT1, EXT2, ...).
+   int ext_order = 2;
+   /// CFL-controlled steps (> 0; fixed-step machinery, one solve per step):
+   /// before each step dt = cfl_target / c(u^n), c the convective CFL rate
+   /// supplied by SetCflRate (time/cfl.hpp: Nek5000's definition, so Nek's
+   /// CFL targets transfer). Shrinks at once, grows by at most
+   /// cfl_growth per step and only when the target allows cfl_hysteresis
+   /// more (quasi-steady flows then refresh the solver rarely); capped by
+   /// dt_max; the last step lands on t_final. Exclusive with adaptive.
+   double cfl_target = 0.0;
+   double cfl_growth = 1.2;     ///< CFL mode: max dt growth factor per step.
+   double cfl_hysteresis = 0.05; ///< CFL mode: relative slack before growing.
+   double dt_max = 0.0;         ///< CFL mode: dt cap (0 = none).
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    /// Solve Navier-Stokes rather than unsteady Stokes (Sprint 2.2): adds the
@@ -61,13 +79,6 @@ struct TimeIntegratorOptions
    /// Rotational form: compute the rotation number and viscous ratio every
    /// step (StokesSolverOptions::rotation_diagnostics).
    bool rotation_diagnostics = false;
-   /// Rotational form, fixed steps (EXPERIMENTAL): after each BDF solve, set
-   /// w* = u^{n+1} and solve the step again, this many times (Picard sweeps
-   /// on the rotation term; converged sweeps = fully implicit BDF2 for the
-   /// rotational form). 0 (default) = the semi-implicit lagged-vorticity
-   /// scheme. The lag makes VORTICITY transport explicit (CFL-limited); the
-   /// sweeps move it to the new time level.
-   int rotation_picard = 0;
    bool collocated_mass = false; ///< GLL collocated mass option.
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
@@ -197,6 +208,23 @@ public:
     */
    void SetDtCeiling(AdaptiveController::DtCeilingFn ceiling);
 
+   /// The convective CFL rate c(u) of the current velocity (dt * c = CFL).
+   using CflRateFn = std::function<double()>;
+
+   /**
+    * @brief Install the CFL rate for CFL-controlled steps
+    *        (TimeIntegratorOptions::cfl_target > 0).
+    * @param rate Callback returning c for the current velocity.
+    */
+   void SetCflRate(CflRateFn rate) { cfl_rate_ = std::move(rate); }
+
+   /**
+    * @brief Set the step size of the next step (before the first step, or in
+    *        CFL mode). Fixed-step mode never changes dt on its own.
+    * @param dt Step size (> 0).
+    */
+   void SetStepSize(double dt);
+
    /// Advance one (accepted) step; in adaptive mode this may retry internally.
    void Step();
 
@@ -275,14 +303,6 @@ private:
     */
    StokesSolver& EnsureBdfSolver(SolverCache& cache, double c0);
 
-   /**
-    * @brief Rotational form with rotation_picard > 0: re-solve the step just
-    *        solved with w* = u^{n+1}, rotation_picard times (no-op otherwise).
-    * @param solver The solver of the step.
-    * @param b      The step's raw right-hand side.
-    * @param t_new  The step's end time (for messages).
-    */
-   void PicardSweeps(StokesSolver& solver, const mfem::Vector& b, double t_new);
 
    /**
     * @brief Assemble the forcing functional F(t) on velocity true dofs.
@@ -297,9 +317,11 @@ private:
     * @param t_new Time the step solves for.
     * @param b     Output: momentum right-hand side (true dofs, before
     *              Dirichlet elimination).
+    * @param ext   Extrapolation order of the convective term (capped by the
+    *              history); 0 = the configured ExtrapolationOrder().
     */
    void AssembleBdfRhs(const std::vector<double>& c, double t_new,
-                       mfem::Vector& b);
+                       mfem::Vector& b, int ext = 0);
 
    /**
     * @brief Subtract the AB/EXT-extrapolated convection term from @p b.
@@ -317,8 +339,10 @@ private:
     * No-op when TimeIntegratorOptions::convection is false.
     * @param t_new Time the step solves for.
     * @param b     Momentum right-hand side (true dofs), modified in place.
+    * @param ext   Extrapolation order to use (capped by the history); 0 =
+    *              ExtrapolationOrder(). The adaptive BDF3 candidate passes 3.
     */
-   void SubtractConvection(double t_new, mfem::Vector& b);
+   void SubtractConvection(double t_new, mfem::Vector& b, int ext = 0);
 
    /**
     * @brief Rotational form: set the lagged velocity w* to the EXT
@@ -326,8 +350,18 @@ private:
     *        SubtractConvection: EXT1 on the first step, EXT2 after). The
     *        caller then calls UpdateRotation() on each solver it uses.
     * @param t_new Time the step solves for.
+    * @param ext   Extrapolation order (capped by the history); 0 =
+    *              ExtrapolationOrder().
     */
-   void UpdateLaggedVelocity(double t_new);
+   void UpdateLaggedVelocity(double t_new, int ext = 0);
+
+   /// @return The extrapolation order usable now: min(history size,
+   ///         ext_order, or 3 in BDF3 test mode).
+   std::size_t ExtrapolationOrder() const;
+
+   /// CFL mode: choose dt_ for the next step from the CFL rate (see
+   /// TimeIntegratorOptions::cfl_target).
+   void ChooseCflStep();
 
    /// Rotational form: p_static_ = p_ - I(1/2|u_|^2), mean-normalized when
    /// the pressure null space exists.
@@ -386,6 +420,7 @@ private:
    /// Solver of the last accepted step (MomentumResidual); not owned.
    StokesSolver* last_solver_ = nullptr;
    mfem::Vector last_b_;      ///< Its raw momentum right-hand side.
+   CflRateFn cfl_rate_;       ///< CFL rate for CFL-controlled steps.
 
    double t_ = 0.0;           ///< Current time.
    double dt_ = 0.0;          ///< Current step size (varies in adaptive mode).

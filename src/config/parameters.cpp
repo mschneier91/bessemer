@@ -130,6 +130,26 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(time, "atol", p.controller.atol);
    Maybe(time, "rtol", p.controller.rtol);
    Maybe(time, "cfl_max", p.cfl_max);
+   Maybe(time, "cfl_target", p.cfl_target);
+   Maybe(time, "dt_max", p.dt_max);
+   Maybe(time, "ext_order", p.ext_order);
+   if (time && time["step_control"])
+   {
+      const std::string sc = time["step_control"].as<std::string>();
+      if (sc == "fixed") { p.adaptive = false; p.cfl_target = 0.0; }
+      else if (sc == "error") { p.adaptive = true; p.cfl_target = 0.0; }
+      else if (sc == "cfl")
+      {
+         p.adaptive = false;
+         MFEM_VERIFY(p.cfl_target > 0.0, "parameters: time.step_control: cfl "
+                     "needs time.cfl_target > 0");
+      }
+      else
+      {
+         MFEM_ABORT("parameters: unknown time.step_control '" << sc
+                    << "' (fixed|error|cfl)");
+      }
+   }
 
    const YAML::Node solver = root["solver"];
    Maybe(solver, "rtol", p.krylov_rtol);
@@ -207,9 +227,6 @@ Parameters Parameters::LoadYAML(const std::string& path)
                   "solver.rotation_schur thresholds / inner_iterations");
    }
    Maybe(solver, "rotation_log_interval", p.rotation_log_interval);
-   Maybe(solver, "rotation_picard", p.rotation_picard);
-   MFEM_VERIFY(p.rotation_picard >= 0,
-               "parameters: solver.rotation_picard must be >= 0");
    MFEM_VERIFY(p.rotation_log_interval >= 0,
                "parameters: solver.rotation_log_interval must be >= 0");
    if (solver && solver["schur"])
@@ -360,6 +377,16 @@ Parameters Parameters::LoadYAML(const std::string& path)
    MFEM_VERIFY(p.order_u >= 1 && p.order_p >= 1, "parameters: bad orders");
    MFEM_VERIFY(p.dt > 0.0 && p.t_final > 0.0, "parameters: bad time settings");
    MFEM_VERIFY(p.cfl_max >= 0.0, "parameters: time.cfl_max must be >= 0");
+   MFEM_VERIFY(p.cfl_target >= 0.0 && p.dt_max >= 0.0,
+               "parameters: time.cfl_target and time.dt_max must be >= 0");
+   MFEM_VERIFY(!(p.adaptive && p.cfl_target > 0.0), "parameters: choose "
+               "time.step_control error OR cfl, not both");
+   MFEM_VERIFY(p.cfl_target == 0.0 || p.equation == Equation::NavierStokes,
+               "parameters: CFL-controlled steps need equation: navier_stokes");
+   MFEM_VERIFY(p.cfl_max == 0.0 || p.cfl_target <= p.cfl_max,
+               "parameters: time.cfl_target exceeds time.cfl_max");
+   MFEM_VERIFY(p.ext_order == 2 || p.ext_order == 3,
+               "parameters: time.ext_order must be 2 or 3");
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();
@@ -401,6 +428,7 @@ void Parameters::Normalize()
       forces.reference_area /= std::pow(nondim.L_ref, mesh.dim - 1);
       dt *= U_over_L;
       t_final *= U_over_L;
+      dt_max *= U_over_L;
       nu = 1.0 / nondim.Re;
       controller.atol /= nondim.U_ref; // the LTE norm carries velocity units
    }

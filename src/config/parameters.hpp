@@ -127,7 +127,22 @@ struct Parameters
    double dt = 1e-2;     ///< Fixed step size / adaptive initial guess.
    double t_final = 1.0; ///< End time.
    int time_order = 2;   ///< BDF order: 2 production, 3 test-only.
-   bool adaptive = false; ///< Adaptive stepping (BDF2 advance, BDF3 estimator).
+   /// Error-controlled adaptive stepping (BDF2 advance, BDF3 estimator) --
+   /// deck `time.step_control: error` (or the older `time.adaptive: true`).
+   bool adaptive = false;
+   /// CFL-controlled steps: dt = cfl_target / c each step (> 0 enables; deck
+   /// `time.step_control: cfl` + `time.cfl_target`). One solve per step, no
+   /// estimator. c is the directional CFL rate with Nek5000's definition
+   /// (time/cfl.hpp), so Nek's CFL targets transfer. Exclusive with adaptive;
+   /// Navier-Stokes only. See TimeIntegratorOptions::cfl_target for the
+   /// growth rules.
+   double cfl_target = 0.0;
+   /// CFL mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
+   double dt_max = 0.0;
+   /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3
+   /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3 (Nek's choice; larger
+   /// stability region for advection).
+   int ext_order = 2;
    AdaptiveControllerOptions controller; ///< Adaptive tolerances/constants.
    /// Convective CFL limit for Navier-Stokes (deck `time.cfl_max`; 0 = off),
    /// BOTH forms: the IMEX convective form transports velocity explicitly,
@@ -167,10 +182,6 @@ struct Parameters
    /// `<output.path>/<output.name>_rotation.csv` every this many steps (deck
    /// `solver.rotation_log_interval`; 0 = off).
    int rotation_log_interval = 0;
-   /// Rotational form, fixed steps, EXPERIMENTAL: Picard sweeps per step on
-   /// the rotation term (deck `solver.rotation_picard`; 0 = the semi-implicit
-   /// scheme). See TimeIntegratorOptions::rotation_picard.
-   int rotation_picard = 0;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
    /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
    /// the right default for the adaptive-primary workflow. `mass` remains

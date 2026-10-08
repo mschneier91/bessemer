@@ -22,19 +22,23 @@ using namespace mfem;
 namespace cfl_kernels
 {
 
-// rate[e] = max_q sum_d |(J_q^{-1} u_q)_d| from u at points U(q, c, e)
-// (byNODES) and Jacobians J(q, i, j, e) = dx_i/dxi_j.
-void ElementRates(int ne, int nq, int dim, const Vector& uq, const Vector& jac,
-                  Vector& rate)
+// rate[e] = max over the GLL nodes q = (i, j[, l]) (lexicographic, x
+// fastest) of sum_d |(J_q^{-1} u_q)_d| * inv_dxi[index_d(q)], from u at the
+// nodes U(q, c, e) (byNODES) and Jacobians J(q, i, j, e) = dx_i/dxi_j.
+void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
+                  const Vector& inv_dxi, Vector& rate)
 {
+   const int nq = (dim == 3) ? d1 * d1 * d1 : d1 * d1;
    const auto U = Reshape(uq.Read(), nq, dim, ne);
    const auto J = Reshape(jac.Read(), nq, dim, dim, ne);
+   const auto X = inv_dxi.Read();
    auto R = rate.Write();
    mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
    {
       real_t rmax = 0.0;
       for (int q = 0; q < nq; ++q)
       {
+         const int ix = q % d1, iy = (q / d1) % d1, iz = q / (d1 * d1);
          real_t s = 0.0;
          if (dim == 2)
          {
@@ -43,7 +47,8 @@ void ElementRates(int ne, int nq, int dim, const Vector& uq, const Vector& jac,
             const real_t det = a * d - b * c;
             const real_t u0 = U(q, 0, e), u1 = U(q, 1, e);
             // J^{-1} = [d -b; -c a] / det
-            s = fabs((d * u0 - b * u1) / det) + fabs((-c * u0 + a * u1) / det);
+            s = fabs((d * u0 - b * u1) / det) * X[ix] +
+                fabs((-c * u0 + a * u1) / det) * X[iy];
          }
          else
          {
@@ -61,9 +66,9 @@ void ElementRates(int ne, int nq, int dim, const Vector& uq, const Vector& jac,
             const real_t a22 = m[0][0] * m[1][1] - m[0][1] * m[1][0];
             const real_t det = m[0][0] * a00 + m[0][1] * a10 + m[0][2] * a20;
             const real_t u0 = U(q, 0, e), u1 = U(q, 1, e), u2 = U(q, 2, e);
-            s = fabs((a00 * u0 + a01 * u1 + a02 * u2) / det) +
-                fabs((a10 * u0 + a11 * u1 + a12 * u2) / det) +
-                fabs((a20 * u0 + a21 * u1 + a22 * u2) / det);
+            s = fabs((a00 * u0 + a01 * u1 + a02 * u2) / det) * X[ix] +
+                fabs((a10 * u0 + a11 * u1 + a12 * u2) / det) * X[iy] +
+                fabs((a20 * u0 + a21 * u1 + a22 * u2) / det) * X[iz];
          }
          rmax = (s > rmax) ? s : rmax;
       }
@@ -73,6 +78,21 @@ void ElementRates(int ne, int nq, int dim, const Vector& uq, const Vector& jac,
 
 } // namespace cfl_kernels
 
+Vector ConvectiveCfl::InverseNodeSpacing(int k)
+{
+   // GLL points on [0,1] (MFEM's Poly_1D); Nek's getdr on the same points.
+   const real_t* z = poly1d.GetPoints(k, BasisType::GaussLobatto);
+   Vector inv(k + 1);
+   for (int i = 0; i <= k; ++i)
+   {
+      const real_t dz = (i == 0) ? z[1] - z[0]
+                        : (i == k) ? z[k] - z[k - 1]
+                        : 0.5 * (z[i + 1] - z[i - 1]);
+      inv(i) = 1.0 / dz;
+   }
+   return inv;
+}
+
 ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
                              const RuleBook& rules)
    : vfes_(vfes)
@@ -81,14 +101,21 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
    dim_ = mesh.Dimension();
    ne_ = vfes.GetNE();
    order_ = vfes.GetTypicalFE()->GetOrder();
+   MFEM_VERIFY(order_ >= 1, "cfl: velocity order must be >= 1");
    MFEM_VERIFY(vfes.GetVDim() == dim_, "cfl: velocity vdim must equal dim");
    const Geometry::Type geom = (dim_ == 3) ? Geometry::CUBE : Geometry::SQUARE;
-   ir_ = &rules.Get(geom, 2 * order_ + dim_ - 1);
+   // The k+1 GLL points per direction: the H1 nodes, where Nek evaluates.
+   ir_ = &rules.Get(geom, 2 * order_ - 1, Rule1D::GaussLobatto);
+   MFEM_VERIFY(ir_->GetNPoints() == ((dim_ == 3) ? (order_ + 1) * (order_ + 1) *
+                                     (order_ + 1) : (order_ + 1) * (order_ + 1)),
+               "cfl: expected k+1 GLL points per direction");
    restr_ = vfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
    qi_ = vfes.GetQuadratureInterpolator(*ir_);
    qi_->SetOutputLayout(QVectorLayout::byNODES);
    geom_ = mesh.GetGeometricFactors(*ir_, GeometricFactors::JACOBIANS,
                                     Device::GetDeviceMemoryType());
+   inv_dxi_ = InverseNodeSpacing(order_);
+   inv_dxi_.UseDevice(true);
    ue_.SetSize(restr_->Height());
    ue_.UseDevice(true);
    uq_.SetSize(ir_->GetNPoints() * dim_ * ne_);
@@ -104,14 +131,15 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
    if (ne_ > 0)
    {
       restr_->Mult(u, ue_);
+      qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
       qi_->Values(ue_, uq_);
-      cfl_kernels::ElementRates(ne_, ir_->GetNPoints(), dim_, uq_, geom_->J,
+      cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq_, geom_->J, inv_dxi_,
                                 rate_);
       local = rate_.Max(); // device-aware reduction
    }
    double global = 0.0;
    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MAX, vfes_.GetComm());
-   return static_cast<double>(order_ * order_) * global;
+   return global;
 }
 
 } // namespace incns

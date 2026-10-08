@@ -1,11 +1,17 @@
 // Convective CFL ceiling (time/cfl, amr_spec.md D6).
-//  C1 constant velocity on an affine sheared mesh: the rate equals
-//     k^2 max_K sum_d |(J_K^{-1} u)_d| exactly, conforming and refined NC
-//     (refined cells halve J's split column, doubling that entry);
+//  C1 Nek5000's CFL definition: the 1D inverse GLL spacings match Nek's
+//     getdr by hand (Q3); for a constant velocity on an affine sheared mesh
+//     the rate equals max_K sum_d |(J_K^{-1} u)_d| / dxi_end exactly (the max
+//     sits at a corner node, end spacing in every direction), conforming and
+//     refined NC (refined cells halve J's split column, doubling that entry);
 //  C2 adaptive Navier-Stokes TGV with a binding time.cfl_max: the controller
 //     keeps c * dt within the limit, and its steps are smaller than without
 //     -- for BOTH the IMEX convective and the semi-implicit rotational form
-//     (the latter transports vorticity explicitly; DFG 2D-3 study 2026-10-06).
+//     (the latter transports vorticity explicitly; DFG 2D-3 study 2026-10-06);
+//  C3 CFL-controlled steps (time.cfl_target, one solve per step) on a
+//     decaying NSE TGV, both forms, BDF2/EXT3: every step after the startup
+//     pair has c(u^n) dt <= cfl_target, dt never grows by more than the growth
+//     factor, it does grow as the flow decays, and the run lands on t_final.
 
 #include <gtest/gtest.h>
 
@@ -76,9 +82,18 @@ TEST(Cfl, C1_ConstantVelocityOnAffineMeshIsExact)
             ref = std::max(ref, s);
          }
          MPI_Allreduce(MPI_IN_PLACE, &ref, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-         ref *= k * k;
+         ref *= incns::ConvectiveCfl::InverseNodeSpacing(k)(0);
          EXPECT_NEAR(rate, ref, 1e-12 * ref);
       }
+   // Q3 GLL points on [0,1]: 0, (1 - 1/sqrt 5)/2, (1 + 1/sqrt 5)/2, 1. Nek's
+   // getdr: one-sided at the ends, half central difference inside.
+   const Vector inv = incns::ConvectiveCfl::InverseNodeSpacing(3);
+   const double z1 = 0.5 * (1.0 - 1.0 / std::sqrt(5.0)), z2 = 1.0 - z1;
+   EXPECT_NEAR(inv(0), 1.0 / z1, 1e-12);
+   EXPECT_NEAR(inv(1), 1.0 / (0.5 * z2), 1e-12);
+   EXPECT_NEAR(inv(2), 1.0 / (0.5 * (1.0 - z1)), 1e-12);
+   EXPECT_NEAR(inv(3), 1.0 / z1, 1e-12);
+   EXPECT_NEAR(inv(0), 3.6180339887, 1e-9); // = Nek's 2 * 1/0.5528 on [-1,1]
 }
 
 namespace
@@ -139,3 +154,66 @@ TEST(Cfl, C2_RotationalFormRespectsTheCeiling)
 {
    AdaptiveStepRespectsTheCeiling(incns::ConvectiveForm::Rotational);
 }
+
+namespace
+{
+
+void CflControlledSteps(incns::ConvectiveForm form)
+{
+   incns::Parameters p;
+   p.equation = incns::Equation::NavierStokes;
+   p.convective_form = form;
+   p.nu = 0.05;
+   p.order_u = 3;
+   p.order_p = 2;
+   p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
+   p.dt = 0.02;
+   p.t_final = 1.0;
+   p.cfl_target = 0.3; // Nek-scale CFL (time/cfl.hpp)
+   p.ext_order = 3;
+   p.Normalize();
+   auto mesh = incns::MakeCaseMesh(p);
+   incns::Case flow(*mesh, p);
+   VectorFunctionCoefficient u0 = incns::tgv2d::VelocityCoefficient(p.nu);
+   flow.SetInitialVelocity(u0);
+   const double growth = incns::TimeIntegratorOptions().cfl_growth;
+   double dt_prev = 0.0, dt_first = 0.0, dt_last = 0.0, worst = 0.0;
+   int steps = 0;
+   while (!flow.Done())
+   {
+      // c(u^n): the rate the controller sees before the step.
+      const double rate_before = flow.ConvectiveCflNumber() /
+                                 flow.Integrator().CurrentDt();
+      flow.Step();
+      ++steps;
+      const double dt = flow.Integrator().CurrentDt();
+      if (steps > 2)
+      {
+         worst = std::max(worst, rate_before * dt / p.cfl_target);
+         EXPECT_LE(dt, growth * dt_prev * (1.0 + 1e-12)) << "step " << steps;
+         if (dt_first == 0.0) { dt_first = dt; }
+         dt_last = dt;
+      }
+      dt_prev = dt;
+   }
+   if (Mpi::Root())
+   {
+      mfem::out << "[cfl-steps] form=" << static_cast<int>(form) << " steps="
+                << steps << " dt " << dt_first << " -> " << dt_last
+                << " max(c dt / target)=" << worst << std::endl;
+   }
+   EXPECT_LE(worst, 1.0 + 1e-12);
+   EXPECT_GT(worst, 0.5); // the target actually binds
+   EXPECT_NEAR(flow.Time(), p.t_final, 1e-12);
+   // The TGV decays like exp(-2 nu t): the controlled dt grows.
+   EXPECT_GT(dt_last, dt_first);
+}
+
+} // namespace
+
+TEST(Cfl, C3_CflControlledSteps)
+{
+   CflControlledSteps(incns::ConvectiveForm::Convective);
+   CflControlledSteps(incns::ConvectiveForm::Rotational);
+}
+

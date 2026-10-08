@@ -8,25 +8,32 @@ the handoff state — start there.
 **Branches.** `main` = `b448e70` (AMR, lift/drag, self-contained PBJ test). Working branch
 **`rotational-schur`** (NOT merged; merge/push only when the human says so):
 - `0c01824` — rotation-aware Schur preconditioner (spec Part C) + velocity diagnostics (§5.4).
-- `55509f1` — DFG 2D-3 driver, force cache across AMR events, experimental Picard sweeps.
-- **Uncommitted, built, partly tested** (commit after the checks below):
-  velocity-PC case default `jacobi_pcg` + `solver.a_pc` keys (§5.3); grad-div in the LOR-AMG
-  operator + `test/lor_grad_div_test.cpp` (§5.3); `time.cfl_max` applied to both convective
-  forms + `cfl_test` C2 rotational case (§5.2); `bench/bench_velocity_pc.cpp`;
-  `docs/imex_vs_semi_implicit.md` (DFG study write-up, results placeholders still open);
-  `docs/precond_cc.md`; this file.
+- `55509f1` — DFG 2D-3 driver, force cache across AMR events (it also added experimental
+  Picard sweeps — REMOVED again 2026-10-07, human: "we will never use that").
+- `ed3a44d` — velocity-PC case default `jacobi_pcg` (§5.3), grad-div in LOR-AMG (§5.3),
+  `time.cfl_max` for both forms, Python enum exports, the DFG study doc (placeholders open),
+  this file.
+- Step-control commit (after `ed3a44d`; fast tier 153/153 in 177 s, python 12/12):
+  `time.step_control: fixed|error|cfl` + `cfl_target` /
+  `dt_max`, `time.ext_order: 2|3` (§5.2); **CFL number = Nek5000's definition** (§5.2;
+  `cfl_max` baselines converted ×0.4); **error-control estimator fixed to a genuine
+  BDF3/EXT3 candidate** (§5.2); Picard sweeps REMOVED; tests `cfl_test` C1/C3,
+  `nse_mms_test` Ext3TemporalOrder2D + AdaptiveEstimatorSeesConvection, `deck_test`
+  StepControlKeys; DFG app `-ext/-cflt/-dtmax` + non-uniform peak interpolation. Defaults
+  at this commit: fixed steps, EXT2; the human decided (2026-10-07) case-level defaults
+  `step_control: cfl` and BDF2/EXT3 — the next commit.
 
 **To finish this branch:**
-1. Full fast tier, debug device for the new tests (`lor_grad_div_test`, `cfl_test`,
-   `deck_test`), `cpu-python` build + `ctest -R py_` (new bindings: `APC`, `a_pc*`,
-   `RotationSchurOptions`, `rotation_*`), `scripts/docs.sh`, `scripts/style.sh`; commit.
+1. Finish the EXT3 / CFL-mode sweep; set the case-level defaults it supports (human wants
+   BDF2/EXT3 and a CFL-multiple mode à la Nek); full fast tier, debug device (`cfl_test`,
+   `nse_mms_test` Ext3), python; commit.
 2. **DFG 2D-3 AMR study** (human request 2026-10-06, §5.6): runs were in progress via a
    detached script; raw results in the session scratchpad
    `/tmp/claude-1000/-home-michaelschneier/<session>/scratchpad/dfg3/{base,amr}/summary*.txt`
    (ephemeral — if gone, re-run with `apps/dfg_cylinder -c 3 …`, commands in the doc).
    Done: base mesh (all), AMR IMEX Δt = 4e-4 (c_D,max err 1.9e-5, c_L,max 2.8%, Δp 0.06%,
    803 elements, 55 min). Pending: AMR rotational 4e-4; both forms at 8e-4 and 1.6e-3;
-   rotational + Picard (1 sweep at 8e-4, 3 sweeps at 1.6e-3). Then fill
+   (the AMR Picard runs were cancelled with the feature). Then fill
    `RESULTS_PLACEHOLDER` / `AMR_PLACEHOLDER` in `docs/imex_vs_semi_implicit.md` and summarize
    in §5.6.
 3. Report; wait for the human to merge.
@@ -38,8 +45,8 @@ the handoff state — start there.
 - Rotation-aware Schur `auto` thresholds (spec's 20/10) uncalibrated in 3D; default `cc`.
 - p-multigrid velocity block (spec Part D Level 1) not built (human: PBJ only for now).
 - Skew-symmetric convective form: gated on upstream MFEM (§5.4 TRAP).
-- A CFL-free implicit option would need an Oseen linearization (w*·∇)u^{n+1} or converged
-  (Newton) steps; Picard sweeps exist but never paid off (§5.6).
+- Not pursued (human 2026-10-07: "not interested in implicit methods at the moment"): a
+  CFL-free option (Oseen linearization (w*·∇)u^{n+1}, or converged Newton/Picard steps).
 - PENDING GPU VALIDATION list (§7.5). `README.md` is stale (still says NSE is gated).
 - Upstream candidates: the MFEM debug-device BlockVector false positive (§6).
 - 2D NSE TGV pressure-rate oracle never built (human accepted the 3D MMS, 2026-07-24).
@@ -222,26 +229,69 @@ additive term inside `StokesTimeIntegrator`.
 - **BDF2** for the implicit part, variable-step coefficients recomputed every step from the
   actual step ratios (reusing uniform coefficients under varying Δt is the #1 adaptive bug).
   First step: trapezoidal starter (viscous term split half/half).
+- **Step control** (`time.step_control`, human request 2026-10-07 to mimic Nek):
+  - `fixed` (default): dt constant; with `cfl_max > 0` an abort if exceeded.
+  - `error` (= the older `time.adaptive: true`): BDF2−BDF3 LTE control, below. Two solves
+    per step.
+  - `cfl`: **dt = `cfl_target` / c(uⁿ) before every step** (one solve per step): shrinks at
+    once, grows ≤ ×1.2 per step and only once the target allows 5% more (the solver
+    refreshes rarely in quasi-steady flow), `time.dt_max` cap, lands exactly on t_final,
+    the first step capped too. NSE only; exclusive with `error`. `cfl_test` C3 pins the
+    controller; calibrated targets: §5.6.
+- **Extrapolation order `time.ext_order: 2|3`** of the nonlinear term (IMEX convection and
+  the rotational form's w*), ramped EXT1 → EXT2 → EXT3 from the available history (three
+  levels kept for EXT3). Accuracy: on the NSE MMS (quadratic in t, so BDF2 is exact) EXT3
+  shows order 2.94 → 2.98 vs EXT2's 1.98 → 1.99, error 70× lower (`nse_mms_test`
+  Ext3TemporalOrder2D). **Stability is regime-dependent — default stays EXT2 pending the
+  human's call (2026-10-07).** Stable radius |λΔt| of the explicit term along rays at an
+  angle from the negative real axis (90° = imaginary axis = undamped advection):
+  ```
+              90°    85°   80°   70°   45°   0°
+  BDF2/EXT2   ~0    0.48  0.60  0.78  1.09  1.33
+  BDF2/EXT3   0.63  0.62  0.62  0.60  0.58  0.57
+  BDF3/EXT3   0.63  0.66  0.68  0.72  0.83  0.95
+  ```
+  EXT3 wins only within ~10° of the imaginary axis (nearly undamped advection, high-Re DNS —
+  the reason NekRS uses it); for damped spectra BDF2/EXT2's region is larger and BDF2/EXT3's
+  is the smallest. DFG 2D-3 (Re ≤ 100, grad-div) confirms it: IMEX at Δt 0.002 blew up at
+  t = 2.36 with EXT3 vs 3.28 with EXT2; 0.0025: 2.02 vs 2.80; the rotational scheme was
+  also worse. BDF3/EXT3 dominates BDF2/EXT3 everywhere, but BDF3 is test-/estimator-only
+  as an advancing scheme (a human decision to change).
 - **IMEX convective form:** N(u) = (u·∇)u evaluated on the history and extrapolated (EXT2,
   variable-step weights; EXT1 on the first step), on the RHS. **Landmine:** the trapezoidal
   starter builds its RHS inline, not via `AssembleBdfRhs`, so it needs its own
   `SubtractConvection` — without it step 1 silently solves Stokes.
 - **BDF3** exists only for the adaptive error estimate (and is marched in tests to prove it
   is 3rd order); never the advancing solution.
-- **Adaptive stepping** (primary mode in production): LTE = BDF2 − BDF3 on **velocity only**
-  (pressure is the algebraic DAE variable), PI controller, accept when
-  ‖LTE‖ ≤ atol + rtol·‖u‖ (global norms, not per-dof WRMS), rejection + retry, no local
-  extrapolation, step history recorded and exposed programmatically.
+- **Error-controlled stepping** (`step_control: error`): an EMBEDDED pair — the step
+  advances with BDF2 (+ EXT of `ext_order`), and the auxiliary candidate is a genuine
+  **BDF3/EXT3** solution of the same step (its own EXT3 convection / its own w* for the
+  rotational form). LTE = their difference on **velocity only** (pressure is the algebraic
+  DAE variable), PI controller, accept when ‖LTE‖ ≤ atol + rtol·‖u‖ (global norms, not
+  per-dof WRMS), rejection + retry, no local extrapolation, step history recorded.
+  **Fixed 2026-10-07 (human):** the BDF3 candidate used EXT2 like the advancing step, so the
+  convective splitting error — the dominant one at CFL-limited NSE steps — cancelled in the
+  difference and the estimator was blind to it (NSE MMS: error 7× the tolerance; 100×
+  tighter tol bought only 2× the steps). `nse_mms_test` AdaptiveEstimatorSeesConvection
+  guards it (fails on the old code). Adaptive NSE results changed (smaller steps).
 - **A Δt change is a refresh, not a rebuild** (`StokesSolver::Refresh(c0)` → only the fused
   momentum block reassembles; M, νK, B, Schur structure persist). `solver.amg_reuse`
   freezes a LOR-AMG hierarchy at c0_ref·M + νK (+ grad-div) across Δt.
-- **CFL ceiling `time.cfl_max`** (0 = off): directional rate c = k² max Σ_d |(J⁻¹u)_d|;
+- **CFL number = Nek5000's definition** (`time/cfl`, human decision 2026-10-07: "whatever is
+  most accurate"): c = max over the GLL nodes of Σ_d |(J⁻¹u)_d| / Δξ_d(node), Δξ the local
+  reference node spacing (one-sided at element ends, half central difference inside — Nek's
+  `getdr`), so Nek's CFL targets transfer. It replaced a uniform k²·max Σ|J⁻¹u| at GL points
+  that was ~2.5× larger at element edges (Q3: 9 vs 3.62 per unit |u|/h) and ~3.3× inside;
+  CFL numbers recorded before 2026-10-07 (the base-mesh DFG study, the 2D-1 runs) are in
+  that old measure — divide by ~2.5. `cfl_test` C1 checks the spacings against Nek's by
+  hand.
+- **CFL ceiling `time.cfl_max`** (0 = off):
   adaptive: dt ≤ cfl_max/c; fixed step: abort at setup/AMR events if c·dt > cfl_max (dt never
   changes silently). **Applies to BOTH convective forms** (2026-10-07): the semi-implicit
   rotational form transports vorticity explicitly and has the same threshold (§5.6).
   On AMR meshes the measured CFL number is a poor stability predictor (the max sits in
   viscous wall cells that implicit viscosity stabilizes).
-- Rotational form: see §5.4 (lagged vorticity in the implicit block; Picard option).
+- Rotational form: see §5.4 (lagged vorticity in the implicit block).
 
 ### 5.3 Linear solver
 
@@ -343,8 +393,6 @@ additive term inside `StokesTimeIntegrator`.
   `ViscousRatioDiagnostic` v̂ = ν/(σ(h/p)²) (c_p matches the spec: 20.22/29.53/40.92 for
   p = 3/4/5), `SolveStats` + `MonitoredSolver` (counts/timings of velocity and Schur PCs).
   `solver.rotation_log_interval: N` → `<output.path>/<output.name>_rotation.csv`.
-- **Picard sweeps** `solver.rotation_picard: K` (EXPERIMENTAL, fixed steps): re-solve each
-  BDF step with w* = u^{n+1}; see §5.6 for why it doesn't pay.
 - **The TGV cannot see errors in N** (its convection is a pure gradient); the MMS pins N.
 
 **Skew-symmetric — TRAP, do not "just switch the integrator".** MFEM's
@@ -398,7 +446,7 @@ by default (bitwise unchanged).
   default 208 Q3 elements). Driver `apps/dfg_cylinder`: `-c 1` 2D-1 (steady Re 20),
   `-c 2` 2D-2 (expensive tier), `-c 3` 2D-3 (U(t) = 1.5 sin(πt/8), t ∈ [0, 8], fixed steps,
   RESULT line with errors vs John 2004: c_D,max 2.950921575 at 3.93625, c_L,max 0.47795 at
-  5.693125, Δp(8) = −0.1116). Options: `-rot -pbj -schur -rlog -picard -gd -apc -at -maxe
+  5.693125, Δp(8) = −0.1116). Options: `-rot -pbj -schur -rlog -gd -apc -ext -cflt -at -maxe
   -theta -aniso -rtol -cfl -dout`.
 - **2D-1 measured** (208 elements, t = 8, rel. errors c_D / c_L / Δp): convective 1.05e-4 /
   2.79e-3 / 4.06e-3; rotational 9.45e-4 / 5.32e-2 / 5.72e-3; rotational + c_gd 1 1.03e-4 /
@@ -413,8 +461,9 @@ by default (bitwise unchanged).
   - At equal stable Δt both schemes cost and deliver the same (base: 134 vs 138 s, c_D,max
     errors 2.2e-3 vs 2.4e-3, temporally converged); the base mesh's c_L error (7%) is
     spatial — AMR (803 elements) brings it to 2.8% and c_D,max to 1.9e-5.
-  - Picard sweeps extend the threshold ~×1.5 per sweep but each is a full solve; never
-    cheaper than the plain schemes at their stable Δt.
+  - An experiment with Picard sweeps (re-solving each step with w* = u^{n+1}) extended the
+    threshold ~×1.5 per sweep but each sweep is a full solve — never cheaper than the plain
+    schemes at their stable Δt; the option was removed (2026-10-07).
   - IMEX with LOR-AMG at CFL-limited steps was 3× slower than Jacobi–Chebyshev → §5.3.
 
 ### 5.7 Python interface (`cpu-python` preset, module `incns`)
@@ -425,7 +474,9 @@ Python `Case` builds its own mesh via `MakeCaseMesh`); pure SPMD (`mpirun -np N 
 all MPI below the binding line; no mpi4py; `incns.rank()/size()/on_root()`); **no bulk
 solution data in Python** — numerics and diagnostics are C++ routines surfaced as scalars.
 Surface: `incns.Parameters` (all fields incl. `mesh.box(...)`, `amr`, `forces`, `cc`,
-`rotation_schur`, `from_yaml`, `normalize`); `incns.Case(p)` / `Case.from_yaml(path)`;
+`rotation_schur`, `cfl_target`, `dt_max`, `ext_order`, `from_yaml`, `normalize`; enums
+re-exported from `incns/__init__.py` — add new ones there, the AMR work forgot
+`AmrThreshold` until 2026-10-07); `incns.Case(p)` / `Case.from_yaml(path)`;
 `set_initial_velocity`, `set_forcing`, `set_dirichlet_field(group, f)`,
 `velocity_dirichlet(attrs, f)`, `outflow`, `no_slip`, `face/faces/all_faces` (box names),
 `run/step`, scalars (`time`, `time_dimensional`, `done`, `step_count`, `iterations`,
@@ -501,7 +552,8 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   = every module at np 1/2/4 plus the oracles (TGV spatial/temporal orders, adaptive TGV,
   unsteady/steady MMS 2D+3D, NSE MMS, divergence, solver-health iteration baselines).
 - **Slow** (`scripts/test.sh cpu -L slow`, np 4, on demand): `cc_sweep_slow_test` (full CC
-  robustness grid), `dfg_cylinder_slow_test` (DFG 2D-1, ~9 min).
+  robustness grid), `dfg_cylinder_slow_test` (DFG 2D-1, ~9 min). ctest names
+  `cc_sweep_slow_np4` / `dfg_cylinder_slow_np4` (select one with `-R`).
 - **Debug device** (`scripts/debug_device.sh`), **ASan/UBSan** (`scripts/asan.sh`),
   **Python** (`cpu-python` build, `ctest -R py_`).
 - **Expensive** (human-launched only): 3D TGV Re 1600, channel DNS, DFG 2D-2, anything
@@ -515,7 +567,8 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   (the second half keeps the test from passing trivially).
 - `nse_mms_test`: NSE temporal order 2D/3D (order tests — EXT2 splitting error is real);
   rotational order vs a same-mesh reference; every velocity PC × Schur path (incl. tensor,
-  auto) marches to the same answer; Picard order.
+  auto) marches to the same answer; BDF2/EXT3 order 3 on the MMS; the error-controlled
+  estimator sees the convective error.
 - `tgv_nse_test`, `tgv_stokes_temporal_test`, `adaptive_tgv_test`: oracles.
 - `rule_book_test`, `multistep_coeffs_test`, `adaptive_controller_test`, `pressure_mean_test`,
   `stokes_operator_test` (collocated-mass diagonality; GL mass NOT diagonal),

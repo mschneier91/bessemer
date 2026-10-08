@@ -71,13 +71,15 @@ Consequences:
   robust, and the iteration count barely depends on the flow.
 - **Explicit convection imposes a CFL stability limit.** The extrapolated
   term is a (two-step) explicit treatment of advection, stable only if
-  $\Delta t \lesssim C\,h/(k^2|u|)$. bessemer measures this with a
-  directional, order-aware CFL number
-  $$\mathrm{CFL} = \Delta t\; k^2 \max_{\text{quad. points}} \sum_d \big|(J^{-1}u)_d\big|$$
+  $\Delta t \lesssim C\,h/(k^2|u|)$. bessemer measures this with Nek5000's
+  directional CFL number
+  $$\mathrm{CFL} = \Delta t \max_{\text{GLL nodes } n} \sum_d \frac{\big|(J_n^{-1}u_n)_d\big|}{\Delta\xi_d(n)}$$
   ($J$ the element Jacobian, so $J^{-1}u$ is the velocity in reference
-  coordinates per unit element; $k^2$ accounts for the clustering of the
-  high-order nodes). Beyond the limit the scheme **blows up** — the solver
-  still converges each step, the solution just grows without bound.
+  coordinates; $\Delta\xi_d(n)$ the local reference spacing of the
+  Gauss–Lobatto nodes at node $n$ along direction $d$, one-sided at element
+  ends — Nek's definition, so Nek's CFL targets carry over). Beyond the
+  limit the scheme **blows up** — the solver still converges each step, the
+  solution just grows without bound.
 - **AMR makes the limit tighter.** Halving $h$ near the cylinder halves the
   stable $\Delta t$ for the *whole* domain (one global step size).
 - **Accuracy.** Second order in time; the splitting error of the
@@ -106,7 +108,8 @@ like the viscous term). Nothing is explicit after the first step.
 
 Consequences:
 
-- **No convective CFL limit.** The rotation term is skew:
+- **Energy-stable for any step — but not CFL-free (§5).** The rotation term
+  is skew:
   $(\omega^*\times u, u) = 0$ for *any* $\omega^*$ and $u$, so it does no
   work. Testing the scheme with $u^{n+1}$ gives the same discrete energy
   estimate as unsteady Stokes with BDF2: the scheme is energy-stable for
@@ -179,9 +182,9 @@ the IMEX scheme blows up (forces $\to\infty$, a hard failure), while the
 rotational scheme's growth saturates at the energy bound and leaves a bounded
 but meaningless solution full of grid-scale vorticity — a *silent* failure.
 
-Two ways to make the rotational form genuinely CFL-free (§7): converge the
-nonlinearity within each step (Picard sweeps with $w^* \leftarrow u^{n+1}$;
-bessemer has an experimental `solver.rotation_picard: K`), or use the Oseen
+Two ways to make the rotational form genuinely CFL-free: converge the
+nonlinearity within each step (Picard sweeps with $w^* \leftarrow u^{n+1}$, or
+Newton; an experimental Picard option was measured in §6.2 and removed), or use the Oseen
 linearization of the convective form, $(w^*\cdot\nabla)u^{n+1}$, where the
 transported field is the unknown and transport is fully implicit (not
 implemented in bessemer).
@@ -216,8 +219,12 @@ rotational — point-block Jacobi + GMRES. Schur: Cahouet–Chabard for IMEX,
 `auto` (Cahouet–Chabard / rotating-Darcy tensor) for the rotational scheme.
 All runs on 4 MPI ranks of one desktop CPU (`apps/dfg_cylinder -c 3`).
 
-**CFL number** reported below: the largest value of the directional measure
-of §2 seen during the run (sampled every 5 steps).
+**CFL numbers** reported below: the largest value seen during the run
+(sampled every 5 steps). The base-mesh runs of §6.1–6.2 were measured with
+bessemer's EARLIER definition, $k^2\max_q\sum_d|(J^{-1}u)_d|$ at
+Gauss–Legendre points, which is about 2.5× the Nek-style number of §2 now
+used (Q3: 9 vs 3.62 per unit $|u|/h$ at element edges); divide those columns
+by ~2.5. Later sections use the Nek-style number.
 
 ### 6.1 Base mesh (no AMR): the stability threshold
 
@@ -233,8 +240,8 @@ of §2 seen during the run (sampled every 5 steps).
 | rotational | 0.0025 | **wrong** (ran to $t = 8$) | 3.35 | 4.906 (66%) | 0.41 | 0.523 (9.4%) | 1.78 | 7.2% | 141 s |
 
 - **Both schemes become unstable at the same step size**, $\Delta t \approx
-  0.0017$ (CFL ≈ 2–2.7 in bessemer's measure, reached as the inflow nears its
-  peak). At $\Delta t = 0.002$ the rotational solution leaves the converged
+  0.0017$ (CFL ≈ 2–2.7 in the earlier measure, ≈ 0.8–1.1 Nek-style, reached
+  as the inflow nears its peak). At $\Delta t = 0.002$ the rotational solution leaves the converged
   one at $t \approx 3.03$, the IMEX one blows up at $t = 3.28$; a close-up at
   $\Delta t = 0.004$ shows the deviation growing by a factor ≈ 1.9 per step
   — an exponential instability, not a large truncation error (§5).
@@ -252,8 +259,8 @@ of §2 seen during the run (sampled every 5 steps).
 
 ### 6.2 Making the rotational scheme step past the threshold: Picard sweeps
 
-With `solver.rotation_picard: K`, each step is re-solved $K$ times with
-$w^* \leftarrow u^{n+1}$ (§5):
+An experimental option (since removed, 2026-10-07) re-solved each step $K$
+times with $w^* \leftarrow u^{n+1}$ (§5):
 
 | sweeps | $\Delta t$ | max CFL | $c_{D,\max}$ (err) | $t(c_{D,\max})$ err | $c_{L,\max}$ (err) | wall |
 |---|---|---|---|---|---|---|
