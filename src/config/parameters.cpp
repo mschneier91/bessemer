@@ -68,6 +68,17 @@ Parameters Parameters::LoadYAML(const std::string& path)
       }
       else { MFEM_ABORT("parameters: unknown physics.convective_form '" << cf << "'"); }
    }
+   if (physics && physics["outflow"])
+   {
+      const std::string of = physics["outflow"].as<std::string>();
+      if (of == "directional") { p.outflow = OutflowCondition::Directional; }
+      else if (of == "classical") { p.outflow = OutflowCondition::Classical; }
+      else
+      {
+         MFEM_ABORT("parameters: unknown physics.outflow '" << of
+                    << "' (directional|classical)");
+      }
+   }
 
    const YAML::Node nd = root["nondimensionalization"];
    if (nd && nd["mode"])

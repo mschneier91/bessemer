@@ -68,6 +68,11 @@ struct TimeIntegratorOptions
    /// explicit, and Pressure() reports static pressure recovered from the
    /// Bernoulli head the solve produces (P - 1/2|u|^2, interpolated).
    ConvectiveForm convective_form = ConvectiveForm::Convective;
+   /// Condition on the outflow (do-nothing) boundaries with the CONVECTIVE
+   /// form: Directional adds Braack & Mucha's -1/2 (u.n)_- u term to the
+   /// explicit convection (extrapolated with it); no effect without outflow
+   /// boundaries, with Stokes, or with the rotational form.
+   OutflowCondition outflow = OutflowCondition::Directional;
    /// Velocity-block PC with the rotational form (see RotationVelocityPC).
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    /// Rotational form + LOR-AMG velocity PC: include the rotation term in the

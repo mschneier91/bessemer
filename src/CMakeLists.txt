@@ -18,6 +18,7 @@ add_library(incns STATIC
   bc/boundary_conditions.cpp
   operators/stokes_operator.cpp
   operators/convection.cpp
+  operators/directional_do_nothing.cpp
   operators/grad_div_integrator.cpp
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp

@@ -65,6 +65,7 @@ void Case::BuildIntegrator()
    TimeIntegratorOptions opts;
    opts.convection = (params_.equation == Equation::NavierStokes);
    opts.convective_form = params_.convective_form;
+   opts.outflow = params_.outflow;
    opts.rotation_pc = params_.rotation_pc;
    opts.rotation_in_lor = params_.rotation_in_lor;
    {

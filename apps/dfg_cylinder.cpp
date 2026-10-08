@@ -25,7 +25,7 @@
 //        [-gd c_gd]
 //        [-ip N] [-ai N | -at T] [-maxe N] [-theta t] [-aniso] [-cfl c]
 //        [-rtol r] [-apc loramg|jacobi_chebyshev|jacobi_pcg] [-ext 2|3]
-//        [-cflt c [-dtmax d]] [-dout] [-mref L] [-out dir]
+//        [-cflt c [-dtmax d]] [-dout | -cdn] [-mref L] [-out dir]
 //
 // -mref L regenerates the mesh with every cell count times 2^L and every
 // grading ratio to the power 2^-L: the cells of level L split those of level 0
@@ -124,6 +124,7 @@ int main(int argc, char* argv[])
    double amr_time = 0.0, theta = 0.3, rtol = 1e-10;
    double cfl_target = 0.0, dt_max = 0.0;
    bool rotational = false, pbj = false, dirichlet_out = false, fixed = false;
+   bool classical_out = false;
    bool aniso = false;
    const char* schur = "cc";
    const char* apc = "jacobi_pcg"; // the case-level default
@@ -183,6 +184,10 @@ int main(int argc, char* argv[])
    args.AddOption(&dirichlet_out, "-dout", "--dirichlet-outflow", "-nout",
                   "--natural-outflow", "Outflow: the inflow profile imposed "
                   "(Dirichlet) or do-nothing (natural, the benchmark's).");
+   args.AddOption(&classical_out, "-cdn", "--classical-do-nothing", "-ddn",
+                  "--directional-do-nothing", "Do-nothing outflow, convective "
+                  "form: classical, or Braack & Mucha's directional condition "
+                  "(the default; the same where no flow enters).");
    args.AddOption(&out, "-out", "--output", "Output directory (CSV logs).");
    args.ParseCheck();
    if (bench == 3) { fixed = true; }
@@ -219,6 +224,8 @@ int main(int argc, char* argv[])
                  "jacobi_pcg");
    }
    p.rotation_log_interval = rotational ? rotation_log : 0;
+   p.outflow = classical_out ? incns::OutflowCondition::Classical
+               : incns::OutflowCondition::Directional;
    p.nu = 1e-3;
    p.grad_div = grad_div;
    p.order_u = order;

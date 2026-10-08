@@ -118,6 +118,10 @@ struct Parameters
    /// Nonlinear-term treatment for NavierStokes (deck
    /// `physics.convective_form: convective|rotational`); see ConvectiveForm.
    ConvectiveForm convective_form = ConvectiveForm::Convective;
+   /// Outflow condition on do-nothing boundaries with the convective form
+   /// (deck `physics.outflow: directional|classical`; default directional,
+   /// human decision 2026-10-08). The rotational form ignores it (classical).
+   OutflowCondition outflow = OutflowCondition::Directional;
 
    /// Input scaling: mode + reference scales (see nondimensionalization.hpp).
    Nondimensionalization nondim;

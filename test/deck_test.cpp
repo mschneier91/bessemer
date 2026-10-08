@@ -230,6 +230,31 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_EQ(p.rotation_schur.inner_iterations, 4);
 }
 
+// `physics.outflow: directional|classical` (default directional: Braack &
+// Mucha's directional do-nothing condition on outflow boundaries).
+TEST(Deck, OutflowKey)
+{
+   const std::string path =
+      "deck_outflow_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   auto load = [&](const std::string & physics)
+   {
+      {
+         std::ofstream f(path);
+         f << "equation: navier_stokes\n"
+           << "physics:\n  nu: 0.01\n" << physics
+           << "time:\n  dt: 0.01\n  t_final: 1.0\n";
+      }
+      Parameters p = Parameters::LoadYAML(path);
+      std::remove(path.c_str());
+      return p;
+   };
+   EXPECT_EQ(load("").outflow, incns::OutflowCondition::Directional);
+   EXPECT_EQ(load("  outflow: classical\n").outflow,
+             incns::OutflowCondition::Classical);
+   EXPECT_EQ(load("  outflow: directional\n").outflow,
+             incns::OutflowCondition::Directional);
+}
+
 // Time step control: `time.step_control: fixed|error|cfl` (the older
 // `adaptive: true|false` = error|fixed), `time.cfl_target`, `time.dt_max`
 // (scaled like dt in dimensional mode) and `time.ext_order`. Case-level

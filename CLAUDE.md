@@ -23,6 +23,11 @@ semi-implicit rotational form** — same CFL limit as IMEX, 7–9% more per step
 lift, 50–70× worse drag; both fail silently past the limit (§5.6, the doc §7). The finest
 mesh (M2) was started and stopped unfinished at the human's call.
 
+**Working branch `directional-do-nothing`** (NOT merged): Braack & Mucha's directional
+do-nothing outflow condition for the IMEX convective form, default on (§4 BCs; paper
+`JCM_v32i5_507-521.pdf`, untracked in the repo root); `directional_do_nothing_test`; DFG app
+`-cdn` for the classical condition.
+
 **Open follow-ups** (none started):
 - Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
   ("notoriously bad" for this form, human); the DFG studies used a Dirichlet outflow instead.
@@ -195,7 +200,15 @@ additive term inside `StokesTimeIntegrator`.
 - **Orders are runtime options**; default Taylor–Hood **Q3/Q2**. Equal orders need a
   pressure stabilization that does not exist — warn if `k_u == k_p` (grad-div is not one).
 - **BCs:** velocity Dirichlet (eliminated), outflow/do-nothing (natural), periodic
-  (`MakePeriodic`). **Dirichlet data may be time-dependent:** `SetTime(t)` + re-elimination
+  (`MakePeriodic`). **Outflow with the IMEX convective form = Braack & Mucha's directional
+  do-nothing condition** (J. Comput. Math. 32 (2014) 507–521; human 2026-10-08; deck
+  `physics.outflow: directional|classical`, default directional): T(u,p)n − ½(u·n)₋u = 0,
+  i.e. `Convection` adds −½∫_{S₁}(u·n)₋u·φ (`operators/directional_do_nothing`, host
+  boundary-face assembly on the outflow faces only), so the term is explicit and
+  EXT-extrapolated together with N. Identical to classical where u·n ≥ 0; it removes the
+  backflow energy flux. Not applied to the rotational form (classical on its Bernoulli
+  head). `directional_do_nothing_test` reproduces the paper's Table 5.1 (j₁, j₂ for both
+  conditions to < 0.1%). **Dirichlet data may be time-dependent:** `SetTime(t)` + re-elimination
   every step (stale elimination silently drops temporal order; only the unsteady MMS sees it).
 - **Pressure null space** exists iff no boundary is outflow (fully periodic or fully
   Dirichlet); detect it from the BC set. Remove it by **orthogonalizing against the constant
@@ -606,6 +619,8 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   PA/legacy vs MFEM reference at p ≤ 3; kernel specialization + determinism p = 1..5),
   `point_block_jacobi_test` (self-contained), `rotational_schur_test` (S1/S2),
   `rotational_schur_solver_test` (S3 through StokesSolver + Case rotation log),
+  `directional_do_nothing_test` (D1 value + outward normal, D2 backflow-energy identity 2D/3D,
+  D3 Braack & Mucha Table 5.1),
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test`, `deck_test`,
   `checkpoint_test`, `nondim_test`, `diagnostics_test`, `bc_integration_test`.

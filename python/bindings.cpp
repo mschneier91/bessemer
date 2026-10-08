@@ -408,6 +408,10 @@ PYBIND11_MODULE(_core, m)
    .value("Convective", ConvectiveForm::Convective)
    .value("Rotational", ConvectiveForm::Rotational);
 
+   py::enum_<OutflowCondition>(m, "OutflowCondition")
+   .value("Classical", OutflowCondition::Classical)
+   .value("Directional", OutflowCondition::Directional);
+
    py::enum_<RotationVelocityPC>(m, "RotationVelocityPC")
    .value("Symmetric", RotationVelocityPC::Symmetric)
    .value("PbjOnly", RotationVelocityPC::PbjOnly)
@@ -590,6 +594,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("grad_div", &Parameters::grad_div)
    .def_readwrite("grad_div_scale", &Parameters::grad_div_scale)
    .def_readwrite("convective_form", &Parameters::convective_form)
+   .def_readwrite("outflow", &Parameters::outflow)
    .def_readwrite("order_u", &Parameters::order_u)
    .def_readwrite("order_p", &Parameters::order_p)
    .def_readwrite("collocated_mass", &Parameters::collocated_mass)

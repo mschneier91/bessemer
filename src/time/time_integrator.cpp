@@ -57,6 +57,12 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    if (opts_.convection && !rotational_)
    {
       convection_ = std::make_unique<Convection>(spaces_, rules_);
+      // Directional do-nothing: the boundary part of the convective flux on
+      // the outflow, explicit and extrapolated together with N.
+      if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
+      {
+         convection_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
+      }
    }
    w_star_ = 0.0;
    p_static_ = 0.0;

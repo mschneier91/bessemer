@@ -1,5 +1,7 @@
 #include "operators/convection.hpp"
 
+#include "operators/directional_do_nothing.hpp"
+
 namespace incns
 {
 
@@ -36,9 +38,43 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules)
    form_->Setup();
 }
 
+void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
+{
+   MFEM_VERIFY(!ddn_form_, "convection: directional do-nothing already enabled");
+   ParMesh& mesh = *spaces_.Velocity().GetParMesh();
+   const int n_attr = mesh.bdr_attributes.Size() ? mesh.bdr_attributes.Max() : 0;
+   ddn_marker_.SetSize(n_attr);
+   ddn_marker_ = 0;
+   for (int a : outflow_attrs)
+   {
+      MFEM_VERIFY(a >= 1 && a <= n_attr, "convection: outflow attribute " << a
+                  << " not on the mesh");
+      ddn_marker_[a - 1] = 1;
+   }
+   ddn_u_ = std::make_unique<ParGridFunction>(&spaces_.Velocity());
+   *ddn_u_ = 0.0;
+   ddn_form_ = std::make_unique<ParLinearForm>(&spaces_.Velocity());
+   auto* integ = new DirectionalDoNothingIntegrator(*ddn_u_, 0.5);
+   // Same exactness as the interior term: (u.n)_- (u.phi) is cubic in u.
+   const Geometry::Type face =
+      (spaces_.Dim() == 3) ? Geometry::SQUARE : Geometry::SEGMENT;
+   integ->SetIntRule(&rules_.Get(face, DealiasedOrder(spaces_.OrderU())));
+   ddn_form_->AddBdrFaceIntegrator(integ, ddn_marker_);
+   ddn_true_.SetSize(spaces_.Velocity().GetTrueVSize());
+   ddn_true_.UseDevice(true);
+}
+
 void Convection::Mult(const Vector& u, Vector& y) const
 {
    form_->Mult(u, y);
+   if (!ddn_form_) { return; }
+   // The boundary term: legacy host assembly over the marked faces (few),
+   // reading u's element values on the host.
+   ddn_u_->SetFromTrueDofs(u);
+   ddn_u_->HostRead();
+   ddn_form_->Assemble();
+   ddn_form_->ParallelAssemble(ddn_true_); // MFEM-owned buffer (CLAUDE.md §6)
+   y += ddn_true_;
 }
 
 } // namespace incns

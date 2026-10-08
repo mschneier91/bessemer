@@ -32,6 +32,24 @@ enum class ConvectiveForm
 };
 
 /**
+ * @brief The condition on do-nothing (natural) outflow boundaries with the IMEX
+ *        convective form (deck `physics.outflow: directional|classical`).
+ *
+ * The rotational form keeps the classical condition (on its Bernoulli head).
+ */
+enum class OutflowCondition
+{
+   /// T(u,p) n = 0: nothing assembled. Backflow through the boundary feeds
+   /// the convective energy flux 1/2 (u.n)|u|^2 into the domain unchecked.
+   Classical,
+   /// Braack & Mucha's directional do-nothing condition (J. Comput. Math. 32
+   /// (2014) 507-521): T(u,p) n - 1/2 (u.n)_- u = 0. Identical to Classical
+   /// where u.n >= 0; cancels the backflow energy flux where u.n < 0. The
+   /// default. See DirectionalDoNothingIntegrator.
+   Directional
+};
+
+/**
  * @brief The nonlinear convective term @c N(u) = (u . grad)u, evaluated with a
  *        DEALIASED (over-integrated) quadrature rule.
  *
@@ -100,6 +118,21 @@ public:
    /// @return The quadrature rule this operator integrates with (for tests).
    const mfem::IntegrationRule& Rule() const { return *rule_; }
 
+   /**
+    * @brief Add the directional do-nothing term on the given outflow
+    *        boundaries: Mult then returns
+    *        @f$ N(u) - \tfrac12\int_{S_1}(u\cdot n)_-\,u\cdot\phi @f$ --
+    *        the boundary part of the convective flux, so the IMEX scheme
+    *        extrapolates it exactly like N (explicitly, with the EXT weights).
+    *        Face rule: the RuleBook's dealiasing order 3k on the face
+    *        geometry. Call once, before the first Mult.
+    * @param outflow_attrs Boundary attributes (1-based) of the outflow S_1.
+    */
+   void EnableDirectionalDoNothing(const mfem::Array<int>& outflow_attrs);
+
+   /// @return True when Mult includes the directional do-nothing term.
+   bool DirectionalDoNothing() const { return ddn_form_ != nullptr; }
+
 private:
    MixedSpaces& spaces_;   ///< Mixed spaces (borrowed).
    const RuleBook& rules_; ///< Quadrature source (borrowed).
@@ -107,6 +140,14 @@ private:
    const mfem::IntegrationRule* rule_ = nullptr;
    /// The nonlinear form carrying VectorConvectionNLFIntegrator.
    std::unique_ptr<mfem::ParNonlinearForm> form_;
+   /// Outflow marker of the directional do-nothing term (per attribute).
+   mfem::Array<int> ddn_marker_;
+   /// The velocity the boundary term is evaluated at (set in Mult).
+   std::unique_ptr<mfem::ParGridFunction> ddn_u_;
+   /// Boundary-face linear form of the term (null = classical do-nothing).
+   std::unique_ptr<mfem::ParLinearForm> ddn_form_;
+   /// The term on true dofs (Mult scratch).
+   mutable mfem::Vector ddn_true_;
 };
 
 } // namespace incns
