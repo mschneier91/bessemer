@@ -138,9 +138,9 @@ td.bad { color: var(--bad); }
 
 <main>
   <header class="stack prose">
-    <p class="eyebrow">bessemer · DFG 2D-3 · Q3/Q2 · BDF2/EXT3 · CFL-controlled steps</p>
+    <p class="eyebrow">bessemer · DFG 2D-3 · Q3/Q2 · CFL-controlled steps · 2026-10-08</p>
     <h1>Rotational vs IMEX on DFG 2D-3</h1>
-    <p>What it costs each Navier–Stokes scheme to reach a given accuracy on the time-dependent flow around a cylinder (Re up to 100, t ∈ [0, 8]). Errors are against John's reference values; cost is the wall time spent in time stepping on 4 MPI ranks.</p>
+    <p>What it costs each Navier–Stokes scheme to reach a given accuracy on the time-dependent flow around a cylinder (Re up to 100, t ∈ [0, 8]). Errors are against John's reference values. Cost is the wall time spent in time stepping on 4 MPI ranks.</p>
   </header>
 
   __FINDINGS__
@@ -221,7 +221,11 @@ td.bad { color: var(--bad); }
     let x0 = Math.min(...pts.map(p => lx(p.x))), x1 = Math.max(...pts.map(p => lx(p.x)));
     let y0 = Math.min(...pts.map(p => ly(p.y))), y1 = Math.max(...pts.map(p => ly(p.y)));
     if (opt.xlog) { x0 = Math.floor(x0 * 2) / 2; x1 = Math.ceil(x1 * 2) / 2; } else { x0 = 0; x1 = x1 * 1.05; }
-    if (opt.ylog) { y0 = Math.floor(y0); y1 = Math.ceil(y1); } else { y0 = 0; y1 = y1 * 1.1; }
+    // Linear axes get round ticks: a 1-2-5 step, top rounded up to a tick.
+    const nice = r => { const p = Math.pow(10, Math.floor(Math.log10(r))), f = r / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; };
+    let ystep = 1;
+    if (opt.ylog) { y0 = Math.floor(y0); y1 = Math.ceil(y1); }
+    else { y0 = 0; ystep = nice(y1 * 1.1 / 4); y1 = Math.ceil(y1 * 1.1 / ystep) * ystep; }
     if (opt.ycap !== undefined && opt.ylog) y1 = Math.min(y1, Math.log10(opt.ycap));
     if (x1 === x0) x1 = x0 + 1;
     if (y1 === y0) y1 = y0 + 1;
@@ -236,15 +240,14 @@ td.bad { color: var(--bad); }
         el("text", { x: L - 6, y: y + 3.5, "text-anchor": "end" }, svg).textContent = "1e" + k;
       }
     } else {
-      const n = 4;
-      for (let i = 0; i <= n; i++) {
-        const v = y0 + (y1 - y0) * i / n, y = T + (1 - i / n) * (H - T - B);
+      for (let v = y0; v <= y1 + ystep * 1e-9; v += ystep) {
+        const y = T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
         el("line", { x1: L, x2: W - R, y1: y, y2: y, class: "gridline" }, svg);
-        el("text", { x: L - 6, y: y + 3.5, "text-anchor": "end" }, svg).textContent = fmt(v);
+        el("text", { x: L - 6, y: y + 3.5, "text-anchor": "end" }, svg).textContent = fmt(+v.toPrecision(6));
       }
     }
     if (opt.xlog) {
-      for (let k = Math.ceil(x0); k <= Math.floor(x1); k++) {
+      for (let k = Math.floor(x0); k <= Math.floor(x1); k++) {
         for (const m of [1, 2, 5]) {
           const v = Math.log10(m) + k;
           if (v < x0 - 1e-9 || v > x1 + 1e-9) continue;
@@ -255,6 +258,7 @@ td.bad { color: var(--bad); }
       }
     } else {
       for (const v of opt.xticks) {
+        if (v < x0 || v > x1) continue;
         const x = X(v);
         el("line", { x1: x, x2: x, y1: T, y2: H - B, class: "gridline" }, svg);
         el("text", { x: x, y: H - B + 14, "text-anchor": "middle" }, svg).textContent = String(v);
@@ -321,7 +325,7 @@ td.bad { color: var(--bad); }
     }
     return out;
   };
-  chart(co, { title: "Wall time per step [s]", series: seriesOf(perStep, "s_per_step"), xlog: false, xticks: cflTicks, ylog: true, xlabel: "CFL target", ylabel: "seconds per step" });
+  chart(co, { title: "Wall time per step [s]", series: seriesOf(perStep, "s_per_step"), xlog: false, xticks: cflTicks, ylog: false, xlabel: "CFL target", ylabel: "seconds per step" });
   chart(co, { title: "Outer iterations per step", series: seriesOf(perStep, "outer_mean"), xlog: false, xticks: cflTicks, ylog: false, xlabel: "CFL target", ylabel: "FGMRES iterations" });
 
   // Table

@@ -5,15 +5,18 @@ the handoff state — start there.
 
 ## 0. Current state and next steps (updated 2026-10-08)
 
-**Branches.** `main` = `b64bd19`: all of `rotational-schur`, merged and pushed 2026-10-07
-(rotation-aware Schur PC, DFG 2D-3 driver, `jacobi_pcg` default + grad-div in LOR-AMG, step
+**Branches.** `main` includes `rotational-schur` (merged and pushed 2026-10-07:
+rotation-aware Schur PC, DFG 2D-3 driver, `jacobi_pcg` default + grad-div in LOR-AMG, step
 control `fixed|error|cfl` with Nek's CFL and the BDF3/EXT3 estimator, case-level CFL control
-at 0.5, the debug-device ess-list fix §6). Working branch **`dfg-scheme-comparison`** (NOT
-merged; merge/push only when the human says so): DFG app `-mref` nested meshes, per-step
+at 0.5, the debug-device ess-list fix §6) and **`dfg-scheme-comparison`** (fast-forward
+merged and pushed 2026-10-08, human: "merge and push everything"). New work goes on a new
+branch; merge/push only when the human says so. dfg-scheme-comparison: DFG app `-mref` nested meshes, per-step
 history CSV and `step_wall`; `bench/dfg3/` (pinned two-slot queue runner, sweep generator,
 analysis, HTML report generator, raw results of 2026-10-08); the work-precision write-up
 (`docs/imex_vs_semi_implicit.md` §7 + summary at its top); **case-level default back to
-BDF2/EXT2** (human 2026-10-08; §5.2).
+BDF2/EXT2** (human 2026-10-08; §5.2). The charts were published as a private claude.ai
+artifact (regenerate with `bench/dfg3/report.py OUT.html
+bench/dfg3/results_2026-10-08/findings.html bench/dfg3/results_2026-10-08/sweep.txt`).
 
 **Scheme comparison concluded (human 2026-10-08): for DFG 2D-3 there is no benefit to the
 semi-implicit rotational form** — same CFL limit as IMEX, 7–9% more per step, comparable

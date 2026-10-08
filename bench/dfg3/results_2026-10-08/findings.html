@@ -1,0 +1,11 @@
+  <section class="answer">
+    <h2>No benefit to the rotational form on this flow</h2>
+    <ul>
+      <li><b>Same step limit.</b> With BDF2/EXT2 both schemes are accurate up to CFL 0.7 and both degrade at 0.9. The <span class="rot">rotational</span> scheme cannot take a larger step than <span class="imex">IMEX</span> and stay accurate.</li>
+      <li><b>Same work per step, a little more time.</b> At equal CFL both take the same steps and the same solver iterations. The rotational step costs 7–9% more wall time.</li>
+      <li><b>Lift is comparable; drag is not.</b> The rotational form's drag-peak error is 2.2e-4 at every step size, against 3–4e-6 for IMEX. It is a spatial error of the form.</li>
+      <li><b>BDF2/EXT3 fails silently at CFL 0.7 in both schemes.</b> EXT2 is accurate there, so bessemer now defaults to BDF2/EXT2. The EXT3 runs are the open markers in the charts.</li>
+      <li><b>Bigger steps save less than the step count suggests.</b> Going from CFL 0.5 to 0.7 cuts the steps by 29% but the wall time by only about 10–15%, because the velocity solver needs more iterations per step.</li>
+    </ul>
+    <p class="note">Mesh M1: 832 curved cells, about 19k unknowns, Q3/Q2, grad-div γ = h<sub>K</sub>. Both schemes use a Dirichlet outflow (the inflow profile), which moves the forces by about 1e-8 relative to John's do-nothing reference. Four MPI ranks per run, two runs at a time on separate physical cores. Write-up: <code>docs/imex_vs_semi_implicit.md</code> §7.</p>
+  </section>
