@@ -27,8 +27,8 @@ mesh (M2) was started and stopped unfinished at the human's call.
 Mucha's directional do-nothing outflow condition for the IMEX convective form, default on,
 explicit (on the RHS with the convection; no operator or preconditioner change — a
 semi-implicit LHS version is the fallback if outlet backflow ever destabilizes below the CFL
-limit) (§4 BCs; paper `JCM_v32i5_507-521.pdf`, untracked in the repo root);
-`directional_do_nothing_test`; DFG app `-cdn` for the classical condition.
+limit) (§4 BCs; `docs/outflow_conditions.md`); `directional_do_nothing_test`; DFG app
+`-cdn` for the classical condition.
 
 **Open follow-ups** (none started):
 - Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
@@ -173,7 +173,8 @@ bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not 
 cases/         tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
 python/        bindings.cpp (module incns), incns/__init__.py (@incns.field)
 examples/python/stokes_ex/   run.py, run_yaml.py, run_channel.py, run_amr.py (also py tests)
-docs/          precond_cc.md (CC conventions), imex_vs_semi_implicit.md (DFG 2D-3 study)
+docs/          precond_cc.md (CC conventions), imex_vs_semi_implicit.md (DFG 2D-3 study),
+               outflow_conditions.md (classical / directional do-nothing)
 test/          gtest MPI tests (np 1/2/4) + baselines.yaml
 ```
 
@@ -210,7 +211,8 @@ additive term inside `StokesTimeIntegrator`.
   EXT-extrapolated together with N. Identical to classical where u·n ≥ 0; it removes the
   backflow energy flux. Not applied to the rotational form (classical on its Bernoulli
   head). `directional_do_nothing_test` reproduces the paper's Table 5.1 (j₁, j₂ for both
-  conditions to < 0.1%). **Dirichlet data may be time-dependent:** `SetTime(t)` + re-elimination
+  conditions to < 0.1%). Full write-up (derivation, usage, implementation, tests):
+  `docs/outflow_conditions.md`. **Dirichlet data may be time-dependent:** `SetTime(t)` + re-elimination
   every step (stale elimination silently drops temporal order; only the unsteady MMS sees it).
 - **Pressure null space** exists iff no boundary is outflow (fully periodic or fully
   Dirichlet); detect it from the BC set. Remove it by **orthogonalizing against the constant
