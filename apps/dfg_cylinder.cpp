@@ -24,7 +24,8 @@
 //        [-rot [-pbj] [-schur cc|tensor|auto] [-rlog N] [-picard K]]
 //        [-gd c_gd]
 //        [-ip N] [-ai N | -at T] [-maxe N] [-theta t] [-aniso] [-cfl c]
-//        [-rtol r] [-apc loramg|jacobi_chebyshev] [-dout] [-out dir]
+//        [-rtol r] [-apc loramg|jacobi_chebyshev|jacobi_pcg] [-dout]
+//        [-out dir]
 //
 // Case 3 ends with one machine-readable "RESULT key=value ..." line (errors
 // against John's values, wall time, steps, final element count, the largest
@@ -109,7 +110,7 @@ int main(int argc, char* argv[])
    bool rotational = false, pbj = false, dirichlet_out = false, fixed = false;
    bool aniso = false;
    const char* schur = "cc";
-   const char* apc = "loramg";
+   const char* apc = "jacobi_pcg"; // the case-level default
    const char* out = "dfg_out";
    OptionsParser args(argc, argv);
    args.AddOption(&bench, "-c", "--case",
@@ -133,7 +134,8 @@ int main(int argc, char* argv[])
    args.AddOption(&rtol, "-rtol", "--rtol", "Outer FGMRES relative tolerance.");
    args.AddOption(&apc, "-apc", "--a-pc",
                   "Velocity-block PC of the CC path (convective form, or "
-                  "rotational without -pbj): loramg|jacobi_chebyshev.");
+                  "rotational without -pbj): loramg|jacobi_chebyshev|"
+                  "jacobi_pcg.");
    args.AddOption(&t_final, "-tf", "--t-final",
                   "Final time (default 12 / 30 / 8 for cases 1 / 2 / 3).");
    args.AddOption(&dt, "-dt", "--dt",
@@ -188,7 +190,12 @@ int main(int argc, char* argv[])
    {
       p.cc.a_pc = incns::APC::JacobiChebyshev;
    }
-   else { MFEM_ABORT("dfg_cylinder: -apc must be loramg or jacobi_chebyshev"); }
+   else if (!std::strcmp(apc, "jacobi_pcg")) { p.cc.a_pc = incns::APC::JacobiPCG; }
+   else
+   {
+      MFEM_ABORT("dfg_cylinder: -apc must be loramg, jacobi_chebyshev or "
+                 "jacobi_pcg");
+   }
    p.rotation_log_interval = rotational ? rotation_log : 0;
    p.rotation_picard = rotational ? picard : 0;
    p.nu = 1e-3;

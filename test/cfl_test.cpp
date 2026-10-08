@@ -3,7 +3,9 @@
 //     k^2 max_K sum_d |(J_K^{-1} u)_d| exactly, conforming and refined NC
 //     (refined cells halve J's split column, doubling that entry);
 //  C2 adaptive Navier-Stokes TGV with a binding time.cfl_max: the controller
-//     keeps c * dt within the limit, and its steps are smaller than without.
+//     keeps c * dt within the limit, and its steps are smaller than without
+//     -- for BOTH the IMEX convective and the semi-implicit rotational form
+//     (the latter transports vorticity explicitly; DFG 2D-3 study 2026-10-06).
 
 #include <gtest/gtest.h>
 
@@ -79,12 +81,16 @@ TEST(Cfl, C1_ConstantVelocityOnAffineMeshIsExact)
       }
 }
 
-TEST(Cfl, C2_AdaptiveStepRespectsTheCeiling)
+namespace
 {
-   auto run = [](double cfl_max, double & final_cfl, double & max_dt)
+
+void AdaptiveStepRespectsTheCeiling(incns::ConvectiveForm form)
+{
+   auto run = [form](double cfl_max, double & final_cfl, double & max_dt)
    {
       incns::Parameters p;
       p.equation = incns::Equation::NavierStokes;
+      p.convective_form = form;
       p.nu = 0.01;
       p.order_u = 3;
       p.order_p = 2;
@@ -120,4 +126,16 @@ TEST(Cfl, C2_AdaptiveStepRespectsTheCeiling)
    }
    EXPECT_LE(cfl_cap, 1.05 * limit);
    EXPECT_LT(dt_cap, dt_free);
+}
+
+} // namespace
+
+TEST(Cfl, C2_AdaptiveStepRespectsTheCeiling)
+{
+   AdaptiveStepRespectsTheCeiling(incns::ConvectiveForm::Convective);
+}
+
+TEST(Cfl, C2_RotationalFormRespectsTheCeiling)
+{
+   AdaptiveStepRespectsTheCeiling(incns::ConvectiveForm::Rotational);
 }

@@ -129,10 +129,12 @@ struct Parameters
    int time_order = 2;   ///< BDF order: 2 production, 3 test-only.
    bool adaptive = false; ///< Adaptive stepping (BDF2 advance, BDF3 estimator).
    AdaptiveControllerOptions controller; ///< Adaptive tolerances/constants.
-   /// Convective CFL limit for Navier-Stokes with the (IMEX, explicit)
-   /// convective form (deck `time.cfl_max`; 0 = off; ignored by the
-   /// semi-implicit rotational form): the directional CFL number c*dt (see
-   /// time/cfl.hpp) may not exceed it.
+   /// Convective CFL limit for Navier-Stokes (deck `time.cfl_max`; 0 = off),
+   /// BOTH forms: the IMEX convective form transports velocity explicitly,
+   /// and the semi-implicit rotational form transports vorticity explicitly
+   /// (DFG 2D-3 study: same stability threshold; the rotational failure is
+   /// silent). The directional CFL number c*dt (see time/cfl.hpp) may not
+   /// exceed it.
    /// Adaptive mode caps the step; fixed-step mode aborts at setup or after
    /// an AMR event that would exceed it (it never changes dt silently).
    double cfl_max = 0.0;
@@ -175,8 +177,24 @@ struct Parameters
    /// available (and is what the low-level solver unit tests pin explicitly).
    SchurBlockType schur = SchurBlockType::CahouetChabard;
    /// CC knobs (deck `solver.n_inner`, `solver.lp_vcycles`,
-   /// `solver.block_shape: diag|lower|upper`); sigma/nu are auto-filled.
-   CahouetChabardConfig cc;
+   /// `solver.block_shape: diag|lower|upper`, `solver.a_pc:
+   /// loramg|jacobi_chebyshev|jacobi_pcg`, `solver.a_pcg_rtol`,
+   /// `solver.a_pcg_max_iter`); sigma/nu are auto-filled.
+   /// CASE-LEVEL DEFAULT velocity PC: JacobiPCG (human decision 2026-10-07,
+   /// measured with bench/bench_velocity_pc: never the worst of the three,
+   /// 4-8x faster than LOR-AMG at the mass-dominated steps of CFL-limited
+   /// NSE, and robust with grad-div, which the LOR operator omits). The
+   /// low-level CahouetChabardConfig default stays LORAMG so solver unit
+   /// tests and their baselines pin what they test (the `schur` precedent).
+   CahouetChabardConfig cc = CaseDefaultCc();
+
+   /// @return The case-level CC configuration defaults (a_pc = JacobiPCG).
+   static CahouetChabardConfig CaseDefaultCc()
+   {
+      CahouetChabardConfig c;
+      c.a_pc = APC::JacobiPCG;
+      return c;
+   }
 
    // --- case data ---------------------------------------------------------------
    /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks

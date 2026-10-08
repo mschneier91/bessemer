@@ -92,6 +92,9 @@ void Case::BuildIntegrator()
    opts.amg_reuse = params_.amg_reuse;
    opts.schur = params_.schur;
    opts.cc = params_.cc;
+   // Rotation in the LOR operator only exists for the LOR-AMG velocity PC:
+   // solver.rotation_lor implies it (the case-level default is JacobiPCG).
+   if (params_.rotation_in_lor) { opts.cc.a_pc = APC::LORAMG; }
    opts.rtol = params_.krylov_rtol;
    opts.atol = params_.krylov_atol;
    opts.max_iter = params_.max_iter;
@@ -577,10 +580,13 @@ void Case::WriteCheckpoint(const std::string& dir)
 void Case::SetupCfl()
 {
    cfl_.reset();
-   // Only the IMEX convective form treats convection explicitly; the
-   // rotational form is semi-implicit and has no convective CFL limit.
-   if (params_.cfl_max <= 0.0 || params_.equation != Equation::NavierStokes ||
-       params_.convective_form != ConvectiveForm::Convective)
+   // Both Navier-Stokes forms are CFL-limited: the IMEX convective form treats
+   // velocity transport explicitly, and the semi-implicit rotational form --
+   // energy-stable for any dt -- treats VORTICITY transport explicitly (curl
+   // of w* x u^{n+1} is (u^{n+1}.grad) w*). Measured on DFG 2D-3 (2026-10-06,
+   // docs/imex_vs_semi_implicit.md): both lose stability at the same step;
+   // the rotational one silently, with bounded but wrong forces.
+   if (params_.cfl_max <= 0.0 || params_.equation != Equation::NavierStokes)
    {
       return;
    }

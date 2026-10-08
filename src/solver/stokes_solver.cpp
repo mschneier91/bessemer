@@ -172,8 +172,8 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
 void StokesSolver::BuildVelocityPreconditioner()
 {
    // Velocity block A-hat^-1. Mass path: matrix-free Jacobi (default) or
-   // LOR-BoomerAMG via velocity_prec. CC path: cc.a_pc -- LORAMG (default) or
-   // JacobiChebyshev. AMG on the dense high-order operator coarsens poorly, so
+   // LOR-BoomerAMG via velocity_prec. CC path: cc.a_pc -- LORAMG, JacobiChebyshev
+   // or JacobiPCG. AMG on the dense high-order operator coarsens poorly, so
    // it is built on a low-order-refined (Q1-on-GLL-nodes) rediscretization that
    // is spectrally equivalent -- LOR tdofs match the HO velocity tdofs, so the
    // same ess-dof list applies. The block system FGMRES applies is the same
@@ -233,6 +233,25 @@ void StokesSolver::BuildVelocityPreconditioner()
       lor->GetSolver().iterative_mode = false;
       if (cc_mode_) { lor->GetSolver().SetMaxIter(opts_.cc.a_vcycles); }
       vel_prec_ = std::move(lor);
+   }
+   else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiPCG)
+   {
+      // CG with Jacobi on the SPD momentum block (the symmetric part with the
+      // rotation term) to a loose tolerance. A tolerance-based inner solve is
+      // nonlinear -- legal because the outer solver is FGMRES. SetOperator
+      // before SetPreconditioner: MFEM forwards SetOperator to the PC.
+      vel_prec_.reset(); // it borrows vel_inner_pc_
+      vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
+                         op_.MomentumDiagonal(), bc_.EssentialTrueDofs());
+      auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
+      cg->SetOperator(op_.Momentum());
+      cg->SetPreconditioner(*vel_inner_pc_);
+      cg->SetRelTol(opts_.cc.a_pcg_rtol);
+      cg->SetAbsTol(0.0);
+      cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
+      cg->SetPrintLevel(-1);
+      cg->iterative_mode = false;
+      vel_prec_ = std::move(cg);
    }
    else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiChebyshev)
    {

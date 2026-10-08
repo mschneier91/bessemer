@@ -1,4 +1,4 @@
-"""incns -- Python job driver for the unsteady Stokes solver.
+"""incns -- Python job driver for the bessemer Stokes / Navier-Stokes solver.
 
 Configure a case (parameters + analytic IC/BC/forcing) and run it, with no C++
 recompile. All numerics stay in C++; Python exchanges only Parameters, field
@@ -17,7 +17,12 @@ from ._core import (
     RotationVelocityPC,
     SchurBlockType,
     SchurModel,
+    PcQuadrature,
     BlockPCShape,
+    APC,
+    AmrThreshold,
+    RotationSchurMode,
+    RotationSchurCriterion,
     rank,
     size,
     on_root,
@@ -35,7 +40,12 @@ __all__ = [
     "RotationVelocityPC",
     "SchurBlockType",
     "SchurModel",
+    "PcQuadrature",
     "BlockPCShape",
+    "APC",
+    "AmrThreshold",
+    "RotationSchurMode",
+    "RotationSchurCriterion",
     "rank",
     "size",
     "on_root",

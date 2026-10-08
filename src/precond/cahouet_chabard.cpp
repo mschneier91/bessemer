@@ -51,7 +51,8 @@ void CahouetChabardConfig::Validate(bool root) const
    {
       throw std::invalid_argument(
          "cc config: a_pc = PMGChebyshev (p-multigrid) is deferred to the GPU "
-         "stage (human decision 2026-07-16); use LORAMG or JacobiChebyshev");
+         "stage (human decision 2026-07-16); use LORAMG, JacobiChebyshev or "
+         "JacobiPCG");
    }
    if (pc_precision == PcPrecision::FP32PC)
    {
@@ -66,6 +67,12 @@ void CahouetChabardConfig::Validate(bool root) const
        (tol_inner <= 0.0 || tol_inner >= 1.0))
    {
       throw std::invalid_argument("cc config: tol_inner must be in (0, 1)");
+   }
+   if (a_pc == APC::JacobiPCG &&
+       (a_pcg_rtol <= 0.0 || a_pcg_rtol >= 1.0 || a_pcg_max_iter < 1))
+   {
+      throw std::invalid_argument("cc config: JacobiPCG needs a_pcg_rtol in "
+                                  "(0, 1) and a_pcg_max_iter >= 1");
    }
    if (lp_vcycles < 1 || a_vcycles < 1)
    {

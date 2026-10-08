@@ -240,6 +240,20 @@ Parameters Parameters::LoadYAML(const std::string& path)
       else { MFEM_ABORT("parameters: unknown solver.pc_quadrature '" << q << "'"); }
    }
    Maybe(solver, "lp_vcycles", p.cc.lp_vcycles);
+   if (solver && solver["a_pc"])
+   {
+      const std::string ap = solver["a_pc"].as<std::string>();
+      if (ap == "loramg") { p.cc.a_pc = APC::LORAMG; }
+      else if (ap == "jacobi_chebyshev") { p.cc.a_pc = APC::JacobiChebyshev; }
+      else if (ap == "jacobi_pcg") { p.cc.a_pc = APC::JacobiPCG; }
+      else
+      {
+         MFEM_ABORT("parameters: unknown solver.a_pc '" << ap
+                    << "' (loramg|jacobi_chebyshev|jacobi_pcg)");
+      }
+   }
+   Maybe(solver, "a_pcg_rtol", p.cc.a_pcg_rtol);
+   Maybe(solver, "a_pcg_max_iter", p.cc.a_pcg_max_iter);
    if (solver && solver["block_shape"])
    {
       const std::string bs = solver["block_shape"].as<std::string>();

@@ -45,9 +45,14 @@ enum class PcMassCoeff { ConstNu, ReciprocalNuField };
 enum class InnerStop { FixedIters, RelTol };
 /// Inner Poisson PC choice (v1: LOR-AMG only; PMG deferred with p-MG).
 enum class LpPC { LORAMG, PMG };
-/// A-block preconditioner choice (v1 default LORAMG; PMG deferred -- human
-/// decision 2026-07-16).
-enum class APC { PMGChebyshev, LORAMG, JacobiChebyshev };
+/// A-block (velocity) preconditioner choice. PMG deferred (human decision
+/// 2026-07-16). LORAMG: one LOR-BoomerAMG V-cycle -- robust when viscosity
+/// dominates the block. JacobiChebyshev: a fixed order-4 Chebyshev polynomial
+/// in the Jacobi-preconditioned block -- cheap and near-exact when the mass
+/// term dominates (small steps). JacobiPCG: CG with Jacobi to a loose
+/// tolerance (a_pcg_rtol, at most a_pcg_max_iter) -- adapts its work to the
+/// regime; nonlinear, so only inside the flexible outer Krylov.
+enum class APC { PMGChebyshev, LORAMG, JacobiChebyshev, JacobiPCG };
 /// Nullspace handling mode.
 enum class NullspaceMode { Auto, ForceOn, ForceOff };
 /// Preconditioner arithmetic precision (v2 hook; v1: FP64 only).
@@ -103,6 +108,8 @@ struct CahouetChabardConfig
    // --- A-block --------------------------------------------------------------
    APC a_pc = APC::LORAMG; ///< v1 default (spec's PMGChebyshev deferred).
    int a_vcycles = 1;      ///< V-cycles per A-hat application.
+   double a_pcg_rtol = 1e-2; ///< JacobiPCG: inner relative tolerance.
+   int a_pcg_max_iter = 50;  ///< JacobiPCG: inner iteration cap.
    // --- nullspace ------------------------------------------------------------
    NullspaceMode nullspace = NullspaceMode::Auto; ///< Detection override.
    int k_reproj = 5; ///< Spec parity; the implementation projects every apply.

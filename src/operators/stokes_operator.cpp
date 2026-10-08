@@ -71,6 +71,24 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       {
          gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
       }
+      // The LOR source's gamma: MFEM's LOR assembly evaluates the
+      // coefficient on the order-k_u LOR mesh (k_u^dim children per element,
+      // in order), where gamma must be the PARENT element's c_gd h_K.
+      if (opts_.lor_momentum)
+      {
+         int children = 1;
+         for (int d = 0; d < dim_; ++d) { children *= ku_; }
+         if (opts_.grad_div_scale == GradDivScale::OrderNu)
+         {
+            gamma_lor_ = std::make_unique<ConstantCoefficient>(opts_.grad_div *
+                         opts_.nu);
+         }
+         else
+         {
+            gamma_lor_ = std::make_unique<MeshSizeCoefficient>(
+                            mesh, opts_.grad_div, children);
+         }
+      }
    }
 
    // ==== Delta-t INDEPENDENT blocks: assembled ONCE (a refresh never touches
@@ -118,7 +136,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    }
 
    // --- FROZEN LOR source, built ONCE at the reference mass factor c0_ref*M +
-   // nu*K (c0_ref = the construction-time mass_coeff) so its BoomerAMG hierarchy
+   // nu*K + grad-div (c0_ref = the construction-time mass_coeff; grad-div is
+   // Delta-t independent and, with gamma = c h, can dominate nu*K -- leaving it
+   // out wrecked LOR-AMG, measured 2026-10-07) so its BoomerAMG hierarchy
    // is never rebuilt on a Delta-t refresh. The mass term is KEPT so the frozen
    // operator is SPD even on a fully periodic domain (nu*K alone is singular
    // there -- the constant velocity mode); it also bounds the preconditioned
@@ -128,7 +148,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    {
       lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
       AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
-                             /*include_grad_div=*/false);
+                             /*include_grad_div=*/true, gamma_lor_.get());
    }
 
    // --- rotation in the LOR source: an LOR discretization owned HERE, so the
@@ -179,7 +199,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
 }
 
 void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
-      bool include_mass, bool include_grad_div)
+      bool include_mass, bool include_grad_div, Coefficient* gamma)
 {
    // Diffusion at the default exactness order 2k + dim - 1 (covers the metric
    // factors on deformed elements). The mass term reuses the mass rule (incl.
@@ -202,7 +222,7 @@ void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
       // tensor PA kernels instead of elasticity's dense non-tensor path.
       // Stiffness-type integrand -> the 2k + dim - 1 default rule. gamma never
       // enters the Schur block (pressure_schur stays nu*M_p^{-1}).
-      auto* gdi = new GradDivIntegrator(*gamma_);
+      auto* gdi = new GradDivIntegrator(gamma ? *gamma : *gamma_);
       gdi->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
       form.AddDomainIntegrator(gdi);
    }
@@ -229,14 +249,15 @@ void StokesOperator::BuildMomentum()
    momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
    momentum_form_->AssembleDiagonal(momentum_diag_);
 
-   // Non-frozen LOR source (c0*M + nu*K) tracks the current mass factor, so the
+   // Non-frozen LOR source (c0*M + nu*K + grad-div, the latter with the
+   // parent-element gamma) tracks the current mass factor, so the
    // BoomerAMG hierarchy is rebuilt to match on each refresh (see lor_frozen for
    // the alternative that reuses a single nu*K hierarchy).
    if (opts_.lor_momentum && !opts_.lor_frozen)
    {
       lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
       AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
-                             /*include_grad_div=*/false);
+                             /*include_grad_div=*/true, gamma_lor_.get());
       if (w_lor_)
       {
          // Legacy element matrices on the LOR elements, reading the LOR-space

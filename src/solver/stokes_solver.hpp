@@ -271,8 +271,12 @@ private:
    mfem::OrthoSolver ortho_schur_;
    /// Active pressure block (schur_ or ortho_schur_); set once at construction.
    mfem::Solver* pressure_block_ = nullptr;
-   /// Velocity block preconditioner (Jacobi smoother or LOR-AMG). Declared
-   /// after op_ so it is destroyed before the momentum matrix it may reference.
+   /// Inner preconditioner of an iterative velocity PC (the Jacobi of
+   /// JacobiPCG); declared before vel_prec_, which borrows it.
+   std::unique_ptr<mfem::Solver> vel_inner_pc_;
+   /// Velocity block preconditioner (Jacobi smoother, Chebyshev, PCG or
+   /// LOR-AMG). Declared after op_ so it is destroyed before the momentum
+   /// matrix it may reference.
    std::unique_ptr<mfem::Solver> vel_prec_;
    /// Point-block Jacobi (rotation_pc != Symmetric only). Owned here: with
    /// PbjKrylov vel_prec_ is the inner GMRES that borrows it.

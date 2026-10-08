@@ -9,9 +9,13 @@ conventions** — sign bugs live here; read before touching `src/precond/`.
 
 ## Status / staged adaptations (human-approved 2026-07-16)
 
-- **Â-block default is LOR-AMG** (spec's sanctioned alternative); p-multigrid
-  is deferred until the GPU port at PSC. `a_pc = pmg_chebyshev` is a reserved
-  enum value that errors with a clear message in v1.
+- **Â-block:** the low-level `CahouetChabardConfig` default is LOR-AMG (spec's
+  sanctioned alternative); **the case-level default (decks, Python, `Case`) is
+  `jacobi_pcg` since 2026-10-07** — CG with Jacobi to rtol 1e-2 (≤ 50
+  iterations), measured with `bench/bench_velocity_pc` (CLAUDE.md, "Velocity
+  block PC default"). `jacobi_chebyshev` is the third option. p-multigrid is
+  deferred until the GPU port at PSC; `a_pc = pmg_chebyshev` is a reserved enum
+  value that errors with a clear message in v1.
 - CC is integrated as a **pluggable `schur_model` inside the existing
   `StokesSolver`** (one solve path), not a parallel driver module. The spec's
   normative solver hierarchy (§2.4/§6.5) is what `StokesSolver` executes when

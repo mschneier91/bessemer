@@ -425,6 +425,11 @@ PYBIND11_MODULE(_core, m)
    .value("LowerTri", BlockPCShape::LowerTri)
    .value("UpperTri", BlockPCShape::UpperTri);
 
+   py::enum_<APC>(m, "APC")
+   .value("LORAMG", APC::LORAMG)
+   .value("JacobiChebyshev", APC::JacobiChebyshev)
+   .value("JacobiPCG", APC::JacobiPCG);
+
    py::class_<CahouetChabardConfig>(m, "CahouetChabardConfig")
    .def_readwrite("schur_model", &CahouetChabardConfig::schur_model)
    .def_readwrite("block_shape", &CahouetChabardConfig::block_shape)
@@ -432,7 +437,10 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("lp_vcycles", &CahouetChabardConfig::lp_vcycles)
    .def_readwrite("a_vcycles", &CahouetChabardConfig::a_vcycles)
    .def_readwrite("nu_pc", &CahouetChabardConfig::nu_pc)
-   .def_readwrite("pc_quadrature", &CahouetChabardConfig::pc_quadrature);
+   .def_readwrite("pc_quadrature", &CahouetChabardConfig::pc_quadrature)
+   .def_readwrite("a_pc", &CahouetChabardConfig::a_pc)
+   .def_readwrite("a_pcg_rtol", &CahouetChabardConfig::a_pcg_rtol)
+   .def_readwrite("a_pcg_max_iter", &CahouetChabardConfig::a_pcg_max_iter);
 
    py::class_<Nondimensionalization>(m, "Nondimensionalization")
    .def_readwrite("mode", &Nondimensionalization::mode)

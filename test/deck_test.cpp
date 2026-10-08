@@ -176,9 +176,11 @@ TEST(Deck, RotationalFormKeys)
 }
 
 // The rotational Schur keys: `solver.rotation_schur` as a scalar mode or as a
-// map with the switch options, `solver.rotation_log_interval` and the
-// experimental `solver.rotation_picard`; unstated ones keep the defaults (cc,
-// spec thresholds, 10 inner iterations, no log, no sweeps).
+// map with the switch options, `solver.rotation_log_interval`, the
+// experimental `solver.rotation_picard`, and the CC velocity-PC keys
+// `solver.a_pc` / `a_pcg_rtol` / `a_pcg_max_iter`; unstated ones keep the
+// defaults (cc, spec thresholds, 10 inner iterations, no log, no sweeps,
+// JacobiPCG at the case level).
 TEST(Deck, RotationSchurKeys)
 {
    using RSP = incns::RotationalSchurPreconditioner;
@@ -187,6 +189,10 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_EQ(defaults.rotation_schur.inner_iterations, 10);
    EXPECT_EQ(defaults.rotation_log_interval, 0);
    EXPECT_EQ(defaults.rotation_picard, 0);
+   // The case-level velocity-PC default (low-level CahouetChabardConfig
+   // keeps LOR-AMG for the solver unit tests' baselines).
+   EXPECT_EQ(defaults.cc.a_pc, incns::APC::JacobiPCG);
+   EXPECT_EQ(incns::CahouetChabardConfig().a_pc, incns::APC::LORAMG);
 
    const std::string path =
       "deck_rotschur_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
@@ -195,12 +201,16 @@ TEST(Deck, RotationSchurKeys)
       f << "equation: navier_stokes\n"
         << "physics:\n  nu: 1.0\n  convective_form: rotational\n"
         << "solver:\n  rotation_schur: tensor\n  rotation_log_interval: 5\n"
-        << "  rotation_picard: 2\n";
+        << "  rotation_picard: 2\n  a_pc: jacobi_chebyshev\n"
+        << "  a_pcg_rtol: 0.05\n  a_pcg_max_iter: 20\n";
    }
    Parameters p = Parameters::LoadYAML(path);
    EXPECT_EQ(p.rotation_schur.mode, RSP::Mode::Tensor);
    EXPECT_EQ(p.rotation_log_interval, 5);
    EXPECT_EQ(p.rotation_picard, 2);
+   EXPECT_EQ(p.cc.a_pc, incns::APC::JacobiChebyshev);
+   EXPECT_DOUBLE_EQ(p.cc.a_pcg_rtol, 0.05);
+   EXPECT_EQ(p.cc.a_pcg_max_iter, 20);
    {
       std::ofstream f(path);
       f << "equation: navier_stokes\n"

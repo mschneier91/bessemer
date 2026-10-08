@@ -41,7 +41,8 @@ struct StokesOperatorOptions
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
    /// matrix-free Momentum() operator (what the Krylov apply uses) is unchanged.
    bool lor_momentum = false;
-   /// Freeze the LOR source at the REFERENCE operator c0_ref*M + nu*K (c0_ref =
+   /// Freeze the LOR source at the REFERENCE operator c0_ref*M + nu*K (+ grad-div,
+   /// which is Delta-t independent) (c0_ref =
    /// the construction-time mass_coeff), so its BoomerAMG hierarchy is built once
    /// and NEVER rebuilt on a Delta-t refresh. The mass term is kept: it keeps the
    /// frozen operator SPD (nu*K alone is singular on a fully periodic domain) and
@@ -221,7 +222,13 @@ public:
 
    /**
     * @brief High-order source form for the LOR BoomerAMG velocity block
-    *        (mass + diffusion; grad-div omitted -- see the cpp for why).
+    *        (mass + diffusion + grad-div, the latter with the PARENT
+    *        element's gamma = c_gd h_K evaluated on the LOR mesh).
+    *
+    * Grad-div was omitted until 2026-10-07 on the grounds that gamma ~ h is
+    * negligible; it is not when nu << h (gamma/nu ~ 60 at h = 1/16, nu =
+    * 1e-3), and LOR-AMG without it needed 10-30x more outer iterations
+    * (bench/bench_velocity_pc).
     *
     * The caller (StokesSolver) hands this to mfem::ParLORDiscretization /
     * LORSolver, which rediscretizes it at low order on the GLL-node LOR mesh and
@@ -242,9 +249,13 @@ private:
     * @param form             Form to add to (it takes ownership).
     * @param include_mass     Add c0*M (when mass_coeff > 0).
     * @param include_grad_div Add the grad-div term (when grad_div > 0).
+    * @param gamma            Grad-div coefficient to use instead of gamma_
+    *                         (the LOR source passes gamma_lor_); null =
+    *                         gamma_.
     */
    void AddMomentumIntegrators(mfem::ParBilinearForm& form, bool include_mass,
-                               bool include_grad_div);
+                               bool include_grad_div,
+                               mfem::Coefficient* gamma = nullptr);
    /// (Re)build the momentum block A = c0*M + nu*K (+ grad-div), its diagonal,
    /// and the non-frozen LOR source, from the current mass_coeff_.
    void BuildMomentum();
@@ -256,6 +267,10 @@ private:
    mfem::ConstantCoefficient mass_coeff_; ///< Momentum-block mass coefficient.
    /// Grad-div coefficient gamma(x) = c_gd * h_K (owned; null when disabled).
    std::unique_ptr<mfem::Coefficient> gamma_;
+   /// The same gamma for the LOR source: evaluated on the order-k_u LOR mesh,
+   /// it returns the parent high-order element's value (owned; null unless
+   /// grad-div and lor_momentum).
+   std::unique_ptr<mfem::Coefficient> gamma_lor_;
    const mfem::IntegrationRule* mass_rule_ = nullptr; ///< Mass quadrature rule.
    int dim_ = 0;                     ///< Spatial dimension.
    int ku_ = 0;                      ///< Velocity order.
@@ -273,8 +288,8 @@ private:
    /// BuildMomentum on each mass-factor change, hence held by pointer.
    std::unique_ptr<mfem::ParBilinearForm> momentum_form_;
    /// HO source form for the LOR AMG velocity block (built only for AMG).
-   /// Frozen: nu*K only, built once. Non-frozen: c0*M + nu*K, rebuilt with the
-   /// momentum block. Grad-div is always omitted (see the cpp).
+   /// Frozen: c0_ref*M + nu*K (+ grad-div), built once. Non-frozen: c0*M + nu*K
+   /// (+ grad-div), rebuilt with the momentum block.
    std::unique_ptr<mfem::ParBilinearForm> lor_form_;
    mfem::ParBilinearForm viscous_form_;   ///< Pure viscous form (unconstrained).
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
