@@ -78,14 +78,18 @@ void Case::BuildIntegrator()
       opts.rotation_schur = params_.rotation_schur;
       opts.rotation_diagnostics = rotational && params_.rotation_log_interval > 0;
       opts.ext_order = params_.ext_order;
-      opts.cfl_target = params_.cfl_target;
+      // The integrator's switch for CFL-controlled steps is cfl_target > 0.
+      MFEM_VERIFY(params_.cfl_target > 0.0 && params_.dt_max >= 0.0,
+                  "case: time.cfl_target must be > 0 and time.dt_max >= 0 "
+                  "(choose the mode with Parameters::step_control)");
+      opts.cfl_target = params_.CflSteps() ? params_.cfl_target : 0.0;
       opts.dt_max = params_.dt_max;
    }
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;
    opts.order = params_.time_order;
-   opts.adaptive = params_.adaptive;
+   opts.adaptive = (params_.step_control == StepControl::Error);
    opts.controller = params_.controller;
    opts.collocated_mass = params_.collocated_mass;
    opts.grad_div = params_.grad_div;
@@ -588,7 +592,7 @@ void Case::SetupCfl()
    // of w* x u^{n+1} is (u^{n+1}.grad) w*). Measured on DFG 2D-3 (2026-10-06,
    // docs/imex_vs_semi_implicit.md): both lose stability at the same step;
    // the rotational one silently, with bounded but wrong forces.
-   const bool cfl_steps = params_.cfl_target > 0.0;
+   const bool cfl_steps = params_.CflSteps();
    if ((params_.cfl_max <= 0.0 && !cfl_steps) ||
        params_.equation != Equation::NavierStokes)
    {
@@ -614,7 +618,7 @@ void Case::SetupCfl()
       }
       return; // dt is controlled: the fixed-step abort below does not apply
    }
-   if (params_.adaptive)
+   if (params_.step_control == StepControl::Error)
    {
       // Stability ceiling for the accuracy-driven controller: the largest dt
       // whose CFL number stays within cfl_max for the current velocity.
@@ -632,7 +636,7 @@ void Case::SetupCfl()
                   << cfl << " at dt = " << integrator_->CurrentDt()
                   << " exceeds time.cfl_max = " << params_.cfl_max
                   << " (after an AMR event, smaller elements lower the stable "
-                  "step) -- reduce dt or use adaptive stepping");
+                  "step) -- reduce dt or use time.step_control cfl or error");
    }
 }
 

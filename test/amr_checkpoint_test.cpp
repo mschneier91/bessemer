@@ -68,7 +68,9 @@ void CheckRestart(const Parameters& p, const Setup& setup, int stop_cycle,
                   const std::string& tag)
 {
    const Final ref = March(p, setup);
-   const std::string dir = "chk_amr_" + tag;
+   // Unique per rank count: ctest runs the np 1/2/4 instances concurrently.
+   const std::string dir = "chk_amr_" + tag + "_np" +
+                           std::to_string(Mpi::WorldSize());
    March(p, setup, stop_cycle, dir);
    Parameters q = p;
    q.restart_from = dir;
@@ -105,6 +107,9 @@ TEST(AmrCheckpoint, C1_RestartOfAdaptedRunMatchesUninterrupted2D)
    p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
    p.dt = 0.05;
    p.t_final = 0.6;
+   // Fixed steps keep the event/checkpoint cycles on known steps (CFL-mode
+   // restart: checkpoint_test).
+   p.step_control = incns::StepControl::Fixed;
    p.krylov_rtol = 1e-12;
    p.amr.enabled = true;
    p.amr.interval = 3;

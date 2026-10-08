@@ -177,6 +177,18 @@ public:
    mfem::ParLORDiscretization& LorDiscretization();
 
    /**
+    * @brief The essential velocity true dofs this operator was built with
+    *        (its own copy). Preconditioners that keep the list -- MFEM's
+    *        Jacobi/Chebyshev smoothers hold a pointer and read it on the
+    *        device -- borrow THIS one, never the BoundaryConditions' list:
+    *        that one is rebuilt in place on AMR, and a device read of it
+    *        leaves its host mirror protected on MFEM's debug device, where
+    *        the in-place rebuild (MarkerToList's size-0 HostWrite) faults.
+    * @return The list (lives as long as this operator).
+    */
+   const mfem::Array<int>& EssentialTrueDofs() const { return ess_tdofs_; }
+
+   /**
     * @brief The pure viscous operator @c nu*K on true dofs, UNCONSTRAINED
     *        (no Dirichlet elimination) -- for explicit right-hand-side terms
     *        of time steppers (e.g. the trapezoidal starter's K u^0 term).

@@ -2,8 +2,10 @@
 // a march interrupted by a checkpoint and restarted in a FRESH case (mesh
 // regenerated from the same parameters) finishes with the same solution as the
 // uninterrupted march. The restored BDF history/times/dt reproduce the exact
-// stepping sequence -- fixed-step to roundoff, adaptive including the PI
-// memory so the dt sequence itself continues identically.
+// stepping sequence -- fixed-step to roundoff, error-controlled including the
+// PI memory, CFL-controlled (Navier-Stokes TGV, the case-level default mode)
+// including the dt the growth limit continues from -- so the dt sequence
+// itself continues identically.
 
 #include <gtest/gtest.h>
 
@@ -25,17 +27,21 @@ using incns::Case;
 namespace
 {
 
-Parameters TgvParams(bool adaptive)
+Parameters TgvParams(incns::StepControl control)
 {
    Parameters p;
+   // CFL control needs convection: that variant marches the (still exact)
+   // Navier-Stokes TGV; the others the Stokes one.
+   p.equation = control == incns::StepControl::Cfl ?
+                incns::Equation::NavierStokes : incns::Equation::Stokes;
    p.nu = 1.0;
    p.mesh.dim = 2;
    p.mesh.num_elems = {8, 8, 8};
    p.dt = 0.02;
    p.t_final = 0.2;
    p.initial_velocity = "taylor_green_2d";
-   p.adaptive = adaptive;
-   if (adaptive)
+   p.step_control = control;
+   if (control == incns::StepControl::Error)
    {
       p.controller.atol = 2e-4;
       p.controller.rtol = 1e-16;
@@ -78,20 +84,21 @@ double RelDiff(const Vector& a, const Vector& b)
    return dn / an;
 }
 
-void CheckInterruptedMatchesUninterrupted(bool adaptive,
+void CheckInterruptedMatchesUninterrupted(incns::StepControl control,
       const std::string& tag)
 {
    // Uninterrupted reference.
-   const FinalState ref = MarchCase(TgvParams(adaptive));
+   const FinalState ref = MarchCase(TgvParams(control));
 
    // Interrupted run: SAME t_final as the reference (an adaptive march clamps
    // its last steps to land on t_final, so truncating t_final would change the
    // trajectory BEFORE the checkpoint) -- march manually to mid-run and write
    // the checkpoint there, exactly as a killed job's rolling checkpoint would.
-   const std::string dir = "chk_" + tag;
+   // Unique per rank count: ctest runs the np 1/2/4 instances concurrently.
+   const std::string dir = "chk_" + tag + "_np" + std::to_string(Mpi::WorldSize());
    double halted_t = 0.0;
    {
-      Parameters first = TgvParams(adaptive);
+      Parameters first = TgvParams(control);
       Mesh serial = MakeBoxMesh(first.mesh);
       ParMesh mesh(MPI_COMM_WORLD, serial);
       Case flow(mesh, first);
@@ -103,7 +110,7 @@ void CheckInterruptedMatchesUninterrupted(bool adaptive,
    }
 
    // Fresh case (fresh mesh, fresh operators) restarted from the checkpoint.
-   Parameters second = TgvParams(adaptive);
+   Parameters second = TgvParams(control);
    second.restart_from = dir;
    const FinalState restarted = MarchCase(second);
 
@@ -126,12 +133,17 @@ void CheckInterruptedMatchesUninterrupted(bool adaptive,
 
 TEST(Checkpoint, FixedStepRestartMatchesUninterrupted)
 {
-   CheckInterruptedMatchesUninterrupted(false, "fixed");
+   CheckInterruptedMatchesUninterrupted(incns::StepControl::Fixed, "fixed");
 }
 
 TEST(Checkpoint, AdaptiveRestartMatchesUninterrupted)
 {
-   CheckInterruptedMatchesUninterrupted(true, "adaptive");
+   CheckInterruptedMatchesUninterrupted(incns::StepControl::Error, "adaptive");
+}
+
+TEST(Checkpoint, CflStepRestartMatchesUninterrupted)
+{
+   CheckInterruptedMatchesUninterrupted(incns::StepControl::Cfl, "cfl");
 }
 
 // The deck-driven rolling-checkpoint path (checkpoint.enabled + interval)
@@ -140,17 +152,18 @@ TEST(Checkpoint, AdaptiveRestartMatchesUninterrupted)
 // interrupted trajectory is identical to the reference by construction.
 TEST(Checkpoint, DeckDrivenRollingCheckpoint)
 {
-   const FinalState ref = MarchCase(TgvParams(false));
+   const FinalState ref = MarchCase(TgvParams(incns::StepControl::Fixed));
+   const std::string dir = "chk_deck_np" + std::to_string(Mpi::WorldSize());
 
-   Parameters first = TgvParams(false);
+   Parameters first = TgvParams(incns::StepControl::Fixed);
    first.t_final = 0.1; // exact multiple of dt: no trajectory change
    first.checkpoint.enabled = true;
-   first.checkpoint.path = "chk_deck";
+   first.checkpoint.path = dir;
    first.checkpoint.interval = 1;
    MarchCase(first);
 
-   Parameters second = TgvParams(false);
-   second.restart_from = "chk_deck";
+   Parameters second = TgvParams(incns::StepControl::Fixed);
+   second.restart_from = dir;
    const FinalState restarted = MarchCase(second);
 
    EXPECT_EQ(restarted.steps, ref.steps);

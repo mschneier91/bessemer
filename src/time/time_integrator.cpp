@@ -422,9 +422,11 @@ void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
 
    hist_.push_front(u_true);
    hist_times_.push_front(t_new);
-   // BDF2 needs 2 levels; the BDF3 estimator / test mode and EXT3 need 3.
+   // BDF2 needs 2 levels; the BDF3 estimator / test mode and EXT3 need 3
+   // (EXT only matters with convection: Stokes keeps 2 under ext_order 3).
    const std::size_t needed =
-      (opts_.adaptive || opts_.order == 3 || opts_.ext_order == 3) ? 3 : 2;
+      (opts_.adaptive || opts_.order == 3 ||
+       (opts_.convection && opts_.ext_order == 3)) ? 3 : 2;
    while (hist_.size() > needed)
    {
       hist_.pop_back();

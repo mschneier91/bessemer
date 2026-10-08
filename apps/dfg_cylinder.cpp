@@ -107,7 +107,7 @@ int main(int argc, char* argv[])
 
    int bench = 1, order = 3, n_side = 4, n_ring = 3, n_down = 16;
    int initial_passes = 0, amr_interval = 0, max_elements = 20000;
-   int rotation_log = 0, ext = 2;
+   int rotation_log = 0, ext = 3; // ext: the case-level default (BDF2/EXT3)
    // cfl: Nek-scale CFL ceiling (time/cfl.hpp); 0.24 = the 0.6 this app used
    // in the old k^2 measure.
    double t_final = -1.0, dt = 0.01, cfl = 0.24, grad_div = 0.0;
@@ -153,7 +153,8 @@ int main(int argc, char* argv[])
    args.AddOption(&dt, "-dt", "--dt",
                   "Step size (fixed) or initial step (adaptive).");
    args.AddOption(&fixed, "-fixed", "--fixed-step", "-adapt", "--adaptive",
-                  "Fixed steps (always for case 3) or adaptive steps.");
+                  "Fixed or error-controlled steps (case 3: fixed); -cflt "
+                  "overrides both.");
    args.AddOption(&cfl, "-cfl", "--cfl",
                   "Convective CFL ceiling (adaptive convective form only; "
                   "fixed steps never abort on it -- it is reported).");
@@ -213,8 +214,16 @@ int main(int argc, char* argv[])
    p.mesh.dim = 2;
    p.dt = dt;
    p.t_final = t_final;
-   p.adaptive = !fixed && cfl_target <= 0.0;
-   p.cfl_target = cfl_target;
+   if (cfl_target > 0.0)
+   {
+      p.step_control = incns::StepControl::Cfl;
+      p.cfl_target = cfl_target;
+   }
+   else
+   {
+      p.step_control = fixed ? incns::StepControl::Fixed
+                       : incns::StepControl::Error;
+   }
    p.dt_max = dt_max;
    p.ext_order = ext;
    p.controller.atol = 1e-6;

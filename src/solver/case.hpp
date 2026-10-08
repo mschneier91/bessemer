@@ -210,9 +210,10 @@ private:
    /// amr.write_indicator: recompute the eta / level cell data.
    void UpdateAmrCellData();
 
-   /// time.cfl_max with the convective NSE form: (re)build the CFL estimator
-   /// on the current mesh; adaptive mode installs the dt ceiling, fixed-step
-   /// mode verifies the current dt.
+   /// Navier-Stokes (both forms) with CFL steps or time.cfl_max: (re)build
+   /// the CFL estimator on the current mesh. CFL mode installs the rate the
+   /// integrator steers by (and caps the first step); error mode installs the
+   /// cfl_max dt ceiling; fixed-step mode verifies the current dt.
    void SetupCfl();
 
    /**

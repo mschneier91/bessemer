@@ -192,7 +192,7 @@ void StokesSolver::BuildVelocityPreconditioner()
    {
       vel_prec_.reset(); // a PbjKrylov GMRES borrows pbj_: drop it first
       pbj_ = std::make_unique<PointBlockJacobi>(
-                spaces_.Velocity(), *op_.Rotation(), bc_.EssentialTrueDofs());
+                spaces_.Velocity(), *op_.Rotation(), op_.EssentialTrueDofs());
       pbj_->SetDiagonal(op_.MomentumDiagonal()); // N's diagonal is exactly 0
       pbj_->UpdateSkew();
       if (opts_.rotation_pc == RotationVelocityPC::PbjKrylov)
@@ -227,7 +227,7 @@ void StokesSolver::BuildVelocityPreconditioner()
    else if (want_lor_amg)
    {
       auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
-                    op_.MomentumLORForm(), bc_.EssentialTrueDofs());
+                    op_.MomentumLORForm(), op_.EssentialTrueDofs());
       lor->GetSolver().SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
       lor->GetSolver().SetPrintLevel(0);
       lor->GetSolver().iterative_mode = false;
@@ -242,7 +242,7 @@ void StokesSolver::BuildVelocityPreconditioner()
       // before SetPreconditioner: MFEM forwards SetOperator to the PC.
       vel_prec_.reset(); // it borrows vel_inner_pc_
       vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
-                         op_.MomentumDiagonal(), bc_.EssentialTrueDofs());
+                         op_.MomentumDiagonal(), op_.EssentialTrueDofs());
       auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
       cg->SetOperator(op_.Momentum());
       cg->SetPreconditioner(*vel_inner_pc_);
@@ -259,13 +259,13 @@ void StokesSolver::BuildVelocityPreconditioner()
       // sigma-dominated regimes (SPEC par.6.3).
       vel_prec_ = std::make_unique<OperatorChebyshevSmoother>(
                      op_.Momentum(), op_.MomentumDiagonal(),
-                     bc_.EssentialTrueDofs(), 4,
+                     op_.EssentialTrueDofs(), 4,
                      spaces_.Velocity().GetComm());
    }
    else
    {
       vel_prec_ = std::make_unique<OperatorJacobiSmoother>(
-                     op_.MomentumDiagonal(), bc_.EssentialTrueDofs());
+                     op_.MomentumDiagonal(), op_.EssentialTrueDofs());
    }
 
    // PbjOnly leaves vel_prec_ empty: point-block Jacobi is the velocity PC.

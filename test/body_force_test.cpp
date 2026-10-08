@@ -89,6 +89,7 @@ Parameters ChannelParams(int dim, bool nse)
    p.mesh.periodic = {true, false, true};
    p.dt = 0.02;
    p.t_final = 0.1;
+   p.step_control = incns::StepControl::Fixed;
    p.krylov_rtol = 1e-12;
    p.max_iter = 5000;
    p.kdim = 400;

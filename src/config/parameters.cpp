@@ -126,24 +126,25 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(time, "dt", p.dt);
    Maybe(time, "t_final", p.t_final);
    Maybe(time, "order", p.time_order);
-   Maybe(time, "adaptive", p.adaptive);
    Maybe(time, "atol", p.controller.atol);
    Maybe(time, "rtol", p.controller.rtol);
    Maybe(time, "cfl_max", p.cfl_max);
    Maybe(time, "cfl_target", p.cfl_target);
    Maybe(time, "dt_max", p.dt_max);
    Maybe(time, "ext_order", p.ext_order);
+   if (time && time["adaptive"]) // the older spelling: true = error
+   {
+      MFEM_VERIFY(!time["step_control"], "parameters: give time.step_control "
+                  "or the older time.adaptive, not both");
+      p.step_control = time["adaptive"].as<bool>() ? StepControl::Error
+                       : StepControl::Fixed;
+   }
    if (time && time["step_control"])
    {
       const std::string sc = time["step_control"].as<std::string>();
-      if (sc == "fixed") { p.adaptive = false; p.cfl_target = 0.0; }
-      else if (sc == "error") { p.adaptive = true; p.cfl_target = 0.0; }
-      else if (sc == "cfl")
-      {
-         p.adaptive = false;
-         MFEM_VERIFY(p.cfl_target > 0.0, "parameters: time.step_control: cfl "
-                     "needs time.cfl_target > 0");
-      }
+      if (sc == "fixed") { p.step_control = StepControl::Fixed; }
+      else if (sc == "error") { p.step_control = StepControl::Error; }
+      else if (sc == "cfl") { p.step_control = StepControl::Cfl; }
       else
       {
          MFEM_ABORT("parameters: unknown time.step_control '" << sc
@@ -377,13 +378,10 @@ Parameters Parameters::LoadYAML(const std::string& path)
    MFEM_VERIFY(p.order_u >= 1 && p.order_p >= 1, "parameters: bad orders");
    MFEM_VERIFY(p.dt > 0.0 && p.t_final > 0.0, "parameters: bad time settings");
    MFEM_VERIFY(p.cfl_max >= 0.0, "parameters: time.cfl_max must be >= 0");
-   MFEM_VERIFY(p.cfl_target >= 0.0 && p.dt_max >= 0.0,
-               "parameters: time.cfl_target and time.dt_max must be >= 0");
-   MFEM_VERIFY(!(p.adaptive && p.cfl_target > 0.0), "parameters: choose "
-               "time.step_control error OR cfl, not both");
-   MFEM_VERIFY(p.cfl_target == 0.0 || p.equation == Equation::NavierStokes,
-               "parameters: CFL-controlled steps need equation: navier_stokes");
-   MFEM_VERIFY(p.cfl_max == 0.0 || p.cfl_target <= p.cfl_max,
+   MFEM_VERIFY(p.cfl_target > 0.0 && p.dt_max >= 0.0,
+               "parameters: time.cfl_target must be > 0 and time.dt_max >= 0 "
+               "(choose the mode with time.step_control)");
+   MFEM_VERIFY(!p.CflSteps() || p.cfl_max == 0.0 || p.cfl_target <= p.cfl_max,
                "parameters: time.cfl_target exceeds time.cfl_max");
    MFEM_VERIFY(p.ext_order == 2 || p.ext_order == 3,
                "parameters: time.ext_order must be 2 or 3");

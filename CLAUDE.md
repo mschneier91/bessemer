@@ -13,33 +13,49 @@ the handoff state — start there.
 - `ed3a44d` — velocity-PC case default `jacobi_pcg` (§5.3), grad-div in LOR-AMG (§5.3),
   `time.cfl_max` for both forms, Python enum exports, the DFG study doc (placeholders open),
   this file.
-- Step-control commit (after `ed3a44d`; fast tier 153/153 in 177 s, python 12/12):
-  `time.step_control: fixed|error|cfl` + `cfl_target` /
-  `dt_max`, `time.ext_order: 2|3` (§5.2); **CFL number = Nek5000's definition** (§5.2;
-  `cfl_max` baselines converted ×0.4); **error-control estimator fixed to a genuine
-  BDF3/EXT3 candidate** (§5.2); Picard sweeps REMOVED; tests `cfl_test` C1/C3,
-  `nse_mms_test` Ext3TemporalOrder2D + AdaptiveEstimatorSeesConvection, `deck_test`
-  StepControlKeys; DFG app `-ext/-cflt/-dtmax` + non-uniform peak interpolation. Defaults
-  at this commit: fixed steps, EXT2; the human decided (2026-10-07) case-level defaults
-  `step_control: cfl` and BDF2/EXT3 — the next commit.
+- `466927a` — `time.step_control: fixed|error|cfl` + `cfl_target` / `dt_max`,
+  `time.ext_order: 2|3` (§5.2); **CFL number = Nek5000's definition** (§5.2; `cfl_max`
+  baselines ×0.4); **error-control estimator fixed to a genuine BDF3/EXT3 candidate**
+  (§5.2); Picard sweeps removed; DFG app `-ext/-cflt/-dtmax`. Fast tier 153/153 (177 s),
+  python 12/12, DFG 2D-1 slow test green (667 s, EXT2).
+- Defaults commit (after `466927a`) — **case-level defaults `step_control: cfl` at
+  `cfl_target` 0.5, and BDF2/EXT3** (human 2026-10-07; enum `StepControl` replaces
+  `Parameters::adaptive`; Stokes steps at `time.dt` under cfl; low-level
+  `TimeIntegratorOptions` unchanged); CFL-mode restart (`checkpoint_test`) and AMR no-op
+  event (`amr_event_test` E2) tests; NSE tests not about step control pin `Fixed`;
+  **debug-device fix**: the `jacobi_pcg` default (`ed3a44d`) aliased the BC's ess-dof list
+  and faulted at AMR events (§6) — velocity PCs now borrow `StokesOperator`'s copy;
+  per-np checkpoint dirs in `checkpoint_test` / `amr_checkpoint_test`. Fast tier 153/153,
+  python 12/12, `amr_event_test` green on the debug device at np 1/2 (the full sweep on
+  `466927a` was 100/102, the two failures being exactly that fault), DFG 2D-1 slow test
+  green on the new defaults (EXT3; convective c_D err 1.05e-4, c_L 2.8e-3; 297 s).
 
-**To finish this branch:**
-1. Finish the EXT3 / CFL-mode sweep; set the case-level defaults it supports (human wants
-   BDF2/EXT3 and a CFL-multiple mode à la Nek); full fast tier, debug device (`cfl_test`,
-   `nse_mms_test` Ext3), python; commit.
-2. **DFG 2D-3 AMR study** (human request 2026-10-06, §5.6): runs were in progress via a
-   detached script; raw results in the session scratchpad
-   `/tmp/claude-1000/-home-michaelschneier/<session>/scratchpad/dfg3/{base,amr}/summary*.txt`
-   (ephemeral — if gone, re-run with `apps/dfg_cylinder -c 3 …`, commands in the doc).
-   Done: base mesh (all), AMR IMEX Δt = 4e-4 (c_D,max err 1.9e-5, c_L,max 2.8%, Δp 0.06%,
-   803 elements, 55 min). Pending: AMR rotational 4e-4; both forms at 8e-4 and 1.6e-3;
-   (the AMR Picard runs were cancelled with the feature). Then fill
-   `RESULTS_PLACEHOLDER` / `AMR_PLACEHOLDER` in `docs/imex_vs_semi_implicit.md` and summarize
-   in §5.6.
-3. Report; wait for the human to merge.
+**Plan agreed with the human 2026-10-07** (A–D):
+- **A** verify + commit the step-control work — done (`466927a`).
+- **B** defaults — done (the commit above). `cfl_target` 0.5 is provisional: the human
+  asked what the target means; answer given: it IS Nek's `targetCFL` multiple (dt as a
+  multiple of the CFL = 1 step), < ~1 because convection is explicit; Nek's 2–4 needs OIFS.
+- **C** finish the DFG 2D-3 study — the human's pick pending: C1 minimal (AMR Δt 1.6e-3
+  pair + rotational CFL-mode calibration, ~1.5 h); C2 redo the AMR comparison in CFL mode
+  (both schemes, 2–3 targets, sequential on a quiet machine for clean timings, ~3–4 h);
+  C3 write up from existing data. Then fill `RESULTS_PLACEHOLDER` / `AMR_PLACEHOLDER` in
+  `docs/imex_vs_semi_implicit.md` and summarize in §5.6.
+- **D** merge when the human says.
+
+**DFG 2D-3 study state** (§5.6; raw results in the session scratchpad
+`/tmp/claude-1000/-home-michaelschneier/<session>/scratchpad/dfg3/{base,amr,cfl,ext}/summary*.txt`,
+ephemeral — re-run with `apps/dfg_cylinder -c 3 …` if gone): base mesh complete — both
+schemes lose stability together (Δt 0.0015 ok, 0.002 not; Nek-CFL ~0.8–1.1), IMEX blows
+up, the rotational scheme returns silent garbage, equal cost at equal Δt; EXT3 is less
+stable than EXT2 there (IMEX Δt 0.002 diverged at t = 2.37 vs 3.28). AMR (θ 0.85, cap
+800): IMEX Δt 4e-4 best (c_D,max err 1.9e-5, c_L,max 2.8%, Δp 0.06%); rotational 4e-4
+c_D err 1.0e-4, c_L 4.4%; at 8e-4 IMEX diverged (t = 4.01), rotational ran (same accuracy
+as its 4e-4). CFL mode, IMEX/EXT2, base mesh: targets 0.3/0.5/0.7 all stable, identical
+accuracy (c_D err 2.2e-3), 9379/5634/4030 steps. Missing: AMR Δt 1.6e-3 pair; EXT3 and
+rotational CFL-mode runs. Wall times since the AMR study began came from concurrent runs.
 
 **Open follow-ups** (none started):
-- Fast tier is ~197 s, over the 3-min budget; critical path `tgv_nse_test_np2`.
+- Fast tier ~177–197 s, near the 3-min budget; critical path `tgv_nse_test_np2`.
 - LOR-AMG with strong grad-div in 3D is still 4–5× its no-grad-div count; BoomerAMG's
   elasticity mode is the standard fix but needs `Ordering::byVDIM` (velocity is byNODES).
 - Rotation-aware Schur `auto` thresholds (spec's 20/10) uncalibrated in 3D; default `cc`.
@@ -229,22 +245,32 @@ additive term inside `StokesTimeIntegrator`.
 - **BDF2** for the implicit part, variable-step coefficients recomputed every step from the
   actual step ratios (reusing uniform coefficients under varying Δt is the #1 adaptive bug).
   First step: trapezoidal starter (viscous term split half/half).
-- **Step control** (`time.step_control`, human request 2026-10-07 to mimic Nek):
-  - `fixed` (default): dt constant; with `cfl_max > 0` an abort if exceeded.
-  - `error` (= the older `time.adaptive: true`): BDF2−BDF3 LTE control, below. Two solves
-    per step.
-  - `cfl`: **dt = `cfl_target` / c(uⁿ) before every step** (one solve per step): shrinks at
-    once, grows ≤ ×1.2 per step and only once the target allows 5% more (the solver
-    refreshes rarely in quasi-steady flow), `time.dt_max` cap, lands exactly on t_final,
-    the first step capped too. NSE only; exclusive with `error`. `cfl_test` C3 pins the
-    controller; calibrated targets: §5.6.
+- **Step control** (`time.step_control` → `Parameters::step_control`, enum `StepControl`;
+  human request 2026-10-07 to mimic Nek). **Case-level default `cfl`** (human 2026-10-07);
+  the low-level `TimeIntegratorOptions` keep fixed steps (integrator unit tests pin what
+  they test — the `schur` precedent). The older `time.adaptive: true|false` = error|fixed
+  (giving both keys aborts).
+  - `cfl` (default): **dt = `cfl_target` / c(uⁿ) before every step** (one solve per step):
+    shrinks at once, grows ≤ ×1.2 per step and only once the target allows 5% more (the
+    solver refreshes rarely in quasi-steady flow), `time.dt_max` cap, lands exactly on
+    t_final; `time.dt` is the first step (capped by the target). **Stokes has no
+    convective CFL and steps at `time.dt` under `cfl`** (`Parameters::CflSteps()`).
+    `cfl_target` default **0.5** = Nek's `targetCFL`: the step as a multiple of the CFL = 1
+    step. Explicit convection bounds it below ~1 (DFG 2D-3: unstable at Nek-CFL ~0.8–1.1);
+    Nek's multiples of 2–4 come from OIFS (sub-stepped characteristics), which this code
+    does not have. `cfl_test` C3 pins the controller; restart (`checkpoint_test`) and AMR
+    no-op events (`amr_event_test` E2) reproduce CFL-mode runs exactly.
+  - `fixed`: dt constant; with `cfl_max > 0` an abort if exceeded. NSE tests that are not
+    about step control pin it (`p.step_control = StepControl::Fixed`).
+  - `error`: BDF2−BDF3 LTE control, below. Two solves per step.
 - **Extrapolation order `time.ext_order: 2|3`** of the nonlinear term (IMEX convection and
   the rotational form's w*), ramped EXT1 → EXT2 → EXT3 from the available history (three
   levels kept for EXT3). Accuracy: on the NSE MMS (quadratic in t, so BDF2 is exact) EXT3
   shows order 2.94 → 2.98 vs EXT2's 1.98 → 1.99, error 70× lower (`nse_mms_test`
-  Ext3TemporalOrder2D). **Stability is regime-dependent — default stays EXT2 pending the
-  human's call (2026-10-07).** Stable radius |λΔt| of the explicit term along rays at an
-  angle from the negative real axis (90° = imaginary axis = undamped advection):
+  Ext3TemporalOrder2D). **Case-level default EXT3 (BDF2/EXT3, human 2026-10-07 — Nek's
+  choice); `TimeIntegratorOptions::ext_order` stays 2.** Stability is regime-dependent.
+  Stable radius |λΔt| of the explicit term along rays at an angle from the negative real
+  axis (90° = imaginary axis = undamped advection):
   ```
               90°    85°   80°   70°   45°   0°
   BDF2/EXT2   ~0    0.48  0.60  0.78  1.09  1.33
@@ -474,7 +500,8 @@ Python `Case` builds its own mesh via `MakeCaseMesh`); pure SPMD (`mpirun -np N 
 all MPI below the binding line; no mpi4py; `incns.rank()/size()/on_root()`); **no bulk
 solution data in Python** — numerics and diagnostics are C++ routines surfaced as scalars.
 Surface: `incns.Parameters` (all fields incl. `mesh.box(...)`, `amr`, `forces`, `cc`,
-`rotation_schur`, `cfl_target`, `dt_max`, `ext_order`, `from_yaml`, `normalize`; enums
+`rotation_schur`, `step_control` (enum `StepControl`), `cfl_target`, `dt_max`, `ext_order`,
+`from_yaml`, `normalize`; enums
 re-exported from `incns/__init__.py` — add new ones there, the AMR work forgot
 `AmrThreshold` until 2026-10-07); `incns.Case(p)` / `Case.from_yaml(path)`;
 `set_initial_velocity`, `set_forcing`, `set_dirichlet_field(group, f)`,
@@ -515,6 +542,11 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
 - **Never hand MFEM device paths a hypre-malloc'd buffer:** use
   `form.ParallelAssemble(Vector&)`, never `unique_ptr<HypreParVector>(form.ParallelAssemble())`
   (page-granular mprotect hits heap neighbours → intermittent faults on the debug device).
+- **Preconditioners borrow `StokesOperator::EssentialTrueDofs()`, never the
+  `BoundaryConditions` list** (2026-10-07): MFEM's Jacobi/Chebyshev smoothers keep a pointer
+  and read the list on the device; on the debug device that protects the host mirror, and
+  the BC list's in-place AMR rebuild (`MarkerToList`: `SetSize(0)` then a size-0
+  `HostWrite`) then faults. Hit by the `jacobi_pcg` default in `amr_event_test` E1.
 - **MFEM debug-device false positive (2026-10-06):** a host-valid `BlockVector` whose ≥ 1-page
   block is read on the device through the alias, then the whole vector read on the device →
   "illegal memory access" (pure-MFEM repro: 400 doubles pass, 1032 fail; ASan clean). Hit by

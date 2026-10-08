@@ -73,7 +73,7 @@ Result RunSteadyRe20(bool rotational, double grad_div, double t_final,
    p.mesh.dim = 2;
    p.dt = 0.01;
    p.t_final = t_final;
-   p.adaptive = true;
+   p.step_control = incns::StepControl::Error;
    p.controller.atol = 1e-6;
    p.controller.rtol = 1e-5;
    p.cfl_max = cfl_max;

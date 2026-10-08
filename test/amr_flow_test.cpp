@@ -50,6 +50,9 @@ TgvRun RunTgv(incns::ConvectiveForm form, bool amr)
    p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
    p.dt = 0.02;
    p.t_final = 0.4;
+   // Fixed steps: the AMR and uniform runs then share the temporal error, so
+   // the comparison is about space (CFL control would shrink the AMR run's dt).
+   p.step_control = incns::StepControl::Fixed;
    p.krylov_rtol = 1e-12;
    p.amr.enabled = amr;
    p.amr.interval = 4;

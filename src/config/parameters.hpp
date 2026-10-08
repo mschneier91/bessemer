@@ -30,6 +30,19 @@ enum class Equation
    NavierStokes ///< Incompressible Navier-Stokes (Sprint 2.2; IMEX BDF/AB).
 };
 
+/// How the time step is chosen (deck `time.step_control`).
+enum class StepControl
+{
+   Fixed, ///< dt = time.dt throughout.
+   /// Error control: BDF2 (EXT ext_order) advances, an embedded BDF3/EXT3
+   /// candidate supplies the estimate (AdaptiveController, time.atol/rtol).
+   Error,
+   /// Nek-style CFL control: dt = cfl_target / c before every step, c the
+   /// convective CFL rate (time/cfl.hpp); one solve per step. Navier-Stokes
+   /// only -- Stokes has no convective CFL and steps at time.dt.
+   Cfl
+};
+
 /// The kind of boundary condition a deck-declared group carries.
 enum class BcType
 {
@@ -124,25 +137,33 @@ struct Parameters
    ForceParameters forces;
 
    // --- time integration ------------------------------------------------------
-   double dt = 1e-2;     ///< Fixed step size / adaptive initial guess.
+   /// Fixed step size; the first step in Cfl mode (capped by cfl_target);
+   /// the initial guess in Error mode.
+   double dt = 1e-2;
    double t_final = 1.0; ///< End time.
    int time_order = 2;   ///< BDF order: 2 production, 3 test-only.
-   /// Error-controlled adaptive stepping (BDF2 advance, BDF3 estimator) --
-   /// deck `time.step_control: error` (or the older `time.adaptive: true`).
-   bool adaptive = false;
-   /// CFL-controlled steps: dt = cfl_target / c each step (> 0 enables; deck
-   /// `time.step_control: cfl` + `time.cfl_target`). One solve per step, no
-   /// estimator. c is the directional CFL rate with Nek5000's definition
-   /// (time/cfl.hpp), so Nek's CFL targets transfer. Exclusive with adaptive;
-   /// Navier-Stokes only. See TimeIntegratorOptions::cfl_target for the
-   /// growth rules.
-   double cfl_target = 0.0;
-   /// CFL mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
+   /// Step-size control (deck `time.step_control: fixed|error|cfl`; the older
+   /// `time.adaptive: true|false` means error|fixed). CASE-LEVEL DEFAULT: Cfl
+   /// (human decision 2026-10-07: run Navier-Stokes like Nek, at a target CFL
+   /// number). Stokes steps at time.dt under Cfl (no convective CFL). The
+   /// low-level TimeIntegratorOptions keep fixed steps, so integrator unit
+   /// tests pin what they test (the `schur` precedent).
+   StepControl step_control = StepControl::Cfl;
+   /// Cfl mode: the target CFL number c*dt (deck `time.cfl_target`, > 0). c
+   /// is Nek5000's directional CFL rate (time/cfl.hpp), so this is Nek's
+   /// `targetCFL`: the step as a multiple of the CFL = 1 step. Explicit
+   /// convection bounds it below ~1 (DFG 2D-3: unstable at ~0.8-1.1); larger
+   /// multiples need sub-stepped (OIFS) convection, which this code lacks.
+   /// See TimeIntegratorOptions::cfl_target for the growth rules.
+   double cfl_target = 0.5;
+   /// Cfl mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
    double dt_max = 0.0;
    /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3
-   /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3 (Nek's choice; larger
-   /// stability region for advection).
-   int ext_order = 2;
+   /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3. CASE-LEVEL DEFAULT 3
+   /// (human decision 2026-10-07; Nek's choice): EXT3's stability region
+   /// covers a stretch of the imaginary axis, where Galerkin advection
+   /// eigenvalues sit; EXT2's barely does (time/time_integrator.hpp).
+   int ext_order = 3;
    AdaptiveControllerOptions controller; ///< Adaptive tolerances/constants.
    /// Convective CFL limit for Navier-Stokes (deck `time.cfl_max`; 0 = off),
    /// BOTH forms: the IMEX convective form transports velocity explicitly,
@@ -223,6 +244,14 @@ struct Parameters
    /// When non-empty, restore the marching state from this checkpoint
    /// directory before stepping (same-np restart; see post/checkpoint).
    std::string restart_from;
+
+   /// @return True when the step is CFL-controlled: StepControl::Cfl on a
+   ///         Navier-Stokes case (Stokes steps at time.dt under Cfl).
+   bool CflSteps() const
+   {
+      return step_control == StepControl::Cfl &&
+             equation == Equation::NavierStokes;
+   }
 
    /**
     * @brief Apply the convective nondimensionalization in place (idempotent).

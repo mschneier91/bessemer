@@ -4,9 +4,12 @@
 //     exact solution lies in both spaces and the transfer is exact -- 2D/3D,
 //     fixed-step and adaptive;
 //  E2 a no-op event (nothing marked, the export/rebuild/import path forced)
-//     reproduces the uninterrupted run to ReproTol(1e-13): Stokes adaptive and
-//     NSE rotational (whose warm start is the Bernoulli head);
-//  E3 (inside E2) the adaptive controller's step record and PI memory survive;
+//     reproduces the uninterrupted run to ReproTol(1e-13): Stokes adaptive,
+//     NSE rotational fixed-step (whose warm start is the Bernoulli head), and
+//     NSE convective under CFL control with EXT3 (the case-level default: the
+//     CFL rate is rebuilt on the new mesh and steers on from the carried dt);
+//  E3 (inside E2) the adaptive controller's step record and PI memory
+//     survive, and the CFL-controlled dt sequence continues identically;
 //  E4 the history projection makes transferred velocity discretely
 //     divergence-free on the refined mesh, changing it only slightly;
 //  E5 initial passes refine on the IC and the march starts from the IC
@@ -113,7 +116,8 @@ Parameters MmsParams(int dim, bool adaptive)
    p.mesh = amr_test::Box(dim, dim == 2 ? 3 : 2, false);
    p.dt = 0.02;
    p.t_final = 0.12;
-   p.adaptive = adaptive;
+   p.step_control = adaptive ? incns::StepControl::Error
+                    : incns::StepControl::Fixed;
    p.controller.atol = 1e-8;
    p.controller.rtol = 1e-6;
    p.krylov_rtol = 1e-12;
@@ -185,21 +189,28 @@ struct RunResult
    std::vector<double> dts;
 };
 
+// One E2 configuration: equation, NSE form and step control.
+struct TgvCfg
+{
+   incns::Equation equation;
+   incns::ConvectiveForm form;
+   incns::StepControl control;
+   const char* name;
+};
+
 // Fully periodic 2D TGV through the Case; optionally a forced no-op event.
-RunResult RunTgv(bool rotational, bool adaptive, int noop_event_at)
+RunResult RunTgv(const TgvCfg& c, int noop_event_at)
 {
    Parameters p;
-   p.equation = rotational ? incns::Equation::NavierStokes
-                : incns::Equation::Stokes;
-   p.convective_form = rotational ? incns::ConvectiveForm::Rotational
-                       : incns::ConvectiveForm::Convective;
+   p.equation = c.equation;
+   p.convective_form = c.form;
    p.nu = 0.05;
    p.order_u = 3;
    p.order_p = 2;
    p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
    p.dt = 0.05;
    p.t_final = 0.5;
-   p.adaptive = adaptive;
+   p.step_control = c.control;
    p.controller.atol = 1e-6;
    p.controller.rtol = 1e-4;
    p.krylov_rtol = 1e-12;
@@ -212,11 +223,13 @@ RunResult RunTgv(bool rotational, bool adaptive, int noop_event_at)
    Case flow(*mesh, p);
    VectorFunctionCoefficient u0 = incns::tgv2d::VelocityCoefficient(p.nu);
    flow.SetInitialVelocity(u0);
+   RunResult r;
    int steps = 0;
    while (!flow.Done())
    {
       flow.Step();
       ++steps;
+      r.dts.push_back(flow.Integrator().CurrentDt()); // the step just taken
       if (steps == noop_event_at)
       {
          const incns::AdaptStats st = flow.Adapt(/*force_rebuild=*/true);
@@ -224,13 +237,14 @@ RunResult RunTgv(bool rotational, bool adaptive, int noop_event_at)
          EXPECT_EQ(st.ne_after, st.ne_before);
       }
    }
-   RunResult r;
    r.steps = steps;
    r.u.SetSize(flow.Spaces().Velocity().GetTrueVSize());
    flow.Velocity().GetTrueDofs(r.u);
-   if (const incns::AdaptiveController* c = flow.Integrator().Controller())
+   if (const incns::AdaptiveController* ac = flow.Integrator().Controller())
    {
-      for (const incns::StepAttempt& a : c->History()) { r.dts.push_back(a.dt); }
+      // Error control: every ATTEMPTED dt (rejections included).
+      r.dts.clear();
+      for (const incns::StepAttempt& a : ac->History()) { r.dts.push_back(a.dt); }
    }
    return r;
 }
@@ -239,22 +253,27 @@ RunResult RunTgv(bool rotational, bool adaptive, int noop_event_at)
 
 TEST(AmrEvent, E2_NoOpEventReproducesUninterruptedRun)
 {
-   struct Cfg { bool rotational, adaptive; } cfgs[] = {{false, true},
-      {true, false}
-   };
-   for (const Cfg& c : cfgs)
+   using incns::ConvectiveForm;
+   using incns::Equation;
+   using incns::StepControl;
+   const TgvCfg cfgs[] =
    {
-      SCOPED_TRACE(std::string(c.rotational ? "nse rotational" : "stokes") +
-                   (c.adaptive ? " adaptive" : " fixed"));
-      const RunResult ref = RunTgv(c.rotational, c.adaptive, -1);
-      const RunResult ev = RunTgv(c.rotational, c.adaptive, 3);
+      {Equation::Stokes, ConvectiveForm::Convective, StepControl::Error, "stokes"},
+      {Equation::NavierStokes, ConvectiveForm::Rotational, StepControl::Fixed, "nse rot"},
+      {Equation::NavierStokes, ConvectiveForm::Convective, StepControl::Cfl, "nse cfl"},
+   };
+   for (const TgvCfg& c : cfgs)
+   {
+      SCOPED_TRACE(c.name);
+      const RunResult ref = RunTgv(c, -1);
+      const RunResult ev = RunTgv(c, 3);
       EXPECT_EQ(ev.steps, ref.steps);
       Vector d(ev.u);
       d -= ref.u;
       const double rel = std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d) /
                                    InnerProduct(MPI_COMM_WORLD, ref.u, ref.u));
       EXPECT_LE(rel, incns_test::ReproTol(1e-13));
-      // E3: the controller record (every attempted dt) survived the event.
+      // E3: the step record (error control: every attempted dt) survived.
       ASSERT_EQ(ev.dts.size(), ref.dts.size());
       for (std::size_t i = 0; i < ref.dts.size(); ++i)
       {

@@ -236,6 +236,7 @@ TEST(RotationalSchurSolver, CaseWritesTheRotationLog)
    p.mesh.periodic = {false, false, false};
    p.dt = 0.05;
    p.t_final = 0.2;
+   p.step_control = incns::StepControl::Fixed; // a known number of log rows
    // Unique per rank count: ctest runs the np 1/2/4 instances concurrently.
    p.output.path = "rotation_log_test_out_np" + std::to_string(Mpi::WorldSize());
    p.output.name = "case";

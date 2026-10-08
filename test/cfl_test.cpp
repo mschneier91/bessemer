@@ -112,7 +112,7 @@ void AdaptiveStepRespectsTheCeiling(incns::ConvectiveForm form)
       p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
       p.dt = 0.02;
       p.t_final = 0.6;
-      p.adaptive = true;
+      p.step_control = incns::StepControl::Error;
       p.controller.atol = 1e-3; // loose: accuracy alone would take big steps
       p.controller.rtol = 1e-3;
       p.cfl_max = cfl_max;
@@ -169,6 +169,7 @@ void CflControlledSteps(incns::ConvectiveForm form)
    p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
    p.dt = 0.02;
    p.t_final = 1.0;
+   p.step_control = incns::StepControl::Cfl;
    p.cfl_target = 0.3; // Nek-scale CFL (time/cfl.hpp)
    p.ext_order = 3;
    p.Normalize();

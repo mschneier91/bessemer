@@ -388,6 +388,11 @@ PYBIND11_MODULE(_core, m)
    .value("Stokes", Equation::Stokes)
    .value("NavierStokes", Equation::NavierStokes);
 
+   py::enum_<StepControl>(m, "StepControl")
+   .value("Fixed", StepControl::Fixed)
+   .value("Error", StepControl::Error)
+   .value("Cfl", StepControl::Cfl);
+
    py::enum_<GradDivScale>(m, "GradDivScale")
    .value("OrderH", GradDivScale::OrderH)
    .value("OrderNu", GradDivScale::OrderNu);
@@ -591,7 +596,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("dt", &Parameters::dt)
    .def_readwrite("t_final", &Parameters::t_final)
    .def_readwrite("time_order", &Parameters::time_order)
-   .def_readwrite("adaptive", &Parameters::adaptive)
+   .def_readwrite("step_control", &Parameters::step_control)
    .def_readwrite("cfl_max", &Parameters::cfl_max)
    .def_readwrite("krylov_rtol", &Parameters::krylov_rtol)
    .def_readwrite("krylov_atol", &Parameters::krylov_atol)

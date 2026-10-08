@@ -61,11 +61,13 @@ TEST(Deck, LoadYamlFields)
    EXPECT_EQ(p.initial_velocity, "taylor_green_2d");
    EXPECT_TRUE(p.output.enabled);
    EXPECT_EQ(p.output.interval, 5);
-   // Unstated fields: library defaults (Q3/Q2, BDF2, fixed step, no grad-div).
+   // Unstated fields: library defaults (Q3/Q2, BDF2, CFL step control --
+   // which a Stokes case runs at the fixed dt -- no grad-div).
    EXPECT_EQ(p.order_u, 3);
    EXPECT_EQ(p.order_p, 2);
    EXPECT_EQ(p.time_order, 2);
-   EXPECT_FALSE(p.adaptive);
+   EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
+   EXPECT_FALSE(p.CflSteps()); // the deck is Stokes
    EXPECT_DOUBLE_EQ(p.grad_div, 0.0);
 }
 
@@ -228,9 +230,10 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_EQ(p.rotation_schur.inner_iterations, 4);
 }
 
-// Time step control: `time.step_control: fixed|error|cfl` (`error` = the older
-// `adaptive: true`), `time.cfl_target`, `time.dt_max` (scaled like dt in
-// dimensional mode) and `time.ext_order`.
+// Time step control: `time.step_control: fixed|error|cfl` (the older
+// `adaptive: true|false` = error|fixed), `time.cfl_target`, `time.dt_max`
+// (scaled like dt in dimensional mode) and `time.ext_order`. Case-level
+// defaults (human decision 2026-10-07): CFL control at 0.5, BDF2/EXT3.
 TEST(Deck, StepControlKeys)
 {
    const std::string path =
@@ -249,20 +252,28 @@ TEST(Deck, StepControlKeys)
       std::remove(path.c_str());
       return p;
    };
-   Parameters p = load("  step_control: cfl\n  cfl_target: 1.5\n"
-                       "  dt_max: 0.05\n  ext_order: 3\n");
-   EXPECT_FALSE(p.adaptive);
-   EXPECT_DOUBLE_EQ(p.cfl_target, 1.5);
-   EXPECT_DOUBLE_EQ(p.dt_max, 0.05 * 4.0 / 2.0); // * U_ref / L_ref
+   Parameters p = load("");
+   EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
+   EXPECT_TRUE(p.CflSteps());
+   EXPECT_DOUBLE_EQ(p.cfl_target, 0.5);
+   EXPECT_EQ(p.dt_max, 0.0);
    EXPECT_EQ(p.ext_order, 3);
+   p = load("  step_control: cfl\n  cfl_target: 0.3\n"
+            "  dt_max: 0.05\n  ext_order: 2\n");
+   EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
+   EXPECT_DOUBLE_EQ(p.cfl_target, 0.3);
+   EXPECT_DOUBLE_EQ(p.dt_max, 0.05 * 4.0 / 2.0); // * U_ref / L_ref
+   EXPECT_EQ(p.ext_order, 2);
    p = load("  step_control: error\n");
-   EXPECT_TRUE(p.adaptive);
-   EXPECT_EQ(p.cfl_target, 0.0);
+   EXPECT_EQ(p.step_control, incns::StepControl::Error);
+   EXPECT_FALSE(p.CflSteps());
    p = load("  adaptive: true\n"); // the older spelling still works
-   EXPECT_TRUE(p.adaptive);
+   EXPECT_EQ(p.step_control, incns::StepControl::Error);
+   p = load("  adaptive: false\n");
+   EXPECT_EQ(p.step_control, incns::StepControl::Fixed);
    p = load("  step_control: fixed\n");
-   EXPECT_FALSE(p.adaptive);
-   EXPECT_EQ(p.cfl_target, 0.0);
+   EXPECT_EQ(p.step_control, incns::StepControl::Fixed);
+   EXPECT_FALSE(p.CflSteps());
 }
 
 // The `amr:` section and `time.cfl_max` parse; unstated keys keep their
