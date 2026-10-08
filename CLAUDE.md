@@ -23,10 +23,12 @@ semi-implicit rotational form** — same CFL limit as IMEX, 7–9% more per step
 lift, 50–70× worse drag; both fail silently past the limit (§5.6, the doc §7). The finest
 mesh (M2) was started and stopped unfinished at the human's call.
 
-**Working branch `directional-do-nothing`** (NOT merged): Braack & Mucha's directional
-do-nothing outflow condition for the IMEX convective form, default on (§4 BCs; paper
-`JCM_v32i5_507-521.pdf`, untracked in the repo root); `directional_do_nothing_test`; DFG app
-`-cdn` for the classical condition.
+**`directional-do-nothing`** (fast-forward merged and pushed 2026-10-08, human): Braack &
+Mucha's directional do-nothing outflow condition for the IMEX convective form, default on,
+explicit (on the RHS with the convection; no operator or preconditioner change — a
+semi-implicit LHS version is the fallback if outlet backflow ever destabilizes below the CFL
+limit) (§4 BCs; paper `JCM_v32i5_507-521.pdf`, untracked in the repo root);
+`directional_do_nothing_test`; DFG app `-cdn` for the classical condition.
 
 **Open follow-ups** (none started):
 - Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
