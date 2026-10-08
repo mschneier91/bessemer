@@ -3,60 +3,34 @@
 Project instructions for Claude Code. Read this fully before planning any task. Section 0 is
 the handoff state — start there.
 
-## 0. Current state and next steps (updated 2026-10-07)
+## 0. Current state and next steps (updated 2026-10-08)
 
-**Branches.** `main` includes all of **`rotational-schur`** (fast-forward merged and pushed
-2026-10-07, human: "merge and push everything"; before it `main` was `b448e70` — AMR,
-lift/drag, self-contained PBJ test). New work goes on a new branch; merge/push only when the
-human says so. The merged commits:
-- `0c01824` — rotation-aware Schur preconditioner (spec Part C) + velocity diagnostics (§5.4).
-- `55509f1` — DFG 2D-3 driver, force cache across AMR events (it also added experimental
-  Picard sweeps — REMOVED again 2026-10-07, human: "we will never use that").
-- `ed3a44d` — velocity-PC case default `jacobi_pcg` (§5.3), grad-div in LOR-AMG (§5.3),
-  `time.cfl_max` for both forms, Python enum exports, the DFG study doc (placeholders open),
-  this file.
-- `466927a` — `time.step_control: fixed|error|cfl` + `cfl_target` / `dt_max`,
-  `time.ext_order: 2|3` (§5.2); **CFL number = Nek5000's definition** (§5.2; `cfl_max`
-  baselines ×0.4); **error-control estimator fixed to a genuine BDF3/EXT3 candidate**
-  (§5.2); Picard sweeps removed; DFG app `-ext/-cflt/-dtmax`. Fast tier 153/153 (177 s),
-  python 12/12, DFG 2D-1 slow test green (667 s, EXT2).
-- Defaults commit (after `466927a`) — **case-level defaults `step_control: cfl` at
-  `cfl_target` 0.5, and BDF2/EXT3** (human 2026-10-07; enum `StepControl` replaces
-  `Parameters::adaptive`; Stokes steps at `time.dt` under cfl; low-level
-  `TimeIntegratorOptions` unchanged); CFL-mode restart (`checkpoint_test`) and AMR no-op
-  event (`amr_event_test` E2) tests; NSE tests not about step control pin `Fixed`;
-  **debug-device fix**: the `jacobi_pcg` default (`ed3a44d`) aliased the BC's ess-dof list
-  and faulted at AMR events (§6) — velocity PCs now borrow `StokesOperator`'s copy;
-  per-np checkpoint dirs in `checkpoint_test` / `amr_checkpoint_test`. Fast tier 153/153,
-  python 12/12, `amr_event_test` green on the debug device at np 1/2 (the full sweep on
-  `466927a` was 100/102, the two failures being exactly that fault), DFG 2D-1 slow test
-  green on the new defaults (EXT3; convective c_D err 1.05e-4, c_L 2.8e-3; 297 s).
+**Branches.** `main` = `b64bd19`: all of `rotational-schur`, merged and pushed 2026-10-07
+(rotation-aware Schur PC, DFG 2D-3 driver, `jacobi_pcg` default + grad-div in LOR-AMG, step
+control `fixed|error|cfl` with Nek's CFL and the BDF3/EXT3 estimator, case-level CFL control
+at 0.5, the debug-device ess-list fix §6). Working branch **`dfg-scheme-comparison`** (NOT
+merged; merge/push only when the human says so): DFG app `-mref` nested meshes, per-step
+history CSV and `step_wall`; `bench/dfg3/` (pinned two-slot queue runner, sweep generator,
+analysis, HTML report generator, raw results of 2026-10-08); the work-precision write-up
+(`docs/imex_vs_semi_implicit.md` §7 + summary at its top); **case-level default back to
+BDF2/EXT2** (human 2026-10-08; §5.2).
 
-**Plan agreed with the human 2026-10-07** (A–D):
-- **A** verify + commit the step-control work — done (`466927a`).
-- **B** defaults — done (the commit above). `cfl_target` 0.5 is provisional: the human
-  asked what the target means; answer given: it IS Nek's `targetCFL` multiple (dt as a
-  multiple of the CFL = 1 step), < ~1 because convection is explicit; Nek's 2–4 needs OIFS.
-- **C** finish the DFG 2D-3 study — the human's pick pending: C1 minimal (AMR Δt 1.6e-3
-  pair + rotational CFL-mode calibration, ~1.5 h); C2 redo the AMR comparison in CFL mode
-  (both schemes, 2–3 targets, sequential on a quiet machine for clean timings, ~3–4 h);
-  C3 write up from existing data. Then fill `RESULTS_PLACEHOLDER` / `AMR_PLACEHOLDER` in
-  `docs/imex_vs_semi_implicit.md` and summarize in §5.6.
-- **D** merged and pushed 2026-10-07 (before C, at the human's request).
-
-**DFG 2D-3 study state** (§5.6; raw results in the session scratchpad
-`/tmp/claude-1000/-home-michaelschneier/<session>/scratchpad/dfg3/{base,amr,cfl,ext}/summary*.txt`,
-ephemeral — re-run with `apps/dfg_cylinder -c 3 …` if gone): base mesh complete — both
-schemes lose stability together (Δt 0.0015 ok, 0.002 not; Nek-CFL ~0.8–1.1), IMEX blows
-up, the rotational scheme returns silent garbage, equal cost at equal Δt; EXT3 is less
-stable than EXT2 there (IMEX Δt 0.002 diverged at t = 2.37 vs 3.28). AMR (θ 0.85, cap
-800): IMEX Δt 4e-4 best (c_D,max err 1.9e-5, c_L,max 2.8%, Δp 0.06%); rotational 4e-4
-c_D err 1.0e-4, c_L 4.4%; at 8e-4 IMEX diverged (t = 4.01), rotational ran (same accuracy
-as its 4e-4). CFL mode, IMEX/EXT2, base mesh: targets 0.3/0.5/0.7 all stable, identical
-accuracy (c_D err 2.2e-3), 9379/5634/4030 steps. Missing: AMR Δt 1.6e-3 pair; EXT3 and
-rotational CFL-mode runs. Wall times since the AMR study began came from concurrent runs.
+**Scheme comparison concluded (human 2026-10-08): for DFG 2D-3 there is no benefit to the
+semi-implicit rotational form** — same CFL limit as IMEX, 7–9% more per step, comparable
+lift, 50–70× worse drag; both fail silently past the limit (§5.6, the doc §7). The finest
+mesh (M2) was started and stopped unfinished at the human's call.
 
 **Open follow-ups** (none started):
+- Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
+  ("notoriously bad" for this form, human); the DFG studies used a Dirichlet outflow instead.
+- A velocity PC whose iteration count does not grow as σ = β₀/Δt shrinks (Jacobi-PCG's
+  does, so CFL 0.5 → 0.7 saves 29% of steps but only ~10–15% of wall time) — e.g. the
+  p-multigrid velocity block (spec Part D).
+- Warn when the measured CFL creeps above `cfl_target` (the IMEX/EXT3 failure symptom on
+  DFG); the rotational form's silent failure shows no such signal.
+- If the rotational form is pursued: find the source of its DFG drag error (the form's
+  spatial error vs the force evaluation from the Bernoulli head).
+- `auto` Schur: compute μ every N steps (it costs ≤1% per step now; low priority).
 - Fast tier ~177–197 s, near the 3-min budget; critical path `tgv_nse_test_np2`.
 - LOR-AMG with strong grad-div in 3D is still 4–5× its no-grad-div count; BoomerAMG's
   elasticity mode is the standard fix but needs `Ordering::byVDIM` (velocity is byNODES).
@@ -184,7 +158,8 @@ src/
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
                unsteady_mms_3d, hello_mpi
-bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest)
+bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest);
+               dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
 cases/         tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
 python/        bindings.cpp (module incns), incns/__init__.py (@incns.field)
 examples/python/stokes_ex/   run.py, run_yaml.py, run_channel.py, run_amr.py (also py tests)
@@ -269,8 +244,10 @@ additive term inside `StokesTimeIntegrator`.
   the rotational form's w*), ramped EXT1 → EXT2 → EXT3 from the available history (three
   levels kept for EXT3). Accuracy: on the NSE MMS (quadratic in t, so BDF2 is exact) EXT3
   shows order 2.94 → 2.98 vs EXT2's 1.98 → 1.99, error 70× lower (`nse_mms_test`
-  Ext3TemporalOrder2D). **Case-level default EXT3 (BDF2/EXT3, human 2026-10-07 — Nek's
-  choice); `TimeIntegratorOptions::ext_order` stays 2.** Stability is regime-dependent.
+  Ext3TemporalOrder2D). **Case-level default EXT2 (human 2026-10-08, after one day at EXT3)**:
+  on DFG 2D-3 EXT3 fails *silently* at CFL 0.7 in both schemes where EXT2 is accurate, and
+  buys no accuracy there (the error is spatial) — `docs/imex_vs_semi_implicit.md` §7.
+  `TimeIntegratorOptions::ext_order` is 2 too. Stability is regime-dependent.
   Stable radius |λΔt| of the explicit term along rays at an angle from the negative real
   axis (90° = imaginary axis = undamped advection):
   ```
@@ -474,13 +451,27 @@ by default (bitwise unchanged).
   default 208 Q3 elements). Driver `apps/dfg_cylinder`: `-c 1` 2D-1 (steady Re 20),
   `-c 2` 2D-2 (expensive tier), `-c 3` 2D-3 (U(t) = 1.5 sin(πt/8), t ∈ [0, 8], fixed steps,
   RESULT line with errors vs John 2004: c_D,max 2.950921575 at 3.93625, c_L,max 0.47795 at
-  5.693125, Δp(8) = −0.1116). Options: `-rot -pbj -schur -rlog -gd -apc -ext -cflt -at -maxe
-  -theta -aniso -rtol -cfl -dout`.
+  5.693125, Δp(8) = −0.1116; per-step `<out>/dfg_2d3_history.csv`; `step_wall` = time in
+  `Case::Step()` only). Options: `-rot -pbj -schur -rlog -gd -apc -ext -cflt -mref -at -maxe
+  -theta -aniso -rtol -cfl -dout`. Study harness: `bench/dfg3/` (`run_queue.sh` pins two
+  np-4 runs to disjoint physical cores at constant load; `make_sweep.sh`, `analyze.py`,
+  `report.py`).
 - **2D-1 measured** (208 elements, t = 8, rel. errors c_D / c_L / Δp): convective 1.05e-4 /
   2.79e-3 / 4.06e-3; rotational 9.45e-4 / 5.32e-2 / 5.72e-3; rotational + c_gd 1 1.03e-4 /
   1.13e-2 / 5.74e-3. Slow-tier test `dfg_cylinder_slow_test` (np 4, ~9 min) pins the first
   and third (ceilings in `baselines.yaml` `dfg_2d1`).
-- **2D-3 study (in progress; `docs/imex_vs_semi_implicit.md`)** — findings so far:
+- **2D-3 studies (`docs/imex_vs_semi_implicit.md` §6–7; concluded 2026-10-08, human: "for
+  this problem there is no benefit to the rotational form")**. Work-precision study (§7):
+  Dirichlet outflow for both (do-nothing is a different BC for the rotational form; bias vs
+  John's values ~1e-8), nested meshes `-mref` M0/M1/M2 (208/832/3328 cells), CFL control,
+  tooling + raw results in `bench/dfg3/`. On M1: both schemes accurate to CFL 0.7 with EXT2
+  and degraded at 0.9 — **the rotational scheme cannot step further than IMEX**; equal
+  steps and iterations at equal CFL, rotational +7–9% per step; lift comparable, **drag
+  peak 50–70× worse for the rotational form (2.2e-4 vs 3–4e-6, spatial)**; EXT3 fails
+  silently at 0.7 in both (IMEX: measured CFL creeps above the target; rotational: no
+  signal). CFL 0.5 → 0.7 saves 29% of steps but only ~10–15% wall time (Jacobi-PCG
+  iterations per step grow as σ shrinks). M2 (~6× M1 per step) was stopped unfinished.
+  Earlier findings (§6):
   - **The lagged-vorticity rotational scheme is CFL-limited exactly like IMEX.** The curl of
     ω*×u^{n+1} is (u^{n+1}·∇)ω*: vorticity *transport* is explicit (EXT2). Base mesh: both
     fine at Δt = 0.0015, both unstable at 0.002 (same onset time; deviation ×~1.9 per step).

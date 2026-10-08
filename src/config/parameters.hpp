@@ -159,11 +159,14 @@ struct Parameters
    /// Cfl mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
    double dt_max = 0.0;
    /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3
-   /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3. CASE-LEVEL DEFAULT 3
-   /// (human decision 2026-10-07; Nek's choice): EXT3's stability region
-   /// covers a stretch of the imaginary axis, where Galerkin advection
-   /// eigenvalues sit; EXT2's barely does (time/time_integrator.hpp).
-   int ext_order = 3;
+   /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3. CASE-LEVEL DEFAULT 2
+   /// (human decision 2026-10-08, from the DFG 2D-3 study,
+   /// docs/imex_vs_semi_implicit.md section 7): on that flow EXT3 fails
+   /// silently at CFL 0.7 in BOTH schemes while EXT2 stays accurate, and EXT3
+   /// buys no accuracy there (the error is spatial). EXT3's stability region
+   /// covers a stretch of the imaginary axis (nearly undamped advection, where
+   /// Nek uses it); for damped spectra EXT2's is larger.
+   int ext_order = 2;
    AdaptiveControllerOptions controller; ///< Adaptive tolerances/constants.
    /// Convective CFL limit for Navier-Stokes (deck `time.cfl_max`; 0 = off),
    /// BOTH forms: the IMEX convective form transports velocity explicitly,

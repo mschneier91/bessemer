@@ -6,8 +6,9 @@
 //  E2 a no-op event (nothing marked, the export/rebuild/import path forced)
 //     reproduces the uninterrupted run to ReproTol(1e-13): Stokes adaptive,
 //     NSE rotational fixed-step (whose warm start is the Bernoulli head), and
-//     NSE convective under CFL control with EXT3 (the case-level default: the
-//     CFL rate is rebuilt on the new mesh and steers on from the carried dt);
+//     NSE convective under CFL control (the case-level default mode: the CFL
+//     rate is rebuilt on the new mesh and steers on from the carried dt) with
+//     EXT3, so three history levels cross the event;
 //  E3 (inside E2) the adaptive controller's step record and PI memory
 //     survive, and the CFL-controlled dt sequence continues identically;
 //  E4 the history projection makes transferred velocity discretely
@@ -211,6 +212,8 @@ RunResult RunTgv(const TgvCfg& c, int noop_event_at)
    p.dt = 0.05;
    p.t_final = 0.5;
    p.step_control = c.control;
+   // EXT3 keeps three history levels: all of them must survive the event.
+   if (c.control == incns::StepControl::Cfl) { p.ext_order = 3; }
    p.controller.atol = 1e-6;
    p.controller.rtol = 1e-4;
    p.krylov_rtol = 1e-12;

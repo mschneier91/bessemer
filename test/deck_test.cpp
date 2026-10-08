@@ -233,7 +233,7 @@ TEST(Deck, RotationSchurKeys)
 // Time step control: `time.step_control: fixed|error|cfl` (the older
 // `adaptive: true|false` = error|fixed), `time.cfl_target`, `time.dt_max`
 // (scaled like dt in dimensional mode) and `time.ext_order`. Case-level
-// defaults (human decision 2026-10-07): CFL control at 0.5, BDF2/EXT3.
+// defaults (human decisions 2026-10-07/08): CFL control at 0.5, BDF2/EXT2.
 TEST(Deck, StepControlKeys)
 {
    const std::string path =
@@ -257,13 +257,13 @@ TEST(Deck, StepControlKeys)
    EXPECT_TRUE(p.CflSteps());
    EXPECT_DOUBLE_EQ(p.cfl_target, 0.5);
    EXPECT_EQ(p.dt_max, 0.0);
-   EXPECT_EQ(p.ext_order, 3);
+   EXPECT_EQ(p.ext_order, 2);
    p = load("  step_control: cfl\n  cfl_target: 0.3\n"
-            "  dt_max: 0.05\n  ext_order: 2\n");
+            "  dt_max: 0.05\n  ext_order: 3\n");
    EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
    EXPECT_DOUBLE_EQ(p.cfl_target, 0.3);
    EXPECT_DOUBLE_EQ(p.dt_max, 0.05 * 4.0 / 2.0); // * U_ref / L_ref
-   EXPECT_EQ(p.ext_order, 2);
+   EXPECT_EQ(p.ext_order, 3);
    p = load("  step_control: error\n");
    EXPECT_EQ(p.step_control, incns::StepControl::Error);
    EXPECT_FALSE(p.CflSteps());

@@ -25,13 +25,20 @@
 //        [-gd c_gd]
 //        [-ip N] [-ai N | -at T] [-maxe N] [-theta t] [-aniso] [-cfl c]
 //        [-rtol r] [-apc loramg|jacobi_chebyshev|jacobi_pcg] [-ext 2|3]
-//        [-cflt c [-dtmax d]] [-dout] [-out dir]
+//        [-cflt c [-dtmax d]] [-dout] [-mref L] [-out dir]
+//
+// -mref L regenerates the mesh with every cell count times 2^L and every
+// grading ratio to the power 2^-L: the cells of level L split those of level 0
+// exactly (geometric sequences nest), with the cylinder exact at each level.
 //
 // Case 3 ends with one machine-readable "RESULT key=value ..." line (errors
 // against John's values, wall time, steps, final element count, the largest
 // convective CFL number reached, iteration statistics) -- what the DFG 2D-3
-// study (docs/imex_vs_semi_implicit.md) collects. A run whose forces blow up
-// stops with status=diverged.
+// study (docs/imex_vs_semi_implicit.md) collects -- and writes the per-step
+// history <out>/dfg_2d3_history.csv (t, dt, c_D, c_L, outer and velocity-inner
+// iterations, step wall time). step_wall is the time spent in Case::Step()
+// alone (the scheme's cost); wall adds the force and CFL bookkeeping. A run
+// whose forces blow up stops with status=diverged.
 
 #include "bc/boundary_conditions.hpp"
 #include "config/parameters.hpp"
@@ -45,6 +52,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -107,7 +116,8 @@ int main(int argc, char* argv[])
 
    int bench = 1, order = 3, n_side = 4, n_ring = 3, n_down = 16;
    int initial_passes = 0, amr_interval = 0, max_elements = 20000;
-   int rotation_log = 0, ext = 3; // ext: the case-level default (BDF2/EXT3)
+   int rotation_log = 0, ext = 2; // ext: the case-level default (BDF2/EXT2)
+   int mesh_level = 0;
    // cfl: Nek-scale CFL ceiling (time/cfl.hpp); 0.24 = the 0.6 this app used
    // in the old k^2 measure.
    double t_final = -1.0, dt = 0.01, cfl = 0.24, grad_div = 0.0;
@@ -125,6 +135,8 @@ int main(int argc, char* argv[])
    args.AddOption(&n_side, "-ns", "--n-side", "O-grid cells per square side.");
    args.AddOption(&n_ring, "-nr", "--n-ring", "Radial ring layers.");
    args.AddOption(&n_down, "-nd", "--n-down", "Downstream cells.");
+   args.AddOption(&mesh_level, "-mref", "--mesh-level",
+                  "Mesh level L: every cell count x 2^L (nested refinement).");
    args.AddOption(&initial_passes, "-ip", "--initial-passes",
                   "AMR passes on the initial (ramped) flow.");
    args.AddOption(&amr_interval, "-ai", "--amr-interval",
@@ -236,7 +248,9 @@ int main(int argc, char* argv[])
    p.forces.attributes = {incns::kCylinderBody};
    p.forces.reference_velocity = U_ref;
    p.forces.reference_area = D;
-   p.forces.interval = (bench == 3) ? 1 : 10;
+   // Case 3 evaluates the forces itself every step (below); the Case's own
+   // CSV log would evaluate them a second time.
+   p.forces.interval = (bench == 3) ? 0 : 10;
    p.output.path = out;
    p.output.name = (bench == 1) ? "dfg_2d1" : (bench == 2) ? "dfg_2d2" : "dfg_2d3";
    if (amr_time > 0.0)
@@ -253,9 +267,22 @@ int main(int argc, char* argv[])
    incns::ConfigureDevice(p.device);
 
    incns::CylinderChannelSpec spec;
-   spec.n_side = n_side;
-   spec.n_ring = n_ring;
-   spec.n_down = n_down;
+   MFEM_VERIFY(mesh_level >= 0 && mesh_level <= 4, "dfg_cylinder: -mref 0..4");
+   {
+      // Level L: counts x 2^L, gradings g -> g^(2^-L). A geometric sequence
+      // of n cells with ratio g is split exactly by 2n cells with ratio
+      // sqrt(g), so the levels nest.
+      const int m = 1 << mesh_level;
+      const double root = 1.0 / m;
+      spec.n_side = n_side * m;
+      spec.n_ring = n_ring * m;
+      spec.n_down = n_down * m;
+      spec.n_up *= m;
+      spec.n_below *= m;
+      spec.n_above *= m;
+      spec.ring_grading = std::pow(spec.ring_grading, root);
+      spec.down_grading = std::pow(spec.down_grading, root);
+   }
    spec.order = std::max(order, 2);
    Mesh serial = incns::MakeCylinderChannelMesh(spec);
    std::unique_ptr<ParMesh> mesh = incns::PartitionMesh(serial, p.amr.enabled);
@@ -286,6 +313,11 @@ int main(int argc, char* argv[])
 
    int steps = 0;
    std::vector<double> ts, cds, cls;
+   // Per-step history (case 3): dt, outer / velocity-inner iterations, and the
+   // wall time of Case::Step() alone.
+   std::vector<double> hdt, hstep;
+   std::vector<int> houter, hinner;
+   double step_wall = 0.0;
    double cd = 0.0, cl = 0.0, cd_prev = 0.0, cfl_seen = 0.0, max_mu = 0.0;
    long long outer_sum = 0, inner_sum = 0, cap_hits = 0;
    int outer_max = 0, tensor_steps = 0;
@@ -294,14 +326,19 @@ int main(int argc, char* argv[])
    double next_report = 0.0;
    while (!flow.Done())
    {
+      const double step0 = MPI_Wtime();
       flow.Step();
+      const double step_t = MPI_Wtime() - step0;
+      step_wall += step_t;
       ++steps;
       const int its = flow.Integrator().LastIterations();
       outer_sum += its;
       outer_max = std::max(outer_max, its);
+      int inner_its = 0;
       if (const incns::StokesSolver* s = flow.Integrator().LastSolver())
       {
          const incns::SolveStats& st = s->Stats();
+         inner_its = static_cast<int>(st.vel_inner_iterations);
          inner_sum += st.vel_inner_iterations;
          cap_hits += st.vel_cap_hits;
          tensor_steps += st.tensor_active ? 1 : 0;
@@ -327,6 +364,13 @@ int main(int argc, char* argv[])
       ts.push_back(flow.Time());
       cds.push_back(cd);
       cls.push_back(cl);
+      if (bench == 3)
+      {
+         hdt.push_back(flow.Integrator().CurrentDt());
+         hstep.push_back(step_t);
+         houter.push_back(its);
+         hinner.push_back(inner_its);
+      }
       if (steps % 5 == 0) { cfl_seen = std::max(cfl_seen, flow.ConvectiveCflNumber()); }
       if (flow.Time() >= next_report - 1e-12 || flow.Done())
       {
@@ -372,7 +416,7 @@ int main(int argc, char* argv[])
                   "err_cl=%.3e err_tcl=%.3e err_dp=%.3e cfl_max=%.3f "
                   "outer_mean=%.2f outer_max=%d vel_inner_mean=%.2f "
                   "cap_hits=%lld tensor_frac=%.3f mu_max=%.3f rtol=%g "
-                  "ext=%d cfl_target=%g\n",
+                  "ext=%d cfl_target=%g mref=%d dout=%d step_wall=%.2f\n",
                   rotational ? "rotational" : "convective",
                   rotational ? schur : "-", (rotational && pbj) ? "pbj_krylov"
                   : apc,
@@ -383,7 +427,17 @@ int main(int argc, char* argv[])
                   std::abs(dp - dp_ref) / std::abs(dp_ref), cfl_seen,
                   outer_sum / n, outer_max, inner_sum / n, cap_hits,
                   tensor_steps / n, max_mu, rtol, ext,
-                  cfl_target);
+                  cfl_target, mesh_level, dirichlet_out ? 1 : 0, step_wall);
+      std::filesystem::create_directories(out);
+      const std::string hpath = std::string(out) + "/dfg_2d3_history.csv";
+      std::ofstream h(hpath);
+      h << "t,dt,c_d,c_l,outer,vel_inner,step_wall\n";
+      h.precision(16);
+      for (std::size_t i = 0; i < hdt.size(); ++i)
+      {
+         h << ts[i] << "," << hdt[i] << "," << cds[i] << "," << cls[i] << ","
+           << houter[i] << "," << hinner[i] << "," << hstep[i] << "\n";
+      }
    }
    std::fflush(stdout);
    return diverged ? 2 : 0;
