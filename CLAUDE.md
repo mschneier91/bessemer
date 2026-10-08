@@ -5,8 +5,10 @@ the handoff state — start there.
 
 ## 0. Current state and next steps (updated 2026-10-07)
 
-**Branches.** `main` = `b448e70` (AMR, lift/drag, self-contained PBJ test). Working branch
-**`rotational-schur`** (NOT merged; merge/push only when the human says so):
+**Branches.** `main` includes all of **`rotational-schur`** (fast-forward merged and pushed
+2026-10-07, human: "merge and push everything"; before it `main` was `b448e70` — AMR,
+lift/drag, self-contained PBJ test). New work goes on a new branch; merge/push only when the
+human says so. The merged commits:
 - `0c01824` — rotation-aware Schur preconditioner (spec Part C) + velocity diagnostics (§5.4).
 - `55509f1` — DFG 2D-3 driver, force cache across AMR events (it also added experimental
   Picard sweeps — REMOVED again 2026-10-07, human: "we will never use that").
@@ -40,7 +42,7 @@ the handoff state — start there.
   (both schemes, 2–3 targets, sequential on a quiet machine for clean timings, ~3–4 h);
   C3 write up from existing data. Then fill `RESULTS_PLACEHOLDER` / `AMR_PLACEHOLDER` in
   `docs/imex_vs_semi_implicit.md` and summarize in §5.6.
-- **D** merge when the human says.
+- **D** merged and pushed 2026-10-07 (before C, at the human's request).
 
 **DFG 2D-3 study state** (§5.6; raw results in the session scratchpad
 `/tmp/claude-1000/-home-michaelschneier/<session>/scratchpad/dfg3/{base,amr,cfl,ext}/summary*.txt`,
