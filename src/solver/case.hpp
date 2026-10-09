@@ -152,9 +152,11 @@ public:
    /**
     * @brief The directional convective CFL number of the current velocity at
     *        the current step size, c * dt (see time/cfl.hpp). Collective.
+    * @param where Optional output: the centre of the element where the rate
+    *              peaks (diagnostics), on every rank.
     * @return The CFL number (0 for a zero velocity).
     */
-   double ConvectiveCflNumber();
+   double ConvectiveCflNumber(mfem::Vector* where = nullptr);
 
    /**
     * @brief Write a rolling checkpoint of the current state, including the

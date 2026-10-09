@@ -4,15 +4,24 @@
 //     both), inflow/outflow/wall lengths exact, det J > 0 at every quadrature
 //     point, and order 1 (straight ring edges) visibly worse;
 //  M2 it partitions (np 1/2/4), including nonconforming-ready for AMR, and an
-//     NC refinement keeps the area (the curved geometry is refined exactly).
+//     NC refinement keeps the area (the curved geometry is refined exactly);
+//  M3 mesh/square_cylinder (Joly et al. 2012's domain): area = 180 x 120 - 1,
+//     boundary lengths exact (inflow/outflow 120, sides 360, square 4), the
+//     square's faces on +-1/2, nodes increasing, the corner cells the
+//     smallest along each face, the near wake uniform at wake_h, det J > 0,
+//     and it partitions nonconforming-ready and refines keeping the area.
 
 #include <gtest/gtest.h>
 
 #include "mesh/case_mesh.hpp"
 #include "mesh/cylinder_channel.hpp"
+#include "mesh/square_cylinder.hpp"
 #include "mfem.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
 
 using namespace mfem;
 using incns::CylinderChannelSpec;
@@ -124,4 +133,53 @@ TEST(CylinderMesh, M2_PartitionAndRefine)
          EXPECT_NEAR(perim, 2 * M_PI * s.radius, 1e-6 * 2 * M_PI * s.radius);
       }
    }
+}
+
+TEST(CylinderMesh, M3_SquareCylinderDomain)
+{
+   incns::SquareCylinderSpec spec; // the defaults: a fine graded mesh
+   for (bool x : {true, false})
+   {
+      const std::vector<double> n = incns::SquareCylinderNodes(spec, x);
+      for (std::size_t k = 1; k < n.size(); ++k) { ASSERT_GT(n[k], n[k - 1]); }
+      EXPECT_DOUBLE_EQ(n.front(), x ? -spec.upstream : -spec.half_height);
+      EXPECT_DOUBLE_EQ(n.back(), x ? spec.downstream : spec.half_height);
+      // The square's faces are nodes; along a face the corner cells are the
+      // smallest.
+      const auto ia = std::find(n.begin(), n.end(), -0.5), ib = std::find(n.begin(),
+                      n.end(), 0.5);
+      ASSERT_NE(ia, n.end());
+      ASSERT_NE(ib, n.end());
+      ASSERT_EQ(ib - ia, spec.n_face);
+      const double corner = *(ia + 1) - *ia;
+      for (auto it = ia + 1; it != ib; ++it) { EXPECT_GE(*(it + 1) - *it, corner - 1e-14); }
+      if (x)
+      {
+         // Near wake: the last cell before wake_end is (close to) wake_h.
+         const auto we = std::lower_bound(n.begin(), n.end(), spec.wake_end - 1e-12);
+         ASSERT_NE(we, n.end());
+         EXPECT_NEAR(*we - * (we - 1), spec.wake_h, 0.2 * spec.wake_h);
+      }
+   }
+
+   Mesh serial = incns::MakeSquareCylinderMesh(spec);
+   const double W = spec.upstream + spec.downstream, H = 2.0 * spec.half_height;
+   EXPECT_NEAR(Area(serial), W * H - spec.side * spec.side, 1e-9 * W * H);
+   EXPECT_NEAR(BoundaryLength(serial, incns::kSquareInflow), H, 1e-11);
+   EXPECT_NEAR(BoundaryLength(serial, incns::kSquareOutflow), H, 1e-11);
+   EXPECT_NEAR(BoundaryLength(serial, incns::kSquareSides), 2.0 * W, 1e-10);
+   EXPECT_NEAR(BoundaryLength(serial, incns::kSquareBody), 4.0 * spec.side, 1e-12);
+   for (int e = 0; e < serial.GetNE(); ++e)
+   {
+      ElementTransformation& T = *serial.GetElementTransformation(e);
+      T.SetIntPoint(&Geometries.GetCenter(T.GetGeometryType()));
+      ASSERT_GT(T.Weight(), 0.0) << "element " << e;
+   }
+
+   std::unique_ptr<ParMesh> pm = incns::PartitionMesh(
+                                    serial, /*nonconforming=*/true);
+   Array<int> refs;
+   for (int e = 0; e < pm->GetNE(); e += 3) { refs.Append(e); }
+   pm->GeneralRefinement(refs, 1, 1);
+   EXPECT_NEAR(Sum(Area(*pm)), W * H - spec.side * spec.side, 1e-9 * W * H);
 }

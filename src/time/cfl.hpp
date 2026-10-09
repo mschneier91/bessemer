@@ -51,6 +51,16 @@ public:
    double Rate(const mfem::ParGridFunction& u) const;
 
    /**
+    * @brief Rate() and where it peaks (collective; diagnostics): the centre
+    *        of the element with the largest rate, on every rank.
+    * @param u     Velocity on the space given at construction.
+    * @param where Output: that element's centre (size dim).
+    * @return The rate c, as Rate().
+    */
+   double RateAndLocation(const mfem::ParGridFunction& u,
+                          mfem::Vector& where) const;
+
+   /**
     * @brief Nek's inverse local reference spacing at the k+1 GLL points on
     *        [0,1] (index 0..k).
     * @param k Polynomial order.

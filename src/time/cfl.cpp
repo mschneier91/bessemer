@@ -2,6 +2,7 @@
 
 #include "mfem/general/forall.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 // This TU defines a device kernel (mfem::forall). A host compiler would build
@@ -140,6 +141,30 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
    double global = 0.0;
    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MAX, vfes_.GetComm());
    return global;
+}
+
+double ConvectiveCfl::RateAndLocation(const ParGridFunction& u,
+                                      Vector& where) const
+{
+   const double rate = Rate(u); // fills rate_ per element
+   struct { double val; int rank; } loc{-1.0, 0}, glob{0.0, 0};
+   MPI_Comm_rank(vfes_.GetComm(), &loc.rank);
+   int arg = -1;
+   if (ne_ > 0)
+   {
+      const double* r = rate_.HostRead();
+      arg = static_cast<int>(std::max_element(r, r + ne_) - r);
+      loc.val = r[arg];
+   }
+   MPI_Allreduce(&loc, &glob, 1, MPI_DOUBLE_INT, MPI_MAXLOC, vfes_.GetComm());
+   where.SetSize(dim_);
+   where = 0.0;
+   if (loc.rank == glob.rank && arg >= 0)
+   {
+      vfes_.GetParMesh()->GetElementCenter(arg, where);
+   }
+   MPI_Bcast(where.HostReadWrite(), dim_, MPI_DOUBLE, glob.rank, vfes_.GetComm());
+   return rate;
 }
 
 } // namespace incns

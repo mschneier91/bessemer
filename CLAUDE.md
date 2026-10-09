@@ -30,6 +30,53 @@ semi-implicit LHS version is the fallback if outlet backflow ever destabilizes b
 limit) (§4 BCs; `docs/outflow_conditions.md`); `directional_do_nothing_test`; DFG app
 `-cdn` for the classical condition.
 
+**Square cylinder (Joly, Etienne & Pelletier, J. Fluids Struct. 28 (2012) 232–243;
+human 2026-10-08) — branch `square-cylinder`, fast-forward merged and pushed 2026-10-08
+(human: "commit merge and push this stuff")**: `src/mesh/square_cylinder.{hpp,cpp}`,
+`apps/square_cylinder.cpp`,
+`ConvectiveCfl::RateAndLocation` + `Case::ConvectiveCflNumber(Vector* where)` (where the
+CFL rate peaks), `cylinder_mesh_test` M3. Details §5.6. The paper PDF `big_domain.pdf` sits
+untracked in the repo root (do not commit it; copyright).
+- **Re = 200, α = 0 — DONE, all within the human's 5%** (IMEX, Q3/Q2, CFL 0.5, EXT2, AMR):
+  C_D 1.4434 (paper 1.44, +0.2%), mean C_L 0.0003 (0.001), C_L,rms 0.4034 (0.42, −4.0%),
+  St 0.1568 (0.151, +3.8%), 10 periods, period spread 0.03%. Fine AMR (tol 0.12, 5,003
+  cells vs 3,001): C_D 1.4425, C_L −0.0003, C_L,rms 0.4025, St 0.1569 (11,518 steps, dt
+  5.3e-3–2.5e-2) — every coefficient within 0.2% of the base run → wake-converged; corner resolution (smallest cell 0.125 in
+  both) and dt were NOT varied. dt 6.2e-3–2.5e-2 (mean 1.4e-2, ~440 steps/period vs the
+  paper's ~32 at UΔt/D = 0.2); 11,138 steps, 69 min at np 4. Remaining −4% / +3.8% may be the
+  paper's large implicit step (untested). Literature scatter (their Table 1): C_L,rms
+  0.32–0.55, St 0.142–0.170.
+- **Re = 1000 — moved to HPC (human 2026-10-08: "that whole campaign will be left to the
+  hpc")**. A desktop level-1 run (tol 0.25, min size 0.1, cap 6000) was stopped at t = 20:
+  dt 1.5–4e-3 (5–9× below Re 200), 4,708 cells at t = 20 and still refining, CFL peak in the
+  near wake ((2.4, −0.3) → (9.4, −0.4)), ~0.44 s/step at np 4 → ~5 h for t = 160 at that
+  level. No public benchmark: plan = self-convergence over 2–3 AMR levels (halve
+  tolerance AND min size; track cells/unknowns, dt range, C_D, C_L,rms, St; converged when
+  < 1–2% change) + a CFL 0.5 vs 0.25 branch from the t = 90 checkpoint; check periodicity
+  (2D at Re 1000 may be irregular → batch-means error bars). Consider `-amr-start` (spin up
+  on the coarse mesh) to cut the startup cost.
+- **dt sawtooth on AMR meshes (open):** once shedding starts, every ~0.13 time units the CFL
+  rate jumps ~1.5× in ONE step → the controller cuts dt ~1.9e-2 → ~1.0e-2 and regrows ×1.2.
+  Forces unaffected (C_D jitter ~1e-4); ~10–20% extra steps. Likely a fast mode at its
+  stability limit at CFL 0.5 on the AMR (hanging-node) mesh — conforming DFG meshes were
+  stable to 0.7. Diagnose with the CFL location now printed; a 0.4 target likely removes it.
+- **Human's goal: Re = 10k and 100k on HPC** (2D on purpose; human knows it is not
+  physical). Estimates (2D: unknowns ∝ Re, dt ∝ Re^-1/2, work ∝ Re^3/2, ~30× per decade):
+  Re 10k ~1–3e6 unknowns, smallest cell ~0.02 (Q3), dt ~8e-4; Re 100k ~1–3e7, ~0.006,
+  ~2.5e-4; ~1e4 core-hours at Re 100k if the solver scales. Prerequisites agreed so far:
+  the dt-sawtooth diagnosis; GPU validation (§7.5) or a CPU strong-scaling check of the CC
+  Schur / LOR-AMG; an element-order comparison at Re 1000 (Q5–Q7 likely better per unknown
+  at high Re); OIFS (subcycled convection, CFL 2–4) before Re 100k; time-based AMR
+  scheduling (start / interval / end) in Case/Parameters for decks (now only in the
+  driver); statistics with error bars; same-np restart constrains job chaining. Batch
+  scripts: drafted by Claude, submitted by the human (guardrail).
+- **AMR stays refinement-only (human 2026-10-08):** derefinement breaks the multistep
+  history (refinement transfers every BDF/EXT level exactly; coarsening must project them),
+  and single-step schemes are order-bound. For a statistically stationary turbulent wake,
+  refine-only converges to resolving the wake region anyway; bound the startup waste with
+  `-amr-start` (spin up on the coarse mesh — spin-up only has to reach the state, not
+  accurately) and `-amr-end`; a remesh-and-restart (multistep startup ramp) is the fallback.
+
 **Open follow-ups** (none started):
 - Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
   ("notoriously bad" for this form, human); the DFG studies used a Dirichlet outflow instead.
@@ -143,7 +190,8 @@ target DOE systems, not this desktop.
 src/
   mesh/        periodic_box (box factory: periodic flags, per-direction stretching),
                case_mesh (THE factory: MakeCaseMesh/PartitionMesh; NC-ready with AMR),
-               cylinder_channel (DFG geometry), mesh_size_coefficient (gamma = c h_K)
+               cylinder_channel (DFG geometry), square_cylinder (Joly et al. 2012 domain),
+               mesh_size_coefficient (gamma = c h_K)
   amr/         amr_parameters, gradient_indicator (nvcc), refinement_marker, mesh_adapter
                (refine/rebalance + exact transfer, RefinementRecord), history_projection
   spaces/      mixed_spaces (velocity/pressure ParFESpaces, block offsets)
@@ -167,7 +215,8 @@ src/
   util/        profiler (INCNS_PROFILE), device
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
-               unsteady_mms_3d, hello_mpi
+               square_cylinder (Joly et al. 2012, AMR + live dt tracking), unsteady_mms_3d,
+               hello_mpi
 bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest);
                dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
 cases/         tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
@@ -309,7 +358,8 @@ additive term inside `StokesTimeIntegrator`.
   that was ~2.5× larger at element edges (Q3: 9 vs 3.62 per unit |u|/h) and ~3.3× inside;
   CFL numbers recorded before 2026-10-07 (the base-mesh DFG study, the 2D-1 runs) are in
   that old measure — divide by ~2.5. `cfl_test` C1 checks the spacings against Nek's by
-  hand.
+  hand. `ConvectiveCfl::RateAndLocation` / `Case::ConvectiveCflNumber(&where)` also return
+  the centre of the element where the rate peaks (diagnostics).
 - **CFL ceiling `time.cfl_max`** (0 = off):
   adaptive: dt ≤ cfl_max/c; fixed step: abort at setup/AMR events if c·dt > cfl_max (dt never
   changes silently). **Applies to BOTH convective forms** (2026-10-07): the semi-implicit
@@ -434,7 +484,12 @@ by 3× once). A default change needs measured NSE evidence (§2).
 ### 5.5 Adaptive mesh refinement (`amr:`; `amr_spec.md`; human 2026-10-06)
 
 Refinement only (no derefinement), isotropic or anisotropic, Stokes and both NSE forms. Off
-by default (bitwise unchanged).
+by default (bitwise unchanged). **Refinement-only is a design decision (human 2026-10-08):**
+under refinement every BDF/EXT history level transfers EXACTLY (the coarse field lies in the
+fine space), so the multistep scheme keeps its order across events; coarsening would have to
+project every level, and single-step schemes are order-bound. Events are step-interval based
+(`amr.interval`); with CFL-controlled dt a driver triggers `Case::Adapt()` in SIMULATED time
+instead (`apps/square_cylinder -at/-amr-start/-amr-end/-amr-burst`).
 - `MakeCaseMesh` is the only mesh factory. AMR on: `EnsureNCMesh()` BEFORE partitioning and
   METIS's partition passed explicitly. Hanging nodes via MFEM's P; every operator/PC works on
   NC meshes (`nc_stokes_test`: steady MMS exact on every solver path).
@@ -504,6 +559,22 @@ by default (bitwise unchanged).
     threshold ~×1.5 per sweep but each sweep is a full solve — never cheaper than the plain
     schemes at their stable Δt; the option was removed (2026-10-07).
   - IMEX with LOR-AMG at CFL-limited steps was 3× slower than Jacobi–Chebyshev → §5.3.
+
+- **Square cylinder** (Joly, Etienne & Pelletier 2012, Fig. 3 domain: inlet 60 D upstream
+  of the centre, outlet 120 D downstream, sides ±60 D; free stream on inlet and sides,
+  do-nothing outflow (directional with IMEX), no-slip square; U = D = 1, Re = 1/ν). Mesh
+  `mesh/square_cylinder` (graded tensor grid minus the square: faces graded to the
+  corners, `far_ratio` outward, near wake uniform at `wake_h` to `wake_end`; attributes
+  inflow 1 / outflow 2 / sides 3 / body 4). Driver `apps/square_cylinder`: coarse base mesh
+  (1,172 cells) + AMR in simulated time (`-at` interval, `-amr-start`, `-amr-burst` passes
+  at the first event, `-amr-end`; absolute `-tol`, `-minh`, `-maxe`), CFL control, an
+  asymmetric initial bump (`-pert`) to start shedding; progress line every `-pi` (t, dt and
+  its min/max since the last line, CFL and where it peaks, C_D, C_L, its, cells, ETA), per-step
+  `<out>/history.csv` flushed live; checkpoints `-chk-at T` / `-restart dir`; final averages
+  over the last `-np` periods between C_L up-crossings and a RESULT line. Targets at Re 200,
+  α = 0: C_D 1.44, C_L 0.001 (Table 2), C_L,rms 0.42, St 0.151 (Table 1). Results §0.
+  **Trap:** `ParMesh::GetGlobalNE()` is collective — never call it inside `if (root)` (the
+  first driver version deadlocked there).
 
 ### 5.7 Python interface (`cpu-python` preset, module `incns`)
 
@@ -626,7 +697,8 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   `directional_do_nothing_test` (D1 value + outward normal, D2 backflow-energy identity 2D/3D,
   D3 Braack & Mucha Table 5.1),
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
-  `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test`, `deck_test`,
+  `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
+  square-cylinder domain's area, boundary lengths, grading), `deck_test`,
   `checkpoint_test`, `nondim_test`, `diagnostics_test`, `bc_integration_test`.
 
 ### 7.4 GPU parity

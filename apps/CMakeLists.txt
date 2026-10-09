@@ -18,3 +18,8 @@ target_link_libraries(unsteady_mms_3d PRIVATE incns)
 # the curved cylinder-channel mesh, optional AMR.
 add_executable(dfg_cylinder dfg_cylinder.cpp)
 target_link_libraries(dfg_cylinder PRIVATE incns)
+
+# Square cylinder in a large domain (Joly, Etienne & Pelletier 2012): IMEX,
+# CFL-controlled steps, AMR in simulated time, live dt/force progress.
+add_executable(square_cylinder square_cylinder.cpp)
+target_link_libraries(square_cylinder PRIVATE incns)

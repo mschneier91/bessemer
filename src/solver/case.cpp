@@ -641,12 +641,14 @@ void Case::SetupCfl()
    }
 }
 
-double Case::ConvectiveCflNumber()
+double Case::ConvectiveCflNumber(Vector* where)
 {
    EnsureSetup();
    ConvectiveCfl local(spaces_.Velocity(), rules_);
    const ConvectiveCfl& c = cfl_ ? *cfl_ : local;
-   return c.Rate(integrator_->Velocity()) * integrator_->CurrentDt();
+   const double rate = where ? c.RateAndLocation(integrator_->Velocity(), *where)
+                       : c.Rate(integrator_->Velocity());
+   return rate * integrator_->CurrentDt();
 }
 
 void Case::UpdateAmrCellData()

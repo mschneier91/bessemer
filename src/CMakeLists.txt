@@ -4,6 +4,7 @@ add_library(incns STATIC
   mesh/periodic_box.cpp
   mesh/case_mesh.cpp
   mesh/cylinder_channel.cpp
+  mesh/square_cylinder.cpp
   amr/amr_parameters.cpp
   amr/gradient_indicator.cpp
   amr/refinement_marker.cpp
