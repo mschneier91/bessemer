@@ -33,10 +33,9 @@ slow-tier values, 70 s), `dfg_2d3.yaml` (dt 0.001; C_D,max 0.08%, 172 s),
 last step of the AMR window `end_time: 90`): no error output, summary left at "running",
 no OOM record, and no kill or reap in the agent's commands at that time. Cause unknown;
 next: rerun it alone (~70 min) and see if it reproduces at t = 90 (OIFS crossed the same
-point fine). Debug-device sweep after the merge: 112/114; only `run_monitor_test` np1/np2 fail,
-a segfault in R3 (AMR on a periodic Taylor-Green box, inside FGMRES), the known MFEM
-periodic-NC debug-device false positive. Next: give R3 the same `GTEST_SKIP` guard as
-`amr_flow_test.cpp:88`. Bridges-2: its lock must be
+point fine). Debug-device sweep: green, 114/114. The full sweep after the merge failed only
+`run_monitor_test` R3 (AMR on a periodic Taylor-Green box), the known MFEM periodic-NC
+debug-device false positive; R3 now skips there like `amr_flow_test.cpp:88`. Bridges-2: its lock must be
 re-resolved on the cluster (MUMPS + pin edit).
 
 **Next, in order:**

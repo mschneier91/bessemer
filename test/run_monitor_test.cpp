@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include "amr_test_util.hpp"
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
@@ -107,6 +108,11 @@ incns::Parameters TgvBox()
 
 TEST(RunMonitor, R3_TimeBasedAmrEvents)
 {
+   if (amr_test::DebugDeviceSkipsPeriodicNcSolves())
+   {
+      GTEST_SKIP() << "periodic NC solve: MFEM debug-device alias false "
+                   "positive (see amr_test_util.hpp / CLAUDE.md)";
+   }
    incns::Parameters p = TgvBox();
    p.amr.enabled = true;
    p.amr.every_time = 0.1;

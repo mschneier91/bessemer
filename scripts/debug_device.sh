@@ -12,8 +12,8 @@
 # separate build is needed -- it reuses build/cpu. It is much slower (mprotect on
 # every access), so this is a diagnostic sweep, not part of the agentic loop.
 #
-# STATUS (2026-10-09): GREEN -- 106/106 (every fast-tier test at np 1 and 2, ~15
-# min at -j6). Tests that solve on refined PERIODIC nonconforming meshes skip
+# STATUS (2026-10-09): GREEN -- 114/114 (every fast-tier test at np 1 and 2, ~15
+# min). Tests that solve on refined PERIODIC nonconforming meshes skip
 # those solves here only (an MFEM debug-device false positive, see CLAUDE.md).
 # The last failure was an intermittent page-protection fault from wrapping
 # hypre-malloc'd vectors (see CLAUDE.md, "Never hand MFEM device paths a
