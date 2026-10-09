@@ -143,6 +143,17 @@ Parameters Parameters::LoadYAML(const std::string& path)
    Maybe(time, "cfl_target", p.cfl_target);
    Maybe(time, "dt_max", p.dt_max);
    Maybe(time, "ext_order", p.ext_order);
+   Maybe(time, "oifs_cfl", p.oifs_cfl);
+   if (time && time["convection"])
+   {
+      const std::string cv = time["convection"].as<std::string>();
+      if (cv == "imex") { p.convection_treatment = ConvectionTreatment::Imex; }
+      else if (cv == "oifs") { p.convection_treatment = ConvectionTreatment::Oifs; }
+      else
+      {
+         MFEM_ABORT("parameters: unknown time.convection '" << cv << "' (imex|oifs)");
+      }
+   }
    if (time && time["adaptive"]) // the older spelling: true = error
    {
       MFEM_VERIFY(!time["step_control"], "parameters: give time.step_control "
@@ -396,6 +407,15 @@ Parameters Parameters::LoadYAML(const std::string& path)
                "parameters: time.cfl_target exceeds time.cfl_max");
    MFEM_VERIFY(p.ext_order == 2 || p.ext_order == 3,
                "parameters: time.ext_order must be 2 or 3");
+   MFEM_VERIFY(p.time_order == 0 || p.time_order == 2 || p.time_order == 3,
+               "parameters: time.order must be 2, 3 or 0 (auto)");
+   MFEM_VERIFY(p.oifs_cfl > 0.0, "parameters: time.oifs_cfl must be > 0");
+   MFEM_VERIFY(p.convection_treatment == ConvectionTreatment::Imex ||
+               (p.equation == Equation::NavierStokes &&
+                p.convective_form == ConvectiveForm::Convective &&
+                p.step_control != StepControl::Error),
+               "parameters: time.convection: oifs needs navier_stokes, the "
+               "convective form and fixed or cfl step control");
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();

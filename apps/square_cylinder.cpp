@@ -105,8 +105,9 @@ int main(int argc, char* argv[])
    double rtol = 1e-8;
    int amr_burst = 1;
    double pert = 0.1, progress_dt = 1.0, grad_div = 0.0;
-   int order = 3, max_elements = 3000, n_periods = 10, ext = 2;
-   bool aniso = true, classical_out = false;
+   int order = 3, max_elements = 3000, n_periods = 10, ext = 2, bdf = 0;
+   bool aniso = true, classical_out = false, oifs = false, cmass = false;
+   double oifs_cfl = 0.5;
    incns::SquareCylinderSpec spec;
    // Coarse base mesh: AMR does the refinement.
    spec.n_face = 2;
@@ -124,6 +125,8 @@ int main(int argc, char* argv[])
    args.AddOption(&cfl_target, "-cflt", "--cfl-target", "CFL target (Nek scale).");
    args.AddOption(&dt0, "-dt", "--dt", "First step (capped by the CFL target).");
    args.AddOption(&ext, "-ext", "--ext-order", "Extrapolation order 2 or 3.");
+   args.AddOption(&bdf, "-bdf", "--bdf-order",
+                  "BDF order 2 or 3; 0 = auto (3 with OIFS, 2 with IMEX).");
    args.AddOption(&order, "-o", "--order", "Velocity order k_u (k_p = k_u - 1).");
    args.AddOption(&grad_div, "-gd", "--grad-div",
                   "Grad-div scale c_gd (0 = off).");
@@ -153,6 +156,12 @@ int main(int argc, char* argv[])
                   "Base mesh: near-wake extent.");
    args.AddOption(&pert, "-pert", "--perturbation",
                   "Asymmetric initial bump amplitude (fraction of U).");
+   args.AddOption(&oifs, "-oifs", "--oifs", "-imex", "--imex",
+                  "Convection: OIFS (advected BDF history, CFL > 1) or IMEX.");
+   args.AddOption(&oifs_cfl, "-ocfl", "--oifs-cfl", "OIFS substep CFL number.");
+   args.AddOption(&cmass, "-cm", "--collocated-mass", "-gm", "--gauss-mass",
+                  "Velocity mass: GLL collocated (diagonal) or Gauss (consistent; "
+                  "OIFS always uses the collocated one).");
    args.AddOption(&classical_out, "-cdn", "--classical-do-nothing", "-ddn",
                   "--directional-do-nothing", "Outflow condition.");
    args.AddOption(&n_periods, "-np", "--n-periods",
@@ -170,6 +179,10 @@ int main(int argc, char* argv[])
    incns::Parameters p;
    p.equation = incns::Equation::NavierStokes;
    p.convective_form = incns::ConvectiveForm::Convective;
+   p.convection_treatment = oifs ? incns::ConvectionTreatment::Oifs
+                            : incns::ConvectionTreatment::Imex;
+   p.oifs_cfl = oifs_cfl;
+   p.collocated_mass = cmass;
    p.outflow = classical_out ? incns::OutflowCondition::Classical
                : incns::OutflowCondition::Directional;
    p.nu = U * D / re;
@@ -182,6 +195,9 @@ int main(int argc, char* argv[])
    p.step_control = incns::StepControl::Cfl;
    p.cfl_target = cfl_target;
    p.ext_order = ext;
+   p.time_order = bdf;
+   // BDF3 extrapolates at order 3 whatever ext says.
+   const int ext_eff = std::max(ext, p.BdfOrder());
    p.krylov_rtol = rtol;
    p.forces.enabled = true;
    p.forces.attributes = {incns::kSquareBody};
@@ -229,11 +245,13 @@ int main(int argc, char* argv[])
    {
       std::filesystem::create_directories(out);
       std::printf("square cylinder: Re %g, nu %g, Q%d/Q%d, base mesh %lld cells, "
-                  "CFL target %g, EXT%d, outflow %s, AMR every %g for t in "
+                  "CFL target %g (%s), BDF%d/EXT%d, %s mass, outflow %s, AMR every %g for t in "
                   "[%g, %g] (tol %g, min size %g, cap %d, first-event burst %d), "
                   "t_final %g, np %d\n",
                   re, p.nu, order, order - 1, ne0, cfl_target,
-                  ext, classical_out ? "classical" : "directional", amr_dt,
+                  oifs ? "OIFS" : "IMEX", p.BdfOrder(), ext_eff,
+                  p.CollocatedMass() ? "collocated" : "consistent",
+                  classical_out ? "classical" : "directional", amr_dt,
                   amr_start, amr_end, tol, min_h, max_elements, amr_burst,
                   t_final, Mpi::WorldSize());
       std::fflush(stdout);
@@ -318,10 +336,11 @@ int main(int argc, char* argv[])
          if (root)
          {
             std::printf("t %7.2f  dt %.3e [%.3e, %.3e]  CFL %.2f @(%.2f,%.2f)  "
-                        "C_D %.4f  C_L %+.4f  its %2d  NE %lld  steps %zu  "
+                        "C_D %.4f  C_L %+.4f  its %2d  sub %d  NE %lld  steps %zu  "
                         "wall %.0f s  ETA %.0f min\n", t, dt, dt_lo, dt_hi, cfl,
-                        where(0), where(1), C(0), C(1),
-                        s.back().outer, ne, s.size(), wall, eta / 60.0);
+                        where(0), where(1), C(0), C(1), s.back().outer,
+                        flow.Integrator().LastOifsSubsteps(), ne, s.size(), wall,
+                        eta / 60.0);
             std::fflush(stdout);
             for (; flushed < s.size(); ++flushed)
             {
@@ -398,12 +417,14 @@ int main(int argc, char* argv[])
       std::printf("RESULT case=square re=%g status=%s t=%.4f steps=%zu ne=%lld "
                   "events=%d wall=%.1f step_wall=%.1f cd=%.5f cl_mean=%.5f "
                   "cl_rms=%.5f st=%.5f err_cd=%.3e err_clrms=%.3e err_st=%.3e "
-                  "periods=%d dt_min=%.4e dt_max=%.4e cfl_target=%g ext=%d\n", re,
+                  "periods=%d dt_min=%.4e dt_max=%.4e cfl_target=%g bdf=%d "
+                  "ext=%d conv=%s mass=%s\n", re,
                   diverged ? "diverged" : "ok", flow.Time(), s.size(),
                   ne_final, events, wall, step_wall, cd_mean, cl_mean,
                   cl_rms, st, std::abs(cd_mean / cd_ref - 1.0),
                   std::abs(cl_rms / clrms_ref - 1.0), std::abs(st / st_ref - 1.0),
-                  nper, dmin, dmax, cfl_target, ext);
+                  nper, dmin, dmax, cfl_target, p.BdfOrder(), ext_eff,
+                  oifs ? "oifs" : "imex", p.CollocatedMass() ? "collocated" : "consistent");
       std::fflush(stdout);
       for (; flushed < s.size(); ++flushed)
       {

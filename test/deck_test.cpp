@@ -61,11 +61,13 @@ TEST(Deck, LoadYamlFields)
    EXPECT_EQ(p.initial_velocity, "taylor_green_2d");
    EXPECT_TRUE(p.output.enabled);
    EXPECT_EQ(p.output.interval, 5);
-   // Unstated fields: library defaults (Q3/Q2, BDF2, CFL step control --
+   // Unstated fields: library defaults (Q3/Q2, BDF auto = 2 with IMEX, CFL
+   // step control --
    // which a Stokes case runs at the fixed dt -- no grad-div).
    EXPECT_EQ(p.order_u, 3);
    EXPECT_EQ(p.order_p, 2);
-   EXPECT_EQ(p.time_order, 2);
+   EXPECT_EQ(p.time_order, 0);
+   EXPECT_EQ(p.BdfOrder(), 2);
    EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
    EXPECT_FALSE(p.CflSteps()); // the deck is Stokes
    EXPECT_DOUBLE_EQ(p.grad_div, 0.0);
@@ -253,6 +255,40 @@ TEST(Deck, OutflowKey)
              incns::OutflowCondition::Classical);
    EXPECT_EQ(load("  outflow: directional\n").outflow,
              incns::OutflowCondition::Directional);
+}
+
+// `time.convection: imex|oifs` (default imex) and `time.oifs_cfl`.
+TEST(Deck, ConvectionKeys)
+{
+   const std::string path =
+      "deck_convection_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   auto load = [&](const std::string & time_block)
+   {
+      {
+         std::ofstream f(path);
+         f << "equation: navier_stokes\n" << "physics:\n  nu: 0.01\n"
+           << "time:\n  dt: 0.01\n  t_final: 1.0\n" << time_block;
+      }
+      Parameters p = Parameters::LoadYAML(path);
+      std::remove(path.c_str());
+      return p;
+   };
+   Parameters p = load("");
+   EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Imex);
+   EXPECT_DOUBLE_EQ(p.oifs_cfl, 0.5);
+   EXPECT_EQ(p.BdfOrder(), 2); // auto: BDF2 with IMEX
+   EXPECT_FALSE(p.CollocatedMass());
+   p = load("  convection: oifs\n  oifs_cfl: 0.75\n  cfl_target: 2.0\n");
+   EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Oifs);
+   EXPECT_DOUBLE_EQ(p.oifs_cfl, 0.75);
+   EXPECT_DOUBLE_EQ(p.cfl_target, 2.0);
+   EXPECT_EQ(p.BdfOrder(), 3); // auto: BDF3 with OIFS
+   EXPECT_FALSE(p.collocated_mass);
+   EXPECT_TRUE(p.CollocatedMass()); // OIFS always uses the collocated mass
+   p = load("  convection: oifs\n  order: 2\n");
+   EXPECT_EQ(p.BdfOrder(), 2); // explicit order wins
+   p = load("  convection: imex\n");
+   EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Imex);
 }
 
 // Time step control: `time.step_control: fixed|error|cfl` (the older

@@ -34,7 +34,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
 
    MFEM_VERIFY(opts_.dt > 0.0, "time_integrator: dt must be positive");
    MFEM_VERIFY(opts_.order == 2 || opts_.order == 3,
-               "time_integrator: order must be 2 (production) or 3 (test-only)");
+               "time_integrator: order must be 2 or 3");
 
    MFEM_VERIFY(opts_.convection ||
                opts_.convective_form == ConvectiveForm::Convective,
@@ -45,6 +45,9 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    MFEM_VERIFY(opts_.cfl_target >= 0.0 && opts_.dt_max >= 0.0 &&
                opts_.cfl_growth >= 1.0 && opts_.cfl_hysteresis >= 0.0,
                "time_integrator: bad CFL step-control settings");
+   MFEM_VERIFY(opts_.convection_treatment == ConvectionTreatment::Imex ||
+               (opts_.convection && !rotational_), "time_integrator: OIFS "
+               "needs the convective form of the Navier-Stokes equation");
    MFEM_VERIFY(!(opts_.adaptive && opts_.cfl_target > 0.0),
                "time_integrator: choose error-controlled (adaptive) OR "
                "CFL-controlled steps, not both");
@@ -54,7 +57,17 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    // this never touches the implicit block solve. The ROTATIONAL form has no
    // explicit part: its lagged-vorticity term lives in every solver's
    // momentum block, reading w_star_ (zero until the first step sets it).
-   if (opts_.convection && !rotational_)
+   if (opts_.convection && !rotational_ &&
+       opts_.convection_treatment == ConvectionTreatment::Oifs)
+   {
+      // OIFS: the BDF history is advected (time/oifs.hpp) -- no explicit
+      // convection on the right-hand side.
+      MFEM_VERIFY(!opts_.adaptive, "time_integrator: OIFS supports fixed and "
+                  "CFL-controlled steps, not error control (yet)");
+      oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_, opts_.oifs_cfl);
+      oifs_conv_ = std::make_unique<Convection>(spaces_, rules_);
+   }
+   else if (opts_.convection && !rotational_)
    {
       convection_ = std::make_unique<Convection>(spaces_, rules_);
       // Directional do-nothing: the boundary part of the convective flux on
@@ -344,6 +357,17 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    const int n_u = spaces_.Velocity().GetTrueVSize();
    AssembleForcing(t_new, b);
    Vector combo(n_u), tmp(n_u);
+   if (oifs_)
+   {
+      // OIFS: the history levels advected to t_new replace both the plain
+      // history and the explicit convection.
+      oifs_->Advect(c, hist_, hist_times_, t_new,
+                    static_cast<int>(ExtrapolationOrder()), combo);
+      OifsBoundaryValues(c, t_new, combo);
+      trap_->Blocks().Mass().Mult(combo, tmp);
+      b -= tmp;
+      return;
+   }
    combo = 0.0;
    for (std::size_t j = 1; j < c.size(); ++j)
    {
@@ -355,6 +379,37 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    b -= tmp;
 
    SubtractConvection(t_new, b, ext);
+}
+
+void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
+      double t_new, Vector& phi)
+{
+   // Collective (N applies): every rank runs it, imposed dofs or not.
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+   const std::size_t k = c.size() - 1;
+   Vector bd(n_u), q(n_u), nj(n_u);
+   bd = 0.0;
+   double ctau = 0.0;
+   for (std::size_t j = 1; j <= k; ++j)
+   {
+      bd.Add(c[j], hist_[j - 1]);
+      ctau += c[j] * (t_new - hist_times_[j - 1]);
+   }
+   const std::size_t m = ExtrapolationOrder();
+   std::vector<double> times(hist_times_.begin(), hist_times_.begin() + m);
+   const std::vector<double> g = ExtrapolationWeights(t_new, times);
+   q = 0.0;
+   for (std::size_t l = 0; l < m; ++l)
+   {
+      oifs_conv_->Mult(hist_[l], nj);
+      q.Add(g[l], nj);
+   }
+   oifs_->LumpedNodal(q, q); // (u.grad)u at the nodes
+   bd.Add(-ctau, q);
+   const Array<int>& imp = oifs_->ImposedDofs();
+   Vector vals;
+   bd.GetSubVector(imp, vals);
+   phi.SetSubVector(imp, vals);
 }
 
 void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b, int ext)
@@ -464,9 +519,25 @@ void StokesTimeIntegrator::StepStartup()
       b = f0;
       b += f1;
       b *= 0.5;
-      trap_->Blocks().Mass().Mult(hist_[0], tmp);
+      // OIFS: u^0 advected to t^1 takes u^0's place in the explicit terms.
+      Vector u0_adv;
+      if (oifs_)
+      {
+         oifs_->Advect({0.0, 1.0}, hist_, hist_times_, t_new, 1, u0_adv);
+         // Imposed boundary nodes: the one-step characteristic expansion
+         // u^0 - dt (u^0.grad)u^0 (see OifsBoundaryValues).
+         Vector q(n_u);
+         oifs_conv_->Mult(hist_[0], q);
+         oifs_->LumpedNodal(q, q);
+         Vector bd(hist_[0]), vals;
+         bd.Add(-dt_, q);
+         bd.GetSubVector(oifs_->ImposedDofs(), vals);
+         u0_adv.SetSubVector(oifs_->ImposedDofs(), vals);
+      }
+      const Vector& u0 = oifs_ ? u0_adv : hist_[0];
+      trap_->Blocks().Mass().Mult(u0, tmp);
       b.Add(1.0 / dt_, tmp);
-      trap_->Blocks().ViscousUnconstrained().Mult(hist_[0], tmp); // (nu/2) K u^0
+      trap_->Blocks().ViscousUnconstrained().Mult(u0, tmp); // (nu/2) K u^0
       b -= tmp;
       // NSE: the starter builds its RHS inline (it does NOT go through
       // AssembleBdfRhs), so the convection term has to be subtracted here too

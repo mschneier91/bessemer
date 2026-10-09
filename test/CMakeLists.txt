@@ -130,6 +130,7 @@ incns_add_mpi_test(amr_flow_test amr_flow_test.cpp)
 incns_add_mpi_test(body_force_test body_force_test.cpp)
 incns_add_mpi_test(cylinder_mesh_test cylinder_mesh_test.cpp)
 incns_add_mpi_test(directional_do_nothing_test directional_do_nothing_test.cpp)
+incns_add_mpi_test(oifs_test oifs_test.cpp)
 # The DFG 2D-1 benchmark (c_D, c_L, dp vs John's reference values): `slow`
 # label, np = 4 only, on demand (`scripts/test.sh cpu -L slow`).
 add_executable(dfg_cylinder_slow_test dfg_cylinder_slow_test.cpp)

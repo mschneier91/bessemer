@@ -66,6 +66,8 @@ void Case::BuildIntegrator()
    opts.convection = (params_.equation == Equation::NavierStokes);
    opts.convective_form = params_.convective_form;
    opts.outflow = params_.outflow;
+   opts.convection_treatment = params_.convection_treatment;
+   opts.oifs_cfl = params_.oifs_cfl;
    opts.rotation_pc = params_.rotation_pc;
    opts.rotation_in_lor = params_.rotation_in_lor;
    {
@@ -89,10 +91,10 @@ void Case::BuildIntegrator()
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;
-   opts.order = params_.time_order;
+   opts.order = params_.BdfOrder();
    opts.adaptive = (params_.step_control == StepControl::Error);
    opts.controller = params_.controller;
-   opts.collocated_mass = params_.collocated_mass;
+   opts.collocated_mass = params_.CollocatedMass();
    opts.grad_div = params_.grad_div;
    opts.grad_div_scale = params_.grad_div_scale;
    opts.velocity_prec = params_.velocity_prec;

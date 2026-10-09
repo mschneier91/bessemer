@@ -2,6 +2,8 @@
 
 #include "mfem.hpp" // MFEM_VERIFY
 
+#include <cmath>
+
 namespace incns
 {
 
@@ -65,6 +67,25 @@ std::vector<double> ExtrapolationWeights(double t_target,
       }
    }
    return g;
+}
+
+std::vector<double> LagrangeWeights(double t, const std::vector<double>& nodes)
+{
+   const std::size_t m = nodes.size();
+   MFEM_VERIFY(m >= 1, "multistep_coeffs: LagrangeWeights needs a node");
+   std::vector<double> w(m, 1.0);
+   for (std::size_t l = 0; l < m; ++l)
+   {
+      for (std::size_t q = 0; q < m; ++q)
+      {
+         if (q == l) { continue; }
+         const double d = nodes[l] - nodes[q];
+         MFEM_VERIFY(std::abs(d) > 0.0, "multistep_coeffs: LagrangeWeights "
+                     "needs distinct nodes");
+         w[l] *= (t - nodes[q]) / d;
+      }
+   }
+   return w;
 }
 
 } // namespace incns

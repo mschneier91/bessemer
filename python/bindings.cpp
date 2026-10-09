@@ -408,6 +408,10 @@ PYBIND11_MODULE(_core, m)
    .value("Convective", ConvectiveForm::Convective)
    .value("Rotational", ConvectiveForm::Rotational);
 
+   py::enum_<ConvectionTreatment>(m, "ConvectionTreatment")
+   .value("Imex", ConvectionTreatment::Imex)
+   .value("Oifs", ConvectionTreatment::Oifs);
+
    py::enum_<OutflowCondition>(m, "OutflowCondition")
    .value("Classical", OutflowCondition::Classical)
    .value("Directional", OutflowCondition::Directional);
@@ -595,12 +599,16 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("grad_div_scale", &Parameters::grad_div_scale)
    .def_readwrite("convective_form", &Parameters::convective_form)
    .def_readwrite("outflow", &Parameters::outflow)
+   .def_readwrite("convection_treatment", &Parameters::convection_treatment)
+   .def_readwrite("oifs_cfl", &Parameters::oifs_cfl)
    .def_readwrite("order_u", &Parameters::order_u)
    .def_readwrite("order_p", &Parameters::order_p)
    .def_readwrite("collocated_mass", &Parameters::collocated_mass)
+   .def("collocated_mass_in_effect", &Parameters::CollocatedMass)
    .def_readwrite("dt", &Parameters::dt)
    .def_readwrite("t_final", &Parameters::t_final)
    .def_readwrite("time_order", &Parameters::time_order)
+   .def("bdf_order", &Parameters::BdfOrder)
    .def_readwrite("step_control", &Parameters::step_control)
    .def_readwrite("cfl_max", &Parameters::cfl_max)
    .def_readwrite("krylov_rtol", &Parameters::krylov_rtol)

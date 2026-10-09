@@ -129,7 +129,10 @@ struct Parameters
    // --- discretization (default Q3/Q2 Taylor-Hood) ---------------------------
    int order_u = 3;              ///< Velocity polynomial order k_u.
    int order_p = 2;              ///< Pressure polynomial order k_p.
-   bool collocated_mass = false; ///< GLL collocated (diagonal) mass option.
+   /// GLL collocated (diagonal) velocity mass (deck
+   /// `discretization.collocated_mass`). OIFS always uses it: read it
+   /// through CollocatedMass().
+   bool collocated_mass = false;
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;
@@ -145,7 +148,9 @@ struct Parameters
    /// the initial guess in Error mode.
    double dt = 1e-2;
    double t_final = 1.0; ///< End time.
-   int time_order = 2;   ///< BDF order: 2 production, 3 test-only.
+   /// BDF order (deck `time.order`): 2, 3, or 0 = auto -- BDF3 with OIFS
+   /// (human 2026-10-09), BDF2 with IMEX. Read it through BdfOrder().
+   int time_order = 0;
    /// Step-size control (deck `time.step_control: fixed|error|cfl`; the older
    /// `time.adaptive: true|false` means error|fixed). CASE-LEVEL DEFAULT: Cfl
    /// (human decision 2026-10-07: run Navier-Stokes like Nek, at a target CFL
@@ -162,6 +167,14 @@ struct Parameters
    double cfl_target = 0.5;
    /// Cfl mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
    double dt_max = 0.0;
+   /// Convective form: IMEX (explicit EXT convection, the default) or OIFS
+   /// (the BDF history advected by RK4 substeps, time/oifs.hpp; the BDF step
+   /// may then run at a CFL number of several) -- deck `time.convection:
+   /// imex|oifs`. OIFS: fixed or CFL step control, BDF3 by default
+   /// (time_order).
+   ConvectionTreatment convection_treatment = ConvectionTreatment::Imex;
+   /// OIFS: CFL number of each RK4 substep (deck `time.oifs_cfl`).
+   double oifs_cfl = 0.5;
    /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3
    /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3. CASE-LEVEL DEFAULT 2
    /// (human decision 2026-10-08, from the DFG 2D-3 study,
@@ -251,6 +264,27 @@ struct Parameters
    /// When non-empty, restore the marching state from this checkpoint
    /// directory before stepping (same-np restart; see post/checkpoint).
    std::string restart_from;
+
+   /// @return The BDF order in effect: time_order, or with 0 (auto) 3 under
+   ///         OIFS and 2 otherwise.
+   int BdfOrder() const
+   {
+      if (time_order > 0) { return time_order; }
+      return convection_treatment == ConvectionTreatment::Oifs ? 3 : 2;
+   }
+
+   /// @return Whether the velocity mass is the GLL collocated (diagonal) one:
+   ///         collocated_mass, and always under OIFS. OIFS advects with the
+   ///         lumped GLL mass; a consistent mass in the BDF step makes its
+   ///         dt -> 0 limit M M_L^-1 N(u) instead of N(u) -- measured on the
+   ///         Re 200 square cylinder: C_D +3%, C_L,rms +12% vs IMEX at every
+   ///         dt; with the collocated mass in both, within 0.3% / 1.1% of
+   ///         IMEX's (collocated) values (human-requested study 2026-10-09).
+   bool CollocatedMass() const
+   {
+      return collocated_mass ||
+             convection_treatment == ConvectionTreatment::Oifs;
+   }
 
    /// @return True when the step is CFL-controlled: StepControl::Cfl on a
    ///         Navier-Stokes case (Stokes steps at time.dt under Cfl).

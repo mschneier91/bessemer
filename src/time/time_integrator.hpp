@@ -14,6 +14,7 @@
 #include "spaces/mixed_spaces.hpp"
 #include "time/adaptive_controller.hpp"
 #include "time/integrator_state.hpp"
+#include "time/oifs.hpp"
 #include "mfem.hpp"
 
 #include <deque>
@@ -29,10 +30,11 @@ struct TimeIntegratorOptions
    double nu = 1.0;              ///< Kinematic viscosity.
    double dt = 1e-2;             ///< Fixed step size / adaptive initial guess.
    double t_final = 1.0;         ///< End time for Run().
-   /// BDF order: 2 = production; 3 = TEST-ONLY (marched directly solely to
-   /// validate the order-3 path that drives the adaptive LTE estimator --
-   /// never a production advancing scheme). Ignored when adaptive is on
-   /// (the solution always advances with the order-2 step).
+   /// BDF order, 2 or 3 (the trapezoidal starter, then BDF2, then BDF3;
+   /// order 3 extrapolates at order 3 too). BDF3 is the OIFS production
+   /// scheme (human 2026-10-09, Nek's pairing); with IMEX convection the
+   /// case-level default stays BDF2. Ignored when adaptive is on (the
+   /// solution always advances with the order-2 step).
    int order = 2;
    /// Adaptive stepping (default stays fixed-step BDF2). The LTE is estimated
    /// from the difference between the BDF2 and BDF3 solutions each step;
@@ -73,6 +75,12 @@ struct TimeIntegratorOptions
    /// explicit convection (extrapolated with it); no effect without outflow
    /// boundaries, with Stokes, or with the rotational form.
    OutflowCondition outflow = OutflowCondition::Directional;
+   /// Convective form: IMEX (explicit EXT convection) or OIFS (advected BDF
+   /// history, time/oifs.hpp). OIFS: fixed or CFL-controlled steps only; the
+   /// directional do-nothing term is not applied.
+   ConvectionTreatment convection_treatment = ConvectionTreatment::Imex;
+   /// OIFS: CFL number of each RK4 substep.
+   double oifs_cfl = 0.5;
    /// Velocity-block PC with the rotational form (see RotationVelocityPC).
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    /// Rotational form + LOR-AMG velocity PC: include the rotation term in the
@@ -124,8 +132,11 @@ struct TimeIntegratorOptions
  * that gate; full-size BE would also visibly pollute the BDF3 order study.
  * Known property: the trapezoidal step's pressure is the time-average
  * (p^0 + p^1)/2, not p(t^1) -- pressure is checked from step 2 on. In BDF3
- * (test) mode the ramp extends: trapezoidal -> BDF2 -> BDF3, each startup step
- * with LTE O(dt^3), preserving the global order 3.
+ * mode the ramp extends: trapezoidal -> BDF2 -> BDF3, each startup step
+ * with LTE O(dt^3), preserving the global order 3 -- EXCEPT under OIFS, whose
+ * starter has an O(dt^2) local error (frozen wind, unadvected viscous half):
+ * a fixed-step BDF3-OIFS march from u^0 is globally second order
+ * (CFL-controlled runs start at a small dt, so it is negligible there).
  *
  * @b Adaptive mode. From the third step on (three history levels), each
  * attempt solves BOTH the BDF2 and BDF3 candidates from the same accepted
@@ -245,6 +256,9 @@ public:
    /// @return FGMRES iterations of the most recent implicit solve.
    int LastIterations() const { return last_iterations_; }
 
+   /// @return OIFS RK4 substeps of the last step (0 without OIFS).
+   int LastOifsSubsteps() const { return oifs_ ? oifs_->LastSubsteps() : 0; }
+
    /// @return The solver of the step that produced the current solution
    ///         (null before the first step / after a state import) -- for
    ///         its SolveStats.
@@ -350,6 +364,28 @@ private:
    void SubtractConvection(double t_new, mfem::Vector& b, int ext = 0);
 
    /**
+    * @brief OIFS: replace the advected history on the imposed (inflow /
+    *        tangential) Dirichlet nodes by its characteristic expansion.
+    *
+    * With the CONSISTENT mass the BDF right-hand side couples those nodes to
+    * their interior neighbours, so they must carry the advected history,
+    * not the frozen data: following the characteristic back from a boundary
+    * node, @f$ \sum_{j\ge1} c_j \tilde u_j = \sum_{j\ge1} c_j u_D(t^{n+1-j}) -
+    * (\sum_j c_j \tau_j)\,(u\cdot\nabla)u|_{t^{n+1}} + O(\Delta t^2) @f$,
+    * @f$ \tau_j = t^{n+1} - t^{n+1-j} @f$ (BDF2 and BDF3 have
+    * @f$ \sum c_j\tau_j = -1 @f$ and @f$ \sum c_j\tau_j^2 = 0 @f$ for any
+    * step ratio, BDF3 also @f$ \sum c_j\tau_j^3 = 0 @f$, so the
+    * higher-order terms cancel to the scheme's order). The convective
+    * acceleration is EXT-extrapolated from @f$ M_L^{-1} N(u) @f$ at the
+    * history levels. (A diagonal mass -- Nek's -- has no such coupling.)
+    * @param c     BDF weights (c[0] leading).
+    * @param t_new Time the step solves for.
+    * @param phi   Advected history combination, modified on the imposed dofs.
+    */
+   void OifsBoundaryValues(const std::vector<double>& c, double t_new,
+                           mfem::Vector& phi);
+
+   /**
     * @brief Rotational form: set the lagged velocity w* to the EXT
     *        extrapolation of the history to @p t_new (same order matching as
     *        SubtractConvection: EXT1 on the first step, EXT2 after). The
@@ -400,6 +436,11 @@ private:
    std::unique_ptr<AdaptiveController> controller_; ///< Adaptive mode only.
    /// Dealiased convection operator; built only when opts_.convection is set.
    std::unique_ptr<Convection> convection_;
+   /// OIFS history advector (null with IMEX convection).
+   std::unique_ptr<OifsAdvector> oifs_;
+   /// OIFS: the convection operator N, for the convective acceleration at
+   /// the imposed boundary nodes (OifsBoundaryValues); never on the RHS.
+   std::unique_ptr<Convection> oifs_conv_;
    /// Rotational form active (convection on, ConvectiveForm::Rotational).
    bool rotational_ = false;
 

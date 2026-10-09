@@ -68,7 +68,8 @@ untracked in the repo root (do not commit it; copyright).
   Schur / LOR-AMG; an element-order comparison at Re 1000 (Q5–Q7 likely better per unknown
   at high Re); OIFS (subcycled convection, CFL 2–4) before Re 100k; time-based AMR
   scheduling (start / interval / end) in Case/Parameters for decks (now only in the
-  driver); statistics with error bars; same-np restart constrains job chaining. Batch
+  driver); statistics with error bars; same-np restart constrains job chaining. OIFS now
+  exists (`oifs` branch: CFL 2 within 1% of IMEX at Re 200, see above). Batch
   scripts: drafted by Claude, submitted by the human (guardrail).
 - **AMR stays refinement-only (human 2026-10-08):** derefinement breaks the multistep
   history (refinement transfers every BDF/EXT level exactly; coarsening must project them),
@@ -76,6 +77,30 @@ untracked in the repo root (do not commit it; copyright).
   refine-only converges to resolving the wake region anyway; bound the startup waste with
   `-amr-start` (spin up on the coarse mesh — spin-up only has to reach the state, not
   accurately) and `-amr-end`; a remesh-and-restart (multistep startup ramp) is the fallback.
+
+**`oifs` (branch; human 2026-10-08 "give a shot at implementing the OIFS stuff", 2026-10-09
+"you should be running everything with BDF3 with the OIFS stuff"; committed on the branch,
+NOT merged):** OIFS (§5.2), BDF3 by default under OIFS, collocated GLL mass always under
+OIFS. Square cylinder Re 200 (same AMR as the base IMEX run, np 4; vs IMEX CFL 0.5 with
+the SAME collocated mass: C_D 1.4381, C_L,rms 0.3957, St 0.1564, 9,103 steps):
+```
+OIFS BDF3, collocated   C_D            C_L,rms         St             steps
+  CFL 1                 1.4346 -0.2%   0.3931 -0.7%    0.1565 +0.1%   4,379
+  CFL 2                 1.4265 -0.8%   0.3923 -0.9%    0.1565 +0.1%   2,191
+  CFL 4                 1.4772 +2.7%   0.4778 +21%     0.1507 -3.6%   1,120
+```
+**CFL 2 is the sweet spot: within 1% of IMEX in 4.2× fewer steps (~3× less wall time;
+an OIFS step costs ~1.3–1.5× an IMEX step).** CFL 4 loses the lift amplitude. History of
+the study (each step measured): BDF2 + consistent BDF mass converged in dt to the WRONG
+answer (C_D 1.49, C_L,rms 0.45: +3% / +12% at CFL 4 → 0.5) — the mass mismatch (§5.2),
+not the wall treatment (pointwise wall acceleration: no change, reverted), the force
+evaluation (wall MMS: = IMEX to 1.5e-3), hanging nodes (`oifs_test` O3) or the outflow
+(IMEX classical = directional BITWISE on this domain: no outlet backflow). BDF2's
+trajectory time error at CFL 4 was ~4× BDF3's (C_D). OIFS also has no dt sawtooth (steady
+dt at every CFL). The collocated mass itself moves IMEX by −0.4% C_D / −1.8% C_L,rms.
+Open: DDN under OIFS (only matters with outlet backflow); OIFS cost per step (substep
+CFL 0.5 — try 1.0); the fixed-step BDF3-OIFS startup (O(dt²) starter); error control
+under OIFS; whether the case-level default for HPC runs should become OIFS CFL 2.
 
 **Open follow-ups** (none started):
 - Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
@@ -159,6 +184,15 @@ disagree): `SPEC_cahouet_chabard_mfem.md` (+ `docs/precond_cc.md`),
   existing envs and lockfiles are never edited to make another machine work. Spack builds
   are long — never kill them for being slow, and report failures verbatim instead of
   "fixing" them by pinning MFEM to a release, swapping versions or using a system tool.
+- **Periodic full refresh (human 2026-10-09):** every couple of months the human rebuilds
+  each env from scratch with current spack (re-concretize everything, MFEM moves to the
+  current develop). **Pending for the next refresh — MUMPS:** add `+mumps` to the mfem spec
+  and `^mumps+metis+parmetis~openmp` under it, in both envs (no OpenMP: one MPI rank per
+  core). No CMake change is needed (`FindMFEM` reads MFEM's `config.mk`). It could not be
+  added incrementally (2026-10-09): re-concretizing with today's spack changed the
+  compiler-wrapper / gcc-runtime / glibc-external hashes, and every new C package then
+  failed to link through spack's `mpicc` (`libxml2.so.16: undefined reference to
+  pow@GLIBC_2.29`, via openmpi's hwloc) — the env was restored to its July 10 lock.
 - **MFEM tracks `dev`** (commit recorded in the lock). Verify API/capability claims against
   the installed headers (`~/spack/opt/spack/linux-skylake/mfem-develop-*/include/mfem`);
   if an API seems missing, suspect a commit mismatch and flag it.
@@ -303,8 +337,8 @@ additive term inside `StokesTimeIntegrator`.
     convective CFL and steps at `time.dt` under `cfl`** (`Parameters::CflSteps()`).
     `cfl_target` default **0.5** = Nek's `targetCFL`: the step as a multiple of the CFL = 1
     step. Explicit convection bounds it below ~1 (DFG 2D-3: unstable at Nek-CFL ~0.8–1.1);
-    Nek's multiples of 2–4 come from OIFS (sub-stepped characteristics), which this code
-    does not have. `cfl_test` C3 pins the controller; restart (`checkpoint_test`) and AMR
+    Nek's multiples of 2–4 come from OIFS (sub-stepped characteristics): `time.convection:
+    oifs` below. `cfl_test` C3 pins the controller; restart (`checkpoint_test`) and AMR
     no-op events (`amr_event_test` E2) reproduce CFL-mode runs exactly.
   - `fixed`: dt constant; with `cfl_max > 0` an abort if exceeded. NSE tests that are not
     about step control pin it (`p.step_control = StepControl::Fixed`).
@@ -329,14 +363,62 @@ additive term inside `StokesTimeIntegrator`.
   the reason NekRS uses it); for damped spectra BDF2/EXT2's region is larger and BDF2/EXT3's
   is the smallest. DFG 2D-3 (Re ≤ 100, grad-div) confirms it: IMEX at Δt 0.002 blew up at
   t = 2.36 with EXT3 vs 3.28 with EXT2; 0.0025: 2.02 vs 2.80; the rotational scheme was
-  also worse. BDF3/EXT3 dominates BDF2/EXT3 everywhere, but BDF3 is test-/estimator-only
-  as an advancing scheme (a human decision to change).
+  also worse. BDF3/EXT3 dominates BDF2/EXT3 everywhere; with IMEX the case-level default
+  stays BDF2 (`time.order` auto), BDF3 is the OIFS default (below).
 - **IMEX convective form:** N(u) = (u·∇)u evaluated on the history and extrapolated (EXT2,
   variable-step weights; EXT1 on the first step), on the RHS. **Landmine:** the trapezoidal
   starter builds its RHS inline, not via `AssembleBdfRhs`, so it needs its own
   `SubtractConvection` — without it step 1 silently solves Stokes.
-- **BDF3** exists only for the adaptive error estimate (and is marched in tests to prove it
-  is 3rd order); never the advancing solution.
+- **OIFS** (`time.convection: oifs`, `time.oifs_cfl` substep CFL 0.5; `time/oifs`; human
+  request 2026-10-08; Maday–Patera–Rønquist 1990, as in Nek5000): each BDF history level is
+  advected to tⁿ⁺¹ by ∂ũ/∂s + (w(s)·∇)ũ = 0 (w = Lagrange interpolant/extrapolant of the
+  velocity history, `LagrangeWeights`) and the step uses M·Σcⱼũⱼ — no explicit N on the RHS,
+  so the BDF step runs at CFL 2–4. One combined field from the oldest level (Nek's way);
+  RK4 substeps sized by the substep CFL; advection = MFEM `ConvectionIntegrator` per
+  component (PA, 3k rule), one operator per history velocity combined with the weights per
+  stage; ROW-SUM-LUMPED GLL mass in the substeps. **The BDF step must use the SAME
+  (collocated GLL, diagonal) mass — case-level OIFS always does (`Parameters::
+  CollocatedMass()`, human-requested study 2026-10-09).** With the consistent mass there
+  the dt → 0 limit is M·M_L⁻¹N(u), not IMEX's N(u): a mismatch that converges only with h
+  (wall MMS 1.6e-3 / 1.6e-4 at n = 4 / 8) but cost C_D +3% and C_L,rms +12% on the Re 200
+  square cylinder at EVERY dt (CFL 4 → 0.5). Matched, OIFS = IMEX to the time error (wall
+  MMS 5e-7; square cylinder BDF3 CFL 1: C_D −0.24%, C_L,rms −0.66%, St +0.06% vs IMEX
+  collocated, in half the steps). Nek never sees it (diagonal mass everywhere).
+  `nse_mms_test` OifsMatchesImexWithCollocatedMass2D pins both sides.
+  **Boundaries (two traps, both measured on `nse_mms_test` OifsTemporalOrder2D):**
+  (1) characteristic rule — impose u_D(s) in the substeps only where the wind enters or is
+  tangential (w·n ≤ 0, walls included), leave outflow nodes free; (2) with a non-diagonal
+  mass (consistent; P^T D P at hanging nodes) the BDF RHS couples boundary nodes to interior rows, so imposed nodes must carry the
+  advected history, not frozen data: `OifsBoundaryValues` sets them to Σcⱼu_D(tⁿ⁺¹⁻ʲ) −
+  (Σcⱼτⱼ)(u·∇)u|ⁿ⁺¹ (BDF2/3: Σcⱼτⱼ = −1, Σcⱼτⱼ² = 0 for any step ratio, BDF3 also
+  Σcⱼτⱼ³ = 0, so the same formula is 3rd order), the convective
+  acceleration EXT-extrapolated from M_L⁻¹N(u). Without (2) the error stalled at 4.6e-4
+  (h = 1/3) whatever dt and converged only like h² — Nek never sees it (diagonal mass).
+  **BDF order: `time.order` auto (0) = BDF3 under OIFS (human 2026-10-09: "you should be
+  running everything with BDF3 with the OIFS stuff"; Nek's pairing), BDF2 under IMEX;
+  `Parameters::BdfOrder()`.** BDF3 extrapolates the wind at order 3 (EXT3). Scope:
+  convective form, BDF2/BDF3, fixed/CFL steps (not error control); the directional
+  do-nothing term is NOT applied under OIFS (TODO; exactly zero without outlet backflow —
+  on the square cylinder IMEX classical = directional bitwise); first step = trapezoidal
+  starter with u⁰ advected, then BDF2, then BDF3. **Startup trap:** the starter's local
+  error is O(dt²) (frozen wind, unadvected viscous half), which caps a FIXED-step BDF3
+  march at global order 2 (wall MMS: orders 2.54/2.19/1.93); CFL-controlled runs start at
+  `time.dt` and grow ×1.2, so it is negligible there. Order tests seed the exact history
+  via `ImportState` (`MmsConfig::exact_history`). **Accuracy — OIFS's time error is BDF
+  ALONG TRAJECTORIES (D³u/Dt³ for BDF2), IMEX's is Eulerian (+ EXT's):** where fluid
+  crosses a nearly fixed pattern quickly (attached shear layers, corners, a steady vortex)
+  OIFS's is far larger at equal dt (wall MMS, dt 0.005: BDF2-OIFS 8.6e-3 vs IMEX's
+  all-spatial 5.45e-3). BDF3 cuts it 3.5–7× (wall MMS, exact start, orders 2.42/2.80;
+  TGV CFL 2/4: errors 0.085/0.079 vs BDF2's 0.164/0.204 and IMEX CFL 0.5's 0.097, in 11/9
+  vs 38 steps; 0.074/0.072 with the collocated mass, the case-level default). The lumped substep mass converges at ~4.5 and is as accurate on hanging-node
+  meshes (O3). Tests `oifs_test` O1 (RK4 order 4, translation) / O2 (TGV CFL 2/4, BDF3:
+  ≤ 1.2× IMEX's error in 3.5–4× fewer steps) / O3 (nonconforming), `nse_mms_test`
+  OifsTemporalOrder2D (BDF2, inflow), OifsWallBounded2D (BDF2, no-slip: order, error
+  ≤ 1.35× IMEX's, residual wall force = IMEX's to 5e-3), OifsBdf3TemporalOrder2D,
+  `deck_test` ConvectionKeys (auto order). On AMR meshes OIFS also removes the IMEX dt
+  sawtooth (§0).
+- **BDF3** drives the adaptive error estimate and is the OIFS advancing scheme (above); with
+  IMEX it is selectable (`time.order: 3`) but not the default.
 - **Error-controlled stepping** (`step_control: error`): an EMBEDDED pair — the step
   advances with BDF2 (+ EXT of `ext_order`), and the auxiliary candidate is a genuine
   **BDF3/EXT3** solution of the same step (its own EXT3 convection / its own w* for the
@@ -620,9 +702,16 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   Kernels go in a NAMED namespace (nvcc rejects extended lambdas in internal-linkage scope).
 - **Device-resident vectors in the solve path:** `UseDevice(true)`, `BlockVector`s with
   `Device::GetMemoryType()` (no-ops on CPU). The **debug device** (`INCNS_DEVICE=debug`,
-  `scripts/debug_device.sh`) faults on unsynced host access; sweep GREEN 94/94 at np 1/2
-  (2026-10-06; refined-periodic NC solves skip there) — a failure is a regression. **It
+  `scripts/debug_device.sh`) faults on unsynced host access; sweep GREEN 106/106 at np 1/2
+  (2026-10-09; refined-periodic NC solves skip there) — a failure is a regression. **It
   cannot catch a host-compiled `forall`** — only a real GPU run proves the GPU path.
+- **`Vector::Get/SetSubVector(const Array<int>&, Vector&)` pick host or device from the
+  INDEX ARRAY and the value vector, not the target** (this MFEM): with a plain host
+  `Array<int>` they silently drag a device vector back to the host. Mark index lists
+  `list.GetMemory().UseDevice(true)` and build them through `HostWrite()` (never `Append`
+  onto a possibly device-valid buffer). Found by the debug device in OIFS (2026-10-09).
+- **Aliases (`MakeRef`) on device memory:** `alias.SyncMemory(base)` before use,
+  `alias.SyncAliasMemory(base)` after writing through it (MFEM's BlockVector protocol).
 - **Never hand MFEM device paths a hypre-malloc'd buffer:** use
   `form.ParallelAssemble(Vector&)`, never `unique_ptr<HypreParVector>(form.ParallelAssemble())`
   (page-granular mprotect hits heap neighbours → intermittent faults on the debug device).

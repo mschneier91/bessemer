@@ -58,4 +58,16 @@ std::vector<double> BdfWeights(const std::vector<double>& times);
 std::vector<double> ExtrapolationWeights(double t_target,
       const std::vector<double>& times);
 
+/**
+ * @brief Lagrange weights of the polynomial through @p nodes, evaluated at
+ *        @p t -- interpolation or extrapolation (OIFS needs the advecting
+ *        velocity inside the history interval, where ExtrapolationWeights
+ *        refuses).
+ * @param t     Evaluation time.
+ * @param nodes Distinct node times (any order).
+ * @return w with p(t) = sum_l w[l] p(nodes[l]) for every polynomial p of
+ *         degree < nodes.size(); a single node gives {1}.
+ */
+std::vector<double> LagrangeWeights(double t, const std::vector<double>& nodes);
+
 } // namespace incns
