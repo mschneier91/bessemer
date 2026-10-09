@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -402,4 +404,64 @@ TEST(Deck, ForcesKeys)
    EXPECT_DOUBLE_EQ(p.forces.reference_velocity, 0.5); // 2.0 / U_ref
    EXPECT_DOUBLE_EQ(p.forces.reference_area, 0.125);   // 0.5 / L_ref^2 (3D)
    EXPECT_EQ(p.forces.interval, 0);
+}
+
+// The deck reference is generated from the loader itself: one pass over an
+// empty deck declares every key with its default. Pins that the schema is
+// complete and self-consistent, that unknown keys are caught (with a
+// suggestion), and that the committed docs/deck_reference.md is current.
+TEST(Deck, SchemaIsCompleteAndCurrent)
+{
+   const std::vector<incns::DeckKey> keys = Parameters::DeckSchema();
+   std::set<std::string> paths;
+   for (const incns::DeckKey& k : keys)
+   {
+      EXPECT_TRUE(paths.insert(k.path).second) << "duplicate key " << k.path;
+      EXPECT_FALSE(k.type.empty()) << k.path;
+      EXPECT_FALSE(k.description.empty()) << k.path << " has no description";
+   }
+   // A sample of keys from every section, including custom-parsed ones.
+   for (const char* must :
+        {"equation", "physics.nu", "physics.Re", "mesh.elements",
+         "time.dt", "time.convection", "time.adaptive",
+         "solver.schur", "solver.rotation_schur",
+         "solver.rotation_schur.mu_on", "boundary_conditions",
+         "amr.theta", "forces.attributes", "checkpoint.path"
+        })
+   {
+      EXPECT_TRUE(paths.count(must)) << "schema lacks " << must;
+   }
+   // Defaults come from a fresh Parameters.
+   for (const incns::DeckKey& k : keys)
+   {
+      if (k.path == "time.cfl_target") { EXPECT_EQ(k.default_value, "0.5"); }
+      if (k.path == "time.convection") { EXPECT_EQ(k.default_value, "imex"); }
+   }
+
+   // Unknown keys: reported with the closest valid key; valid decks clean.
+   const std::vector<std::string> bad = Parameters::UnknownDeckKeys(
+                                           "time:\n  cfl_targt: 2\nphysic:\n  nu: 1\n"
+                                           "solver:\n  rotation_schur:\n    mu_onn: 3\n");
+   ASSERT_EQ(bad.size(), 3u);
+   EXPECT_NE(bad[0].find("time.cfl_targt (did you mean time.cfl_target?)"),
+             std::string::npos) << bad[0];
+   EXPECT_NE(bad[1].find("physic (did you mean physics?)"),
+             std::string::npos) << bad[1];
+   EXPECT_NE(bad[2].find("solver.rotation_schur.mu_onn"),
+             std::string::npos) << bad[2];
+   EXPECT_TRUE(Parameters::UnknownDeckKeys(
+                  "physics:\n  Re: 100\ntime:\n  adaptive: true\n"
+                  "solver:\n  rotation_schur: tensor\n"
+                  "boundary_conditions:\n  - {select: all, type: no_slip}\n").empty());
+
+   // The committed reference is exactly what the loader generates.
+   const std::string path = std::string(INCNS_SOURCE_DIR) +
+                            "/docs/deck_reference.md";
+   std::ifstream f(path);
+   ASSERT_TRUE(f.good()) << "missing " << path;
+   std::stringstream ss;
+   ss << f.rdbuf();
+   EXPECT_EQ(ss.str(), Parameters::DeckReferenceMarkdown())
+         << "docs/deck_reference.md is out of date; regenerate it with\n"
+         "  build/cpu/apps/run_case --deck-reference > docs/deck_reference.md";
 }

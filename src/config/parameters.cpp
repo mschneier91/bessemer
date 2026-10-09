@@ -1,5 +1,7 @@
 #include "config/parameters.hpp"
 
+#include "config/deck_reader.hpp"
+
 #include "mfem.hpp" // MFEM_VERIFY
 
 #include <yaml-cpp/yaml.h>
@@ -11,250 +13,166 @@ namespace incns
 
 namespace
 {
-// Read node[key] into value when present (defaults hold otherwise).
-template <typename T>
-void Maybe(const YAML::Node& node, const char* key, T& value)
+// Every deck key is declared here, whether or not the deck sets it, so the
+// same code reads a deck and -- run on an empty deck -- produces the deck
+// reference (Parameters::DeckSchema). Descriptions are one line each.
+void FillFromDeck(DeckReader& r, Parameters& p)
 {
-   if (node && node[key]) { value = node[key].as<T>(); }
-}
+   const DeckSection root = r.Root();
 
-template <std::size_t N, typename T>
-void MaybeArray(const YAML::Node& node, const char* key,
-                std::array<T, N>& value, int count)
-{
-   if (!(node && node[key])) { return; }
-   const YAML::Node seq = node[key];
-   MFEM_VERIFY(seq.IsSequence() && static_cast<int>(seq.size()) == count,
-               "parameters: '" << key << "' must be a sequence of " << count);
-   for (int i = 0; i < count; ++i) { value[i] = seq[i].as<T>(); }
-}
-} // namespace
-
-Parameters Parameters::LoadYAML(const std::string& path)
-{
-   Parameters p;
-   const YAML::Node root = YAML::LoadFile(path);
-
-   if (root["equation"])
+   r.ReadEnum(root, "equation", p.equation,
    {
-      const std::string eq = root["equation"].as<std::string>();
-      if (eq == "stokes") { p.equation = Equation::Stokes; }
-      else if (eq == "navier_stokes" || eq == "nse")
-      {
-         p.equation = Equation::NavierStokes;
-      }
-      else { MFEM_ABORT("parameters: unknown equation '" << eq << "'"); }
-   }
+      {"stokes", Equation::Stokes}, {"navier_stokes", Equation::NavierStokes},
+      {"nse", Equation::NavierStokes}
+   },
+   "Equation set: unsteady Stokes or incompressible Navier-Stokes.");
+   r.Read(root, "device", p.device,
+          "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
+   r.Read(root, "initial_velocity", p.initial_velocity,
+          "Named initial condition: zero or taylor_green_2d (others come from "
+          "Python or C++).");
+   r.Read(root, "restart", p.restart_from,
+          "Checkpoint directory to restart from (same number of MPI ranks).");
 
-   Maybe(root, "device", p.device);
+   const DeckSection physics = r.Section(root, "physics", "Physical parameters.");
+   r.Read(physics, "nu", p.nu,
+          "Kinematic viscosity (dimensionless: 1/Re).");
+   r.Declare(physics, "Re", "real", "unset", "",
+             "Reynolds number; sets nu = 1/Re (dimensionless mode; not with nu).");
+   r.Read(physics, "grad_div", p.grad_div,
+          "Grad-div stabilization scale c_gd (0 = off).");
+   r.ReadEnum(physics, "grad_div_scale", p.grad_div_scale,
+   {{"h", GradDivScale::OrderH}, {"nu", GradDivScale::OrderNu}},
+   "Grad-div coefficient: c_gd * h_K per element, or c_gd * nu.");
+   r.ReadEnum(physics, "convective_form", p.convective_form,
+   {
+      {"convective", ConvectiveForm::Convective},
+      {"rotational", ConvectiveForm::Rotational}
+   },
+   "Nonlinear term: explicit (u.grad)u, or the semi-implicit rotational form "
+   "(the pressure becomes the Bernoulli head).");
+   r.ReadEnum(physics, "outflow", p.outflow,
+   {
+      {"directional", OutflowCondition::Directional},
+      {"classical", OutflowCondition::Classical}
+   },
+   "Condition on outflow boundaries: Braack-Mucha directional do-nothing "
+   "(stable under backflow) or classical do-nothing.");
 
-   const YAML::Node physics = root["physics"];
-   Maybe(physics, "nu", p.nu);
-   Maybe(physics, "grad_div", p.grad_div);
-   if (physics && physics["grad_div_scale"])
+   const DeckSection nd = r.Section(root, "nondimensionalization",
+                                    "Input scaling: dimensionless (default) or "
+                                    "dimensional with reference scales.");
+   r.ReadEnum(nd, "mode", p.nondim.mode,
    {
-      const std::string gs = physics["grad_div_scale"].as<std::string>();
-      if (gs == "h") { p.grad_div_scale = GradDivScale::OrderH; }
-      else if (gs == "nu") { p.grad_div_scale = GradDivScale::OrderNu; }
-      else { MFEM_ABORT("parameters: unknown physics.grad_div_scale '" << gs << "'"); }
-   }
-   if (physics && physics["convective_form"])
-   {
-      const std::string cf = physics["convective_form"].as<std::string>();
-      if (cf == "convective") { p.convective_form = ConvectiveForm::Convective; }
-      else if (cf == "rotational")
-      {
-         p.convective_form = ConvectiveForm::Rotational;
-      }
-      else { MFEM_ABORT("parameters: unknown physics.convective_form '" << cf << "'"); }
-   }
-   if (physics && physics["outflow"])
-   {
-      const std::string of = physics["outflow"].as<std::string>();
-      if (of == "directional") { p.outflow = OutflowCondition::Directional; }
-      else if (of == "classical") { p.outflow = OutflowCondition::Classical; }
-      else
-      {
-         MFEM_ABORT("parameters: unknown physics.outflow '" << of
-                    << "' (directional|classical)");
-      }
-   }
-
-   const YAML::Node nd = root["nondimensionalization"];
-   if (nd && nd["mode"])
-   {
-      const std::string mode = nd["mode"].as<std::string>();
-      if (mode == "dimensional") { p.nondim.mode = ScalingMode::Dimensional; }
-      else
-      {
-         MFEM_VERIFY(mode == "dimensionless",
-                     "parameters: unknown nondimensionalization mode '"
-                     << mode << "'");
-      }
-   }
-   Maybe(nd, "L_ref", p.nondim.L_ref);
-   Maybe(nd, "U_ref", p.nondim.U_ref);
-   Maybe(nd, "rho", p.nondim.rho);
+      {"dimensionless", ScalingMode::Dimensionless},
+      {"dimensional", ScalingMode::Dimensional}
+   },
+   "dimensional: lengths, times and nu carry units and are rescaled by L_ref, U_ref.");
+   r.Read(nd, "L_ref", p.nondim.L_ref, "Reference length (dimensional mode).");
+   r.Read(nd, "U_ref", p.nondim.U_ref, "Reference velocity (dimensional mode).");
+   r.Read(nd, "rho", p.nondim.rho, "Density, for dimensional forces.");
 
    // Convenience: `physics: Re` in dimensionless mode sets nu = 1/Re.
-   if (physics && physics["Re"])
+   if (physics.Has("Re"))
    {
-      MFEM_VERIFY(!physics["nu"],
+      MFEM_VERIFY(!physics.Has("nu"),
                   "parameters: give either physics.nu or physics.Re, not both");
       MFEM_VERIFY(p.nondim.mode == ScalingMode::Dimensionless,
                   "parameters: physics.Re is a dimensionless-mode input");
-      p.nu = 1.0 / physics["Re"].as<double>();
+      p.nu = 1.0 / physics.Get("Re").as<double>();
    }
 
-   const YAML::Node disc = root["discretization"];
-   Maybe(disc, "order_u", p.order_u);
-   Maybe(disc, "order_p", p.order_p);
-   Maybe(disc, "collocated_mass", p.collocated_mass);
+   const DeckSection disc = r.Section(root, "discretization",
+                                      "Finite element orders and mass.");
+   r.Read(disc, "order_u", p.order_u, "Velocity polynomial order k_u.");
+   r.Read(disc, "order_p", p.order_p, "Pressure polynomial order k_p (k_u - 1).");
+   r.Read(disc, "collocated_mass", p.collocated_mass,
+          "Use the diagonal GLL collocated velocity mass (always on under OIFS).");
 
-   const YAML::Node mesh = root["mesh"];
-   Maybe(mesh, "dim", p.mesh.dim);
-   MaybeArray(mesh, "elements", p.mesh.num_elems, p.mesh.dim);
-   MaybeArray(mesh, "lengths", p.mesh.lengths, p.mesh.dim);
-   MaybeArray(mesh, "periodic", p.mesh.periodic, p.mesh.dim);
-   if (mesh && mesh["stretch"])
+   const DeckSection mesh = r.Section(root, "mesh",
+                                      "Box mesh (quads/hexes) for apps/run_case.");
+   r.Read(mesh, "dim", p.mesh.dim, "Spatial dimension, 2 or 3.");
+   r.ReadArray(mesh, "elements", p.mesh.num_elems, p.mesh.dim,
+               "Elements per direction.");
+   r.ReadArray(mesh, "lengths", p.mesh.lengths, p.mesh.dim,
+               "Box edge lengths (the box starts at the origin).");
+   r.ReadArray(mesh, "periodic", p.mesh.periodic, p.mesh.dim,
+               "Periodic directions; non-periodic faces need boundary_conditions.");
+   r.Declare(mesh, "stretch", "enum[dim]", "[none, none]", "none | tanh",
+             "Per-direction node clustering: uniform, or two-sided tanh toward "
+             "both ends.");
+   if (mesh.Has("stretch"))
    {
-      const YAML::Node seq = mesh["stretch"];
-      MFEM_VERIFY(seq.IsSequence()
-                  && static_cast<int>(seq.size()) == p.mesh.dim,
-                  "parameters: mesh.stretch must be a sequence of "
-                  << p.mesh.dim);
+      const YAML::Node seq = mesh.Get("stretch");
+      MFEM_VERIFY(seq.IsSequence() && static_cast<int>(seq.size()) == p.mesh.dim,
+                  "parameters: mesh.stretch must be a sequence of " << p.mesh.dim);
       for (int d = 0; d < p.mesh.dim; ++d)
       {
          const std::string kind = seq[d].as<std::string>();
          if (kind == "none") { p.mesh.stretch[d] = Stretch::None; }
          else if (kind == "tanh") { p.mesh.stretch[d] = Stretch::TwoSidedTanh; }
-         else { MFEM_ABORT("parameters: unknown mesh.stretch '" << kind << "'"); }
+         else { MFEM_ABORT("parameters: unknown mesh.stretch '" << kind << "' (none|tanh)"); }
       }
    }
-   MaybeArray(mesh, "stretch_beta", p.mesh.stretch_beta, p.mesh.dim);
+   r.ReadArray(mesh, "stretch_beta", p.mesh.stretch_beta, p.mesh.dim,
+               "tanh clustering strength per direction.");
 
-   const YAML::Node time = root["time"];
-   Maybe(time, "dt", p.dt);
-   Maybe(time, "t_final", p.t_final);
-   Maybe(time, "order", p.time_order);
-   Maybe(time, "atol", p.controller.atol);
-   Maybe(time, "rtol", p.controller.rtol);
-   Maybe(time, "cfl_max", p.cfl_max);
-   Maybe(time, "cfl_target", p.cfl_target);
-   Maybe(time, "dt_max", p.dt_max);
-   Maybe(time, "ext_order", p.ext_order);
-   Maybe(time, "oifs_cfl", p.oifs_cfl);
-   if (time && time["convection"])
+   const DeckSection time = r.Section(root, "time", "Time integration.");
+   r.Read(time, "dt", p.dt,
+          "Step size (fixed steps), or the first step (cfl / error control).");
+   r.Read(time, "t_final", p.t_final, "End time.");
+   r.ReadEnum(time, "step_control", p.step_control,
    {
-      const std::string cv = time["convection"].as<std::string>();
-      if (cv == "imex") { p.convection_treatment = ConvectionTreatment::Imex; }
-      else if (cv == "oifs") { p.convection_treatment = ConvectionTreatment::Oifs; }
-      else
-      {
-         MFEM_ABORT("parameters: unknown time.convection '" << cv << "' (imex|oifs)");
-      }
-   }
-   if (time && time["adaptive"]) // the older spelling: true = error
+      {"cfl", StepControl::Cfl}, {"fixed", StepControl::Fixed},
+      {"error", StepControl::Error}
+   },
+   "How dt is chosen: dt = cfl_target / CFL rate before every step (Navier-Stokes), "
+   "constant, or BDF2/BDF3 error control (IMEX only).");
+   r.Declare(time, "adaptive", "bool", "unset", "",
+             "Older spelling: true = step_control error, false = fixed.");
+   if (time.Has("adaptive"))
    {
-      MFEM_VERIFY(!time["step_control"], "parameters: give time.step_control "
+      MFEM_VERIFY(!time.Has("step_control"), "parameters: give time.step_control "
                   "or the older time.adaptive, not both");
-      p.step_control = time["adaptive"].as<bool>() ? StepControl::Error
+      p.step_control = time.Get("adaptive").as<bool>() ? StepControl::Error
                        : StepControl::Fixed;
    }
-   if (time && time["step_control"])
-   {
-      const std::string sc = time["step_control"].as<std::string>();
-      if (sc == "fixed") { p.step_control = StepControl::Fixed; }
-      else if (sc == "error") { p.step_control = StepControl::Error; }
-      else if (sc == "cfl") { p.step_control = StepControl::Cfl; }
-      else
-      {
-         MFEM_ABORT("parameters: unknown time.step_control '" << sc
-                    << "' (fixed|error|cfl)");
-      }
-   }
+   r.Read(time, "cfl_target", p.cfl_target,
+          "Target CFL number (Nek5000's definition) under step_control cfl: "
+          "~0.5 for IMEX, 2 for OIFS.");
+   r.Read(time, "cfl_max", p.cfl_max,
+          "CFL ceiling (0 = off): caps error-controlled dt, aborts fixed steps above it.");
+   r.Read(time, "dt_max", p.dt_max,
+          "Largest step under cfl control (0 = no cap).");
+   r.ReadEnum(time, "convection", p.convection_treatment,
+   {{"imex", ConvectionTreatment::Imex}, {"oifs", ConvectionTreatment::Oifs}},
+   "Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS "
+   "sub-stepping (CFL 2 practical; BDF3 and the collocated mass automatically).");
+   r.Read(time, "oifs_cfl", p.oifs_cfl, "CFL number of each OIFS substep.");
+   r.Read(time, "order", p.time_order,
+          "BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX).");
+   r.Read(time, "ext_order", p.ext_order,
+          "Extrapolation order of the explicit/lagged nonlinear term, 2 or 3.");
+   r.Read(time, "atol", p.controller.atol,
+          "Error control: absolute tolerance on the velocity error estimate.");
+   r.Read(time, "rtol", p.controller.rtol,
+          "Error control: relative tolerance on the velocity error estimate.");
 
-   const YAML::Node solver = root["solver"];
-   Maybe(solver, "rtol", p.krylov_rtol);
-   Maybe(solver, "atol", p.krylov_atol);
-   Maybe(solver, "max_iter", p.max_iter);
-   Maybe(solver, "kdim", p.kdim);
-   Maybe(solver, "print_level", p.print_level);
-   if (solver && solver["preconditioner"])
+   const DeckSection solver = r.Section(root, "solver",
+                                        "Linear solver: FGMRES on the monolithic "
+                                        "velocity-pressure system with a block "
+                                        "preconditioner.");
+   r.Read(solver, "rtol", p.krylov_rtol, "FGMRES relative tolerance.");
+   r.Read(solver, "atol", p.krylov_atol, "FGMRES absolute tolerance.");
+   r.Read(solver, "max_iter", p.max_iter, "FGMRES iteration cap.");
+   r.Read(solver, "kdim", p.kdim, "FGMRES restart size.");
+   r.Read(solver, "print_level", p.print_level, "Solver verbosity (-1 = quiet).");
+   r.Declare(solver, "schur", "enum", "cc", "cc | mass | laplacian_legacy",
+             "Pressure Schur block: Cahouet-Chabard, scaled pressure mass, or the "
+             "legacy Laplacian CC (comparison only).");
+   if (solver.Has("schur"))
    {
-      const std::string pc = solver["preconditioner"].as<std::string>();
-      if (pc == "jacobi") { p.velocity_prec = VelocityPreconditioner::Jacobi; }
-      // "loramg" is the accurate spelling -- the AMG always runs on the
-      // low-order-refined rediscretization, never on the HO operator.
-      // "amg"/"boomer_amg" stay accepted so existing decks keep parsing.
-      else if (pc == "loramg" || pc == "lor_amg" || pc == "amg"
-               || pc == "boomer_amg")
-      {
-         p.velocity_prec = VelocityPreconditioner::LORAMG;
-      }
-      else { MFEM_ABORT("parameters: unknown solver.preconditioner '" << pc << "'"); }
-   }
-   Maybe(solver, "amg_reuse", p.amg_reuse);
-   Maybe(solver, "rotation_lor", p.rotation_in_lor);
-   if (solver && solver["rotation_pc"])
-   {
-      const std::string rp = solver["rotation_pc"].as<std::string>();
-      if (rp == "symmetric") { p.rotation_pc = RotationVelocityPC::Symmetric; }
-      else if (rp == "pbj_only") { p.rotation_pc = RotationVelocityPC::PbjOnly; }
-      else if (rp == "pbj_krylov")
-      {
-         p.rotation_pc = RotationVelocityPC::PbjKrylov;
-      }
-      else { MFEM_ABORT("parameters: unknown solver.rotation_pc '" << rp << "'"); }
-   }
-   if (solver && solver["rotation_schur"])
-   {
-      using RSP = RotationalSchurPreconditioner;
-      const YAML::Node rs = solver["rotation_schur"];
-      auto mode = [](const std::string & m)
-      {
-         if (m == "cc") { return RSP::Mode::CahouetChabard; }
-         if (m == "tensor") { return RSP::Mode::Tensor; }
-         if (m == "auto") { return RSP::Mode::Auto; }
-         MFEM_ABORT("parameters: unknown solver.rotation_schur mode '" << m
-                    << "' (cc|tensor|auto)");
-         return RSP::Mode::CahouetChabard;
-      };
-      RSP::Options& o = p.rotation_schur;
-      if (rs.IsScalar()) { o.mode = mode(rs.as<std::string>()); }
-      else
-      {
-         if (rs["mode"]) { o.mode = mode(rs["mode"].as<std::string>()); }
-         if (rs["criterion"])
-         {
-            const std::string c = rs["criterion"].as<std::string>();
-            if (c == "max_mu") { o.criterion = RSP::Criterion::MaxMu; }
-            else if (c == "volume_fraction")
-            {
-               o.criterion = RSP::Criterion::VolumeFraction;
-            }
-            else
-            {
-               MFEM_ABORT("parameters: unknown solver.rotation_schur.criterion '"
-                          << c << "' (max_mu|volume_fraction)");
-            }
-         }
-         Maybe(rs, "mu_on", o.mu_on);
-         Maybe(rs, "mu_off", o.mu_off);
-         Maybe(rs, "vol_on", o.vol_on);
-         Maybe(rs, "vol_off", o.vol_off);
-         Maybe(rs, "inner_iterations", o.inner_iterations);
-      }
-      MFEM_VERIFY(o.mu_off <= o.mu_on && o.vol_off <= o.vol_on &&
-                  o.inner_iterations >= 1, "parameters: bad "
-                  "solver.rotation_schur thresholds / inner_iterations");
-   }
-   Maybe(solver, "rotation_log_interval", p.rotation_log_interval);
-   MFEM_VERIFY(p.rotation_log_interval >= 0,
-               "parameters: solver.rotation_log_interval must be >= 0");
-   if (solver && solver["schur"])
-   {
-      const std::string sm = solver["schur"].as<std::string>();
+      const std::string sm = solver.Get("schur").as<std::string>();
       if (sm == "mass") { p.schur = SchurBlockType::Mass; }
       else if (sm == "cc")
       {
@@ -266,51 +184,115 @@ Parameters Parameters::LoadYAML(const std::string& path)
          p.schur = SchurBlockType::CahouetChabard;
          p.cc.schur_model = SchurModel::LaplacianLegacy;
       }
-      else { MFEM_ABORT("parameters: unknown solver.schur '" << sm << "'"); }
-   }
-   Maybe(solver, "n_inner", p.cc.n_inner);
-   if (solver && solver["pc_quadrature"])
-   {
-      const std::string q = solver["pc_quadrature"].as<std::string>();
-      if (q == "inherit") { p.cc.pc_quadrature = PcQuadrature::Inherit; }
-      else if (q == "gll_collocated")
-      {
-         p.cc.pc_quadrature = PcQuadrature::GllCollocated;
-      }
-      else { MFEM_ABORT("parameters: unknown solver.pc_quadrature '" << q << "'"); }
-   }
-   Maybe(solver, "lp_vcycles", p.cc.lp_vcycles);
-   if (solver && solver["a_pc"])
-   {
-      const std::string ap = solver["a_pc"].as<std::string>();
-      if (ap == "loramg") { p.cc.a_pc = APC::LORAMG; }
-      else if (ap == "jacobi_chebyshev") { p.cc.a_pc = APC::JacobiChebyshev; }
-      else if (ap == "jacobi_pcg") { p.cc.a_pc = APC::JacobiPCG; }
       else
       {
-         MFEM_ABORT("parameters: unknown solver.a_pc '" << ap
-                    << "' (loramg|jacobi_chebyshev|jacobi_pcg)");
+         MFEM_ABORT("parameters: unknown solver.schur '" << sm
+                    << "' (cc|mass|laplacian_legacy)");
       }
    }
-   Maybe(solver, "a_pcg_rtol", p.cc.a_pcg_rtol);
-   Maybe(solver, "a_pcg_max_iter", p.cc.a_pcg_max_iter);
-   if (solver && solver["block_shape"])
+   r.ReadEnum(solver, "a_pc", p.cc.a_pc,
    {
-      const std::string bs = solver["block_shape"].as<std::string>();
-      if (bs == "diag") { p.cc.block_shape = BlockPCShape::Diag; }
-      else if (bs == "lower") { p.cc.block_shape = BlockPCShape::LowerTri; }
-      else if (bs == "upper") { p.cc.block_shape = BlockPCShape::UpperTri; }
-      else { MFEM_ABORT("parameters: unknown solver.block_shape '" << bs << "'"); }
+      {"jacobi_pcg", APC::JacobiPCG}, {"jacobi_chebyshev", APC::JacobiChebyshev},
+      {"loramg", APC::LORAMG}
+   },
+   "Velocity-block preconditioner (Cahouet-Chabard path): Jacobi-PCG, "
+   "Jacobi-Chebyshev, or one LOR-AMG V-cycle (best when viscous-dominated).");
+   r.Read(solver, "a_pcg_rtol", p.cc.a_pcg_rtol,
+          "jacobi_pcg: inner CG tolerance.");
+   r.Read(solver, "a_pcg_max_iter", p.cc.a_pcg_max_iter,
+          "jacobi_pcg: inner CG iteration cap.");
+   r.ReadEnum(solver, "preconditioner", p.velocity_prec,
+   {
+      {"jacobi", VelocityPreconditioner::Jacobi},
+      {"loramg", VelocityPreconditioner::LORAMG},
+      {"lor_amg", VelocityPreconditioner::LORAMG},
+      {"amg", VelocityPreconditioner::LORAMG},
+      {"boomer_amg", VelocityPreconditioner::LORAMG}
+   },
+   "Velocity-block preconditioner on the mass Schur path.");
+   r.ReadEnum(solver, "block_shape", p.cc.block_shape,
+   {
+      {"upper", BlockPCShape::UpperTri}, {"lower", BlockPCShape::LowerTri},
+      {"diag", BlockPCShape::Diag}
+   },
+   "Block preconditioner shape.");
+   r.Read(solver, "n_inner", p.cc.n_inner,
+          "Cahouet-Chabard: fixed inner CG iterations on the pressure Poisson block.");
+   r.Read(solver, "lp_vcycles", p.cc.lp_vcycles,
+          "Cahouet-Chabard: LOR-AMG V-cycles preconditioning the inner CG.");
+   r.ReadEnum(solver, "pc_quadrature", p.cc.pc_quadrature,
+   {
+      {"inherit", PcQuadrature::Inherit},
+      {"gll_collocated", PcQuadrature::GllCollocated}
+   },
+   "Quadrature of the preconditioner's operators.");
+   r.Read(solver, "amg_reuse", p.amg_reuse,
+          "Freeze the LOR-AMG hierarchy across dt changes.");
+   r.ReadEnum(solver, "rotation_pc", p.rotation_pc,
+   {
+      {"symmetric", RotationVelocityPC::Symmetric},
+      {"pbj_only", RotationVelocityPC::PbjOnly},
+      {"pbj_krylov", RotationVelocityPC::PbjKrylov}
+   },
+   "Rotational form: velocity preconditioner (pbj_krylov recommended).");
+   r.Read(solver, "rotation_lor", p.rotation_in_lor,
+          "Rotational form: put the rotation term into LOR-AMG (measured not to pay off).");
+   r.Read(solver, "rotation_log_interval", p.rotation_log_interval,
+          "Rotational form: log rotation-number statistics every N steps (0 = off).");
+   {
+      using RSP = RotationalSchurPreconditioner;
+      RSP::Options& o = p.rotation_schur;
+      const std::initializer_list<std::pair<const char*, RSP::Mode>> modes =
+      {{"cc", RSP::Mode::CahouetChabard}, {"tensor", RSP::Mode::Tensor}, {"auto", RSP::Mode::Auto}};
+      // Either a mode name, or a map with the mode and its switch options.
+      r.Declare(solver, "rotation_schur", "enum or map", "cc", "cc | tensor | auto",
+                "Rotational form: Schur preconditioner (a mode, or a map with the "
+                "keys below).");
+      const DeckSection rs = r.Section(solver, "rotation_schur",
+                                       "Rotation-aware Schur preconditioner options.");
+      if (solver.Has("rotation_schur") && solver.Get("rotation_schur").IsScalar())
+      {
+         const std::string m = solver.Get("rotation_schur").as<std::string>();
+         bool found = false;
+         for (const auto& n : modes)
+         {
+            if (m == n.first) { o.mode = n.second; found = true; }
+         }
+         MFEM_VERIFY(found, "parameters: unknown solver.rotation_schur '" << m
+                     << "' (cc|tensor|auto)");
+      }
+      r.ReadEnum(rs, "mode", o.mode, modes, "Schur mode.");
+      r.ReadEnum(rs, "criterion", o.criterion,
+      {
+         {"max_mu", RSP::Criterion::MaxMu},
+         {"volume_fraction", RSP::Criterion::VolumeFraction}
+      },
+      "auto: switch on the maximum rotation number or the volume fraction above it.");
+      r.Read(rs, "mu_on", o.mu_on,
+             "auto: switch to tensor above this rotation number.");
+      r.Read(rs, "mu_off", o.mu_off, "auto: switch back below this rotation number.");
+      r.Read(rs, "vol_on", o.vol_on, "auto (volume_fraction): switch-on fraction.");
+      r.Read(rs, "vol_off", o.vol_off,
+             "auto (volume_fraction): switch-off fraction.");
+      r.Read(rs, "inner_iterations", o.inner_iterations,
+             "tensor: fixed inner FGMRES iterations.");
+      MFEM_VERIFY(o.mu_off <= o.mu_on && o.vol_off <= o.vol_on &&
+                  o.inner_iterations >= 1, "parameters: bad "
+                  "solver.rotation_schur thresholds / inner_iterations");
    }
-
-   Maybe(root, "initial_velocity", p.initial_velocity);
+   MFEM_VERIFY(p.rotation_log_interval >= 0,
+               "parameters: solver.rotation_log_interval must be >= 0");
 
    // Boundary-condition groups: topology + type only (fields are bound in the
    // driver by group name). A selector token is an attribute integer if it
    // parses fully as one, otherwise a box face name.
-   const YAML::Node bcs = root["boundary_conditions"];
-   if (bcs)
+   r.Declare(root, "boundary_conditions", "list", "[]", "",
+             "Boundary groups, each {select: [faces or attributes], type: no_slip | "
+             "outflow | velocity_dirichlet, group: name}; faces are xmin, xmax, "
+             "ymin, ymax, zmin, zmax or all.");
+   if (root.Has("boundary_conditions"))
    {
+      const YAML::Node bcs = root.Get("boundary_conditions");
       MFEM_VERIFY(bcs.IsSequence(),
                   "parameters: 'boundary_conditions' must be a sequence");
       auto add_token = [](const std::string & tok, BcSpec & s)
@@ -327,6 +309,13 @@ Parameters Parameters::LoadYAML(const std::string& path)
       };
       for (const auto& e : bcs)
       {
+         for (const auto& kv : e)
+         {
+            const std::string k = kv.first.as<std::string>();
+            MFEM_VERIFY(k == "group" || k == "type" || k == "select",
+                        "parameters: unknown boundary_conditions key '" << k
+                        << "' (group, type, select)");
+         }
          BcSpec s;
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
          const std::string ty = e["type"].as<std::string>();
@@ -335,7 +324,8 @@ Parameters Parameters::LoadYAML(const std::string& path)
          else
          {
             MFEM_VERIFY(ty == "velocity_dirichlet",
-                        "parameters: unknown boundary type '" << ty << "'");
+                        "parameters: unknown boundary type '" << ty
+                        << "' (no_slip|outflow|velocity_dirichlet)");
             s.type = BcType::VelocityDirichlet;
          }
          const YAML::Node sel = e["select"];
@@ -349,51 +339,121 @@ Parameters Parameters::LoadYAML(const std::string& path)
       }
    }
 
-   const YAML::Node output = root["output"];
-   Maybe(output, "enabled", p.output.enabled);
-   Maybe(output, "path", p.output.path);
-   Maybe(output, "name", p.output.name);
-   Maybe(output, "interval", p.output.interval);
-   Maybe(output, "diagnostics", p.output.diagnostics);
+   const DeckSection output = r.Section(root, "output",
+                                        "ParaView output and diagnostics.");
+   r.Read(output, "enabled", p.output.enabled, "Write ParaView output.");
+   r.Read(output, "path", p.output.path, "Output directory prefix.");
+   r.Read(output, "name", p.output.name, "Collection name.");
+   r.Read(output, "interval", p.output.interval, "Write every N accepted steps.");
+   r.Read(output, "diagnostics", p.output.diagnostics,
+          "Also log kinetic energy, dissipation and ||div u|| to a CSV.");
 
-   const YAML::Node amr = root["amr"];
-   Maybe(amr, "enabled", p.amr.enabled);
-   Maybe(amr, "interval", p.amr.interval);
-   Maybe(amr, "initial_passes", p.amr.initial_passes);
-   Maybe(amr, "passes_per_event", p.amr.passes_per_event);
-   Maybe(amr, "anisotropic", p.amr.anisotropic);
-   Maybe(amr, "aniso_ratio", p.amr.aniso_ratio);
-   if (amr && amr["threshold_mode"])
-   {
-      const std::string tm = amr["threshold_mode"].as<std::string>();
-      if (tm == "relative") { p.amr.threshold_mode = AmrThreshold::Relative; }
-      else if (tm == "absolute") { p.amr.threshold_mode = AmrThreshold::Absolute; }
-      else { MFEM_ABORT("parameters: unknown amr.threshold_mode '" << tm << "'"); }
-   }
-   Maybe(amr, "theta", p.amr.theta);
-   Maybe(amr, "tolerance", p.amr.tolerance);
-   Maybe(amr, "min_size", p.amr.min_size);
-   Maybe(amr, "max_elements", p.amr.max_elements);
-   Maybe(amr, "nc_limit", p.amr.nc_limit);
-   Maybe(amr, "rebalance", p.amr.rebalance);
-   Maybe(amr, "project_history", p.amr.project_history);
-   Maybe(amr, "write_indicator", p.amr.write_indicator);
+   const DeckSection amr = r.Section(root, "amr",
+                                     "Adaptive mesh refinement (refinement only).");
+   r.Read(amr, "enabled", p.amr.enabled,
+          "Turn AMR on (the mesh becomes nonconforming).");
+   r.Read(amr, "interval", p.amr.interval, "Adapt every N accepted steps.");
+   r.Read(amr, "initial_passes", p.amr.initial_passes,
+          "Refinement passes on the initial condition.");
+   r.Read(amr, "passes_per_event", p.amr.passes_per_event,
+          "Refinement passes per adaptation event.");
+   r.Read(amr, "anisotropic", p.amr.anisotropic,
+          "Split only the directions with large gradients.");
+   r.Read(amr, "aniso_ratio", p.amr.aniso_ratio,
+          "Anisotropic: split direction d if its gradient >= ratio * the largest.");
+   r.ReadEnum(amr, "threshold_mode", p.amr.threshold_mode,
+   {{"relative", AmrThreshold::Relative}, {"absolute", AmrThreshold::Absolute}},
+   "Mark where the indicator >= theta * its max (relative) or >= tolerance (absolute).");
+   r.Read(amr, "theta", p.amr.theta, "Relative marking fraction.");
+   r.Read(amr, "tolerance", p.amr.tolerance,
+          "Absolute marking threshold (velocity units).");
+   r.Read(amr, "min_size", p.amr.min_size,
+          "Do not split below this element extent.");
+   r.Read(amr, "max_elements", p.amr.max_elements, "Element cap (0 = none).");
+   r.Read(amr, "nc_limit", p.amr.nc_limit,
+          "Maximum hanging-node level difference.");
+   r.Read(amr, "rebalance", p.amr.rebalance,
+          "Rebalance the partition after refining.");
+   r.Read(amr, "project_history", p.amr.project_history,
+          "Divergence-free projection of the time history after an event.");
+   r.Read(amr, "write_indicator", p.amr.write_indicator,
+          "Write the refinement indicator with the output.");
 
-   const YAML::Node forces = root["forces"];
-   Maybe(forces, "enabled", p.forces.enabled);
-   if (forces && forces["attributes"])
-   {
-      p.forces.attributes = forces["attributes"].as<std::vector<int>>();
-   }
-   Maybe(forces, "reference_velocity", p.forces.reference_velocity);
-   Maybe(forces, "reference_area", p.forces.reference_area);
-   Maybe(forces, "interval", p.forces.interval);
+   const DeckSection forces = r.Section(root, "forces",
+                                        "Lift and drag on a body (John's volume "
+                                        "integral of the momentum residual).");
+   r.Read(forces, "enabled", p.forces.enabled, "Compute forces.");
+   r.Read(forces, "attributes", p.forces.attributes,
+          "Boundary attributes of the body.");
+   r.Read(forces, "reference_velocity", p.forces.reference_velocity,
+          "U in C = 2F / (rho U^2 A).");
+   r.Read(forces, "reference_area", p.forces.reference_area,
+          "A in C = 2F / (rho U^2 A) (a length in 2D).");
+   r.Read(forces, "interval", p.forces.interval,
+          "Log to <path>/<name>_forces.csv every N steps (0 = no log).");
 
-   const YAML::Node chk = root["checkpoint"];
-   Maybe(chk, "enabled", p.checkpoint.enabled);
-   Maybe(chk, "path", p.checkpoint.path);
-   Maybe(chk, "interval", p.checkpoint.interval);
-   Maybe(root, "restart", p.restart_from);
+   const DeckSection chk = r.Section(root, "checkpoint", "Rolling checkpoints.");
+   r.Read(chk, "enabled", p.checkpoint.enabled, "Write rolling checkpoints.");
+   r.Read(chk, "path", p.checkpoint.path,
+          "Checkpoint directory (overwritten each time).");
+   r.Read(chk, "interval", p.checkpoint.interval, "Write every N accepted steps.");
+}
+
+// Abort with every unknown key a deck sets, each with its closest valid key.
+void VerifyNoUnknownKeys(const DeckReader& r, const std::string& where)
+{
+   const std::vector<std::string> unknown = r.UnknownKeys();
+   if (unknown.empty()) { return; }
+   std::string list;
+   for (const std::string& u : unknown) { list += "\n  " + u; }
+   MFEM_ABORT("parameters: unknown key(s) in " << where << ":" << list
+              << "\n(every valid key: docs/deck_reference.md, or "
+              "run_case --deck-reference)");
+}
+
+Parameters FromYAML(const YAML::Node& root, const std::string& where);
+} // namespace
+
+Parameters Parameters::LoadYAML(const std::string& path)
+{
+   return FromYAML(YAML::LoadFile(path), path);
+}
+
+Parameters Parameters::LoadYAMLString(const std::string& text)
+{
+   return FromYAML(YAML::Load(text), "<string>");
+}
+
+std::vector<std::string> Parameters::UnknownDeckKeys(const std::string& text)
+{
+   Parameters p;
+   DeckReader r(YAML::Load(text));
+   FillFromDeck(r, p);
+   return r.UnknownKeys();
+}
+
+std::vector<DeckKey> Parameters::DeckSchema()
+{
+   Parameters p;
+   DeckReader r(YAML::Node(YAML::NodeType::Map));
+   FillFromDeck(r, p);
+   return r.Keys();
+}
+
+std::string Parameters::DeckReferenceMarkdown()
+{
+   return DeckReader::Markdown(DeckSchema());
+}
+
+namespace
+{
+// Read, check for unknown keys, validate, normalize.
+Parameters FromYAML(const YAML::Node& root, const std::string& where)
+{
+   Parameters p;
+   DeckReader r(root);
+   FillFromDeck(r, p);
+   VerifyNoUnknownKeys(r, where);
 
    // Basic validation (module-level invariants are re-checked downstream).
    MFEM_VERIFY(p.nu > 0.0, "parameters: nu must be positive");
@@ -427,6 +487,7 @@ Parameters Parameters::LoadYAML(const std::string& path)
    p.Normalize();
    return p;
 }
+} // namespace
 
 void Parameters::Normalize()
 {

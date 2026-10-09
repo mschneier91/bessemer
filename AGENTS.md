@@ -10,7 +10,7 @@ drivers.
 
 | Task | Read |
 |---|---|
-| Run a simulation: a validated benchmark, a new deck, a Python case | [docs/using.md](docs/using.md) |
+| Run a simulation: a validated benchmark, a new deck, a Python case | [docs/using.md](docs/using.md); every deck key: [docs/deck_reference.md](docs/deck_reference.md) |
 | Install or build on a machine | [docs/install/desktop.md](docs/install/desktop.md), [docs/install/bridges2.md](docs/install/bridges2.md) (PSC GPU cluster) |
 | Change the solver (`src/`, `test/`, `apps/`) | [docs/developing.md](docs/developing.md): read it fully before planning |
 | **Where development left off**, open items, past decisions | [docs/status.md](docs/status.md) |

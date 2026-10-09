@@ -1,7 +1,8 @@
 // Generic YAML-driven driver: `run_case <deck.yaml>` -- no recompilation per
 // case. The deck supplies parameters, mesh, initial condition (by name), and
 // output settings; the case goes through the same Case surface as any
-// in-code driver.
+// in-code driver. `run_case --deck-reference` prints every deck key with its
+// default (docs/deck_reference.md is that output).
 
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
@@ -10,6 +11,7 @@
 #include "util/device.hpp"
 #include "mfem.hpp"
 
+#include <cstring>
 #include <iostream>
 #include <memory>
 
@@ -20,13 +22,20 @@ int main(int argc, char* argv[])
    Mpi::Init(argc, argv);
    Hypre::Init();
 
-   if (argc < 2)
+   if (argc < 2 || !std::strcmp(argv[1], "--help") || !std::strcmp(argv[1], "-h"))
    {
       if (Mpi::Root())
       {
-         std::cerr << "usage: run_case <deck.yaml>" << std::endl;
+         std::cerr << "usage: run_case <deck.yaml>\n"
+                   "       run_case --deck-reference   (every deck key, Markdown)"
+                   << std::endl;
       }
-      return 1;
+      return argc < 2 ? 1 : 0;
+   }
+   if (!std::strcmp(argv[1], "--deck-reference"))
+   {
+      if (Mpi::Root()) { std::cout << incns::Parameters::DeckReferenceMarkdown(); }
+      return 0;
    }
 
    const incns::Parameters params = incns::Parameters::LoadYAML(argv[1]);

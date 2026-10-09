@@ -31,7 +31,10 @@ mpirun -np 4 build/cpu/apps/run_case cases/tgv2d_stokes.yaml
 ```
 
 `run_case` handles box geometries (periodic and/or walled, optionally stretched). Omitted
-keys take library defaults. The sections and keys it reads:
+keys take library defaults, and a key the loader doesn't know is an error that names the
+closest valid key. **Every key, with its default and allowed values:
+[deck_reference.md](deck_reference.md)** (generated from the loader; `run_case
+--deck-reference` prints it). The sections at a glance:
 
 | Section | Keys |
 |---|---|
@@ -48,9 +51,8 @@ keys take library defaults. The sections and keys it reads:
 | `checkpoint` | `enabled`, `path`, `interval` |
 | `nondimensionalization` | dimensionless (default) or dimensional reference scales |
 
-The authoritative list, with validation, is `Parameters::LoadYAML` in
-`src/config/parameters.cpp`. Examples: `cases/tgv2d_stokes.yaml`,
-`cases/stokes_mms.yaml`, `cases/channel_noslip.yaml`.
+Examples: `cases/tgv2d_stokes.yaml`, `cases/stokes_mms.yaml`,
+`cases/channel_noslip.yaml`.
 
 ### Python (analytic fields, no compiling)
 

@@ -117,7 +117,7 @@ incns_add_mpi_test(nullspace_test nullspace_test.cpp)
 incns_add_mpi_test(mixed_poisson_test mixed_poisson_test.cpp)
 incns_add_mpi_test(lp_surrogate_test lp_surrogate_test.cpp)
 incns_add_mpi_test(cahouet_chabard_test cahouet_chabard_test.cpp)
-# AMR (amr_spec.md): the solver on nonconforming meshes, then the AMR modules.
+# AMR (docs/design/amr_spec.md): the solver on nonconforming meshes, then the AMR modules.
 incns_add_mpi_test(nc_stokes_test nc_stokes_test.cpp)
 incns_add_mpi_test(amr_indicator_test amr_indicator_test.cpp)
 incns_add_mpi_test(amr_marker_test amr_marker_test.cpp)
@@ -161,7 +161,8 @@ incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
 incns_add_mpi_test(deck_test deck_test.cpp
-  INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml")
+  INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml"
+  INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The actual driver executables, run on the committed deck (label fast).
 foreach(np IN LISTS INCNS_TEST_NPS)

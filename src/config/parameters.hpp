@@ -6,6 +6,7 @@
 #pragma once
 
 #include "amr/amr_parameters.hpp"
+#include "config/deck_key.hpp"
 #include "config/nondimensionalization.hpp"
 #include "mesh/periodic_box.hpp"
 #include "operators/convection.hpp" // ConvectiveForm
@@ -317,6 +318,28 @@ struct Parameters
     * @return The populated, normalized parameters (throws on malformed input).
     */
    static Parameters LoadYAML(const std::string& path);
+
+   /**
+    * @brief LoadYAML() on deck text instead of a file (tests, tools).
+    * @param text YAML deck.
+    * @return The loaded, validated, normalized parameters.
+    */
+   static Parameters LoadYAMLString(const std::string& text);
+
+   /**
+    * @brief The keys of a deck that the loader does not know, without
+    *        aborting (LoadYAML aborts on any).
+    * @param text YAML deck.
+    * @return One entry per unknown key: "path" or "path (did you mean x?)".
+    */
+   static std::vector<std::string> UnknownDeckKeys(const std::string& text);
+
+   /// @return Every key a deck may set, with its default, type, allowed
+   ///         values and description (the loader run on an empty deck).
+   static std::vector<DeckKey> DeckSchema();
+
+   /// @return The deck reference (docs/deck_reference.md) as Markdown.
+   static std::string DeckReferenceMarkdown();
 };
 
 } // namespace incns

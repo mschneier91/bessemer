@@ -55,6 +55,7 @@ mpirun -np 4 python examples/python/start_here.py
 | | |
 |---|---|
 | [docs/using.md](docs/using.md) | Running cases: decks, Python, the benchmark drivers, outputs |
+| [docs/deck_reference.md](docs/deck_reference.md) | Every deck key with its default (generated from the loader) |
 | [docs/install/](docs/install/) | Building the Spack environment (desktop, PSC Bridges-2) |
 | [docs/developing.md](docs/developing.md) | Rules, design and testing for changing the solver |
 | [docs/status.md](docs/status.md) | Where the project stands, open items, decision log |
