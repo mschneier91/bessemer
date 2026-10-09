@@ -79,8 +79,8 @@ untracked in the repo root (do not commit it; copyright).
   accurately) and `-amr-end`; a remesh-and-restart (multistep startup ramp) is the fallback.
 
 **`oifs` (branch; human 2026-10-08 "give a shot at implementing the OIFS stuff", 2026-10-09
-"you should be running everything with BDF3 with the OIFS stuff"; committed on the branch,
-NOT merged):** OIFS (§5.2), BDF3 by default under OIFS, collocated GLL mass always under
+"you should be running everything with BDF3 with the OIFS stuff"; fast-forward merged and
+pushed 2026-10-09, human: "merge and push"):** OIFS (§5.2), BDF3 by default under OIFS, collocated GLL mass always under
 OIFS. Square cylinder Re 200 (same AMR as the base IMEX run, np 4; vs IMEX CFL 0.5 with
 the SAME collocated mass: C_D 1.4381, C_L,rms 0.3957, St 0.1564, 9,103 steps):
 ```
