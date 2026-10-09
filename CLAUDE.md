@@ -260,7 +260,8 @@ cases/         tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
 python/        bindings.cpp (module incns), incns/__init__.py (@incns.field)
 examples/python/stokes_ex/   run.py, run_yaml.py, run_channel.py, run_amr.py (also py tests)
 docs/          precond_cc.md (CC conventions), imex_vs_semi_implicit.md (DFG 2D-3 study),
-               outflow_conditions.md (classical / directional do-nothing)
+               outflow_conditions.md (classical / directional do-nothing),
+               oifs_implementation.md (OIFS: how it works, the edge cases)
 test/          gtest MPI tests (np 1/2/4) + baselines.yaml
 ```
 
@@ -374,7 +375,8 @@ additive term inside `StokesTimeIntegrator`.
   starter builds its RHS inline, not via `AssembleBdfRhs`, so it needs its own
   `SubtractConvection` — without it step 1 silently solves Stokes.
 - **OIFS** (`time.convection: oifs`, `time.oifs_cfl` substep CFL 0.5; `time/oifs`; human
-  request 2026-10-08; Maday–Patera–Rønquist 1990, as in Nek5000): each BDF history level is
+  request 2026-10-08; Maday–Patera–Rønquist 1990, as in Nek5000; full write-up
+  `docs/oifs_implementation.md`): each BDF history level is
   advected to tⁿ⁺¹ by ∂ũ/∂s + (w(s)·∇)ũ = 0 (w = Lagrange interpolant/extrapolant of the
   velocity history, `LagrangeWeights`) and the step uses M·Σcⱼũⱼ — no explicit N on the RHS,
   so the BDF step runs at CFL 2–4. One combined field from the oldest level (Nek's way);
