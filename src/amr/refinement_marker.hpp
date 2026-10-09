@@ -2,7 +2,7 @@
  * @file refinement_marker.hpp
  * @brief Turns the directional indicator into refinements: which elements,
  *        which directions, within the size and element-count caps, and free
- *        of 3D parallel anisotropic conflicts (amr_spec.md, Section 3).
+ *        of 3D parallel anisotropic conflicts (docs/design/amr_spec.md, Section 3).
  */
 #pragma once
 

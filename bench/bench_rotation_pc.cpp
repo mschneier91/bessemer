@@ -1,5 +1,5 @@
 // bench_rotation_pc -- velocity-block preconditioners with the semi-implicit
-// rotation term (rotational_convection_pa_spec.md Table A2 setup).
+// rotation term (docs/design/rotational_convection_pa_spec.md Table A2 setup).
 //
 // A = sigma M + nu K + N(omega), 3D, p = 4, curved mesh M2 (3x3x3), Dirichlet
 // on the whole boundary, each term at the solver's Gauss-Legendre rule (mass

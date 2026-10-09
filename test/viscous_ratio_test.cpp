@@ -1,4 +1,4 @@
-// precond/viscous_ratio -- rotational_schur_velocity_mg_spec.md 8, V1 (the
+// precond/viscous_ratio -- docs/design/rotational_schur_velocity_mg_spec.md 8, V1 (the
 // diagnostic part; the p-multigrid parts of V1-V3 are not built):
 //  - on uniform n^dim boxes, VHatMax(sigma, nu) = nu / (sigma (1/(n p))^2) to
 //    1e-12 for p in {3, 4, 5}, 2D and 3D (the spec is 3D only);

@@ -2,7 +2,7 @@
  * @file block_stokes_pc.hpp
  * @brief Block Diag / LowerTri / UpperTri preconditioner shapes on the
  *        canonical symmetric system [A B^T; B 0] with internal p~ = -p_phys
- *        (SPEC_cahouet_chabard_mfem.md par.2.4/par.6.5; docs/precond_cc.md).
+ *        (docs/design/SPEC_cahouet_chabard_mfem.md par.2.4/par.6.5; docs/precond_cc.md).
  */
 #pragma once
 

@@ -1,4 +1,4 @@
-// precond/rotational_schur -- rotational_schur_velocity_mg_spec.md Part C,
+// precond/rotational_schur -- docs/design/rotational_schur_velocity_mg_spec.md Part C,
 // tests S1 and S2 (S3, the iteration study, runs through StokesSolver in
 // rotational_schur_solver_test.cpp). Every test runs in 2D and 3D (the spec
 // is 3D only; bessemer's tensor mode also covers 2D).

@@ -25,7 +25,7 @@ if [ -z "${INCNS_MACHINE:-}" ]; then
     # Add hostname patterns here as machines are brought up, e.g.:
     #   frontier* ) INCNS_MACHINE=frontier ;;
     # Bridges-2: br0xx login nodes + w0xx H100 nodes. psc_gpu is pinned to
-    # cuda_arch=90 (H100 only, see spack_install_directions.md) -- v0xx (V100)
+    # cuda_arch=90 (H100 only, see docs/install/bridges2.md) -- v0xx (V100)
     # and gl0xx (L40S) are deliberately NOT matched here, since a cuda_arch=90
     # binary is wrong-SM-arch on them.
     br0* | w0* ) INCNS_MACHINE=psc_gpu ;;

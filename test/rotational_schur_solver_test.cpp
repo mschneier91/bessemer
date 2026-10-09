@@ -1,4 +1,4 @@
-// rotational_schur_velocity_mg_spec.md Part C, test S3: outer iterations of
+// docs/design/rotational_schur_velocity_mg_spec.md Part C, test S3: outer iterations of
 // the full saddle-point solve with the rotation-aware Schur preconditioner,
 // run through the standard solve path (StokesSolver on the CC Schur path, its
 // real Cahouet-Chabard pieces and point-block-Jacobi velocity block).

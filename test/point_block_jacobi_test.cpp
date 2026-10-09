@@ -1,4 +1,4 @@
-// PointBlockJacobi -- rotational_convection_pa_spec.md Part B tests (par.7.6):
+// PointBlockJacobi -- docs/design/rotational_convection_pa_spec.md Part B tests (par.7.6):
 //  B1 PBJ applies the exact inverse of every nodal block of a legacy-assembled
 //     reference, with no / all-component / component-0 essential dofs,
 //     byNODES + byVDIM;

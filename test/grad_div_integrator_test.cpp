@@ -1,4 +1,4 @@
-// GradDivIntegrator validation (vecdivdiv_spec.md par.7):
+// GradDivIntegrator validation (docs/design/vecdivdiv_spec.md par.7):
 //  7.2 full-assembly element matrices equal ElasticityIntegrator(lambda, mu=0)
 //      on CURVED meshes, 2D+3D (locks the math before any PA work);
 //  7.1 PA operator action equals the fully assembled action, dim x order x

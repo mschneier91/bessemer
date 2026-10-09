@@ -1,4 +1,4 @@
-// Convective CFL ceiling (time/cfl, amr_spec.md D6).
+// Convective CFL ceiling (time/cfl, docs/design/amr_spec.md D6).
 //  C1 Nek5000's CFL definition: the 1D inverse GLL spacings match Nek's
 //     getdr by hand (Q3); for a constant velocity on an affine sheared mesh
 //     the rate equals max_K sum_d |(J_K^{-1} u)_d| / dxi_end exactly (the max

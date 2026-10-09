@@ -3,7 +3,7 @@
  * @brief Rotation-aware pressure Schur preconditioner for the semi-implicit
  *        rotational form: Cahouet-Chabard or Olshanskii's rotating-Darcy
  *        tensor, switched per time step on the rotation number
- *        (rotational_schur_velocity_mg_spec.md, Part C).
+ *        (docs/design/rotational_schur_velocity_mg_spec.md, Part C).
  *
  * The momentum block of the rotational form is
  * @f$ A = \sigma M + \nu K + N(\omega^*) @f$ with the lagged rotation term

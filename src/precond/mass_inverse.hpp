@@ -1,7 +1,7 @@
 /**
  * @file mass_inverse.hpp
  * @brief Fixed-linear-operator mass-inverse strategies for the Cahouet-Chabard
- *        preconditioner (SPEC_cahouet_chabard_mfem.md par.6.1; docs/precond_cc.md).
+ *        preconditioner (docs/design/SPEC_cahouet_chabard_mfem.md par.6.1; docs/precond_cc.md).
  */
 #pragma once
 

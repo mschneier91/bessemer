@@ -1,7 +1,7 @@
 /**
  * @file grad_div_integrator.hpp
  * @brief Sum-factorized grad-div integrator (Q div u, div v) for [H1]^d vector
- *        fields (vecdivdiv_spec.md; out-of-tree against installed MFEM).
+ *        fields (docs/design/vecdivdiv_spec.md; out-of-tree against installed MFEM).
  */
 #pragma once
 

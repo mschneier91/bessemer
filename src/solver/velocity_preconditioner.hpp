@@ -35,7 +35,7 @@ enum class VelocityPreconditioner
 
 /**
  * @brief Velocity-block preconditioner when the semi-implicit rotational term
- *        N is in the momentum block (rotational_convection_pa_spec.md par.7.5;
+ *        N is in the momentum block (docs/design/rotational_convection_pa_spec.md par.7.5;
  *        deck `solver.rotation_pc: symmetric|pbj_only|pbj_krylov`).
  *
  * N is skew with an exactly zero diagonal, so scalar Jacobi -- and LOR-AMG,

@@ -1,7 +1,7 @@
 /**
  * @file nullspace.hpp
  * @brief Constant-pressure nullspace projector for the Cahouet-Chabard
- *        preconditioner (SPEC_cahouet_chabard_mfem.md par.4; docs/precond_cc.md).
+ *        preconditioner (docs/design/SPEC_cahouet_chabard_mfem.md par.4; docs/precond_cc.md).
  *
  * Detection is NOT here: whether the constant pressure mode exists is decided
  * by BoundaryConditions::PressureNullspaceExists() (singular iff no

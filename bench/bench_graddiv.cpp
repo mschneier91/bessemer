@@ -1,4 +1,4 @@
-// Micro-benchmark (vecdivdiv_spec.md par.8): AddMult throughput of
+// Micro-benchmark (docs/design/vecdivdiv_spec.md par.8): AddMult throughput of
 //   (a) incns::GradDivIntegrator PA   (fused sum-factorized, this work)
 //   (b) mfem::ElasticityIntegrator(Q, mu=0) PA (the status quo it replaces)
 //   (c) mfem::VectorDiffusionIntegrator PA (structural upper bound)

@@ -1,7 +1,7 @@
 /**
  * @file history_projection.hpp
  * @brief Project transferred velocity history onto the refined mesh's
- *        discretely divergence-free subspace (amr_spec.md, Section 5.4).
+ *        discretely divergence-free subspace (docs/design/amr_spec.md, Section 5.4).
  */
 #pragma once
 

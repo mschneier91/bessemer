@@ -1,6 +1,6 @@
 # Cahouet–Chabard preconditioner — math conventions, usage, tuning
 
-Implements `SPEC_cahouet_chabard_mfem.md` (repo root): the consistent
+Implements [`design/SPEC_cahouet_chabard_mfem.md`](design/SPEC_cahouet_chabard_mfem.md): the consistent
 `B M_v⁻¹ Bᵀ` Cahouet–Chabard Schur preconditioner for the generalized Stokes
 problem, per Creff & Guermond [arXiv:2407.01783; CAMWA 191 (2025) 255–274],
 with the spec's deliberate deviations (no ε-shift, lumping optional not

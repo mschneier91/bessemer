@@ -23,7 +23,7 @@ enum class ConvectiveForm
    /// (u.grad)u, dealiased, AB/EXT-extrapolated on the right-hand side (IMEX);
    /// the implicit block is the symmetric Stokes one. The default.
    Convective,
-   /// Semi-implicit rotational form (rotational_convection_pa_spec.md):
+   /// Semi-implicit rotational form (docs/design/rotational_convection_pa_spec.md):
    /// (curl w*) x u with the vorticity lagged on the EXT-extrapolated w*, in
    /// the IMPLICIT velocity block (nonsymmetric, skew, energy neutral for any
    /// w*); the gradient part 1/2|u|^2 is absorbed into the pressure, which the

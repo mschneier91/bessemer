@@ -2,7 +2,7 @@
  * @file rotational_convection.hpp
  * @brief Lagged-vorticity (semi-implicit) rotational convection,
  *        @f$ \alpha ((\nabla\times w)\times u, v) @f$, partially assembled
- *        (rotational_convection_pa_spec.md, Part A).
+ *        (docs/design/rotational_convection_pa_spec.md, Part A).
  */
 #pragma once
 

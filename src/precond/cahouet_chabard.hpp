@@ -1,7 +1,7 @@
 /**
  * @file cahouet_chabard.hpp
  * @brief The Cahouet-Chabard Schur preconditioner (consistent BM_v^-1 B^T
- *        variant) and its configuration (SPEC_cahouet_chabard_mfem.md par.2.3,
+ *        variant) and its configuration (docs/design/SPEC_cahouet_chabard_mfem.md par.2.3,
  *        par.6, par.7; docs/precond_cc.md).
  */
 #pragma once
@@ -23,7 +23,7 @@ namespace incns
 enum class SchurBlockType
 {
    Mass,          ///< Sprint-1 default: S_hat^-1 = nu M_p^-1, block-diag PC.
-   CahouetChabard ///< CC per SPEC_cahouet_chabard_mfem.md (block-tri default);
+   CahouetChabard ///< CC per docs/design/SPEC_cahouet_chabard_mfem.md (block-tri default);
    ///<              cc.schur_model picks ConsistentBMB vs LaplacianLegacy.
 };
 

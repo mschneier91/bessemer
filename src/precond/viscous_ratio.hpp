@@ -1,7 +1,7 @@
 /**
  * @file viscous_ratio.hpp
  * @brief The viscous-ratio diagnostic @f$ \hat v_{\max} @f$ of the velocity
- *        block (rotational_schur_velocity_mg_spec.md 7.3): how far viscosity
+ *        block (docs/design/rotational_schur_velocity_mg_spec.md 7.3): how far viscosity
  *        dominates the time derivative at the finest grid scale -- what tells
  *        you when point-block Jacobi is running out of steam.
  */

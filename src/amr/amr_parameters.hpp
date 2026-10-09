@@ -1,7 +1,7 @@
 /**
  * @file amr_parameters.hpp
  * @brief Settings for refinement-only adaptive mesh refinement (deck section
- *        `amr:`); see amr_spec.md.
+ *        `amr:`); see docs/design/amr_spec.md.
  */
 #pragma once
 

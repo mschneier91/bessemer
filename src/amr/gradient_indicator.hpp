@@ -1,6 +1,6 @@
 /**
  * @file gradient_indicator.hpp
- * @brief Directional velocity-gradient refinement indicator (amr_spec.md,
+ * @brief Directional velocity-gradient refinement indicator (docs/design/amr_spec.md,
  *        Section 2), computed on the device.
  */
 #pragma once

@@ -661,7 +661,7 @@ TEST(NseMms, ConvectionOffMatchesStokes)
 }
 
 // ===========================================================================
-// ROTATIONAL FORM (rotational_convection_pa_spec.md, step 6): the lagged-
+// ROTATIONAL FORM (docs/design/rotational_convection_pa_spec.md, step 6): the lagged-
 // vorticity term (curl w*) x u in the IMPLICIT velocity block, w* the EXT
 // extrapolation of the history; the solve yields the Bernoulli head
 // P = p + 1/2|u|^2 and Pressure() reports static p.
@@ -816,7 +816,7 @@ TEST(NseMms, RotationalPreconditionersAgree)
       runs.push_back(NseMmsRun(2, 3, 3, nu, dt, t_final, *u_exact, *forcing,
                                cfg));
    }
-   // The rotation-aware Schur PC (rotational_schur_velocity_mg_spec.md Part
+   // The rotation-aware Schur PC (docs/design/rotational_schur_velocity_mg_spec.md Part
    // C) on the CC path with PBJ-GMRES: always the rotating-Darcy tensor, and
    // Auto with thresholds low enough that it switches to the tensor on the
    // first BDF step (max mu here is ~0.3).

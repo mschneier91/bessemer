@@ -1,7 +1,7 @@
 /**
  * @file mixed_poisson_op.hpp
  * @brief The consistent mixed Poisson operator B M_v^-1 B^T -- matrix-free
- *        composition (SPEC_cahouet_chabard_mfem.md par.2.3/par.3;
+ *        composition (docs/design/SPEC_cahouet_chabard_mfem.md par.2.3/par.3;
  *        docs/precond_cc.md).
  *
  * INVARIANT (spec par.8 item 16): this operator is NEVER assembled into a

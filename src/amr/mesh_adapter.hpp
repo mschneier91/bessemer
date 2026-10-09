@@ -1,7 +1,7 @@
 /**
  * @file mesh_adapter.hpp
  * @brief Applies refinements to the mesh and carries fields across (exact
- *        transfer), with optional rebalancing (amr_spec.md, Section 5.1).
+ *        transfer), with optional rebalancing (docs/design/amr_spec.md, Section 5.1).
  */
 #pragma once
 

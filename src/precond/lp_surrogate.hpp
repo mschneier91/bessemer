@@ -2,7 +2,7 @@
  * @file lp_surrogate.hpp
  * @brief Inner Poisson preconditioner for the Cahouet-Chabard Schur block:
  *        fixed LOR-AMG V-cycle(s) on the pressure Laplacian L_p
- *        (SPEC_cahouet_chabard_mfem.md par.6.2; docs/precond_cc.md).
+ *        (docs/design/SPEC_cahouet_chabard_mfem.md par.6.2; docs/precond_cc.md).
  *
  * L_p appears ONLY as the preconditioner of the inner CG on B M_v^-1 B^T --
  * never as the Schur surrogate itself (that mistake is exactly the
