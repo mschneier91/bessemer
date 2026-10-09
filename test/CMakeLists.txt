@@ -160,6 +160,8 @@ set_tests_properties(cc_sweep_slow_np4 PROPERTIES
 incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
+incns_add_mpi_test(run_monitor_test run_monitor_test.cpp)
+incns_add_mpi_test(deck_boundary_test deck_boundary_test.cpp)
 incns_add_mpi_test(deck_test deck_test.cpp
   INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml"
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -172,10 +174,28 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   endif()
   add_test(NAME run_case_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
-            ${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml)
+            ${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml
+            --summary run_case_np${np}_summary.json)
   set_tests_properties(run_case_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
-    PASS_REGULAR_EXPRESSION "run_case: done")
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # Deck boundary conditions end to end: the lid-driven cavity.
+  add_test(NAME run_case_cavity_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/cavity.yaml
+            --summary run_case_cavity_np${np}_summary.json)
+  set_tests_properties(run_case_cavity_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # A walled deck without boundary_conditions must be refused, not run with
+  # silent do-nothing walls.
+  add_test(NAME run_case_rejects_missing_bcs_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_CURRENT_SOURCE_DIR}/decks/no_bcs_walled_box.yaml
+            --summary run_case_rejects_np${np}_summary.json)
+  set_tests_properties(run_case_rejects_missing_bcs_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "declares no boundary_conditions")
   add_test(NAME taylor_green_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:taylor_green>)
   set_tests_properties(taylor_green_np${np} PROPERTIES

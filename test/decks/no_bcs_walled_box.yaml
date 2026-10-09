@@ -1,0 +1,11 @@
+# A walled box with no boundary_conditions: run_case must refuse it (the walls
+# would otherwise silently become do-nothing). Used by run_case_rejects_*.
+equation: navier_stokes
+physics:
+  Re: 10
+mesh:
+  dim: 2
+  elements: [2, 2]
+  periodic: [false, false]
+time:
+  t_final: 0.02

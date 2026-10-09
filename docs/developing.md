@@ -122,18 +122,23 @@ src/
   time/        multistep_coeffs, time_integrator (in-repo BDF; NOT mfem::ODESolver),
                adaptive_controller, integrator_state, cfl (nvcc)
   post/        pressure_mean, kinetic_head (nvcc), body_force (lift/drag), diagnostics,
-               output (ParaView), checkpoint
+               output (ParaView), checkpoint, force_statistics (period averages, peaks),
+               run_monitor (progress lines, history CSV, divergence; owned by Case)
   quadrature/  rule_book (OWNS all rules; order + 1D family per operator)
-  bc/          boundary_conditions (Dirichlet/no-slip/outflow per attribute; null-space detection)
-  config/      parameters (+ YAML), nondimensionalization, initial_conditions
-  util/        profiler (INCNS_PROFILE), device
+  bc/          boundary_conditions (Dirichlet/no-slip/outflow per attribute; null-space detection),
+               boundary_names (box faces / geometry names -> attributes), deck_boundary
+               (the deck's groups -> BoundaryConditions + coverage check; Case and Python)
+  config/      parameters (+ YAML), deck_reader (declares every key: the generated deck
+               reference, unknown-key errors), nondimensionalization, initial_conditions
+  util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
                square_cylinder (Joly et al. 2012, AMR + live dt tracking), unsteady_mms_3d,
                hello_mpi
 bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest);
                dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
-cases/         tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
+cases/         validated benchmark decks (square_cylinder_re200[_oifs], dfg_2d1, dfg_2d3),
+               cavity.yaml (smoke), tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
 python/        bindings.cpp (module incns), incns/__init__.py (@incns.field)
 examples/python/stokes_ex/   run.py, run_yaml.py, run_channel.py, run_amr.py (also py tests)
 docs/          using.md (running cases), developing.md (this guide), status.md (state and
@@ -144,6 +149,16 @@ docs/          using.md (running cases), developing.md (this guide), status.md (
 AGENTS.md      entry point for coding agents; CLAUDE.md imports it with this guide and status.md
 test/          gtest MPI tests (np 1/2/4) + baselines.yaml
 ```
+
+**Decks are the agent-facing interface** (human 2026-10-09: "agent first"): `run_case`
+reads every key through `config/deck_reader` (so `docs/deck_reference.md` is generated —
+`run_case --deck-reference` — and `deck_test` fails if it is stale; unknown keys abort with
+a suggestion), builds any `mesh.geometry`, applies the deck's boundary groups through
+`DeckBoundaryConditions` with full coverage required (a bounded mesh with no groups is
+refused), and always writes `<path>/<name>_summary.json` (`Case::WriteSummary`: status
+`running` → `ok` / `diverged`). A new deck key = a `DeckReader` declaration with a
+description, then regenerate the reference. `scripts/doctor.sh` is the setup check agents
+run first.
 
 **Public surface.** `incns::Parameters` (fields or `LoadYAML(path)`; `Normalize()` before
 building the mesh), `MakeCaseMesh(p)`, one `incns::Case(ParMesh&, const Parameters&)` that
@@ -676,7 +691,11 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   `point_block_jacobi_test` (self-contained), `rotational_schur_test` (S1/S2),
   `rotational_schur_solver_test` (S3 through StokesSolver + Case rotation log),
   `directional_do_nothing_test` (D1 value + outward normal, D2 backflow-energy identity 2D/3D,
-  D3 Braack & Mucha Table 5.1),
+  D3 Braack & Mucha Table 5.1, D4 the same under OIFS),
+  `run_monitor_test` (R1 force statistics on a synthetic shedding signal, R2 JSON, R3
+  time-based AMR events, R4 the summary is valid JSON), `deck_boundary_test` (B1 box
+  coverage, B2 cylinder geometries and names, B3 a deck velocity is imposed), the
+  `run_case_cavity` / `run_case_rejects_missing_bcs` driver tests,
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
   square-cylinder domain's area, boundary lengths, grading), `deck_test`,

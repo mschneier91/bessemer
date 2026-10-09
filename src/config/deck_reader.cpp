@@ -1,6 +1,7 @@
 #include "config/deck_reader.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <map>
 
@@ -89,6 +90,7 @@ void DeckReader::Record(const DeckSection& s, const char* key,
 
 std::string DeckReader::ToString(double v)
 {
+   if (!std::isfinite(v)) { return "unset"; }
    char buf[32];
    std::snprintf(buf, sizeof(buf), "%g", v);
    return buf;

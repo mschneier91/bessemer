@@ -7,6 +7,7 @@
 
 #include "mfem.hpp"
 
+#include <string>
 #include <vector>
 
 namespace incns
@@ -20,6 +21,9 @@ struct ForceParameters
    bool enabled = false;
    /// Boundary attributes forming the body S (no-slip walls, e.g. a cylinder).
    std::vector<int> attributes;
+   /// The body by boundary name (box faces or the geometry's names); Case
+   /// resolves them to attributes and adds them to `attributes`.
+   std::vector<std::string> boundaries;
    /// Reference velocity U of C = 2 F / (rho U^2 A) (nondimensional; the
    /// DFG cylinder benchmark uses the mean inflow velocity).
    double reference_velocity = 1.0;
@@ -30,6 +34,12 @@ struct ForceParameters
    /// `<output.path>/<output.name>_forces.csv`; 0 = no log (the force is
    /// still available through the API).
    int interval = 1;
+   /// Evaluate the coefficients every step and report their statistics in
+   /// the run summary: final values, extrema, and averages over the last
+   /// `average_periods` shedding periods (Case::WriteSummary).
+   bool statistics = false;
+   /// Shedding periods to average over (statistics).
+   int average_periods = 10;
 };
 
 /**

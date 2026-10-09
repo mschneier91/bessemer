@@ -7,6 +7,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
+#include <set>
 
 namespace incns
 {
@@ -29,8 +30,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(root, "device", p.device,
           "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
    r.Read(root, "initial_velocity", p.initial_velocity,
-          "Named initial condition: zero or taylor_green_2d (others come from "
-          "Python or C++).");
+          "Named initial condition: zero, uniform (see the initial section) or "
+          "taylor_green_2d; anything else comes from Python or C++.");
    r.Read(root, "restart", p.restart_from,
           "Checkpoint directory to restart from (same number of MPI ranks).");
 
@@ -116,6 +117,65 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    }
    r.ReadArray(mesh, "stretch_beta", p.mesh.stretch_beta, p.mesh.dim,
                "tanh clustering strength per direction.");
+   r.ReadEnum(mesh, "geometry", p.geometry,
+   {
+      {"box", MeshGeometry::Box}, {"square_cylinder", MeshGeometry::SquareCylinder},
+      {"cylinder_channel", MeshGeometry::CylinderChannel}
+   },
+   "Domain: the box above, a square cylinder in a large domain (Joly et al. "
+   "2012; boundaries inflow, outflow, sides, body), or the DFG channel with a "
+   "cylinder (boundaries inflow, outflow, walls, cylinder). The cylinder "
+   "geometries are 2D.");
+   {
+      SquareCylinderSpec& sq = p.square_cylinder;
+      const DeckSection s = r.Section(mesh, "square_cylinder",
+                                      "geometry square_cylinder: domain and base mesh.");
+      r.Read(s, "side", sq.side, "Square side D.");
+      r.Read(s, "upstream", sq.upstream, "Inlet distance from the square's centre.");
+      r.Read(s, "downstream", sq.downstream, "Outlet distance from the centre.");
+      r.Read(s, "half_height", sq.half_height,
+             "Side boundaries at y = +-half_height.");
+      r.Read(s, "n_face", sq.n_face, "Cells along each face of the square (even).");
+      r.Read(s, "corner_ratio", sq.corner_ratio,
+             "Cell growth from the corners to mid-face.");
+      r.Read(s, "far_ratio", sq.far_ratio,
+             "Cell growth upstream, sideways and far downstream.");
+      r.Read(s, "wake_ratio", sq.wake_ratio,
+             "Cell growth from the square into the near wake.");
+      r.Read(s, "wake_h", sq.wake_h, "Cell width in the near wake.");
+      r.Read(s, "wake_end", sq.wake_end,
+             "x where the near wake's uniform cells end.");
+   }
+   {
+      CylinderChannelSpec& cc = p.cylinder_channel;
+      const DeckSection s = r.Section(mesh, "cylinder_channel",
+                                      "geometry cylinder_channel: the DFG channel "
+                                      "(2.2 x 0.41, cylinder of radius 0.05 at "
+                                      "(0.2, 0.2)) and its base mesh.");
+      r.Read(s, "n_side", cc.n_side, "Cells along each side of the O-grid square.");
+      r.Read(s, "n_ring", cc.n_ring, "Radial cell layers around the cylinder.");
+      r.Read(s, "n_down", cc.n_down, "Cells downstream of the O-grid.");
+      r.Read(s, "level", p.cylinder_channel_level,
+             "Nested uniform refinement level (cell counts x 2^level).");
+   }
+
+   if (p.geometry != MeshGeometry::Box)
+   {
+      MFEM_VERIFY(p.mesh.dim == 2, "parameters: the cylinder geometries are 2D "
+                  "(mesh.dim 2)");
+   }
+
+   const DeckSection init = r.Section(root, "initial",
+                                      "initial_velocity: uniform -- a uniform flow "
+                                      "with an optional shedding trigger.");
+   r.ReadArray(init, "velocity", p.initial.velocity, p.mesh.dim,
+               "The uniform velocity.");
+   r.Read(init, "perturbation", p.initial.perturbation,
+          "Amplitude (relative to |velocity|) of a Gaussian bump exp(-|x - c|^2) "
+          "added to the second velocity component; breaks the symmetry so vortex "
+          "shedding starts early (0 = none).");
+   r.ReadArray(init, "perturbation_center", p.initial.perturbation_center,
+               p.mesh.dim, "The bump's centre c.");
 
    const DeckSection time = r.Section(root, "time", "Time integration.");
    r.Read(time, "dt", p.dt,
@@ -287,9 +347,15 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    // driver by group name). A selector token is an attribute integer if it
    // parses fully as one, otherwise a box face name.
    r.Declare(root, "boundary_conditions", "list", "[]", "",
-             "Boundary groups, each {select: [faces or attributes], type: no_slip | "
-             "outflow | velocity_dirichlet, group: name}; faces are xmin, xmax, "
-             "ymin, ymax, zmin, zmax or all.");
+             "Boundary groups, each {select: [names or attributes], type: no_slip | "
+             "outflow | velocity | velocity_dirichlet, ...}. Names: box faces xmin, "
+             "xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. "
+             "type velocity takes value: [u, v] (constant), or profile: parabolic "
+             "with u_max and height (u_x = 4 u_max y (height - y) / height^2), "
+             "optionally time_profile: ramp | sine with time_scale T (ramp: "
+             "sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet "
+             "takes its field from Python or C++ by the group name. Every real "
+             "boundary needs exactly one group when run by run_case.");
    if (root.Has("boundary_conditions"))
    {
       const YAML::Node bcs = root.Get("boundary_conditions");
@@ -309,24 +375,87 @@ void FillFromDeck(DeckReader& r, Parameters& p)
       };
       for (const auto& e : bcs)
       {
+         static const std::set<std::string> entry_keys =
+         {
+            "group", "type", "select", "value", "profile", "u_max", "height",
+            "time_profile", "time_scale"
+         };
          for (const auto& kv : e)
          {
             const std::string k = kv.first.as<std::string>();
-            MFEM_VERIFY(k == "group" || k == "type" || k == "select",
-                        "parameters: unknown boundary_conditions key '" << k
-                        << "' (group, type, select)");
+            MFEM_VERIFY(entry_keys.count(k), "parameters: unknown "
+                        "boundary_conditions key '" << k << "' (group, type, "
+                        "select, value, profile, u_max, height, time_profile, "
+                        "time_scale)");
          }
          BcSpec s;
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
+         MFEM_VERIFY(e["type"], "parameters: a boundary_conditions entry needs 'type'");
          const std::string ty = e["type"].as<std::string>();
          if (ty == "outflow") { s.type = BcType::Outflow; }
          else if (ty == "no_slip") { s.type = BcType::NoSlip; }
+         else if (ty == "velocity") { s.type = BcType::Velocity; }
          else
          {
             MFEM_VERIFY(ty == "velocity_dirichlet",
                         "parameters: unknown boundary type '" << ty
-                        << "' (no_slip|outflow|velocity_dirichlet)");
+                        << "' (no_slip|outflow|velocity|velocity_dirichlet)");
             s.type = BcType::VelocityDirichlet;
+         }
+         if (s.type == BcType::Velocity)
+         {
+            const std::string prof = e["profile"] ? e["profile"].as<std::string>()
+                                     : std::string("constant");
+            if (prof == "constant")
+            {
+               s.profile = BcProfile::Constant;
+               MFEM_VERIFY(e["value"] && e["value"].IsSequence() &&
+                           static_cast<int>(e["value"].size()) == p.mesh.dim,
+                           "parameters: a constant velocity boundary needs value: "
+                           "a list of " << p.mesh.dim << " components");
+               for (int d = 0; d < p.mesh.dim; ++d)
+               {
+                  s.value[d] = e["value"][d].as<double>();
+               }
+            }
+            else if (prof == "parabolic")
+            {
+               s.profile = BcProfile::Parabolic;
+               MFEM_VERIFY(e["u_max"] && e["height"], "parameters: profile "
+                           "parabolic needs u_max and height");
+               s.u_max = e["u_max"].as<double>();
+               s.height = e["height"].as<double>();
+            }
+            else
+            {
+               MFEM_ABORT("parameters: unknown boundary profile '" << prof
+                          << "' (constant|parabolic)");
+            }
+            if (e["time_profile"])
+            {
+               const std::string tp = e["time_profile"].as<std::string>();
+               if (tp == "constant") { s.time_profile = BcTimeProfile::Constant; }
+               else if (tp == "ramp") { s.time_profile = BcTimeProfile::Ramp; }
+               else if (tp == "sine") { s.time_profile = BcTimeProfile::Sine; }
+               else
+               {
+                  MFEM_ABORT("parameters: unknown boundary time_profile '" << tp
+                             << "' (constant|ramp|sine)");
+               }
+            }
+            if (e["time_scale"]) { s.time_scale = e["time_scale"].as<double>(); }
+            MFEM_VERIFY(s.time_scale > 0.0, "parameters: time_scale must be > 0");
+         }
+         else
+         {
+            for (const char* k :
+                 {"value", "profile", "u_max", "height",
+                  "time_profile", "time_scale"
+                 })
+            {
+               MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
+                           << "' needs type velocity");
+            }
          }
          const YAML::Node sel = e["select"];
          MFEM_VERIFY(sel, "parameters: a boundary_conditions entry needs 'select'");
@@ -347,6 +476,13 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(output, "interval", p.output.interval, "Write every N accepted steps.");
    r.Read(output, "diagnostics", p.output.diagnostics,
           "Also log kinetic energy, dissipation and ||div u|| to a CSV.");
+   r.Read(output, "progress", p.output.progress,
+          "Print a progress line every this many time units (0 = never): t, dt "
+          "and its range, CFL and where it peaks, forces, iterations, cells, wall "
+          "time, ETA.");
+   r.Read(output, "history", p.output.history,
+          "Write a per-step <path>/<name>_history.csv (t, dt, c_d, c_l, "
+          "iterations, cells, step wall time).");
 
    const DeckSection amr = r.Section(root, "amr",
                                      "Adaptive mesh refinement (refinement only).");
@@ -378,6 +514,16 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Divergence-free projection of the time history after an event.");
    r.Read(amr, "write_indicator", p.amr.write_indicator,
           "Write the refinement indicator with the output.");
+   r.Read(amr, "every_time", p.amr.every_time,
+          "Adapt every this many time units instead of every interval steps "
+          "(0 = step-based); use it with CFL-controlled steps.");
+   r.Read(amr, "start_time", p.amr.start_time,
+          "Time-based events only from this time on (spin up on the coarse mesh).");
+   r.Read(amr, "end_time", p.amr.end_time,
+          "Time-based events only up to this time (0 = no end).");
+   r.Read(amr, "first_event_passes", p.amr.first_event_passes,
+          "Refinement passes at the first time-based event (stops when a pass "
+          "changes nothing).");
 
    const DeckSection forces = r.Section(root, "forces",
                                         "Lift and drag on a body (John's volume "
@@ -385,18 +531,73 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(forces, "enabled", p.forces.enabled, "Compute forces.");
    r.Read(forces, "attributes", p.forces.attributes,
           "Boundary attributes of the body.");
+   r.Declare(forces, "boundaries", "string list", "[]", "",
+             "The body by boundary name (e.g. [body], [cylinder], [ymin]); "
+             "alternative to attributes.");
+   if (forces.Has("boundaries"))
+   {
+      p.forces.boundaries = forces.Get("boundaries").as<std::vector<std::string>>();
+   }
    r.Read(forces, "reference_velocity", p.forces.reference_velocity,
           "U in C = 2F / (rho U^2 A).");
    r.Read(forces, "reference_area", p.forces.reference_area,
           "A in C = 2F / (rho U^2 A) (a length in 2D).");
    r.Read(forces, "interval", p.forces.interval,
           "Log to <path>/<name>_forces.csv every N steps (0 = no log).");
+   r.Read(forces, "statistics", p.forces.statistics,
+          "Evaluate the coefficients every step; the run summary reports final "
+          "values, maxima and averages over shedding periods (mean C_D, mean and "
+          "rms C_L, Strouhal number = reference_area / (reference_velocity "
+          "period) in 2D).");
+   r.Read(forces, "average_periods", p.forces.average_periods,
+          "Shedding periods (the last ones) the averages cover.");
 
    const DeckSection chk = r.Section(root, "checkpoint", "Rolling checkpoints.");
    r.Read(chk, "enabled", p.checkpoint.enabled, "Write rolling checkpoints.");
    r.Read(chk, "path", p.checkpoint.path,
           "Checkpoint directory (overwritten each time).");
    r.Read(chk, "interval", p.checkpoint.interval, "Write every N accepted steps.");
+   r.Read(chk, "at_time", p.checkpoint.at_time,
+          "Also write one checkpoint once t >= at_time, to branch runs from "
+          "(0 = off; independent of enabled).");
+
+   const DeckSection probes = r.Section(root, "probes",
+                                        "Point values reported in the run summary.");
+   r.Declare(probes, "pressure_difference", "two points", "[]", "",
+             "[[x1, y1], [x2, y2]]: the summary reports p(x1) - p(x2) at the end "
+             "(e.g. the DFG benchmark's front-back pressure difference).");
+   if (probes.Has("pressure_difference"))
+   {
+      const YAML::Node pts = probes.Get("pressure_difference");
+      MFEM_VERIFY(pts.IsSequence() && pts.size() == 2, "parameters: "
+                  "probes.pressure_difference needs two points");
+      for (const auto& pt : pts)
+      {
+         MFEM_VERIFY(pt.IsSequence() && static_cast<int>(pt.size()) == p.mesh.dim,
+                     "parameters: a probe point needs " << p.mesh.dim
+                     << " coordinates");
+         std::array<double, 3> x = {0.0, 0.0, 0.0};
+         for (int d = 0; d < p.mesh.dim; ++d) { x[d] = pt[d].as<double>(); }
+         p.probes.pressure_difference.push_back(x);
+      }
+   }
+
+   const DeckSection ref = r.Section(root, "reference",
+                                     "Benchmark values the run summary compares "
+                                     "against (relative errors; absolute for times).");
+   ReferenceValues& rv = p.reference;
+   r.Read(ref, "cd", rv.cd, "Final drag coefficient.");
+   r.Read(ref, "cl", rv.cl, "Final lift coefficient.");
+   r.Read(ref, "cd_mean", rv.cd_mean, "Period-mean drag coefficient.");
+   r.Read(ref, "cl_mean", rv.cl_mean, "Period-mean lift coefficient.");
+   r.Read(ref, "cl_rms", rv.cl_rms, "Period-rms lift coefficient.");
+   r.Read(ref, "strouhal", rv.strouhal, "Strouhal number.");
+   r.Read(ref, "cd_max", rv.cd_max, "Maximum drag coefficient.");
+   r.Read(ref, "t_cd_max", rv.t_cd_max, "Time of the maximum drag.");
+   r.Read(ref, "cl_max", rv.cl_max, "Maximum lift coefficient.");
+   r.Read(ref, "t_cl_max", rv.t_cl_max, "Time of the maximum lift.");
+   r.Read(ref, "pressure_difference", rv.pressure_difference,
+          "The pressure-difference probe's value.");
 }
 
 // Abort with every unknown key a deck sets, each with its closest valid key.
@@ -479,11 +680,19 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();
-   MFEM_VERIFY(!p.forces.enabled || !p.forces.attributes.empty(),
-               "parameters: forces.enabled needs forces.attributes");
+   MFEM_VERIFY(!p.forces.enabled || !p.forces.attributes.empty() ||
+               !p.forces.boundaries.empty(),
+               "parameters: forces.enabled needs forces.attributes or "
+               "forces.boundaries");
    MFEM_VERIFY(p.forces.reference_velocity > 0.0 &&
                p.forces.reference_area > 0.0 && p.forces.interval >= 0,
                "parameters: bad forces reference scales or interval");
+   MFEM_VERIFY(!p.forces.statistics || p.forces.enabled,
+               "parameters: forces.statistics needs forces.enabled");
+   MFEM_VERIFY(p.forces.average_periods >= 1,
+               "parameters: forces.average_periods must be >= 1");
+   MFEM_VERIFY(p.output.progress >= 0.0 && p.checkpoint.at_time >= 0.0,
+               "parameters: output.progress and checkpoint.at_time must be >= 0");
    p.Normalize();
    return p;
 }
@@ -521,6 +730,28 @@ void Parameters::Normalize()
       dt_max *= U_over_L;
       nu = 1.0 / nondim.Re;
       controller.atol /= nondim.U_ref; // the LTE norm carries velocity units
+      MFEM_VERIFY(geometry == MeshGeometry::Box, "parameters: the cylinder "
+                  "geometries are nondimensional (mode dimensionless)");
+      // Times, lengths and velocities of the scheduling, boundary and probe
+      // settings.
+      amr.every_time *= U_over_L;
+      amr.start_time *= U_over_L;
+      amr.end_time *= U_over_L;
+      output.progress *= U_over_L;
+      checkpoint.at_time *= U_over_L;
+      for (BcSpec& s : boundary_conditions)
+      {
+         for (double& v : s.value) { v /= nondim.U_ref; }
+         s.u_max /= nondim.U_ref;
+         s.height /= nondim.L_ref;
+         s.time_scale *= U_over_L;
+      }
+      for (auto& x : probes.pressure_difference)
+      {
+         for (double& c : x) { c /= nondim.L_ref; }
+      }
+      reference.t_cd_max *= U_over_L;
+      reference.t_cl_max *= U_over_L;
    }
    nondim.normalized = true;
 }

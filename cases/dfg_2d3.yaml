@@ -1,0 +1,63 @@
+# DFG benchmark 2D-3 (Schaefer & Turek 1996; reference values John 2004):
+# unsteady flow past a cylinder in a channel, inflow U(t) = 1.5 sin(pi t / 8)
+# (peak; Re up to 100), t in [0, 8]. Same geometry as 2D-1.
+#
+# Fixed steps of 0.001: the explicit convection's stability edge on this mesh
+# is near dt 0.0015 (0.0015 diverges at t ~3.9 on the 2026-10-09 stack).
+# 4 MPI ranks, about 3 min. Measured 2026-10-09 on this 208-element base mesh:
+# C_D,max 2.94858 (0.08%) at t 3.93632, C_L,max 0.5141 (7.6%; refine the mesh
+# or use AMR for the lift), dp(8) -0.11078 (0.7%).
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d3.yaml
+#   -> dfg_2d3/dfg_2d3_summary.json (forces, probes, reference)
+
+equation: navier_stokes
+
+physics:
+  nu: 1.0e-3
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+
+time:
+  dt: 0.001
+  t_final: 8
+  step_control: fixed
+
+solver:
+  rtol: 1.0e-10
+
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 1.5, height: 0.41,
+     time_profile: sine, time_scale: 8.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [outflow], type: outflow}
+
+forces:
+  enabled: true
+  boundaries: [cylinder]
+  reference_velocity: 1.0      # the maximum mean inflow velocity
+  reference_area: 0.1
+  interval: 0
+  statistics: true             # every step: the maxima and their times
+
+probes:
+  pressure_difference: [[0.15, 0.2], [0.25, 0.2]]
+
+output:
+  path: dfg_2d3
+  name: dfg_2d3
+  progress: 0.5
+  history: true
+
+reference:                     # John 2004
+  cd_max: 2.950921575
+  t_cd_max: 3.93625
+  cl_max: 0.47795
+  t_cl_max: 5.693125
+  pressure_difference: -0.1116

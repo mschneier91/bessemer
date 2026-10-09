@@ -1,0 +1,84 @@
+# Flow past a square cylinder at Re = 200, zero incidence (Joly, Etienne &
+# Pelletier, J. Fluids Struct. 28 (2012) 232-243, Fig. 3 domain): inlet 60 D
+# upstream of the centre, outlet 120 D downstream, sides 60 D away; free
+# stream on the inlet and sides, do-nothing outflow, no-slip square; U = D = 1.
+#
+# IMEX convection at CFL 0.5, AMR in simulated time on a coarse base mesh, an
+# asymmetric bump to start the shedding, force statistics over the last 10
+# shedding periods. 4 MPI ranks, about 70 min on a desktop.
+# Expected (validated 2026-10-08): C_D 1.443, C_L,rms 0.403, St 0.157
+# (paper 1.44, 0.42, 0.151 -- all within 5%).
+# Faster, same accuracy within 1%: square_cylinder_re200_oifs.yaml.
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/square_cylinder_re200.yaml
+#   -> square_cylinder_re200/re200_summary.json (forces.periodic, reference)
+
+equation: navier_stokes
+
+physics:
+  Re: 200
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 2
+  geometry: square_cylinder
+  square_cylinder:          # a coarse base mesh (1,172 cells); AMR does the refinement
+    n_face: 2
+    corner_ratio: 1.0
+    far_ratio: 1.5
+    wake_ratio: 1.3
+    wake_h: 1.0
+    wake_end: 25.0
+
+initial_velocity: uniform
+initial:
+  velocity: [1, 0]
+  perturbation: 0.1         # Gaussian bump behind the square: shedding starts early
+  perturbation_center: [2, 0]
+
+time:
+  dt: 0.01                  # the first step; then dt = cfl_target / CFL rate
+  t_final: 160
+  step_control: cfl
+  cfl_target: 0.5
+
+solver:
+  rtol: 1.0e-8
+
+boundary_conditions:
+  - {select: [inflow, sides], type: velocity, value: [1, 0]}
+  - {select: [outflow], type: outflow}
+  - {select: [body], type: no_slip}
+
+amr:
+  enabled: true
+  every_time: 1.0           # an event every time unit ...
+  end_time: 90              # ... until t = 90; the statistics come after
+  threshold_mode: absolute
+  tolerance: 0.25
+  min_size: 0.2
+  max_elements: 3000
+  anisotropic: true
+
+forces:
+  enabled: true
+  boundaries: [body]
+  reference_velocity: 1.0
+  reference_area: 1.0       # D (a length in 2D)
+  interval: 0               # no CSV log; the history and summary carry them
+  statistics: true
+  average_periods: 10
+
+output:
+  path: square_cylinder_re200
+  name: re200
+  progress: 5               # a progress line every 5 time units
+  history: true
+
+reference:                  # Joly et al. 2012, Tables 1-2
+  cd_mean: 1.44
+  cl_rms: 0.42
+  strouhal: 0.151

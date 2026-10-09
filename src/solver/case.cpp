@@ -3,8 +3,12 @@
 #include "amr/gradient_indicator.hpp"
 #include "amr/history_projection.hpp"
 #include "amr/mesh_adapter.hpp"
+#include "bc/boundary_names.hpp"
+#include "util/json.hpp"
 #include "util/profiler.hpp"
 
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -41,6 +45,7 @@ void Case::SetBoundaryConditions(BoundaryConditions& bc)
 {
    MFEM_VERIFY(!integrator_, "case: BCs must be set before stepping");
    bc_ = &bc;
+   bc_explicit_ = true;
 }
 
 void Case::SetInitialVelocity(VectorCoefficient& u0)
@@ -138,6 +143,22 @@ void Case::EnsureSetup()
    if (integrator_) { return; }
    INCNS_PROFILE("case::setup");
 
+   // The deck's boundary groups, unless a driver supplied the conditions:
+   // every real boundary must then be in exactly one group (an uncovered
+   // wall would silently become do-nothing).
+   if (!bc_explicit_ && !params_.boundary_conditions.empty())
+   {
+      deck_bc_ = std::make_unique<DeckBoundaryConditions>(params_, mesh_);
+      deck_bc_->Apply(own_bc_, nullptr, /*require_coverage=*/true);
+   }
+   // The force body by boundary name.
+   for (const std::string& name : params_.forces.boundaries)
+   {
+      params_.forces.attributes.push_back(
+                                  NamedBoundaryAttribute(params_, mesh_, name));
+   }
+   params_.forces.boundaries.clear();
+
    // Restart of an adapted run: replay its refinement history on the initial
    // mesh -- same deterministic operations, same np, so the same mesh,
    // partition and dof numbering as when the checkpoint was written.
@@ -187,6 +208,11 @@ void Case::EnsureSetup()
    }
 
    SetupCfl();
+   ne_ = mesh_.GetGlobalNE();
+   monitor_ = std::make_unique<RunMonitor>(params_, mesh_.GetComm());
+   // A restart past checkpoint.at_time must not overwrite that checkpoint.
+   chk_at_written_ = params_.checkpoint.at_time > 0.0 &&
+                     integrator_->Time() >= params_.checkpoint.at_time;
    if (params_.amr.enabled && params_.amr.write_indicator)
    {
       UpdateAmrCellData();
@@ -220,6 +246,7 @@ void Case::Step()
    integrator_->Step();
    const double step_wall = MPI_Wtime() - wall0;
    ++cycle_;
+   RecordStep(t_prev, step_wall);
    // Forces and the rotation log use the step's own solver: log them before
    // an event rebuilds the integrator.
    MaybeLogForces();
@@ -233,12 +260,31 @@ void Case::Step()
       if (body_force_) { force_cache_ = BodyForceVector(); }
       Adapt();
    }
+   MaybeAdaptInTime(t_prev);
    if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
    MaybeLogDiagnostics(cycle_, integrator_->Time());
    if (params_.checkpoint.enabled &&
        cycle_ % params_.checkpoint.interval == 0)
    {
       WriteCheckpoint(params_.checkpoint.path);
+   }
+   if (params_.checkpoint.at_time > 0.0 && !chk_at_written_ &&
+       integrator_->Time() >= params_.checkpoint.at_time)
+   {
+      chk_at_written_ = true;
+      WriteCheckpoint(params_.checkpoint.path);
+      if (Mpi::Root())
+      {
+         mfem::out << "[incns] checkpoint written at t = " << integrator_->Time()
+                   << " to " << params_.checkpoint.path << std::endl;
+      }
+   }
+   if (monitor_->ProgressDue(integrator_->Time()))
+   {
+      Vector where;
+      const double cfl = (params_.equation == Equation::NavierStokes)
+                         ? ConvectiveCflNumber(&where) : 0.0;
+      monitor_->PrintProgress(cfl, where, ne_);
    }
 
    // Bad-reference-scale guard (dimensional mode): with a well-chosen U_ref
@@ -269,8 +315,15 @@ void Case::Run()
 {
    INCNS_PROFILE("case::run");
    EnsureSetup();
-   while (!integrator_->Done()) { Step(); }
+   while (!integrator_->Done() && !monitor_->Diverged()) { Step(); }
+   monitor_->FlushHistory();
+   if (monitor_->Diverged() && Mpi::Root())
+   {
+      mfem::out << "[incns] DIVERGED: " << monitor_->DivergenceReason() << std::endl;
+   }
 }
+
+bool Case::Diverged() const { return monitor_ && monitor_->Diverged(); }
 
 double Case::Time() const
 {
@@ -321,7 +374,8 @@ double Case::DivergenceNorm()
 bool Case::AdaptDue() const
 {
    const AmrParameters& a = params_.amr;
-   return a.enabled && a.interval > 0 && cycle_ > 0 && cycle_ % a.interval == 0
+   return a.enabled && a.every_time == 0.0 && a.interval > 0 && cycle_ > 0
+          && cycle_ % a.interval == 0
           && integrator_->StepCount() >= 2 && !integrator_->Done();
 }
 
@@ -473,6 +527,8 @@ AdaptStats Case::Adapt(bool force_rebuild)
    BuildOutput(/*restart=*/true);
 
    st.ne_after = mesh_.GetGlobalNE();
+   ne_ = st.ne_after;
+   if (st.ne_after != st.ne_before) { ++amr_events_; }
    st.seconds = MPI_Wtime() - t0;
    adapt_log_.push_back(st);
    if (Mpi::Root() && params_.print_level >= 0)
@@ -672,6 +728,224 @@ void Case::UpdateAmrCellData()
    {
       E[e] = eta(e);
       Lv[e] = mesh_.ncmesh ? mesh_.ncmesh->GetElementDepth(e) : 0.0;
+   }
+}
+
+
+void Case::RecordStep(double t_prev, double step_wall)
+{
+   StepRecord r;
+   r.t = integrator_->Time();
+   r.dt = r.t - t_prev;
+   r.iterations = integrator_->LastIterations();
+   r.substeps = integrator_->LastOifsSubsteps();
+   r.elements = ne_;
+   r.step_wall = step_wall;
+   if (body_force_ && params_.forces.statistics)
+   {
+      const Vector C = ForceCoefficients();
+      r.has_forces = true;
+      r.cd = C(0);
+      r.cl = (C.Size() > 1) ? C(1) : 0.0;
+   }
+   Vector u(spaces_.Velocity().GetTrueVSize());
+   integrator_->Velocity().GetTrueDofs(u);
+   r.velocity_norm = std::sqrt(InnerProduct(mesh_.GetComm(), u, u));
+   monitor_->Record(r);
+}
+
+void Case::MaybeAdaptInTime(double t_prev)
+{
+   const AmrParameters& a = params_.amr;
+   if (!a.enabled || a.every_time <= 0.0 || integrator_->Done() ||
+       integrator_->StepCount() < 2) { return; }
+   const double t = integrator_->Time();
+   // An event when the step crossed a multiple of every_time (one per step,
+   // however many multiples a long step crossed).
+   if (std::floor(t / a.every_time + 1e-9) <=
+       std::floor(t_prev / a.every_time + 1e-9)) { return; }
+   if (t < a.start_time - 1e-12 || (a.end_time > 0.0 && t > a.end_time)) { return; }
+   const int passes = amr_time_started_ ? a.passes_per_event :
+                      a.first_event_passes;
+   amr_time_started_ = true;
+   if (body_force_) { force_cache_ = BodyForceVector(); }
+   for (int k = 0; k < passes; ++k)
+   {
+      const AdaptStats st = Adapt();
+      if (st.ne_after == st.ne_before) { break; }
+   }
+}
+
+namespace
+{
+// A scalar field's value at a point (collective: every rank passes the same
+// point; the owning rank's value is reduced).
+double PointValue(ParMesh& mesh, ParGridFunction& f,
+                  const std::array<double, 3>& x)
+{
+   f.HostRead(); // evaluated on the host below
+   const int dim = mesh.Dimension();
+   DenseMatrix pts(dim, 1);
+   for (int d = 0; d < dim; ++d) { pts(d, 0) = x[d]; }
+   Array<int> elems;
+   Array<IntegrationPoint> ips;
+   mesh.FindPoints(pts, elems, ips, false);
+   double buf[2] = {0.0, 0.0};
+   if (elems[0] >= 0)
+   {
+      buf[0] = f.GetValue(elems[0], ips[0]);
+      buf[1] = 1.0;
+   }
+   MPI_Allreduce(MPI_IN_PLACE, buf, 2, MPI_DOUBLE, MPI_SUM, mesh.GetComm());
+   return buf[1] > 0.0 ? buf[0] / buf[1] : std::nan("");
+}
+
+const char* GeometryName(MeshGeometry g)
+{
+   switch (g)
+   {
+      case MeshGeometry::Box: return "box";
+      case MeshGeometry::SquareCylinder: return "square_cylinder";
+      case MeshGeometry::CylinderChannel: return "cylinder_channel";
+   }
+   return "?";
+}
+} // namespace
+
+void Case::WriteSummary(const std::string& path, const std::string& status)
+{
+   EnsureSetup();
+   Json j;
+   j["status"].Set(status);
+   if (monitor_->Diverged()) { j["divergence"].Set(monitor_->DivergenceReason()); }
+
+   Json& c = j["case"];
+   const bool nse = (params_.equation == Equation::NavierStokes);
+   c["equation"].Set(nse ? "navier_stokes" : "stokes");
+   c["geometry"].Set(GeometryName(params_.geometry));
+   c["dim"].Set(params_.mesh.dim);
+   c["nu"].Set(params_.nu); // the Reynolds number depends on the case's scales
+   c["order_u"].Set(params_.order_u);
+   c["order_p"].Set(params_.order_p);
+   if (nse)
+   {
+      c["convection"].Set(params_.convection_treatment ==
+                          ConvectionTreatment::Oifs ? "oifs" : "imex");
+   }
+   c["bdf_order"].Set(params_.BdfOrder());
+   c["step_control"].Set(params_.step_control == StepControl::Cfl ? "cfl" :
+                         params_.step_control == StepControl::Fixed ? "fixed" : "error");
+   if (params_.CflSteps()) { c["cfl_target"].Set(params_.cfl_target); }
+   int np = 1;
+   MPI_Comm_size(mesh_.GetComm(), &np);
+   c["mpi_ranks"].Set(np);
+   c["mfem"].Set(GetGitStr());
+
+   Json& t = j["time"];
+   t["t"].Set(Time());
+   t["t_final"].Set(params_.t_final);
+   t["steps"].Set(monitor_->Steps());
+   t["dt_min"].Set(monitor_->DtMin());
+   t["dt_max"].Set(monitor_->DtMax());
+   t["wall_seconds"].Set(monitor_->Wall());
+   t["solve_seconds"].Set(monitor_->StepWall());
+
+   Json& m = j["mesh"];
+   m["elements"].Set(ne_);
+   m["velocity_dofs"].Set(static_cast<long long>
+                          (spaces_.Velocity().GlobalTrueVSize()));
+   m["pressure_dofs"].Set(static_cast<long long>
+                          (spaces_.Pressure().GlobalTrueVSize()));
+   m["amr_events"].Set(amr_events_);
+
+   Json& d = j["diagnostics"];
+   d["kinetic_energy"].Set(KineticEnergy());
+   d["divergence_norm"].Set(DivergenceNorm());
+
+   // Computed values the reference section may compare against.
+   std::vector<std::pair<std::string, double>> got;
+   if (body_force_ && integrator_->StepCount() > 0)
+   {
+      Json& f = j["forces"];
+      const Vector C = ForceCoefficients();
+      f["cd"].Set(C(0));
+      f["cl"].Set(C.Size() > 1 ? C(1) : 0.0);
+      got.push_back({"cd", C(0)});
+      got.push_back({"cl", C.Size() > 1 ? C(1) : 0.0});
+      if (params_.forces.statistics)
+      {
+         const ForceStats fs = monitor_->Forces().Compute(
+                                  params_.forces.average_periods);
+         f["cd_max"].Set(fs.cd_max);
+         f["t_cd_max"].Set(fs.t_cd_max);
+         f["cl_max"].Set(fs.cl_max);
+         f["t_cl_max"].Set(fs.t_cl_max);
+         got.push_back({"cd_max", fs.cd_max});
+         got.push_back({"t_cd_max", fs.t_cd_max});
+         got.push_back({"cl_max", fs.cl_max});
+         got.push_back({"t_cl_max", fs.t_cl_max});
+         Json& per = f["periodic"];
+         per["found"].Set(fs.periodic);
+         if (fs.periodic)
+         {
+            // Strouhal number St = D / (U T): in 2D the reference "area" is a length.
+            const double st = params_.forces.reference_area /
+                              (params_.forces.reference_velocity * fs.period);
+            per["periods"].Set(fs.periods);
+            per["t_start"].Set(fs.t_start);
+            per["t_end"].Set(fs.t_end);
+            per["cd_mean"].Set(fs.cd_mean);
+            per["cl_mean"].Set(fs.cl_mean);
+            per["cl_rms"].Set(fs.cl_rms);
+            per["period"].Set(fs.period);
+            per["period_spread"].Set(fs.period_spread);
+            if (params_.mesh.dim == 2) { per["strouhal"].Set(st); }
+            got.push_back({"cd_mean", fs.cd_mean});
+            got.push_back({"cl_mean", fs.cl_mean});
+            got.push_back({"cl_rms", fs.cl_rms});
+            if (params_.mesh.dim == 2) { got.push_back({"strouhal", st}); }
+         }
+      }
+   }
+   if (params_.probes.pressure_difference.size() == 2)
+   {
+      const double dp = PointValue(mesh_, Pressure(),
+                                   params_.probes.pressure_difference[0]) -
+                        PointValue(mesh_, Pressure(), params_.probes.pressure_difference[1]);
+      j["probes"]["pressure_difference"].Set(dp);
+      got.push_back({"pressure_difference", dp});
+   }
+
+   const ReferenceValues& rv = params_.reference;
+   const std::vector<std::pair<std::string, double>> refs =
+   {
+      {"cd", rv.cd}, {"cl", rv.cl}, {"cd_mean", rv.cd_mean}, {"cl_mean", rv.cl_mean},
+      {"cl_rms", rv.cl_rms}, {"strouhal", rv.strouhal}, {"cd_max", rv.cd_max},
+      {"t_cd_max", rv.t_cd_max}, {"cl_max", rv.cl_max}, {"t_cl_max", rv.t_cl_max},
+      {"pressure_difference", rv.pressure_difference}
+   };
+   for (const auto& [key, ref] : refs)
+   {
+      if (!std::isfinite(ref)) { continue; }
+      Json& e = j["reference"][key];
+      e["reference"].Set(ref);
+      for (const auto& [k2, val] : got)
+      {
+         if (k2 != key) { continue; }
+         e["value"].Set(val);
+         const bool is_time = (key.rfind("t_", 0) == 0);
+         if (is_time) { e["abs_error"].Set(std::abs(val - ref)); }
+         else { e["rel_error"].Set(std::abs(val - ref) / std::abs(ref)); }
+      }
+   }
+
+   if (Mpi::Root())
+   {
+      const std::filesystem::path out(path);
+      if (out.has_parent_path()) { std::filesystem::create_directories(out.parent_path()); }
+      std::ofstream f(path);
+      MFEM_VERIFY(f.good(), "case: cannot write the summary " << path);
+      f << j.Dump();
    }
 }
 

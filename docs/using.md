@@ -5,15 +5,22 @@ validated benchmarks, and read the results. No solver code changes are ever need
 a case; if one seems necessary, that is a missing library feature (see
 [developing.md](developing.md)).
 
-## 1. Build once
+## 1. Check the setup, build once
 
-The toolchain comes entirely from Spack (see [install/](install/)). With the machine's
-environment installed:
+The toolchain comes entirely from Spack (see [install/](install/)). Start with the doctor:
+it checks the environment step by step, builds if needed, runs a 2-second smoke case, and
+says how to fix whatever fails.
+
+```sh
+scripts/doctor.sh               # add --build to force a rebuild
+```
+
+Then, as needed:
 
 ```sh
 scripts/build.sh cpu            # the solver, tests and drivers  -> build/cpu/
 scripts/build.sh cpu-python     # also the Python module         -> build/cpu-python/
-scripts/test.sh cpu -L fast     # optional: the fast test tier (~3.5 min, 159 tests)
+scripts/test.sh cpu -L fast     # optional: the fast test tier (~3.5 min, 171 tests)
 ```
 
 The scripts activate the environment themselves. To run `mpirun` by hand, activate it in
@@ -30,7 +37,13 @@ All three go through the same `incns::Case`, so they behave identically.
 mpirun -np 4 build/cpu/apps/run_case cases/tgv2d_stokes.yaml
 ```
 
-`run_case` handles box geometries (periodic and/or walled, optionally stretched). Omitted
+`run_case` builds the box (periodic and/or walled, optionally stretched), the square
+cylinder in a large domain, or the DFG cylinder channel (`mesh.geometry`). Boundary groups
+select box faces (`xmin` ... `zmax`) or the geometry's named boundaries (`inflow`,
+`outflow`, `sides` / `walls`, `body` / `cylinder`); a constant or parabolic velocity
+(optionally ramped or sine-modulated in time) is given right in the deck. Every real
+boundary must be in exactly one group: a deck that leaves one out is refused with the
+boundary named, rather than run with a silent do-nothing wall. Omitted
 keys take library defaults, and a key the loader doesn't know is an error that names the
 closest valid key. **Every key, with its default and allowed values:
 [deck_reference.md](deck_reference.md)** (generated from the loader; `run_case
@@ -75,18 +88,22 @@ options with `--help`.
 
 ## 3. Validated cases you can reproduce
 
-Wall times are for 4 MPI ranks on an 8-core desktop.
+Each is a deck in `cases/`: run it with `mpirun -np 4 build/cpu/apps/run_case
+cases/<deck>.yaml`. The summary's `reference` section reports the errors against the
+literature values. Wall times are for 4 MPI ranks on an 8-core desktop.
 
-| Case | Command | Time | Expected |
+| Deck | Case | Time | Expected |
 |---|---|---|---|
-| Square cylinder, Re 200 (Joly et al. 2012), IMEX | `mpirun -np 4 build/cpu/apps/square_cylinder -re 200 -tf 160 -at 1 -amr-end 90 -tol 0.25 -minh 0.2 -maxe 3000 -pi 5 -out sq200` | ~70 min | C_D 1.44, C_L,rms 0.40, St 0.157 (paper: 1.44, 0.42, 0.151) |
-| Same, OIFS at CFL 2 | the same plus `-oifs -cflt 2` | ~15–20 min | within 1% of IMEX with the same mass |
-| DFG 2D-1 (steady, Re 20) | `scripts/test.sh cpu -R dfg_cylinder_slow_np4` (a slow-tier test) | ~9 min | relative errors C_D 1.1e-4, C_L 2.8e-3, Δp 4.1e-3 vs Schäfer–Turek |
-| DFG 2D-3 (unsteady) | `mpirun -np 4 build/cpu/apps/dfg_cylinder -c 3 -dt 0.0015` (fixed steps: the default `-dt 0.01` is beyond the stability limit) | ~2–3 min | C_D,max within 0.2%, C_L,max within ~7% on the base mesh, vs John 2004 |
+| `square_cylinder_re200_oifs.yaml` | square cylinder, Re 200 (Joly et al. 2012), OIFS at CFL 2 | ~13 min | C_D 1.43, C_L,rms 0.39, St 0.157 (paper 1.44, 0.42, 0.151) |
+| `square_cylinder_re200.yaml` | the same with IMEX at CFL 0.5 | ~70 min | C_D 1.44, C_L,rms 0.40, St 0.157 |
+| `dfg_2d1.yaml` | DFG 2D-1 (steady, Re 20; Schäfer–Turek) | ~1–2 min | relative errors C_D 1e-4, C_L 3e-3, Δp 4e-3 |
+| `dfg_2d3.yaml` | DFG 2D-3 (unsteady; John 2004), fixed dt 0.001 | ~3 min | C_D,max within 0.1%, C_L,max within ~8% (base mesh), Δp(8) within 1% |
+| `cavity.yaml` | lid-driven cavity, Re 100 (a fast smoke case) | seconds | `status: ok` |
 
-Both drivers end with one machine-readable `RESULT key=value ...` line. `square_cylinder`
-also prints progress every `-pi` time units (time, dt and its range, CFL, C_D, C_L, cells,
-ETA) and writes `<out>/history.csv` per step.
+The C++ drivers `apps/square_cylinder` and `apps/dfg_cylinder` run the same benchmarks
+with command-line flags and extra study options (`--help`); they end with a `RESULT
+key=value ...` line. (Note: `dfg_cylinder -c 3` defaults to `-dt 0.01`, beyond the
+stability limit; pass `-dt 0.001`.)
 
 ## 4. Choosing the time stepping
 
@@ -101,6 +118,17 @@ ETA) and writes `<out>/history.csv` per step.
 
 ## 5. Outputs
 
+- **Run summary (always):** `run_case` writes `<output.path>/<output.name>_summary.json`
+  (or `--summary <file>`): `status` (`running` while it runs, then `ok` or `diverged`,
+  exit code 2), the case settings, time-step statistics, mesh size, diagnostics, forces,
+  probes, and `reference` errors. Read this rather than the log. From Python:
+  `case.write_summary(path, status)`.
+- **Progress lines:** `output.progress: <time interval>` prints t, dt and its range, the
+  CFL number and where it peaks, forces, iterations, cells, wall time and an ETA.
+- **History:** `output.history: true` writes `<path>/<name>_history.csv`, one row per step.
+- **Force statistics:** `forces.statistics: true` evaluates C_D and C_L every step; the
+  summary reports final values, maxima (with times), and means, rms and the Strouhal
+  number over the last `forces.average_periods` shedding periods.
 - **ParaView:** `output.enabled: true` writes `<path>/<name>/` with high-order output; open
   the `.pvd` file.
 - **Diagnostics CSV:** `output.diagnostics: true` writes kinetic energy, dissipation and
@@ -119,6 +147,13 @@ ETA) and writes `<out>/history.csv` per step.
 
 ## 7. When something goes wrong
 
+- **Run `scripts/doctor.sh` first.** It finds most setup problems.
+- **`parameters: unknown key(s) ... (did you mean ...?)`:** a typo in the deck; every valid
+  key is in [deck_reference.md](deck_reference.md).
+- **`the deck declares no boundary_conditions` / `has no boundary condition`:** every real
+  boundary needs exactly one group; the message names the boundary.
+- **`status: diverged` in the summary:** the forces or the velocity blew up; the
+  `divergence` field says when. Lower `time.cfl_target` (IMEX) or use OIFS.
 - **`env.sh: ... System-toolchain leak -- aborting`:** the Spack environment isn't
   installed, or it was just edited and spack re-resolved it. See
   [install/desktop.md](install/desktop.md).

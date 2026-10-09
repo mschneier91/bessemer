@@ -43,9 +43,13 @@ drivers.
 ## Commands
 
 ```sh
+scripts/doctor.sh                        # FIRST: check the setup, build if needed, smoke-run
 scripts/build.sh cpu                     # build (build/cpu/)
-scripts/test.sh cpu -L fast              # fast tier: 159 tests, ~3.5 min
+scripts/test.sh cpu -L fast              # fast tier: 171 tests, ~3.5 min
 . scripts/env.sh                         # activate the toolchain in this shell
-mpirun -np 4 build/cpu/apps/run_case cases/tgv2d_stokes.yaml      # run a deck
-mpirun -np 4 build/cpu/apps/square_cylinder --help                # a benchmark driver
+mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d3.yaml   # a validated benchmark deck
+build/cpu/apps/run_case --deck-reference                  # every deck key
 ```
+
+Every `run_case` run writes `<output.path>/<output.name>_summary.json`: read its `status`
+and `reference` errors instead of parsing logs.

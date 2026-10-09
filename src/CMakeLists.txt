@@ -14,9 +14,12 @@ add_library(incns STATIC
   quadrature/rule_book.cpp
   util/profiler.cpp
   util/device.cpp
+  util/json.cpp
   post/pressure_mean.cpp
   post/kinetic_head.cpp
   bc/boundary_conditions.cpp
+  bc/boundary_names.cpp
+  bc/deck_boundary.cpp
   operators/stokes_operator.cpp
   operators/convection.cpp
   operators/directional_do_nothing.cpp
@@ -38,6 +41,8 @@ add_library(incns STATIC
   post/checkpoint.cpp
   post/body_force.cpp
   post/diagnostics.cpp
+  post/force_statistics.cpp
+  post/run_monitor.cpp
   precond/cahouet_chabard.cpp
   precond/point_block_jacobi.cpp
   precond/rotational_schur.cpp

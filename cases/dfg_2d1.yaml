@@ -1,0 +1,62 @@
+# DFG benchmark 2D-1 (Schaefer & Turek 1996): steady flow past a cylinder in a
+# channel, Re = 20. Channel 2.2 x 0.41, cylinder of diameter 0.1 at
+# (0.2, 0.2); parabolic inflow with peak 0.3 (mean 0.2), ramped up from rest
+# over t in [0, 1]; no-slip walls and cylinder; do-nothing outflow. Marched to
+# steady state with error-controlled steps.
+#
+# 4 MPI ranks, about 1-2 min. Expected (the slow-tier test pins these
+# ceilings): relative errors C_D 1.1e-4, C_L 2.8e-3, pressure difference
+# 4.1e-3 on this 208-element base mesh.
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d1.yaml
+#   -> dfg_2d1/dfg_2d1_summary.json (forces, probes, reference)
+
+equation: navier_stokes
+
+physics:
+  nu: 1.0e-3
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 2
+  geometry: cylinder_channel   # the default 208-element base mesh
+
+time:
+  dt: 0.01
+  t_final: 8
+  step_control: error
+  atol: 1.0e-6
+  rtol: 1.0e-5
+  cfl_max: 0.24
+
+solver:
+  rtol: 1.0e-10
+
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 0.3, height: 0.41,
+     time_profile: ramp, time_scale: 1.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [outflow], type: outflow}
+
+forces:
+  enabled: true
+  boundaries: [cylinder]
+  reference_velocity: 0.2      # the mean inflow velocity, 2/3 of the peak
+  reference_area: 0.1          # the diameter
+  interval: 0
+
+probes:
+  pressure_difference: [[0.15, 0.2], [0.25, 0.2]]   # front and back of the cylinder
+
+output:
+  path: dfg_2d1
+  name: dfg_2d1
+  progress: 1
+
+reference:                     # Schaefer & Turek, refined by later studies
+  cd: 5.57953523384
+  cl: 0.010618948146
+  pressure_difference: 0.11752016697

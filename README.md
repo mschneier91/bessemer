@@ -28,7 +28,7 @@ unsteady Stokes), built on [MFEM](https://mfem.org).
 | Directional do-nothing, Braack & Mucha 2014 (Table 5.1) | both conditions within 0.1% |
 | Manufactured solutions, Taylor–Green vortex | design orders in space and time; Stokes MMS exact to solver tolerance |
 
-Each of these is pinned by a test or a driver; see [docs/using.md](docs/using.md) §3.
+Each is a deck in `cases/` (or a test); see [docs/using.md](docs/using.md) §3.
 
 ## Quickstart
 
@@ -36,10 +36,10 @@ The whole toolchain, compiler included, comes from Spack (`environments/<machine
 setup in [docs/install/](docs/install/)). Then:
 
 ```sh
-scripts/build.sh cpu                     # build
-scripts/test.sh cpu -L fast              # 159 tests at 1, 2 and 4 MPI ranks, ~3.5 min
+scripts/doctor.sh                        # check the setup, build, smoke-run (seconds)
+scripts/test.sh cpu -L fast              # the fast test tier at 1, 2 and 4 MPI ranks
 . scripts/env.sh
-mpirun -np 4 build/cpu/apps/run_case cases/tgv2d_stokes.yaml
+mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d3.yaml   # -> dfg_2d3/dfg_2d3_summary.json
 ```
 
 Python (no compiling once the module is built):

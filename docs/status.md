@@ -9,33 +9,47 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**Just landed:**
-- OIFS convection (BDF3, collocated mass, directional outflow), merged to `main`.
-  CFL 2 matches IMEX to 1% on the Re 200 square cylinder in 4.2× fewer steps
-  ([oifs_implementation.md](oifs_implementation.md)).
-- Desktop Spack environment refreshed: MFEM 4.10.1-dev with MUMPS, hypre 3.2, libCEED 1.0.
-  MFEM is pinned to `1c19aba` because of an upstream regression (PR #5297, reported
-  2026-10-09).
+**Just landed (branch `agent-first`, merged to `main` and pushed 2026-10-09, human:
+"commit merge and push"):**
+- Environment refresh: MFEM 4.10.1-dev with MUMPS, hypre 3.2, libCEED 1.0. MFEM pinned
+  to `1c19aba` because of an upstream regression (PR #5297, reported 2026-10-09).
+- Agent-first front door: `AGENTS.md`, short README, `docs/using.md`,
+  `docs/install/desktop.md`, CLAUDE.md split into `developing.md` + this file.
+- Generated deck reference (`docs/deck_reference.md`); unknown deck keys are errors.
+- `scripts/doctor.sh`: setup check + smoke run (seconds).
+- Benchmarks as decks: `mesh.geometry` (square cylinder, DFG channel), deck velocity
+  BCs (constant / parabolic, ramp / sine), boundary coverage check, `uniform` initial
+  flow, time-based AMR, force statistics, progress / history, pressure probe,
+  reference values, and `summary.json` from every `run_case` run. Decks:
+  `cases/square_cylinder_re200[_oifs].yaml`, `dfg_2d1.yaml`, `dfg_2d3.yaml`,
+  `cavity.yaml`. The OIFS deck reproduced the validated result (C_D 1.4275, C_L,rms
+  0.3940, St 0.1568).
 
-**In flight:**
-- Branch `agent-first`: the environment refresh, plus this docs restructure (AGENTS.md,
-  README, using.md, install/desktop.md, the CLAUDE.md split). Awaiting the human's review
-  and merge.
-- Bridges-2: its `spack.yaml` carries the MUMPS + pin edit; the lock has to be re-resolved
-  and rebuilt on the cluster ([install/bridges2.md](install/bridges2.md)).
+**Validated:** `dfg_2d1.yaml` (relative errors C_D 1.05e-4, C_L 2.79e-3, dp 4.06e-3 = the
+slow-tier values, 70 s), `dfg_2d3.yaml` (dt 0.001; C_D,max 0.08%, 172 s),
+`square_cylinder_re200_oifs.yaml` (C_D 1.4265, C_L,rms 0.3923, St 0.1565 in 2,191 steps,
+13 min: the driver's run to every digit). In flight at the merge: the full IMEX
+square-cylinder deck run and a debug-device sweep. Bridges-2: its lock must be
+re-resolved on the cluster (MUMPS + pin edit).
 
 **Next, in order:**
-1. Agent-first follow-ups: `scripts/doctor.sh` (setup check plus a smoke run); the square
-   cylinder and DFG as validated decks (needs the drivers' AMR scheduling and period
-   averaging in the library); `summary.json` per run; a deck reference generated from
-   `Parameters`; a cold-start test with a fresh agent.
+1. A cold-start test: a fresh agent with no context, given real tasks (install check,
+   reproduce a benchmark from its deck, set up a new case); fix where it stumbles.
 2. HPC preparation for Re 10k / 100k (2D): decide whether OIFS at CFL 2 becomes the
-   default; GPU validation (developing.md §7.5) or a CPU strong-scaling check; time-based
-   AMR scheduling for decks; statistics with error bars.
+   default; GPU validation (developing.md §7.5) or a CPU strong-scaling check;
+   statistics with error bars.
 3. When MFEM fixes PR #5297's regression: drop the pin in both `spack.yaml` files.
 
-**Open decisions for the human:** OIFS CFL 2 as the default for production runs; the
-order of the two tracks above.
+**Open decisions for the human:** OIFS CFL 2 as the default for production runs.
+
+**Open finding (2026-10-09):** DFG 2D-3 on the refreshed stack differs from the 10-07
+study: C_D,max 2.94858 at dt 0.001 (study 2.94451, a 0.14% spatial shift) and dt 0.0015
+now diverges at t = 3.91 (the study found it stable; threshold ~0.0017). Bitwise the same
+with the pre-OIFS code (`530f93d`) on the new stack, so not this branch's code; the
+square cylinder is bitwise unchanged across the refresh (driver OIFS CFL 2: 1.4265 /
+0.3923 / 0.1565, 2,191 steps, both stacks). Suspects: MFEM 17d1afc → 1c19aba (curved
+DFG mesh / quadrature?) or a code change between the 10-07 study and 10-08. The deck uses
+dt 0.001.
 
 ## Log: state and decisions (last full update 2026-10-08)
 

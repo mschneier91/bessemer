@@ -68,7 +68,6 @@ pin once it's fixed. Any active pin is commented in `spack.yaml`.
 ## Verifying
 
 ```sh
-. scripts/env.sh                                  # prints machine, gcc and the MFEM path
-grep MFEM_USE_MUMPS "$MFEM_DIR/share/mfem/config.mk"
-scripts/test.sh cpu -L fast                       # 159 tests, ~3.5 min
+scripts/doctor.sh             # environment, toolchain, MFEM (+MUMPS), build, smoke run
+scripts/test.sh cpu -L fast   # the fast tier, ~3.5 min
 ```

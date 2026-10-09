@@ -7,7 +7,9 @@
 
 #include "amr/refinement_marker.hpp"
 #include "bc/boundary_conditions.hpp"
+#include "bc/deck_boundary.hpp"
 #include "config/parameters.hpp"
+#include "post/run_monitor.hpp"
 #include "post/checkpoint.hpp"
 #include "post/diagnostics.hpp"
 #include "post/body_force.hpp"
@@ -100,8 +102,22 @@ public:
     */
    void SetForcing(mfem::VectorCoefficient& f);
 
-   /// March to t_final, writing output per the parameters' output settings.
+   /// March to t_final, writing output per the parameters' output settings;
+   /// stops early if the run diverges (Diverged()).
    void Run();
+
+   /// @return Whether the run diverged (non-finite or huge forces / velocity).
+   bool Diverged() const;
+
+   /**
+    * @brief Write the run summary as JSON: status, case settings, time-step
+    *        statistics, mesh size, diagnostics, force statistics, probes, and
+    *        the errors against the deck's reference values. Collective; rank
+    *        0 writes.
+    * @param path   Output file (its directory is created).
+    * @param status "running" before the run, then "ok" or "diverged".
+    */
+   void WriteSummary(const std::string& path, const std::string& status);
 
    /// Advance one accepted step (writes output on the configured interval).
    void Step();
@@ -194,6 +210,21 @@ private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
 
+   /**
+    * @brief Time-based AMR (amr.every_time): run the event if the step just
+    *        taken crossed one. Collective.
+    * @param t_prev Time before the step.
+    */
+   void MaybeAdaptInTime(double t_prev);
+
+   /**
+    * @brief Record the step that ended at the current time (monitor,
+    *        progress, history). Collective.
+    * @param t_prev    Time before the step.
+    * @param step_wall Its wall time.
+    */
+   void RecordStep(double t_prev, double step_wall);
+
    /// (Re)build the time integrator from the parameters on the current mesh.
    void BuildIntegrator();
 
@@ -272,6 +303,15 @@ private:
    std::unique_ptr<mfem::ParFiniteElementSpace> amr_fes_; ///< P0 space.
    std::unique_ptr<mfem::ParGridFunction> amr_eta_;   ///< eta_K at the event.
    std::unique_ptr<mfem::ParGridFunction> amr_level_; ///< Refinement depth.
+   bool bc_explicit_ = false; ///< SetBoundaryConditions was called.
+   /// The deck's boundary groups (when the deck declares them and no driver
+   /// set boundary conditions).
+   std::unique_ptr<DeckBoundaryConditions> deck_bc_;
+   std::unique_ptr<RunMonitor> monitor_; ///< Progress, history, statistics.
+   long long ne_ = 0;               ///< Global element count (kept current).
+   bool amr_time_started_ = false;  ///< A time-based AMR event has run.
+   bool chk_at_written_ = false;    ///< checkpoint.at_time written.
+   int amr_events_ = 0;             ///< AMR events that changed the mesh.
 };
 
 } // namespace incns

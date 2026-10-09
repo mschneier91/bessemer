@@ -1,0 +1,31 @@
+# Lid-driven cavity, Re = 100: the unit square, the lid (ymax) moving at
+# u = (1, 0), no-slip elsewhere. A small, fast deck that exercises deck
+# boundary conditions end to end (a ctest runs it at np 1/2/4).
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/cavity.yaml
+#   -> cavity/cavity_summary.json
+
+equation: navier_stokes
+
+physics:
+  Re: 100
+
+mesh:
+  dim: 2
+  elements: [6, 6]
+  lengths: [1.0, 1.0]
+  periodic: [false, false]
+
+time:
+  dt: 0.01
+  t_final: 0.3
+  step_control: cfl
+  cfl_target: 0.5
+
+boundary_conditions:
+  - {select: [ymax], type: velocity, value: [1, 0]}
+  - {select: [xmin, xmax, ymin], type: no_slip}
+
+output:
+  path: cavity
+  name: cavity

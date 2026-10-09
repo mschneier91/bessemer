@@ -7,6 +7,7 @@
 #include <pybind11/stl.h>
 
 #include "bc/boundary_conditions.hpp"
+#include "bc/deck_boundary.hpp"
 #include "config/nondimensionalization.hpp"
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
@@ -160,6 +161,13 @@ public:
 
    void Run() { Wire(); py::gil_scoped_release rel; case_->Run(); }
    void Step() { Wire(); py::gil_scoped_release rel; case_->Step(); }
+   void WriteSummary(const std::string& path, const std::string& status)
+   {
+      Wire();
+      py::gil_scoped_release rel;
+      case_->WriteSummary(path, status);
+   }
+   bool Diverged() const { return case_->Diverged(); }
 
    double Time() const { return case_->Time(); }
    double TimeDimensional() const { return case_->TimeDimensional(); }
@@ -239,39 +247,19 @@ private:
       wired_ = true;
    }
 
-   // Apply the deck's boundary_conditions groups: resolve each selection to
-   // attributes, and for a Dirichlet group use the field bound by group name.
+   // Apply the deck's boundary_conditions groups through the library (the
+   // same resolution run_case uses); a velocity_dirichlet group takes the
+   // field bound by its group name. No coverage requirement: a script may add
+   // further conditions itself.
    void ApplyDeckBcs()
    {
-      for (const BcSpec& s : params_.boundary_conditions)
+      if (params_.boundary_conditions.empty()) { return; }
+      deck_bc_ = std::make_unique<DeckBoundaryConditions>(params_, *pmesh_);
+      deck_bc_->Apply(*bc_, [this](const std::string & g) -> VectorCoefficient*
       {
-         std::vector<int> attrs;
-         if (s.select_all) { attrs = AllFaces(); }
-         else
-         {
-            attrs = s.attributes;
-            for (const auto& name : s.faces)
-            {
-               attrs.push_back(ResolveFace(name));
-            }
-         }
-         if (s.type == BcType::Outflow)
-         {
-            for (int a : attrs) { bc_->AddOutflow(a); }
-         }
-         else if (s.type == BcType::NoSlip)
-         {
-            for (int a : attrs) { bc_->AddNoSlip(a); }
-         }
-         else
-         {
-            auto it = dirichlet_fields_.find(s.group);
-            MFEM_VERIFY(it != dirichlet_fields_.end(),
-                        "incns: no Dirichlet field bound to boundary group '" +
-                        s.group + "' -- call set_dirichlet_field(group, field)");
-            for (int a : attrs) { bc_->AddVelocityDirichlet(a, *it->second); }
-         }
-      }
+         const auto it = dirichlet_fields_.find(g);
+         return it == dirichlet_fields_.end() ? nullptr : it->second;
+      }, /*require_coverage=*/false);
    }
 
    std::vector<int> AsAttrs(const py::object& a)
@@ -338,6 +326,7 @@ private:
    std::unique_ptr<VectorCoefficient> forcing_;
    std::vector<std::unique_ptr<VectorCoefficient>> coeffs_;
    std::map<std::string, VectorCoefficient*> dirichlet_fields_;
+   std::unique_ptr<DeckBoundaryConditions> deck_bc_; ///< Deck groups' data.
    bool wired_ = false;
 };
 
@@ -661,6 +650,11 @@ PYBIND11_MODULE(_core, m)
    .def("no_slip", &PyCase::NoSlip, py::arg("selection"))
    .def("run", &PyCase::Run)
    .def("step", &PyCase::Step)
+   .def("write_summary", &PyCase::WriteSummary, py::arg("path"),
+        py::arg("status") = "ok",
+        "Write the run summary JSON (status, time steps, mesh, forces, probes, "
+        "errors against the deck's reference values). Collective.")
+   .def_property_readonly("diverged", &PyCase::Diverged)
    .def("velocity_l2_error", &PyCase::VelocityL2Error, py::arg("f"))
    .def("kinetic_energy", &PyCase::KineticEnergy)
    .def("dissipation_rate", &PyCase::DissipationRate)

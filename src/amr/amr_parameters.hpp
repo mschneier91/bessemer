@@ -67,6 +67,17 @@ struct AmrParameters
    bool project_history = true;
    /// Also write the indicator and refinement levels as ParaView cell data.
    bool write_indicator = false;
+   /// Adaptation events in SIMULATED time: every this many time units
+   /// instead of every `interval` steps (0 = step-based). With CFL-controlled
+   /// steps a step count drifts as dt adapts; a time interval does not.
+   double every_time = 0.0;
+   /// Time-based events only from this time on (spin up on the coarse mesh).
+   double start_time = 0.0;
+   /// Time-based events only up to this time (0 = no end).
+   double end_time = 0.0;
+   /// Refinement passes at the first time-based event (stops early when a
+   /// pass changes nothing), so resolution arrives quickly.
+   int first_event_passes = 1;
 
    /// Abort (MFEM_VERIFY) on out-of-range settings.
    void Validate() const;

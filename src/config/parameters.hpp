@@ -8,7 +8,9 @@
 #include "amr/amr_parameters.hpp"
 #include "config/deck_key.hpp"
 #include "config/nondimensionalization.hpp"
+#include "mesh/cylinder_channel.hpp"
 #include "mesh/periodic_box.hpp"
+#include "mesh/square_cylinder.hpp"
 #include "operators/convection.hpp" // ConvectiveForm
 #include "operators/grad_div_scale.hpp"
 #include "post/body_force.hpp"
@@ -17,6 +19,8 @@
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
 
+#include <array>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -48,8 +52,24 @@ enum class StepControl
 enum class BcType
 {
    VelocityDirichlet, ///< Prescribed velocity (the field is bound in the driver).
+   Velocity,          ///< Prescribed velocity given in the deck (value or profile).
    NoSlip,            ///< Zero velocity wall (no field needed).
    Outflow            ///< Do-nothing / natural traction (no field).
+};
+
+/// Spatial shape of a deck-given boundary velocity (BcType::Velocity).
+enum class BcProfile
+{
+   Constant, ///< `value` everywhere on the group.
+   Parabolic ///< u_x = 4 u_max y (height - y) / height^2 (a channel inflow).
+};
+
+/// Time modulation s(t) of a deck-given boundary velocity.
+enum class BcTimeProfile
+{
+   Constant, ///< s = 1.
+   Ramp,     ///< s = sin^2(pi t / (2 T)) for t < T, then 1 (T = time_scale).
+   Sine      ///< s = sin(pi t / T) (T = time_scale).
 };
 
 /**
@@ -66,8 +86,16 @@ struct BcSpec
    std::string group;              ///< Label for binding a Dirichlet field.
    BcType type = BcType::VelocityDirichlet; ///< Dirichlet or outflow.
    bool select_all = false;        ///< Select every real (non-periodic) face.
-   std::vector<std::string> faces; ///< Face-name selectors (box convenience).
+   std::vector<std::string>
+   faces; ///< Boundary-name selectors (box faces or geometry names).
    std::vector<int> attributes;    ///< Explicit boundary attribute selectors.
+   /// BcType::Velocity: the constant value (Constant profile).
+   std::array<double, 3> value = {0.0, 0.0, 0.0};
+   BcProfile profile = BcProfile::Constant;           ///< BcType::Velocity shape.
+   double u_max = 1.0;   ///< Parabolic: peak velocity.
+   double height = 1.0;  ///< Parabolic: channel height (y from 0 to height).
+   BcTimeProfile time_profile = BcTimeProfile::Constant; ///< Time modulation.
+   double time_scale = 1.0; ///< T of the Ramp / Sine modulation.
 };
 
 /// Rolling checkpoint settings (see post/checkpoint).
@@ -76,6 +104,9 @@ struct CheckpointParameters
    bool enabled = false;     ///< Write a rolling checkpoint during Run().
    std::string path = "chk"; ///< Checkpoint directory (overwritten each write).
    int interval = 10;        ///< Write every this many accepted steps.
+   /// Also write one checkpoint once t >= at_time (0 = off), e.g. after a
+   /// spin-up, to branch several runs from.
+   double at_time = 0.0;
 };
 
 /// ParaView output settings (see post/output).
@@ -86,6 +117,61 @@ struct OutputParameters
    std::string name = "case"; ///< Collection name.
    int interval = 1;          ///< Save every this many accepted steps.
    bool diagnostics = false;  ///< Also log KE/dissipation/||div u|| to a CSV.
+   /// Print a progress line every this many time units (0 = never): time,
+   /// dt and its range, CFL and where it peaks, forces, iterations, cells,
+   /// wall time and an ETA.
+   double progress = 0.0;
+   /// Write a per-step history `<path>/<name>_history.csv` (t, dt, c_d,
+   /// c_l, iterations, cells, step wall time).
+   bool history = false;
+};
+
+/// The case geometry (deck `mesh.geometry`); MakeCaseMesh builds it.
+enum class MeshGeometry
+{
+   Box,            ///< The box of `mesh` (periodic and/or walled).
+   SquareCylinder, ///< A square cylinder in a large domain (mesh/square_cylinder).
+   CylinderChannel ///< The DFG channel with a circular cylinder (mesh/cylinder_channel).
+};
+
+/// A uniform initial flow with an optional shedding trigger (deck
+/// `initial_velocity: uniform`, section `initial`).
+struct InitialFlowParameters
+{
+   /// The uniform velocity.
+   std::array<double, 3> velocity = {1.0, 0.0, 0.0};
+   /// Amplitude, relative to |velocity|, of a Gaussian bump
+   /// exp(-|x - c|^2) added to the second velocity component; it breaks the
+   /// symmetry so vortex shedding starts early. 0 = none.
+   double perturbation = 0.0;
+   /// The bump's centre c.
+   std::array<double, 3> perturbation_center = {0.0, 0.0, 0.0};
+};
+
+/// Point probes evaluated at the end of the run (Case::WriteSummary).
+struct ProbeParameters
+{
+   /// Two points: the summary reports p(first) - p(second) (empty = none).
+   std::vector<std::array<double, 3>> pressure_difference;
+};
+
+/**
+ * @brief Reference values a run is compared against in its summary (NaN =
+ *        not given). Relative errors for values, absolute for times.
+ */
+struct ReferenceValues
+{
+   double cd = std::nan("");          ///< Final drag coefficient.
+   double cl = std::nan("");          ///< Final lift coefficient.
+   double cd_mean = std::nan("");     ///< Period-mean drag coefficient.
+   double cl_mean = std::nan("");     ///< Period-mean lift coefficient.
+   double cl_rms = std::nan("");      ///< Period-rms lift coefficient.
+   double strouhal = std::nan("");    ///< Strouhal number.
+   double cd_max = std::nan("");      ///< Maximum drag coefficient.
+   double t_cd_max = std::nan("");    ///< Its time.
+   double cl_max = std::nan("");      ///< Maximum lift coefficient.
+   double t_cl_max = std::nan("");    ///< Its time.
+   double pressure_difference = std::nan(""); ///< The probe's p1 - p2.
 };
 
 /**
@@ -137,6 +223,16 @@ struct Parameters
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;
+   /// The geometry MakeCaseMesh builds (deck `mesh.geometry`); the box
+   /// fields above apply to Box only.
+   MeshGeometry geometry = MeshGeometry::Box;
+   /// Geometry::SquareCylinder: the domain and its base-mesh grading.
+   SquareCylinderSpec square_cylinder;
+   /// Geometry::CylinderChannel: the DFG channel and its base mesh.
+   CylinderChannelSpec cylinder_channel;
+   /// Geometry::CylinderChannel: uniform refinement level of the base mesh
+   /// (cell counts x 2^level, gradings nested).
+   int cylinder_channel_level = 0;
 
    /// Adaptive mesh refinement (deck section `amr:`; off by default).
    AmrParameters amr;
@@ -253,6 +349,12 @@ struct Parameters
    /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks
    /// select analytic ICs by name so no recompilation is needed per case.
    std::string initial_velocity = "zero";
+   /// The uniform initial flow (initial_velocity: uniform).
+   InitialFlowParameters initial;
+   /// Point probes reported in the run summary.
+   ProbeParameters probes;
+   /// Reference values the run summary compares against.
+   ReferenceValues reference;
 
    /// Boundary-condition groups (topology only; Dirichlet fields are bound in
    /// the driver by group name). Empty means the driver sets BCs explicitly (or
