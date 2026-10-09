@@ -28,8 +28,13 @@ The dated log below keeps the history.
 **Validated:** `dfg_2d1.yaml` (relative errors C_D 1.05e-4, C_L 2.79e-3, dp 4.06e-3 = the
 slow-tier values, 70 s), `dfg_2d3.yaml` (dt 0.001; C_D,max 0.08%, 172 s),
 `square_cylinder_re200_oifs.yaml` (C_D 1.4265, C_L,rms 0.3923, St 0.1565 in 2,191 steps,
-13 min: the driver's run to every digit). In flight at the merge: the full IMEX
-square-cylinder deck run and a debug-device sweep. Bridges-2: its lock must be
+13 min: the driver's run to every digit). **Open:** the full IMEX deck run
+(`square_cylinder_re200.yaml`, 4 ranks) stopped silently at t = 90.0125 (step 6239, the
+last step of the AMR window `end_time: 90`): no error output, summary left at "running",
+no OOM record, and no kill or reap in the agent's commands at that time. Cause unknown;
+next: rerun it alone (~70 min) and see if it reproduces at t = 90 (OIFS crossed the same
+point fine). A debug-device sweep (`scripts/debug_device.sh`) was running at the merge;
+its result is unrecorded. Bridges-2: its lock must be
 re-resolved on the cluster (MUMPS + pin edit).
 
 **Next, in order:**
