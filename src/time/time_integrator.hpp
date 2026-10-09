@@ -386,6 +386,15 @@ private:
                            mfem::Vector& phi);
 
    /**
+    * @brief OIFS: b -= EXT[directional do-nothing term] -- the outflow term
+    *        explicit and extrapolated in the BDF step, as IMEX treats it (OIFS
+    *        keeps only N in its substeps). No-op without the condition.
+    * @param t_new Time the step solves for.
+    * @param b     Momentum right-hand side (modified).
+    */
+   void SubtractOifsDirectionalDoNothing(double t_new, mfem::Vector& b);
+
+   /**
     * @brief Rotational form: set the lagged velocity w* to the EXT
     *        extrapolation of the history to @p t_new (same order matching as
     *        SubtractConvection: EXT1 on the first step, EXT2 after). The
@@ -441,6 +450,9 @@ private:
    /// OIFS: the convection operator N, for the convective acceleration at
    /// the imposed boundary nodes (OifsBoundaryValues); never on the RHS.
    std::unique_ptr<Convection> oifs_conv_;
+   /// OIFS + directional do-nothing outflow: evaluates that boundary term
+   /// alone (SubtractOifsDirectionalDoNothing); null otherwise.
+   std::unique_ptr<Convection> oifs_ddn_;
    /// Rotational form active (convection on, ConvectiveForm::Rotational).
    bool rotational_ = false;
 

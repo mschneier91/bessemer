@@ -61,7 +61,7 @@ $\nu \le 5\cdot10^{-4}$ but not with this one.
 | DFG app | `apps/dfg_cylinder -ddn` (default) / `-cdn` |
 
 It applies to Navier–Stokes with `physics.convective_form: convective` on every outflow
-boundary. Stokes has no convection, so there is nothing to apply. **The rotational form
+boundary, with either convection treatment (`time.convection: imex|oifs`). Stokes has no convection, so there is nothing to apply. **The rotational form
 keeps the classical condition**, which acts on its Bernoulli head. That is a poor outflow
 condition for that form, and fixing it is an open item.
 
@@ -83,6 +83,18 @@ condition for that form, and fixing it is an open item.
   block. It would make the backflow cancellation hold independent of $\Delta t$, but the
   operator would change every step and the Jacobi diagonal would need it. It is the
   fallback if outlet backflow ever destabilizes a run below the CFL limit.
+- **Under OIFS** (`time.convection: oifs`) the interior convection lives in the
+  sub-stepped advection of the BDF history, but this term does not: the time integrator
+  evaluates it alone (`Convection::MultDirectionalDoNothing`) on the velocity history and
+  subtracts its EXT extrapolation from the BDF step's right-hand side
+  (`SubtractOifsDirectionalDoNothing`), exactly as IMEX treats it. Putting it inside the
+  substeps instead, linearized in the advected field ($-\tfrac12\int_{S_1}(w\cdot n)_-
+  \varphi\psi$), makes the substep advection energy-exact but is stiff at backflow nodes
+  (rate $\sim 6|u\cdot n|/h$ for $Q_3$): on the paper's square it biased the steady state
+  by 2.3% at CFL 2 and converged only as the CFL dropped to 0.25, so it was removed. The
+  explicit term reproduces IMEX's steady state at every CFL tested and was stable to CFL 8
+  there; backflow much stronger than the local flow speed could need the semi-implicit
+  version below.
 - Lift/drag (John's volume integral) reuses the step's right-hand side, so it includes
   the term automatically.
 
@@ -102,3 +114,6 @@ condition for that form, and fixing it is an open item.
   |---|---|---|---|---|
   | classical | −4.4984e-2 | −4.498e-2 | 6.113e-4 | 6.109e-4 |
   | directional | −4.2703e-2 | −4.269e-2 | 5.321e-4 | 5.318e-4 |
+
+- **D4** D3 with OIFS convection (BDF3, CFL 2): the same values for both conditions
+  (directional $j_1$ −4.2705e-2, $j_2$ 5.3215e-4 — IMEX's to $5\times10^{-5}$).

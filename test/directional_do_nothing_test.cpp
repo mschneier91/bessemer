@@ -16,7 +16,14 @@
 //     steady state through the Case: the inflow flux j1 = int (u.n)_- and the
 //     outflow energy flux j2 = int (u.n)_+ |u|^2 on the outflow match the
 //     paper's Table 5.1 for BOTH conditions (DDN: -4.269e-2 / 5.318e-4,
-//     classical: -4.498e-2 / 6.109e-4), and DDN reduces both.
+//     classical: -4.498e-2 / 6.109e-4), and DDN reduces both;
+//  D4 D3 with OIFS convection (BDF3, CFL 2), where the term is explicit and
+//     extrapolated in the BDF step: the same Table 5.1 values for both
+//     conditions (measured 2026-10-09: directional j1 -4.2705e-2, j2
+//     5.3215e-4 -- IMEX's to 5e-5; classical = IMEX's to 2e-5). Stable to
+//     CFL 8 here (j1 within 0.5%). Placed INSIDE the substeps instead
+//     (linearized, energy-exact) it gave j1 -4.171e-2 at CFL 2 (-2.3%),
+//     converging only as CFL -> 0.25: stiff at the backflow nodes.
 
 #include <gtest/gtest.h>
 
@@ -262,11 +269,15 @@ struct Fluxes
 };
 
 // Braack & Mucha section 5.1, marched to steady state.
-Fluxes PaperSquare(incns::OutflowCondition outflow, int n, double t_final)
+Fluxes PaperSquare(incns::OutflowCondition outflow, int n, double t_final,
+                   incns::ConvectionTreatment conv =
+                      incns::ConvectionTreatment::Imex, double cfl = 0.5)
 {
    incns::Parameters p;
    p.equation = incns::Equation::NavierStokes;
    p.outflow = outflow;
+   p.convection_treatment = conv;
+   p.cfl_target = cfl;
    p.nu = 0.05;
    p.order_u = 3;
    p.order_p = 2;
@@ -341,6 +352,30 @@ TEST(DirectionalDoNothing, D3_ReproducesBraackMuchaTable51)
    // Measured 2026-10-08 (8x8 Q3/Q2, steady by t = 15): within 0.06% of the
    // paper's values for both conditions, which differ by 5% (j1) and 13%
    // (j2) -- so 0.5% tells them apart.
+   EXPECT_NEAR(cdn.j1, -4.498e-2, 5e-3 * 4.498e-2);
+   EXPECT_NEAR(cdn.j2, 6.109e-4, 5e-3 * 6.109e-4);
+   EXPECT_NEAR(ddn.j1, -4.269e-2, 5e-3 * 4.269e-2);
+   EXPECT_NEAR(ddn.j2, 5.318e-4, 5e-3 * 5.318e-4);
+   EXPECT_GT(ddn.j1, cdn.j1); // less inflow
+   EXPECT_LT(ddn.j2, cdn.j2);
+}
+
+TEST(DirectionalDoNothing, D4_OifsReproducesBraackMuchaTable51)
+{
+   const int n = 8;
+   const double t_final = 15.0;
+   using incns::ConvectionTreatment;
+   const Fluxes cdn = PaperSquare(incns::OutflowCondition::Classical, n, t_final,
+                                  ConvectionTreatment::Oifs, 2.0);
+   const Fluxes ddn = PaperSquare(incns::OutflowCondition::Directional, n,
+                                  t_final, ConvectionTreatment::Oifs, 2.0);
+   if (Mpi::Root())
+   {
+      mfem::out << "[ddn paper 5.1, OIFS CFL 2] classical j1 " << cdn.j1
+                << " j2 " << cdn.j2 << " (paper -4.498e-2, 6.109e-4); "
+                << "directional j1 " << ddn.j1 << " j2 " << ddn.j2
+                << " (paper -4.269e-2, 5.318e-4)\n";
+   }
    EXPECT_NEAR(cdn.j1, -4.498e-2, 5e-3 * 4.498e-2);
    EXPECT_NEAR(cdn.j2, 6.109e-4, 5e-3 * 6.109e-4);
    EXPECT_NEAR(ddn.j1, -4.269e-2, 5e-3 * 4.269e-2);

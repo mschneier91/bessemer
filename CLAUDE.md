@@ -98,9 +98,12 @@ evaluation (wall MMS: = IMEX to 1.5e-3), hanging nodes (`oifs_test` O3) or the o
 (IMEX classical = directional BITWISE on this domain: no outlet backflow). BDF2's
 trajectory time error at CFL 4 was ~4× BDF3's (C_D). OIFS also has no dt sawtooth (steady
 dt at every CFL). The collocated mass itself moves IMEX by −0.4% C_D / −1.8% C_L,rms.
-Open: DDN under OIFS (only matters with outlet backflow); OIFS cost per step (substep
-CFL 0.5 — try 1.0); the fixed-step BDF3-OIFS startup (O(dt²) starter); error control
-under OIFS; whether the case-level default for HPC runs should become OIFS CFL 2.
+DDN under OIFS done (explicit, extrapolated in the BDF step: Braack & Mucha's Table 5.1
+to IMEX's values at CFL 2, stable to CFL 8). **Error control under OIFS: not pursued
+(human 2026-10-09: "we are always going to need to do some multiple of CFL basically,
+so maybe we just skip the error estimator")** — rejected at validation. Open: OIFS cost
+per step (substep CFL 0.5 — try 1.0); the fixed-step BDF3-OIFS startup (O(dt²) starter);
+whether the case-level default for HPC runs should become OIFS CFL 2.
 
 **Open follow-ups** (none started):
 - Outflow condition for the rotational form: do-nothing acts on the Bernoulli head
@@ -293,7 +296,8 @@ additive term inside `StokesTimeIntegrator`.
   boundary-face assembly on the outflow faces only), so the term is explicit and
   EXT-extrapolated together with N. Identical to classical where u·n ≥ 0; it removes the
   backflow energy flux. Not applied to the rotational form (classical on its Bernoulli
-  head). `directional_do_nothing_test` reproduces the paper's Table 5.1 (j₁, j₂ for both
+  head). Under OIFS the same term is subtracted explicitly and EXT-extrapolated in the
+  BDF step (`SubtractOifsDirectionalDoNothing`; N itself lives in the substeps). `directional_do_nothing_test` reproduces the paper's Table 5.1 (j₁, j₂ for both
   conditions to < 0.1%). Full write-up (derivation, usage, implementation, tests):
   `docs/outflow_conditions.md`. **Dirichlet data may be time-dependent:** `SetTime(t)` + re-elimination
   every step (stale elimination silently drops temporal order; only the unsteady MMS sees it).
@@ -397,9 +401,15 @@ additive term inside `StokesTimeIntegrator`.
   **BDF order: `time.order` auto (0) = BDF3 under OIFS (human 2026-10-09: "you should be
   running everything with BDF3 with the OIFS stuff"; Nek's pairing), BDF2 under IMEX;
   `Parameters::BdfOrder()`.** BDF3 extrapolates the wind at order 3 (EXT3). Scope:
-  convective form, BDF2/BDF3, fixed/CFL steps (not error control); the directional
-  do-nothing term is NOT applied under OIFS (TODO; exactly zero without outlet backflow —
-  on the square cylinder IMEX classical = directional bitwise); first step = trapezoidal
+  convective form, BDF2/BDF3, fixed/CFL steps — **no error control, by design (human
+  2026-10-09: OIFS steps are CFL multiples)**. **Directional do-nothing under OIFS:
+  explicit and EXT-extrapolated in the BDF step, exactly IMEX's term**
+  (`directional_do_nothing_test` D4: Table 5.1 j₁/j₂ = IMEX's to 5e-5 at CFL 2; stable to
+  CFL 8 there). Tried first INSIDE the substeps (linearized, energy-exact operator
+  C(w) + D(w)): j₁ −2.3% at CFL 2, converging only as CFL → 0.25 — the term is stiff at
+  backflow nodes (rate ~6|u·n|/h) and the BDF combination of the exponentiated history
+  misses it; removed. A semi-implicit LHS version stays the fallback (as for IMEX).
+  First step = trapezoidal
   starter with u⁰ advected, then BDF2, then BDF3. **Startup trap:** the starter's local
   error is O(dt²) (frozen wind, unadvected viscous half), which caps a FIXED-step BDF3
   march at global order 2 (wall MMS: orders 2.54/2.19/1.93); CFL-controlled runs start at

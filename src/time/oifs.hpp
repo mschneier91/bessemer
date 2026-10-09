@@ -58,8 +58,10 @@ namespace incns
  * imposing u_D there over-constrains the advection and costs an O(h^2)
  * boundary layer (measured: nse_mms_test OifsTemporalOrder2D). The sign uses
  * the newest wind, per Advect(). Do-nothing outflow is natural (pure
- * advection needs no outflow condition); the directional do-nothing term is
- * NOT included.
+ * advection needs no outflow condition). The directional do-nothing term is
+ * NOT in the substeps: the integrator applies it explicitly in the BDF step
+ * (in the substeps it is stiff at backflow nodes and biased the steady state
+ * at CFL 2; measured 2026-10-09).
  *
  * Accuracy: the BDF order, but the time error is the BDF's ALONG
  * TRAJECTORIES (@f$ D^3u/Dt^3 @f$ for BDF2), where IMEX's is that of the

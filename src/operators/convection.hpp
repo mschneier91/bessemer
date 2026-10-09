@@ -145,6 +145,16 @@ public:
     */
    void EnableDirectionalDoNothing(const mfem::Array<int>& outflow_attrs);
 
+   /**
+    * @brief The directional do-nothing term alone, LHS-signed:
+    *        @f$ y = -\tfrac12\int_{S_1}(u\cdot n)_-\,u\cdot\phi @f$ (OIFS
+    *        keeps N in its substeps and extrapolates only this term).
+    * @pre EnableDirectionalDoNothing() was called.
+    * @param u True-dof velocity (input).
+    * @param y True-dof result (output, resized as needed).
+    */
+   void MultDirectionalDoNothing(const mfem::Vector& u, mfem::Vector& y) const;
+
    /// @return True when Mult includes the directional do-nothing term.
    bool DirectionalDoNothing() const { return ddn_form_ != nullptr; }
 

@@ -62,10 +62,24 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    {
       // OIFS: the BDF history is advected (time/oifs.hpp) -- no explicit
       // convection on the right-hand side.
+      // No error control under OIFS (human 2026-10-09): its step is chosen
+      // as a multiple of the CFL step anyway, so an estimator's second solve
+      // per step buys nothing.
       MFEM_VERIFY(!opts_.adaptive, "time_integrator: OIFS supports fixed and "
-                  "CFL-controlled steps, not error control (yet)");
+                  "CFL-controlled steps, not error control (by design: its "
+                  "step is a CFL multiple)");
       oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_, opts_.oifs_cfl);
       oifs_conv_ = std::make_unique<Convection>(spaces_, rules_);
+      // Directional do-nothing: explicit and extrapolated in the BDF step,
+      // exactly as IMEX treats it (SubtractOifsDirectionalDoNothing). Inside
+      // the substeps it is consistent but stiff at backflow nodes (rate
+      // ~6|u.n|/h): Braack & Mucha's square at CFL 2 gave j1 2.3% off the
+      // paper, converging only as CFL -> 0.25 (measured 2026-10-09).
+      if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
+      {
+         oifs_ddn_ = std::make_unique<Convection>(spaces_, rules_);
+         oifs_ddn_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
+      }
    }
    else if (opts_.convection && !rotational_)
    {
@@ -366,6 +380,7 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
       OifsBoundaryValues(c, t_new, combo);
       trap_->Blocks().Mass().Mult(combo, tmp);
       b -= tmp;
+      SubtractOifsDirectionalDoNothing(t_new, b);
       return;
    }
    combo = 0.0;
@@ -410,6 +425,22 @@ void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
    Vector vals;
    bd.GetSubVector(imp, vals);
    phi.SetSubVector(imp, vals);
+}
+
+void StokesTimeIntegrator::SubtractOifsDirectionalDoNothing(double t_new,
+      Vector& b)
+{
+   if (!oifs_ddn_) { return; }
+   // EXT of the history the step has (EXT1 on the starter).
+   const std::size_t m = ExtrapolationOrder();
+   std::vector<double> times(hist_times_.begin(), hist_times_.begin() + m);
+   const std::vector<double> g = ExtrapolationWeights(t_new, times);
+   Vector y;
+   for (std::size_t l = 0; l < m; ++l)
+   {
+      oifs_ddn_->MultDirectionalDoNothing(hist_[l], y);
+      b.Add(-g[l], y);
+   }
 }
 
 void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b, int ext)
@@ -544,6 +575,7 @@ void StokesTimeIntegrator::StepStartup()
       // -- otherwise step 1 would silently solve Stokes and cost the march its
       // temporal order. Only one history entry exists, so this is EXT1.
       SubtractConvection(t_new, b);
+      SubtractOifsDirectionalDoNothing(t_new, b); // OIFS: EXT1 here
       // The starter's momentum block is (1/dt) M + (nu/2) K; refresh it if the
       // first step is (re)tried at a different dt (adaptive rejection).
       if (std::abs(trap_c0_ - 1.0 / dt_) > 1e-12 / dt_)

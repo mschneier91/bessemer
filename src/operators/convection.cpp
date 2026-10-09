@@ -68,13 +68,21 @@ void Convection::Mult(const Vector& u, Vector& y) const
 {
    form_->Mult(u, y);
    if (!ddn_form_) { return; }
-   // The boundary term: legacy host assembly over the marked faces (few),
-   // reading u's element values on the host.
+   MultDirectionalDoNothing(u, ddn_true_);
+   y += ddn_true_;
+}
+
+void Convection::MultDirectionalDoNothing(const Vector& u, Vector& y) const
+{
+   MFEM_VERIFY(ddn_form_, "convection: directional do-nothing not enabled");
+   // Legacy host assembly over the marked faces (few), reading u's element
+   // values on the host.
    ddn_u_->SetFromTrueDofs(u);
    ddn_u_->HostRead();
    ddn_form_->Assemble();
-   ddn_form_->ParallelAssemble(ddn_true_); // MFEM-owned buffer (CLAUDE.md §6)
-   y += ddn_true_;
+   y.SetSize(spaces_.Velocity().GetTrueVSize());
+   y.UseDevice(true);
+   ddn_form_->ParallelAssemble(y); // MFEM-owned buffer (CLAUDE.md §6)
 }
 
 } // namespace incns
