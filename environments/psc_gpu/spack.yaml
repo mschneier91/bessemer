@@ -1,7 +1,16 @@
 spack:
   specs:
-    - mfem@develop+cuda cuda_arch=90 +gslib+lapack+libceed+mpi+shared+suite-sparse
+    # MUMPS (human 2026-10-09): MFEM's +mumps (MFEM_USE_MUMPS; pulls MUMPS and
+    # ScaLAPACK). No OpenMP in MUMPS: one MPI rank per core here, and OpenMP
+    # threads per rank would oversubscribe. METIS/ParMETIS orderings.
+    # MFEM pinned (human 2026-10-09) to master just before PR #5297 ("General
+    # NC mesh spacing in parallel", https://github.com/mfem/mfem/pull/5297):
+    # its ParMesh::AnisotropicConflict segfaults on nonconforming 3D hex meshes
+    # at np >= 2 (reported upstream 2026-10-09). Drop the pin once fixed.
+    - mfem@develop commit=1c19aba72a2b91ee918a332e668cf00922848321
+      +cuda cuda_arch=90 +gslib+lapack+libceed+mpi+mumps+shared+suite-sparse
       ^gslib@1.0.9 cflags="-fPIC"
+      ^mumps+metis+parmetis~openmp
       ^hypre+cuda cuda_arch=90 ldflags="-ldl"
       ^libceed+cuda cuda_arch=90
       ^suite-sparse~cuda
