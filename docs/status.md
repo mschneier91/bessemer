@@ -44,11 +44,11 @@ fresh machine. Next: that test (host terminal, clean VM or container); the TGV e
 **Validated:** `dfg_2d1.yaml` (relative errors C_D 1.05e-4, C_L 2.79e-3, dp 4.06e-3 = the
 slow-tier values, 70 s), `dfg_2d3.yaml` (dt 0.001; C_D,max 0.08%, 172 s),
 `square_cylinder_re200_oifs.yaml` (C_D 1.4265, C_L,rms 0.3923, St 0.1565 in 2,191 steps,
-13 min: the driver's run to every digit). **IMEX deck run (resolved, not a solver problem):** the run that "stopped at t = 90" was
-killed by the agent itself, to restart it on the corrected deck (`corner_ratio`,
-`wake_ratio`); the restart never launched because `scripts/env.sh` was sourced from a
-scratch directory without `INCNS_REPO_ROOT` (output hidden by `>/dev/null`, `&&` chain
-stopped). The log just ended between progress lines. Rerun of the committed deck in flight.
+13 min: the driver's run to every digit). **IMEX deck run:** `square_cylinder_re200.yaml` validated 2026-10-09: C_D 1.4436,
+C_L,rms 0.4034, St 0.1568 in 11,130 steps, 42 min at 4 ranks. (An earlier run that seemed
+to stop at t = 90 had been killed by the agent itself, to restart it on the corrected deck;
+the restart never launched.) Against the OIFS deck: C_D 1.2% and C_L,rms 2.8% higher, St
+equal; the "within 1%" figure is IMEX with OIFS's collocated mass, not this deck.
 Debug-device sweep: green, 114/114. The full sweep after the merge failed only
 `run_monitor_test` R3 (AMR on a periodic Taylor-Green box), the known MFEM periodic-NC
 debug-device false positive; R3 now skips there like `amr_flow_test.cpp:88`. Bridges-2: its lock must be

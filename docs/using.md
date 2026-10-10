@@ -95,7 +95,7 @@ values report their errors in the summary's `reference` section. Wall times are 
 | Deck | Case | Time | Expected |
 |---|---|---|---|
 | `square_cylinder_re200_oifs.yaml` | square cylinder, Re 200 (Joly et al. 2012), OIFS at CFL 2 | ~13 min | C_D 1.43, C_L,rms 0.39, St 0.157 (paper 1.44, 0.42, 0.151) |
-| `square_cylinder_re200.yaml` | the same with IMEX at CFL 0.5 | ~70 min | C_D 1.44, C_L,rms 0.40, St 0.157 |
+| `square_cylinder_re200.yaml` | the same with IMEX at CFL 0.5 | ~42 min | C_D 1.44, C_L,rms 0.40, St 0.157 |
 | `dfg_2d1.yaml` | DFG 2D-1 (steady, Re 20; Schäfer–Turek) | ~1–2 min | relative errors C_D 1e-4, C_L 3e-3, Δp 4e-3 |
 | `dfg_2d3.yaml` | DFG 2D-3 (unsteady; John 2004), fixed dt 0.001 | ~3 min | C_D,max within 0.1%, C_L,max within ~8% (base mesh), Δp(8) within 1% |
 | `cavity.yaml` | lid-driven cavity, Re 100 (a fast smoke case) | seconds | `status: ok` |

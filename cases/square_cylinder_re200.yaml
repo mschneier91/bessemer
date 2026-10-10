@@ -5,10 +5,12 @@
 #
 # IMEX convection at CFL 0.5, AMR in simulated time on a coarse base mesh, an
 # asymmetric bump to start the shedding, force statistics over the last 10
-# shedding periods. 4 MPI ranks, about 70 min on a desktop.
-# Expected (validated 2026-10-08): C_D 1.443, C_L,rms 0.403, St 0.157
-# (paper 1.44, 0.42, 0.151 -- all within 5%).
-# Faster, same accuracy within 1%: square_cylinder_re200_oifs.yaml.
+# shedding periods. 4 MPI ranks, about 42 min on a desktop.
+# Expected (validated 2026-10-09, 11,130 steps): C_D 1.444, C_L,rms 0.403,
+# St 0.157 (paper 1.44, 0.42, 0.151 -- all within 4%).
+# 5x fewer steps: square_cylinder_re200_oifs.yaml (C_D 1.2% and C_L,rms 2.8%
+# lower than this deck, St the same; it uses the collocated GLL mass, and IMEX
+# with that mass agrees with it within 1%).
 #
 #   mpirun -np 4 build/cpu/apps/run_case cases/square_cylinder_re200.yaml
 #   -> square_cylinder_re200/re200_summary.json (forces.periodic, reference)
