@@ -18,8 +18,10 @@ cd bessemer
 claude                 # or whichever coding agent you use
 ```
 
-Then ask it to set things up. The first setup builds the whole toolchain from Spack,
-compiler included, which takes a few hours. Later sessions start in seconds.
+Then ask it to set things up. It shows you a plan first: what gets installed where. The
+first setup builds the whole toolchain from Spack, compiler included, which takes a few
+hours and about 20 GB; the agent starts only when you agree. Later sessions start in
+seconds.
 
 ## What to ask
 
@@ -64,8 +66,8 @@ scripts/doctor.sh                                   # check the setup, build, sm
 mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d1.yaml
 ```
 
-[docs/using.md](docs/using.md) covers running cases, [docs/install/](docs/install/) the
-setup, [docs/developing.md](docs/developing.md) changing the solver, and
+[docs/using.md](docs/using.md) covers running cases, [docs/install/spack.md](docs/install/spack.md)
+the setup (`scripts/setup.sh`), [docs/developing.md](docs/developing.md) changing the solver, and
 [docs/deck_reference.md](docs/deck_reference.md) lists every deck key.
 
 ## Status

@@ -8,7 +8,7 @@
 # instead every failure path returns non-zero, which the wrappers check.
 #
 # Overrides:
-#   INCNS_MACHINE  -- force a machine name (default: hostname-resolved, else desktop)
+#   INCNS_MACHINE  -- force a machine name (default: scripts/machine.sh)
 #   SPACK_ROOT     -- spack checkout (default: $HOME/spack)
 
 # --- repo root -------------------------------------------------------------
@@ -18,25 +18,19 @@ if [ -z "${INCNS_REPO_ROOT:-}" ]; then
 fi
 export INCNS_REPO_ROOT
 
-# --- machine resolution (single source of truth) ---------------------------
+# --- machine resolution: scripts/machine.sh is the single source of truth ----
 if [ -z "${INCNS_MACHINE:-}" ]; then
-  _host=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)
-  case "$_host" in
-    # Add hostname patterns here as machines are brought up, e.g.:
-    #   frontier* ) INCNS_MACHINE=frontier ;;
-    # Bridges-2: br0xx login nodes + w0xx H100 nodes. psc_gpu is pinned to
-    # cuda_arch=90 (H100 only, see docs/install/bridges2.md) -- v0xx (V100)
-    # and gl0xx (L40S) are deliberately NOT matched here, since a cuda_arch=90
-    # binary is wrong-SM-arch on them.
-    br0* | w0* ) INCNS_MACHINE=psc_gpu ;;
-    * ) INCNS_MACHINE=desktop ;;
-  esac
+  INCNS_MACHINE=$("$INCNS_REPO_ROOT/scripts/machine.sh") || INCNS_MACHINE=
+fi
+if [ -z "$INCNS_MACHINE" ]; then
+  return 1 2>/dev/null || exit 1
 fi
 export INCNS_MACHINE
 
 _env_dir="$INCNS_REPO_ROOT/environments/$INCNS_MACHINE"
 if [ ! -d "$_env_dir" ]; then
   echo "env.sh: no spack env for machine '$INCNS_MACHINE' at $_env_dir" >&2
+  echo "  set it up: scripts/setup.sh --plan --name $INCNS_MACHINE (docs/install/spack.md)" >&2
   return 1 2>/dev/null || exit 1
 fi
 

@@ -156,7 +156,7 @@ stability limit; pass `-dt 0.001`.)
   `divergence` field says when. Lower `time.cfl_target` (IMEX) or use OIFS.
 - **`env.sh: ... System-toolchain leak -- aborting`:** the Spack environment isn't
   installed, or it was just edited and spack re-resolved it. See
-  [install/desktop.md](install/desktop.md).
+  [install/spack.md](install/spack.md) ("When `env.sh` fails").
 - **`implicit solve did not converge`:** usually the step is too large for IMEX. Lower
   `time.cfl_target`, or switch to OIFS.
 - **`time.convection: oifs needs ... fixed or cfl step control`:** OIFS has no error

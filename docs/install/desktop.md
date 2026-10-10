@@ -1,39 +1,25 @@
-# Desktop environment (Linux workstation)
+# The `desktop` environment (the maintainer's workstation)
 
-The reference development build. Everything, including GCC, comes from Spack; the
-system compiler, CMake and MPI are never used for project code. The environment lives in
-`environments/desktop/`: `spack.yaml`, the specs, and `spack.lock`, the exact
-resolution, both committed.
+The maintainer's Linux workstation and the project's reference environment:
+`environments/desktop/spack.yaml` and its `spack.lock`, both committed. The lock records
+versions known to work together. Other machines get their own environment from
+`scripts/setup.sh`: see [spack.md](spack.md), which also explains activation, the compiler
+pattern and the two traps.
 
 | | |
 |---|---|
-| Spack | a checkout at `~/spack` (override with `SPACK_ROOT`) |
-| Compiler | Spack-built `gcc@14.3.0`, reused as the compiler; the system GCC builds a few bootstrap tools only |
-| Stack | `mfem@develop` (+MPI, +MUMPS, +SuiteSparse, +gslib, +libCEED, +LAPACK), hypre, OpenMPI, CMake, Ninja, googletest, astyle, yaml-cpp, Python 3.12 with pybind11, NumPy, numba |
-| Activation | automatic: `scripts/*.sh` source `scripts/env.sh`, which activates the environment and aborts if any tool resolves outside Spack |
+| Spack | `~/spack`, develop at `5ca6d8e` (1.3.0.dev0) at the 2026-10-09 refresh |
+| Compiler | Spack-built `gcc@14.3.0`. The system GCC (11.4, no Fortran) builds a few bootstrap tools only |
+| Stack (2026-10-09) | MFEM 4.10.1-dev at `1c19aba` (pinned) with MPI, MUMPS, SuiteSparse, gslib, libCEED, LAPACK; hypre 3.2.0; libCEED 1.0.0; SuiteSparse 7.14; OpenMPI; CMake; Ninja; googletest; astyle; yaml-cpp; Python 3.12 with pybind11, NumPy, numba |
+| Selected by | `environments/.machine` containing `desktop` |
 
-A different machine gets its own `environments/<name>/` directory; existing environments
-are never edited to make another machine work. `scripts/env.sh` picks the machine from the
-hostname (override with `INCNS_MACHINE`).
+`desktop/spack.yaml` lacks `py-matplotlib`, which `stack.yaml` gained after the last
+refresh; the doctor warns about it. It arrives with the next refresh.
 
-## Two traps (both hit on 2026-10-09)
+## Refreshing
 
-1. **Run Spack from a host terminal, never inside a sandboxed editor.** A Flatpak VSCode
-   (and any agent running inside it) sees the Flatpak runtime's OS and glibc, not the
-   host's. Spack then resolves packages for a different OS
-   (`os=org.freedesktop.platform25` instead of the host's), and links fail when they mix
-   with the host-built stack. Check with `ls /.flatpak-info`: if that file exists, you are
-   in a sandbox. Best: install the editor natively.
-2. **Spack re-resolves an environment on activation after `spack.yaml` changes.** Editing
-   `spack.yaml` and then running anything that sources `scripts/env.sh` writes a new
-   `spack.lock` and points the environment's view at packages that aren't built yet. Until
-   `spack install` finishes, `mpirun` and MFEM vanish and `env.sh` aborts. So edit
-   `spack.yaml` only immediately before resolving and installing, in the same host session.
-
-## Building or refreshing the environment
-
-A refresh moves everything, MFEM included, to today's versions. Do it every couple of
-months, from a host terminal:
+A refresh moves everything, MFEM included, to today's versions. The maintainer does one
+every couple of months, from a host terminal (never the sandboxed editor: trap 1):
 
 ```sh
 cd ~/spack && git pull --ff-only
@@ -41,7 +27,7 @@ cd ~/spack && git pull --ff-only
 spack repo update
 
 cd ~/bessemer
-# (edit environments/desktop/spack.yaml now, if anything changes)
+# bring environments/desktop/spack.yaml's specs in line with environments/stack.yaml now
 spack -e environments/desktop concretize --fresh --force 2>&1 | tee ~/concretize.txt
 grep -c freedesktop environments/desktop/spack.lock     # must print 0 (trap 1)
 spack -e environments/desktop install -j 16              # hours: llvm (for numba) is the long pole
@@ -61,9 +47,9 @@ new MFEM or hypre: re-bless them only with a stated reason
 ## MFEM tracks `develop`, so sometimes it needs a pin
 
 `mfem@develop` resolves to the branch head at resolve time, and the lock records the
-commit. When a new MFEM breaks something, pin the last good commit in `spack.yaml`
-(`mfem@develop commit=<sha> +...`) with a comment naming the upstream issue, and drop the
-pin once it's fixed. Any active pin is commented in `spack.yaml`.
+commit. When a new MFEM breaks something, pin the last good commit
+(`mfem@develop commit=<sha> +...`) in `stack.yaml` and every machine's `spack.yaml`, with
+a comment naming the upstream issue. Drop the pin once it's fixed.
 
 ## Verifying
 

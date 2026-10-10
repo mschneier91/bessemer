@@ -28,16 +28,18 @@ may not be CFD specialists; match their vocabulary.
   a case (rule 5).
 - **Keep their runs out of the repo:** user decks and output go under `runs/`
   (git-ignored) unless they name another place.
-- **Setup in a sandboxed editor:** if `scripts/doctor.sh` warns about a sandbox, the Spack
-  steps have to run in a host terminal. Give the user the exact commands to paste
-  ([docs/install/desktop.md](docs/install/desktop.md)).
+- **Setting up their machine:** run `scripts/setup.sh --plan` and show them the plan (what
+  gets installed where, about 20 GB and a few hours the first time). Run `--yes` only
+  after they agree. In a sandboxed editor, give them the `--yes` command for a host
+  terminal instead. The procedure, and how the Spack setup fits together:
+  [docs/install/spack.md](docs/install/spack.md).
 
 ## Start here: what is the task?
 
 | Task | Read |
 |---|---|
 | Run a simulation: an example deck, a new deck, a Python case | [docs/using.md](docs/using.md); every deck key: [docs/deck_reference.md](docs/deck_reference.md) |
-| Install or build on a machine | [docs/install/desktop.md](docs/install/desktop.md), [docs/install/bridges2.md](docs/install/bridges2.md) (PSC GPU cluster) |
+| Install or build on a machine; how the Spack environments work | [docs/install/spack.md](docs/install/spack.md) (new machines: `scripts/setup.sh`); [docs/install/bridges2.md](docs/install/bridges2.md) (PSC GPU cluster) |
 | Change the solver (`src/`, `test/`, `apps/`) | [docs/developing.md](docs/developing.md): read it fully before planning |
 | **Where development left off**, open items, past decisions | [docs/status.md](docs/status.md) |
 | How a method works | `docs/*.md` (OIFS, outflow conditions, the Cahouet–Chabard preconditioner, IMEX vs semi-implicit), design specs in `docs/design/` |
@@ -50,7 +52,7 @@ may not be CFD specialists; match their vocabulary.
 2. **Leave `environments/*/spack.yaml` alone unless the human asks for environment work.** Editing
    it makes Spack re-resolve on the next activation, which breaks the build environment
    until a long install finishes. Environment work belongs in a host terminal, not a
-   sandboxed editor ([docs/install/desktop.md](docs/install/desktop.md)).
+   sandboxed editor ([docs/install/spack.md](docs/install/spack.md)).
 3. **Ask the human first** before using more than 4 MPI ranks, a 3D mesh larger than 32³,
    or any GPU, and before submitting anything to a batch scheduler (draft the job script
    and let the human submit it).
@@ -73,6 +75,7 @@ may not be CFD specialists; match their vocabulary.
 
 ```sh
 scripts/doctor.sh                        # FIRST: check the setup, build if needed, smoke-run
+scripts/setup.sh --plan                  # set up a new machine (plan first; --yes does it)
 scripts/build.sh cpu                     # build (build/cpu/)
 scripts/test.sh cpu -L fast              # fast tier: 171 tests, ~3.5 min
 . scripts/env.sh                         # activate the toolchain in this shell

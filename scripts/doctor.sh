@@ -11,7 +11,7 @@
 #
 # It never edits the Spack environment and never activates one whose
 # spack.yaml changed since its last resolve (activation would re-resolve it;
-# docs/install/desktop.md, trap 2).
+# docs/install/spack.md, trap 2).
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 INCNS_REPO_ROOT=$REPO
@@ -32,7 +32,7 @@ finish()
     echo "doctor: all good ($warns warning(s)). Next: docs/using.md"
     exit 0
   fi
-  echo "doctor: $fails problem(s) to fix (see the -> lines). Setup: docs/install/"
+  echo "doctor: $fails problem(s) to fix (see the -> lines). Setup: scripts/setup.sh --plan"
   exit 1
 }
 
@@ -42,7 +42,7 @@ echo "bessemer doctor ($REPO)"
 if [ -f /.flatpak-info ]; then
   warn "running inside a Flatpak sandbox ($(grep -m1 '^name=' /.flatpak-info | cut -d= -f2))"
   hint "builds and runs work here, but do Spack environment work (install, refresh,"
-  hint "edits to environments/*/spack.yaml) from a host terminal: docs/install/desktop.md"
+  hint "edits to environments/*/spack.yaml) from a host terminal: docs/install/spack.md"
 else
   ok "not in a sandboxed editor"
 fi
@@ -53,33 +53,46 @@ if [ -f "$SPACK_ROOT/share/spack/setup-env.sh" ]; then
   ok "Spack at $SPACK_ROOT"
 else
   fail "no Spack checkout at SPACK_ROOT=$SPACK_ROOT"
-  hint "clone Spack there (or set SPACK_ROOT), then build the environment: docs/install/"
+  hint "scripts/setup.sh --plan sets it up (or set SPACK_ROOT to an existing checkout)"
   finish
 fi
 
 # --- 3. the machine's environment -----------------------------------------------
-# Resolve the machine the way env.sh does, without activating anything yet.
-if [ -z "${INCNS_MACHINE:-}" ]; then
-  _host=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)
-  case "$_host" in
-    br0* | w0* ) INCNS_MACHINE=psc_gpu ;;
-    * ) INCNS_MACHINE=desktop ;;
-  esac
+# The same resolution env.sh uses, without activating anything yet.
+if ! INCNS_MACHINE=$("$REPO/scripts/machine.sh" 2>/dev/null) || [ -z "$INCNS_MACHINE" ]; then
+  fail "no environment selected for this machine"
+  hint "set this machine up: scripts/setup.sh --plan (docs/install/spack.md)"
+  finish
 fi
 envdir="$REPO/environments/$INCNS_MACHINE"
 if [ ! -f "$envdir/spack.yaml" ] || [ ! -f "$envdir/spack.lock" ]; then
-  fail "no Spack environment for machine '$INCNS_MACHINE' ($envdir)"
-  hint "a new machine needs its own environments/<name>/ (spack.yaml + spack.lock);"
-  hint "set INCNS_MACHINE to use an existing one: docs/install/"
+  fail "machine '$INCNS_MACHINE' has no resolved environment ($envdir)"
+  hint "scripts/setup.sh --plan --name $INCNS_MACHINE (docs/install/spack.md)"
   finish
 fi
 ok "machine '$INCNS_MACHINE', environment $envdir"
+# Spec names in a spack.yaml's specs: list.
+spec_names()
+{
+  awk '/^  specs:/ { f = 1; next } f && /^  [a-z]/ { f = 0 }
+       f && /^[[:space:]]*- / { s = $2; sub(/[@+~%^ ].*/, "", s); print s }' "$1" | sort -u
+}
+names=$(mktemp)
+drift=$(spec_names "$REPO/environments/stack.yaml" > "$names"
+        spec_names "$envdir/spack.yaml" | comm -3 "$names" - \
+          | awk -F'\t' '$1 != "" { m = m " " $1 } $2 != "" { e = e " " $2 }
+                         END { if (m) printf "missing:%s", m; if (e) printf "%sextra:%s", (m ? "; " : ""), e }')
+rm -f "$names"
+if [ -n "$drift" ]; then
+  warn "this machine's environment differs from environments/stack.yaml ($drift)"
+  hint "fine until you need those packages; to update: docs/install/spack.md, \"Updating\""
+fi
 yaml_t=$(stat -c %Y "$envdir/spack.yaml")
 lock_t=$(stat -c %Y "$envdir/spack.lock")
 if [ "$yaml_t" -gt $((lock_t + 2)) ]; then
   fail "spack.yaml changed after the last resolve (spack.lock is older)"
   hint "activating now would re-resolve the environment and hide the installed stack."
-  hint "From a host terminal: spack -e $envdir concretize --force && spack -e $envdir install"
+  hint "From a host terminal: scripts/setup.sh --yes --name $INCNS_MACHINE (resolves and installs)"
   hint "(or, if the edit was unintended: git checkout -- $envdir/spack.yaml)"
   finish
 fi
@@ -92,7 +105,7 @@ if . "$REPO/scripts/env.sh" >"$out" 2>&1; then
 else
   fail "activating the environment failed:"
   sed 's/^/          /' "$out" | tail -5
-  hint "the environment is probably not installed: spack -e $envdir install (host terminal)"
+  hint "the environment is probably not installed: scripts/setup.sh --plan --name $INCNS_MACHINE"
   rm -f "$out"
   finish
 fi
@@ -112,7 +125,7 @@ if [ -f "$cfg" ]; then
   fi
 else
   fail "MFEM not found (MFEM_DIR='${MFEM_DIR:-}')"
-  hint "spack -e $envdir install (host terminal)"
+  hint "scripts/setup.sh --plan --name $INCNS_MACHINE (installs the environment)"
   finish
 fi
 

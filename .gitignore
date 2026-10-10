@@ -7,6 +7,8 @@
 # Spack env internals live under environments/<machine>/.spack-env; keep the
 # committed spack.yaml + spack.lock, ignore the generated view/state.
 environments/*/.spack-env/
+# Which environment this checkout uses on this machine (scripts/setup.sh).
+environments/.machine
 
 # Editor / OS / tooling cruft
 *.orig

@@ -15,6 +15,14 @@ ask, what the agent asks first, what comes back. Human: the test cases are not t
 standard CFD benchmarks to showcase (literature table removed; `cases/` decks are now
 "example decks"), and the "production DNS/LES on DOE systems" line removed. AGENTS.md
 gains "Working with the user" and rule 9 (licensing); user runs go under `runs/`.
+Spack for anyone's machine (human: "someone points their agent at the repo ... it can do
+everything from installing with spack (with users permissions of course)"):
+`environments/stack.yaml` (portable stack, + py-matplotlib), `scripts/setup.sh` (plan,
+then `--yes`; builds gcc@14.3.0 and declares it external), `scripts/machine.sh` (no default
+machine any more; this checkout has `environments/.machine` = desktop),
+`docs/install/spack.md` (how it all fits, for agents). Not yet run: `setup.sh --yes` on a
+fresh machine. Next: that test (host terminal, clean VM or container); the TGV example
+(deferred by the human).
 
 **Just landed (branch `agent-first`, merged to `main` and pushed 2026-10-09, human:
 "commit merge and push"):**

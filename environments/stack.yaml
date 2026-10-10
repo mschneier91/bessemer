@@ -1,0 +1,52 @@
+# environments/stack.yaml -- the bessemer software stack, for any machine.
+#
+# Not an environment itself. scripts/setup.sh copies everything from `spack:`
+# down into environments/<machine>/spack.yaml and appends that machine's
+# compiler (and anything else machine-specific) under `packages:`, which is
+# why `packages:` stays the LAST section here.
+#
+# Editing this file changes no machine. Each machine's spack.yaml is updated on
+# purpose, from a host terminal, followed by a resolve and an install
+# (docs/install/spack.md, "Updating a machine's environment").
+spack:
+  specs:
+    # MUMPS (human 2026-10-09): MFEM's +mumps (MFEM_USE_MUMPS; pulls MUMPS and
+    # ScaLAPACK). No OpenMP in MUMPS: one MPI rank per core, and OpenMP threads
+    # per rank would oversubscribe. METIS/ParMETIS orderings.
+    # MFEM pinned (human 2026-10-09) to master just before PR #5297 ("General
+    # NC mesh spacing in parallel", https://github.com/mfem/mfem/pull/5297):
+    # its ParMesh::AnisotropicConflict segfaults on nonconforming 3D hex meshes
+    # at np >= 2 (reported upstream 2026-10-09). Drop the pin once fixed.
+    - mfem@develop commit=1c19aba72a2b91ee918a332e668cf00922848321
+      +gslib+lapack+libceed+mpi+mumps+shared+static+suite-sparse
+      ^gslib@1.0.9 cflags="-fPIC"
+      ^mumps+metis+parmetis~openmp
+
+    - cmake
+    - ninja
+    - openmpi
+
+    - googletest
+    - astyle
+    - yaml-cpp
+
+    # Python interface: our own pybind11 bindings over the incns Case surface
+    # (PyMFEM is never used). numba provides the @cfunc fast path for
+    # user-defined ICs/BCs/forcing. numba lags Python releases, so the
+    # interpreter is pinned to a numba-supported version. matplotlib is for
+    # post-processing (plots from the run summaries and history files).
+    - python@3.12
+    - py-pybind11
+    - py-numpy
+    - py-numba
+    - py-matplotlib
+
+  concretizer:
+    unify: true
+
+  view: true
+
+  packages:
+    all:
+      providers:
+        mpi: [openmpi]
