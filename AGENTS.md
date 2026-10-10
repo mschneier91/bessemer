@@ -39,6 +39,9 @@ drivers.
 8. **Before you stop**, update "Where development left off" at the top of
    [docs/status.md](docs/status.md): what landed, what's in flight, what's next. It is how
    the next agent (or human) picks up.
+9. **Licensing.** bessemer is BSD-3-Clause ([LICENSE](LICENSE)). Never copy in code under
+   a license that can't be relicensed as BSD-3 (GPL, LGPL, no license at all); code
+   adapted from MFEM (also BSD-3) is fine, with a comment naming the source.
 
 ## Commands
 

@@ -66,3 +66,10 @@ mpirun -np 4 python examples/python/start_here.py
 The CPU path is the validated one. GPU kernels exist but haven't been confirmed on a GPU.
 Production DNS/LES runs target DOE systems. Current work and open items:
 [docs/status.md](docs/status.md).
+
+## License
+
+BSD 3-Clause, the same as MFEM: see [LICENSE](LICENSE). The license covers this source
+code. A compiled bessemer links third-party libraries under their own licenses (among
+them MUMPS, CeCILL-C, and SuiteSparse's UMFPACK, GPL), which apply if you distribute
+binaries.
