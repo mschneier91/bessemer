@@ -97,8 +97,7 @@ Stokes) on MFEM (parallel `ParMesh`/`ParGridFunction`), **coupled and monolithic
 velocity and pressure are solved together as one saddle-point system per step — no
 splitting, no projection. It builds as a **library** (`libincns`); a case is a thin driver
 (C++, Python, or a YAML deck). **The solver core is never edited to run a new case** — a
-case that needs a source change exposes a missing library feature. Production DNS/LES runs
-target DOE systems, not this desktop.
+case that needs a source change exposes a missing library feature.
 
 ```
 src/
@@ -137,7 +136,7 @@ apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2
                hello_mpi
 bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest);
                dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
-cases/         validated benchmark decks (square_cylinder_re200[_oifs], dfg_2d1, dfg_2d3),
+cases/         example decks (square_cylinder_re200[_oifs], dfg_2d1, dfg_2d3),
                cavity.yaml (smoke), tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
 python/        bindings.cpp (module incns), incns/__init__.py (@incns.field)
 examples/python/stokes_ex/   run.py, run_yaml.py, run_channel.py, run_amr.py (also py tests)

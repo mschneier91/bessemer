@@ -1,6 +1,9 @@
 # Build trees (per preset). Never committed; never `rm -rf`'d (warm ccache).
 /build/
 
+# User runs: decks and output (AGENTS.md, "Working with the user").
+/runs/
+
 # Spack env internals live under environments/<machine>/.spack-env; keep the
 # committed spack.yaml + spack.lock, ignore the generated view/state.
 environments/*/.spack-env/

@@ -1,7 +1,7 @@
 # Using bessemer
 
-How to run the solver: build it, drive a case (deck, Python or C++), reproduce the
-validated benchmarks, and read the results. No solver code changes are ever needed to run
+How to run the solver: build it, drive a case (deck, Python or C++), start from the example
+decks, and read the results. No solver code changes are ever needed to run
 a case; if one seems necessary, that is a missing library feature (see
 [developing.md](developing.md)).
 
@@ -86,11 +86,11 @@ Geometries beyond boxes have drivers in `apps/`: `dfg_cylinder` (the DFG channel
 cylinder) and `square_cylinder` (a square cylinder in a large domain). Each prints its
 options with `--help`.
 
-## 3. Validated cases you can reproduce
+## 3. Example decks
 
-Each is a deck in `cases/`: run it with `mpirun -np 4 build/cpu/apps/run_case
-cases/<deck>.yaml`. The summary's `reference` section reports the errors against the
-literature values. Wall times are for 4 MPI ranks on an 8-core desktop.
+Starting points for new cases: copy the closest one. Each is a deck in `cases/`; run it
+with `mpirun -np 4 build/cpu/apps/run_case cases/<deck>.yaml`. Those with literature
+values report their errors in the summary's `reference` section. Wall times are for 4 MPI ranks on an 8-core desktop.
 
 | Deck | Case | Time | Expected |
 |---|---|---|---|

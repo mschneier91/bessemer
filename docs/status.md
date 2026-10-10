@@ -9,6 +9,13 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**On branch `license` (not merged yet):** BSD-3-Clause `LICENSE` (copyright Michael
+Schneier; human: "it should be me"). README rewritten so the agent is the way in: what to
+ask, what the agent asks first, what comes back. Human: the test cases are not the
+standard CFD benchmarks to showcase (literature table removed; `cases/` decks are now
+"example decks"), and the "production DNS/LES on DOE systems" line removed. AGENTS.md
+gains "Working with the user" and rule 9 (licensing); user runs go under `runs/`.
+
 **Just landed (branch `agent-first`, merged to `main` and pushed 2026-10-09, human:
 "commit merge and push"):**
 - Environment refresh: MFEM 4.10.1-dev with MUMPS, hypre 3.2, libCEED 1.0. MFEM pinned
