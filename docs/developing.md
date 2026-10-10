@@ -280,15 +280,18 @@ additive term inside `StokesTimeIntegrator`.
   so the BDF step runs at CFL 2–4. One combined field from the oldest level (Nek's way);
   RK4 substeps sized by the substep CFL; advection = MFEM `ConvectionIntegrator` per
   component (PA, 3k rule), one operator per history velocity combined with the weights per
-  stage; ROW-SUM-LUMPED GLL mass in the substeps. **The BDF step must use the SAME
-  (collocated GLL, diagonal) mass — case-level OIFS always does (`Parameters::
-  CollocatedMass()`, human-requested study 2026-10-09).** With the consistent mass there
-  the dt → 0 limit is M·M_L⁻¹N(u), not IMEX's N(u): a mismatch that converges only with h
-  (wall MMS 1.6e-3 / 1.6e-4 at n = 4 / 8) but cost C_D +3% and C_L,rms +12% on the Re 200
-  square cylinder at EVERY dt (CFL 4 → 0.5). Matched, OIFS = IMEX to the time error (wall
-  MMS 5e-7; square cylinder BDF3 CFL 1: C_D −0.24%, C_L,rms −0.66%, St +0.06% vs IMEX
-  collocated, in half the steps). Nek never sees it (diagonal mass everywhere).
-  `nse_mms_test` OifsMatchesImexWithCollocatedMass2D pins both sides.
+  stage. **The substeps invert the BDF step's OWN mass operator** (passed to
+  `OifsAdvector`, never rebuilt; human 2026-10-10: "error out if the two aren't
+  consistent"): pointwise when it is diagonal (collocated GLL on a conforming mesh, the
+  case-level OIFS default, `Parameters::CollocatedMass()`), otherwise Jacobi-CG per RK
+  stage (~6 its/stage at hanging nodes), the FULL inverse with the imposed rates dropped
+  afterwards (a constrained solve left 3.6e-4 vs IMEX). Setup verifies M⁻¹(Mz) = z and
+  aborts otherwise. Why: with a different mass M_sub in the substeps the dt → 0 limit is
+  M·M_sub⁻¹N(u), not IMEX's N(u) — the lumped-substep / consistent-BDF mismatch cost C_D +3%
+  and C_L,rms +12% on the Re 200 square cylinder at EVERY dt (2026-10-09). Matched, OIFS =
+  IMEX to the time error with either mass (wall MMS 3.0e-6 collocated and consistent;
+  square cylinder BDF3 CFL 1: C_D −0.24%, C_L,rms −0.66%, St +0.06% vs IMEX collocated, in
+  half the steps). `nse_mms_test` OifsMatchesImexWithEitherMass2D pins both.
   **Boundaries (two traps, both measured on `nse_mms_test` OifsTemporalOrder2D):**
   (1) characteristic rule — impose u_D(s) in the substeps only where the wind enters or is
   tangential (w·n ≤ 0, walls included), leave outflow nodes free; (2) with a non-diagonal
@@ -296,7 +299,7 @@ additive term inside `StokesTimeIntegrator`.
   advected history, not frozen data: `OifsBoundaryValues` sets them to Σcⱼu_D(tⁿ⁺¹⁻ʲ) −
   (Σcⱼτⱼ)(u·∇)u|ⁿ⁺¹ (BDF2/3: Σcⱼτⱼ = −1, Σcⱼτⱼ² = 0 for any step ratio, BDF3 also
   Σcⱼτⱼ³ = 0, so the same formula is 3rd order), the convective
-  acceleration EXT-extrapolated from M_L⁻¹N(u). Without (2) the error stalled at 4.6e-4
+  acceleration EXT-extrapolated from M⁻¹N(u). Without (2) the error stalled at 4.6e-4
   (h = 1/3) whatever dt and converged only like h² — Nek never sees it (diagonal mass).
   **BDF order: `time.order` auto (0) = BDF3 under OIFS (human 2026-10-09: "you should be
   running everything with BDF3 with the OIFS stuff"; Nek's pairing), BDF2 under IMEX;
@@ -320,8 +323,8 @@ additive term inside `StokesTimeIntegrator`.
   OIFS's is far larger at equal dt (wall MMS, dt 0.005: BDF2-OIFS 8.6e-3 vs IMEX's
   all-spatial 5.45e-3). BDF3 cuts it 3.5–7× (wall MMS, exact start, orders 2.42/2.80;
   TGV CFL 2/4: errors 0.085/0.079 vs BDF2's 0.164/0.204 and IMEX CFL 0.5's 0.097, in 11/9
-  vs 38 steps; 0.074/0.072 with the collocated mass, the case-level default). The lumped substep mass converges at ~4.5 and is as accurate on hanging-node
-  meshes (O3). Tests `oifs_test` O1 (RK4 order 4, translation) / O2 (TGV CFL 2/4, BDF3:
+  vs 38 steps; 0.074/0.072 with the collocated mass, the case-level default). On
+  hanging-node meshes OIFS is as accurate as on conforming ones (O3). Tests `oifs_test` O1 (RK4 order 4, translation) / O2 (TGV CFL 2/4, BDF3:
   ≤ 1.2× IMEX's error in 3.5–4× fewer steps) / O3 (nonconforming), `nse_mms_test`
   OifsTemporalOrder2D (BDF2, inflow), OifsWallBounded2D (BDF2, no-slip: order, error
   ≤ 1.35× IMEX's, residual wall force = IMEX's to 5e-3), OifsBdf3TemporalOrder2D,

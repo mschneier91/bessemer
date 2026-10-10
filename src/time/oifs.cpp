@@ -12,8 +12,9 @@ namespace incns
 using namespace mfem;
 
 OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
-                           BoundaryConditions& bc, double sub_cfl)
-   : spaces_(spaces), rules_(rules), bc_(bc), sub_cfl_(sub_cfl)
+                           BoundaryConditions& bc, double sub_cfl,
+                           Operator& mass, const Vector& mass_diag)
+   : spaces_(spaces), rules_(rules), bc_(bc), sub_cfl_(sub_cfl), mass_(mass)
 {
    MFEM_VERIFY(sub_cfl > 0.0, "oifs: the substep CFL number must be positive");
    ParFiniteElementSpace& V = spaces_.Velocity();
@@ -25,29 +26,7 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
    MFEM_VERIFY(dim_ * n_s_ == V.GetTrueVSize(), "oifs: the scalar companion "
                "space does not match the velocity space's components");
 
-   // Row-sum-lumped GLL mass: the collocated mass applied to ones. On a
-   // conforming mesh that is the (diagonal) GLL mass itself; on a
-   // nonconforming one P^T D P 1 = P^T D 1, the row sums (P 1 = 1).
-   const Geometry::Type geom = (dim_ == 3) ? Geometry::CUBE : Geometry::SQUARE;
-   {
-      ParBilinearForm m(sfes_.get());
-      auto* mi = new MassIntegrator();
-      mi->SetIntRule(&rules_.CollocatedMass(geom, spaces_.OrderU()));
-      m.AddDomainIntegrator(mi);
-      m.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      m.Assemble();
-      OperatorPtr M;
-      Array<int> none;
-      m.FormSystemMatrix(none, M);
-      Vector ones(n_s_);
-      ones.UseDevice(true);
-      ones = 1.0;
-      inv_mass_.SetSize(n_s_);
-      inv_mass_.UseDevice(true);
-      M->Mult(ones, inv_mass_);
-      double* d = inv_mass_.HostReadWrite(); // setup only
-      for (int i = 0; i < n_s_; ++i) { d[i] = 1.0 / d[i]; }
-   }
+   SetupMass(mass_diag);
    cfl_ = std::make_unique<ConvectiveCfl>(V, rules_);
    bd_ = std::make_unique<ParGridFunction>(&V);
    bd_true_.SetSize(V.GetTrueVSize());
@@ -78,23 +57,111 @@ void OifsAdvector::Rhs(double s, const Vector& phi, Vector& dphi)
          conv_op_[l]->Mult(phi_c, tmp_s_);
          dphi_c.Add(-w[l], tmp_s_);
       }
-      dphi_c *= inv_mass_; // element-wise: M_L^{-1}
       dphi_c.SyncAliasMemory(dphi);
    }
+   // The FULL inverse, imposed rows included, then the imposed rates
+   // dropped (SetDirichlet sets those values). The BDF step's right-hand
+   // side M phi then reads M^{-1} N(u) on every row to first order -- the
+   // boundary rows get it from OifsBoundaryValues -- which is IMEX's N(u).
+   // Holding the imposed increments at zero inside a constrained solve
+   // instead couples their (different) values into the interior rows through
+   // M's off-diagonals: measured 3.6e-4 from IMEX with the consistent mass
+   // (nse_mms_test OifsMatchesImexWithEitherMass2D). Identical for a
+   // diagonal M.
+   MassInverse(dphi, dphi);
    dphi.SetSubVector(imposed_, 0.0);
 }
 
-void OifsAdvector::LumpedNodal(const Vector& g, Vector& nodal) const
+void OifsAdvector::SetupMass(const Vector& mass_diag)
 {
-   if (&nodal != &g) { nodal = g; }
-   for (int c = 0; c < dim_; ++c)
+   // The BDF step's mass M, inverted exactly (see the class comment). Whether
+   // M is diagonal is measured here, never assumed from the options.
+   ParFiniteElementSpace& V = spaces_.Velocity();
+   const int n = V.GetTrueVSize();
+   MFEM_VERIFY(mass_.Height() == n && mass_.Width() == n &&
+               mass_diag.Size() == n, "oifs: the mass must act on the "
+               "velocity true dofs");
+   mass_diag_.SetSize(n);
+   mass_diag_.UseDevice(true);
+   mass_diag_ = mass_diag;
+   inv_mass_diag_.SetSize(n);
+   inv_mass_diag_.UseDevice(true);
    {
-      Vector part;
-      part.MakeRef(nodal, c * n_s_, n_s_);
-      part.SyncMemory(nodal);
-      part *= inv_mass_;
-      part.SyncAliasMemory(nodal);
+      const double* d = mass_diag_.HostRead(); // setup only
+      double* id = inv_mass_diag_.HostWrite();
+      for (int i = 0; i < n; ++i)
+      {
+         MFEM_VERIFY(d[i] > 0.0, "oifs: the mass diagonal must be positive");
+         id[i] = 1.0 / d[i];
+      }
    }
+   mass_rhs_.SetSize(n);
+   mass_rhs_.UseDevice(true);
+
+   const MPI_Comm comm = V.GetComm();
+   auto norm = [comm](const Vector & v)
+   {
+      return std::sqrt(InnerProduct(comm, v, v));
+   };
+   // A deterministic test vector without zeros.
+   Vector z(n), mz(n), r(n);
+   z.UseDevice(true);
+   mz.UseDevice(true);
+   r.UseDevice(true);
+   {
+      double* zh = z.HostWrite();
+      const int rank = V.GetMyRank();
+      for (int i = 0; i < n; ++i)
+      {
+         zh[i] = 1.0 + 0.5 * std::sin(0.7 * (i + 1) + 1.3 * rank);
+      }
+   }
+   mass_.Mult(z, mz);
+   r = z;
+   r *= mass_diag_;
+   r -= mz;
+   mass_diagonal_ = norm(r) <= 1e-13 * norm(mz);
+
+   if (!mass_diagonal_)
+   {
+      // SetOperator before SetPreconditioner: MFEM forwards SetOperator to
+      // the PC, which would rebuild the Jacobi diagonal.
+      mass_jacobi_ = std::make_unique<OperatorJacobiSmoother>(mass_diag_,
+                     no_dofs_);
+      mass_cg_ = std::make_unique<CGSolver>(comm);
+      mass_cg_->SetOperator(mass_);
+      mass_cg_->SetPreconditioner(*mass_jacobi_);
+      mass_cg_->SetRelTol(1e-13);
+      mass_cg_->SetAbsTol(0.0);
+      mass_cg_->SetMaxIter(500);
+      mass_cg_->SetPrintLevel(-1);
+      mass_cg_->iterative_mode = false;
+   }
+
+   // The check (human 2026-10-10: error out if the substeps' mass and the
+   // BDF step's are not the same): M^{-1} (M z) must give z back.
+   MassInverse(mz, r);
+   r -= z;
+   const double mismatch = norm(r) / norm(z);
+   MFEM_VERIFY(mismatch <= (mass_diagonal_ ? 1e-12 : 1e-9),
+               "oifs: the substeps' mass inverse does not reproduce the BDF "
+               "step's mass (relative mismatch " << mismatch << "); OIFS "
+               "would converge to M M_sub^-1 N(u) instead of N(u)");
+}
+
+void OifsAdvector::MassInverse(const Vector& g, Vector& nodal)
+{
+   if (mass_diagonal_)
+   {
+      if (&nodal != &g) { nodal = g; }
+      nodal *= inv_mass_diag_; // element-wise: M^{-1}
+      return;
+   }
+   mass_rhs_ = g; // g and nodal may alias
+   mass_cg_->Mult(mass_rhs_, nodal);
+   MFEM_VERIFY(mass_cg_->GetConverged(), "oifs: the mass solve did not "
+               "converge (" << mass_cg_->GetNumIterations() << " iterations)");
+   mass_iterations_ += mass_cg_->GetNumIterations();
 }
 
 void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)

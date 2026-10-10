@@ -377,12 +377,10 @@ struct Parameters
    }
 
    /// @return Whether the velocity mass is the GLL collocated (diagonal) one:
-   ///         collocated_mass, and always under OIFS. OIFS advects with the
-   ///         lumped GLL mass; a consistent mass in the BDF step makes its
-   ///         dt -> 0 limit M M_L^-1 N(u) instead of N(u) -- measured on the
-   ///         Re 200 square cylinder: C_D +3%, C_L,rms +12% vs IMEX at every
-   ///         dt; with the collocated mass in both, within 0.3% / 1.1% of
-   ///         IMEX's (collocated) values (human-requested study 2026-10-09).
+   ///         collocated_mass, and always under OIFS. OIFS's substeps invert
+   ///         the BDF step's own mass, whatever it is (OifsAdvector aborts if
+   ///         they differ); the collocated mass keeps that inverse pointwise
+   ///         on conforming meshes instead of a CG solve per RK stage.
    bool CollocatedMass() const
    {
       return collocated_mass ||

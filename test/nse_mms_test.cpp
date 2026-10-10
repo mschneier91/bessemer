@@ -415,9 +415,11 @@ TEST(NseMms, Ext3TemporalOrder2D)
 //    boundary data the substeps used to impose, the imposed nodes read
 //    Du/Dt = 0 through the consistent mass and the error stalled at 4.6e-4
 //    (h = 1/3, converging only like h^2) whatever dt; with the
-//    characteristic boundary values it is 8.6e-6 at h = 1/3 and 3.9e-7 at
-//    h = 1/6 (rate ~4.5: an ordinary spatial error of the lumped substep
-//    mass, where IMEX is exact on this polynomial MMS).
+//    characteristic boundary values it was 8.6e-6 at h = 1/3 and 3.9e-7 at
+//    h = 1/6 -- the spatial error of the then-lumped substep mass, where
+//    IMEX is exact on this polynomial MMS. Since the substeps invert the
+//    BDF step's own (here consistent) mass, OIFS is exact here too up to the
+//    time error: 9.1e-8 (h = 1/3) and 6.9e-8 (h = 1/6), measured 2026-10-10.
 TEST(NseMms, OifsTemporalOrder2D)
 {
    const double nu = 0.7, t_final = 0.2;
@@ -446,21 +448,21 @@ TEST(NseMms, OifsTemporalOrder2D)
       std::printf("[ NSE MMS  ] 2D BDF2-OIFS error vs exact at dt = 0.000625: "
                   "h = 1/3 %g, h = 1/6 %g\n", ref.u_err, fine);
    }
-   EXPECT_LT(ref.u_err, 1.5e-5) << "error vs the exact solution, h = 1/3";
-   EXPECT_LT(fine, ref.u_err / 8.0) << "the residual must converge in h";
+   // Both at the time-error floor (the frozen-data stall was 4.6e-4, the
+   // lumped-mass spatial error 8.6e-6).
+   EXPECT_LT(ref.u_err, 1e-6) << "error vs the exact solution, h = 1/3";
+   EXPECT_LT(fine, 1e-6) << "error vs the exact solution, h = 1/6";
 }
 
 // OIFS with no-slip walls (u = 0 on the whole boundary; the square-cylinder
-// situation). Measured 2026-10-09 (n = 4, Q3, nu = 0.05):
-//  - small dt: OIFS 6.6e-3 vs IMEX 5.45e-3 (+21%: the mass mismatch -- this
-//    test runs the CONSISTENT BDF mass, see
-//    OifsMatchesImexWithCollocatedMass2D; converging at h^4 like IMEX: 8x8
-//    gives 4.2e-4 vs 3.3e-4); evaluating (u.grad)u pointwise at the wall
-//    nodes instead of by M_L^-1 N(u) changed it by < 1% (tried and reverted);
+// situation). Runs the CONSISTENT mass, which the substeps now invert too
+// (CG). Measured (n = 4, Q3, nu = 0.05):
+//  - small dt: OIFS 5.456e-3 vs IMEX 5.453e-3 (2026-10-10). With the lumped
+//    substep mass it was 6.6e-3 (+21%: the mass mismatch, 2026-10-09);
 //  - order 1.9 / 2.05 vs a dt = 0.000625 reference;
 //  - the residual wall force (how the solver computes lift/drag) agrees with
-//    IMEX's to 1.5e-3 (n = 4) / 1e-5 (n = 8) -- no force bias from the wall
-//    nodes' advected history;
+//    IMEX's to 1.8e-5 (2026-10-10; 1.5e-3 with the mismatch) -- no force bias
+//    from the wall nodes' advected history;
 //  - the TIME ERROR CONSTANT is large: at dt = 0.005 OIFS 8.6e-3 vs IMEX
 //    5.45e-3 (IMEX's error is all spatial). OIFS's time error is that of BDF2
 //    ALONG TRAJECTORIES (D^3u/Dt^3), IMEX's that of the Eulerian field (plus
@@ -496,12 +498,13 @@ TEST(NseMms, OifsWallBounded2D)
    ASSERT_GT(e3, kNoiseFloor) << "finest error at noise level -- vacuous rate";
    EXPECT_GT(Rate(e1, e2, 2.0), 1.8) << "e(0.02)=" << e1 << " e(0.01)=" << e2;
    EXPECT_GT(Rate(e2, e3, 2.0), 1.8) << "e(0.01)=" << e2 << " e(0.005)=" << e3;
-   EXPECT_LT(ref.u_err, 1.35 * imex.u_err) << "OIFS at small dt must match "
-                                           "IMEX's spatial error (walls)";
+   EXPECT_LT(ref.u_err, 1.02 * imex.u_err) << "OIFS at small dt must match "
+                                           "IMEX's spatial error (walls): "
+                                           "a mass mismatch gave +21%";
    // The residual force reads the advected history at the wall nodes: it
-   // must agree with IMEX's (measured 1.5e-3 relative; both 4% from exact,
-   // the spatial error of this mesh).
-   EXPECT_LT(std::abs(ref.wall_fx - imex.wall_fx), 5e-3 * std::abs(imex.wall_fx));
+   // must agree with IMEX's (measured 1.8e-5 relative, 1.5e-3 with the mass
+   // mismatch; both 4% from exact, the spatial error of this mesh).
+   EXPECT_LT(std::abs(ref.wall_fx - imex.wall_fx), 2e-4 * std::abs(imex.wall_fx));
 }
 
 // BDF3-OIFS (the OIFS production scheme, human 2026-10-09), no-slip walls,
@@ -547,16 +550,15 @@ TEST(NseMms, OifsBdf3TemporalOrder2D)
    EXPECT_LT(3.0 * e1, e1_bdf2) << "BDF3 must beat BDF2 at CFL ~2";
 }
 
-// OIFS needs the SAME mass in the substeps and the BDF step. Its substeps
-// advect with the lumped GLL mass M_L; with the consistent mass M in the BDF
-// step its dt -> 0 limit is M M_L^-1 N(u), not IMEX's N(u) -- a mismatch
-// that converges only with h (here 1.6e-3 at n = 4, 1.6e-4 at n = 8) but cost
-// C_D +3% / C_L,rms +12% on the Re 200 square cylinder at EVERY dt. With the
-// collocated (diagonal) mass in both, OIFS and IMEX agree to the time error
-// (measured 2026-10-09: 5e-7 at n = 4, 4e-7 at n = 8, dt = 0.000625; wall
-// forces to 6 digits). Case-level OIFS therefore always uses the collocated
-// mass (Parameters::CollocatedMass).
-TEST(NseMms, OifsMatchesImexWithCollocatedMass2D)
+// OIFS needs the SAME mass in the substeps and the BDF step: with the lumped
+// GLL mass M_L in the substeps and the consistent M in the BDF step its
+// dt -> 0 limit was M M_L^-1 N(u), not IMEX's N(u) -- a gap of 1.6e-3 here
+// (n = 4) that cost C_D +3% / C_L,rms +12% on the Re 200 square cylinder at
+// EVERY dt (2026-10-09). The substeps now invert the BDF step's own mass
+// operator (OifsAdvector aborts otherwise; human 2026-10-10), so OIFS agrees
+// with IMEX to the time error with EITHER mass: the collocated (diagonal,
+// the case-level OIFS default) or the consistent one (a CG solve per stage).
+TEST(NseMms, OifsMatchesImexWithEitherMass2D)
 {
    const double nu = 0.05, t_final = 0.2, dt = 0.00125;
    std::unique_ptr<VectorFunctionCoefficient> u_exact, forcing;
@@ -578,16 +580,15 @@ TEST(NseMms, OifsMatchesImexWithCollocatedMass2D)
       return std::sqrt(InnerProduct(MPI_COMM_WORLD, d, d) /
                        InnerProduct(MPI_COMM_WORLD, ri.u_true, ri.u_true));
    };
-   const double matched = gap(true), mixed = gap(false);
+   const double collocated = gap(true), consistent = gap(false);
    if (Mpi::Root())
    {
       std::printf("[ NSE MMS  ] 2D no-slip walls, |OIFS - IMEX| / |IMEX| at dt "
-                  "= %g: collocated mass %g, consistent BDF mass %g\n", dt,
-                  matched, mixed);
+                  "= %g: collocated mass %g, consistent mass %g\n", dt,
+                  collocated, consistent);
    }
-   EXPECT_LT(matched, 2e-5) << "OIFS must converge to IMEX's discretization";
-   EXPECT_GT(mixed, 5e-4) << "the mixed-mass gap vanished: is the collocated "
-                          "mass still being applied in the comparison?";
+   EXPECT_LT(collocated, 2e-5) << "OIFS must converge to IMEX's discretization";
+   EXPECT_LT(consistent, 2e-5) << "OIFS must converge to IMEX's discretization";
 }
 
 TEST(NseMms, TemporalOrder3D)

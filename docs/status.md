@@ -4,10 +4,22 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-09)
+## Where development left off (2026-10-10)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**On branch `oifs-mass` (not merged yet):** OIFS's substeps invert the BDF step's own mass
+operator, so the two can no longer differ (human: "I literally want it to error out if
+the two aren't consistent, using the diagonal for both of them as the default is fine").
+Pointwise for a diagonal mass (collocated, conforming: the default, unchanged results),
+Jacobi-CG per RK stage otherwise (consistent mass; collocated at hanging nodes, ~6
+its/stage), always the FULL inverse (a constrained solve left 3.6e-4 vs IMEX). Setup
+checks M^-1(Mz) = z and aborts otherwise. OIFS now matches IMEX with either mass (wall MMS
+3.0e-6 both; was 1.6e-3 mismatched). AMR runs change slightly (exact P^T D P instead of
+row-sum lumping). Benchmark plan (3D TGV, channel Re_tau 180/395, sphere, DFG 3D,
+Ethier-Steinman) proposed; waiting on the human's answers (Re_tau pair, forcing,
+directory layout, GPU-hours).
 
 **Just landed (branch `license`, merged to `main` and pushed 2026-10-09, human: "merge and
 push"):** BSD-3-Clause `LICENSE` (copyright Michael

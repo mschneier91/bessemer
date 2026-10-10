@@ -1,6 +1,6 @@
 // OIFS (time/oifs.hpp): the BDF history advected by RK4 substeps.
 //  O1 the advector alone: a smooth periodic field carried by a constant wind
-//     matches the exact translation (spatial accuracy of the lumped-mass,
+//     matches the exact translation (spatial accuracy of the collocated-mass,
 //     dealiased advection), and its time error against a tiny-substep
 //     reference falls like the 4th power of the substep (RK4);
 //  O2 the point of OIFS: the periodic NSE Taylor-Green vortex (exact, nu =
@@ -20,6 +20,7 @@
 #include "mesh/periodic_box.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
+#include "operators/stokes_operator.hpp"
 #include "time/oifs.hpp"
 #include "config/parameters.hpp"
 #include "exact/tgv2d.hpp"
@@ -88,9 +89,16 @@ TEST(Oifs, O1_AdvectionTranslatesWithRk4TimeOrder)
    const std::deque<Vector> wind = {to_true(wind_c)};
    const std::deque<Vector> fields = {to_true(f0_c)};
 
+   // The mass a BDF step would use: the collocated GLL mass (OIFS's default).
+   incns::StokesOperatorOptions mo;
+   mo.nu = 1.0;
+   mo.collocated_mass = true;
+   incns::StokesOperator blocks(spaces, rules, mo);
    auto advect = [&](double sub_cfl, int& substeps)
    {
-      incns::OifsAdvector adv(spaces, rules, bc, sub_cfl);
+      incns::OifsAdvector adv(spaces, rules, bc, sub_cfl, blocks.Mass(),
+                              blocks.MassDiagonal());
+      EXPECT_TRUE(adv.MassIsDiagonal()); // conforming: pointwise inverse
       Vector phi;
       adv.AdvectWith(wind, {0.0}, {0.0, 1.0}, fields, {0.0}, T, phi);
       substeps = adv.LastSubsteps();
@@ -197,12 +205,14 @@ TEST(Oifs, O2_TgvBeyondTheImexCflLimit)
 }
 
 
-// O3 the row-sum-lumped substep mass on a NONCONFORMING (AMR) mesh: the
-// periodic translation of O1 on the 12x12 mesh with a band of elements
-// refined once (hanging nodes on both band edges) is no less accurate than
-// on the conforming 12x12 mesh (measured 2026-10-09: 4.08e-4 vs 4.23e-4;
-// uniform 24x24: 2.4e-5). Guards the lumping on hanging-node meshes, where
-// the square-cylinder runs live.
+// O3 OIFS on a NONCONFORMING (AMR) mesh: the periodic translation of O1 on
+// the 12x12 mesh with a band of elements refined once (hanging nodes on both
+// band edges) is no less accurate than on the conforming 12x12 mesh. There
+// the collocated mass P^T D P is not diagonal, so the substeps solve with it
+// (CG) -- the same mass as the BDF step, as on conforming meshes, where it
+// is diagonal (human 2026-10-10). Measured 2026-10-09 with the old row-sum
+// lumping: 4.08e-4 vs 4.23e-4 (uniform 24x24: 2.4e-5). Guards hanging-node
+// meshes, where the square-cylinder runs live.
 TEST(Oifs, O3_NonconformingAdvection)
 {
    if (amr_test::DebugDeviceSkipsPeriodicNcSolves())
@@ -251,9 +261,24 @@ TEST(Oifs, O3_NonconformingAdvection)
       VectorFunctionCoefficient fT_c(2, [&](const Vector & x, Vector & f) { field(x, T, f, wx, wy); });
       const std::deque<Vector> wind = {to_true(wind_c)};
       const std::deque<Vector> fields = {to_true(f0_c)};
-      incns::OifsAdvector adv(spaces, rules, bc, 0.05);
+      // The BDF step's collocated mass: diagonal on the conforming mesh;
+      // P^T D P, NOT diagonal, with hanging nodes -- there the substeps
+      // solve with it (CG) rather than lump it.
+      incns::StokesOperatorOptions mo;
+      mo.nu = 1.0;
+      mo.collocated_mass = true;
+      incns::StokesOperator blocks(spaces, rules, mo);
+      incns::OifsAdvector adv(spaces, rules, bc, 0.05, blocks.Mass(),
+                              blocks.MassDiagonal());
+      EXPECT_EQ(adv.MassIsDiagonal(), mode == 0);
       Vector phi;
       adv.AdvectWith(wind, {0.0}, {0.0, 1.0}, fields, {0.0}, T, phi);
+      if (mode == 1 && Mpi::Root())
+      {
+         mfem::out << "[oifs O3] hanging nodes: " << adv.MassSolveIterations()
+                   << " mass-CG iterations over " << 4 * adv.LastSubsteps()
+                   << " RK stages\n";
+      }
       ParGridFunction g(&V);
       g.SetFromTrueDofs(phi);
       const IntegrationRule* irs[Geometry::NumGeom] = {};

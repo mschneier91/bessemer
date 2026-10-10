@@ -376,7 +376,7 @@ private:
     * @f$ \sum c_j\tau_j = -1 @f$ and @f$ \sum c_j\tau_j^2 = 0 @f$ for any
     * step ratio, BDF3 also @f$ \sum c_j\tau_j^3 = 0 @f$, so the
     * higher-order terms cancel to the scheme's order). The convective
-    * acceleration is EXT-extrapolated from @f$ M_L^{-1} N(u) @f$ at the
+    * acceleration is EXT-extrapolated from @f$ M^{-1} N(u) @f$ at the
     * history levels. (A diagonal mass -- Nek's -- has no such coupling.)
     * @param c     BDF weights (c[0] leading).
     * @param t_new Time the step solves for.

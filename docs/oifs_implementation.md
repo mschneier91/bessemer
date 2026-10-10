@@ -50,14 +50,20 @@ the largest CFL rate over the wind's history velocities.
   partial assembly and the dealiasing rule of the IMEX convection (order $3k$).
 - One operator per wind level. $C(w)$ is linear in $w$, so each RK stage combines the
   operators with that stage's interpolation weights; nothing is reassembled per stage.
-- The substeps use the row-sum-lumped GLL mass $M_L$ (diagonal), so applying its inverse
-  is a pointwise scaling.
+- The substeps invert the Stokes step's own velocity mass $M$: the operator object is
+  passed in, never rebuilt (`OifsAdvector`'s constructor). When $M$ is diagonal (the
+  collocated GLL mass on a conforming mesh, the default) the inverse is a pointwise
+  scaling. Otherwise (the consistent mass, or the collocated mass on a hanging-node
+  mesh) each RK stage does a Jacobi-preconditioned CG solve, about 6 iterations per stage
+  on a hanging-node mesh. Setup checks that the inverse reproduces $M$ and aborts if it
+  doesn't (see [the mass mismatch](#the-mass-mismatch)).
 
 **Defaults under OIFS** (all automatic at the case level):
 - BDF3 (`time.order` auto = 0 → `Parameters::BdfOrder()`; human decision, 2026-10-09),
   which extrapolates the wind at order 3;
-- the collocated GLL mass in the Stokes step (`Parameters::CollocatedMass()`), see
-  [the mass mismatch](#the-mass-mismatch) below.
+- the collocated GLL mass (`Parameters::CollocatedMass()`). It is the default because it
+  keeps the substeps' inverse pointwise; the substeps follow whatever mass the Stokes step
+  uses.
 
 ## Edge cases
 
@@ -82,7 +88,7 @@ imposed nodes to
 
 $$\sum_{j\ge1} c_j\,u_D(t^{n+1-j}) - \Big(\sum_{j\ge1} c_j\tau_j\Big)(u\cdot\nabla)u\big|^{n+1},$$
 
-with the convective acceleration recovered as $M_L^{-1}N(u)$ and extrapolated. BDF2 and
+with the convective acceleration recovered as $M^{-1}N(u)$ and extrapolated. BDF2 and
 BDF3 satisfy $\sum c_j\tau_j = -1$ and $\sum c_j\tau_j^2 = 0$ for any step ratio, and BDF3
 also $\sum c_j\tau_j^3 = 0$, so the higher-order terms of the expansion cancel to the
 scheme's order.
@@ -115,10 +121,26 @@ M\,\frac{du}{dt} + N(u) + \dots$$
   (AMR, Q3/Q2) C_D was +3% and C_L,rms +12% above IMEX **at every step size**, from CFL 4
   down to CFL 0.5.
 
-The fix is the same diagonal mass in both places, as in Nek by construction. Case-level
-OIFS always uses the collocated GLL mass. With it, OIFS converges to IMEX's discretization:
-the MMS gap drops to 5e-7 (`nse_mms_test` OifsMatchesImexWithCollocatedMass2D pins both
-sides), and on the cylinder OIFS is within 1% of IMEX (with the same mass) at CFL 2.
+The fix is the same mass in both places, as in Nek by construction. First (2026-10-09)
+case-level OIFS was switched to the collocated GLL mass, so the Stokes step's mass matched
+the lumped one on conforming meshes: OIFS then converged to IMEX's discretization (MMS gap
+5e-7; on the cylinder within 1% of IMEX with the same mass at CFL 2).
+
+Then (2026-10-10, human: "error out if the two aren't consistent") the substeps were made
+to invert the Stokes step's mass operator itself, so the two can't differ:
+- **Any mass works.** With the consistent mass in both, the MMS gap to IMEX is 3.0e-6, the
+  same as with the collocated mass (`nse_mms_test` OifsMatchesImexWithEitherMass2D). The
+  wall-bounded MMS matches IMEX (5.456e-3 vs 5.453e-3; wall force to 5 digits). On the
+  polynomial MMS, OIFS is exact up to the time error (9.1e-8), as IMEX is.
+- **Hanging-node meshes are now exact too.** There the collocated mass $P^TDP$ is not
+  diagonal, and the old row-sum lumping differed slightly from it.
+- **The substep solve must be the full inverse, imposed rows included,** with the imposed
+  rates dropped afterwards. A constrained solve that holds the imposed increments at zero
+  couples their values into the interior rows through $M$'s off-diagonals, and left a
+  3.6e-4 gap to IMEX with the consistent mass. With the full inverse, the BDF right-hand
+  side reads $M^{-1}N(u)$ on every row to first order, which is IMEX's $N(u)$.
+- **The check:** at setup, $M^{-1}(Mz)$ must return $z$ (to 1e-12 for a diagonal mass,
+  1e-9 for CG), and every mass solve must converge; otherwise the run aborts.
 
 ### 2. Intrinsic to OIFS, or to any characteristic splitting
 

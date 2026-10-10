@@ -37,13 +37,24 @@ namespace incns
  * to the next history time, add the next level, and so on to
  * @f$ t^{n+1} @f$ -- the sub-integration covers k*dt once.
  *
- * Space: the semi-discrete advection @f$ M_L\,d\tilde u/ds = -C(w)\tilde u @f$
+ * Space: the semi-discrete advection @f$ M\,d\tilde u/ds = -C(w)\tilde u @f$
  * with MFEM's ConvectionIntegrator applied per velocity component (partial
  * assembly, the 3k dealiasing rule of the explicit convection), one operator
  * per history velocity combined with the interpolation weights at each RK
- * stage (C is linear in w), and a ROW-SUM-LUMPED GLL mass @f$ M_L @f$
- * (diagonal; Nek's spectral-element mass) -- correct on nonconforming (AMR)
- * meshes too. The Stokes step keeps the consistent mass.
+ * stage (C is linear in w).
+ *
+ * Mass: @f$ M @f$ IS the BDF step's velocity mass, passed in, never rebuilt
+ * here. OIFS's dt -> 0 limit is @f$ M M_{sub}^{-1} N(u) @f$, the right
+ * equation only when the substeps invert exactly the mass of the BDF step
+ * (a mismatch cost C_D +3% / C_L,rms +12% on the Re 200 square cylinder at
+ * every dt). A diagonal @f$ M @f$ (the collocated GLL mass on a conforming
+ * mesh, OIFS's default) is inverted pointwise; any other (the consistent
+ * mass, or the collocated mass on a nonconforming mesh, where
+ * @f$ P^T D P @f$ is not diagonal) by a Jacobi-preconditioned CG solve per
+ * RK stage (the full inverse, imposed rows included: see Rhs()). The
+ * constructor verifies the inverse against @f$ M @f$ and
+ * aborts on a mismatch (human 2026-10-10: "error out if the two aren't
+ * consistent").
  *
  * Time: classical RK4, substeps chosen so that the convective CFL number of
  * each substep (time/cfl.hpp, the largest rate over the advecting history)
@@ -79,9 +90,14 @@ public:
     * @param bc      Boundary conditions (Dirichlet data, essential dofs);
     *                borrowed. Advect() moves its time and restores it.
     * @param sub_cfl CFL number of each RK4 substep (> 0).
+    * @param mass    The BDF step's velocity mass @f$ M @f$ on true dofs
+    *                (StokesOperator::Mass()); borrowed, must outlive this.
+    * @param mass_diag Its assembled diagonal (StokesOperator::MassDiagonal()).
+    * @pre Aborts if the substeps' inverse does not reproduce @p mass.
     */
    OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
-                BoundaryConditions& bc, double sub_cfl);
+                BoundaryConditions& bc, double sub_cfl, mfem::Operator& mass,
+                const mfem::Vector& mass_diag);
 
    /**
     * @brief The advected BDF history combination.
@@ -124,22 +140,36 @@ public:
    const mfem::Array<int>& ImposedDofs() const { return imposed_; }
 
    /**
-    * @brief Nodal values from a weak-form vector by the lumped mass, per
-    *        component: @f$ M_L^{-1} g @f$ (e.g. the convective acceleration
-    *        (u.grad)u at the nodes from N(u)).
+    * @brief Nodal values from a weak-form vector by the BDF step's mass:
+    *        @f$ M^{-1} g @f$ (e.g. the convective acceleration (u.grad)u at
+    *        the nodes from N(u)).
     * @param g     Weak-form velocity vector (true dofs).
     * @param nodal Output (may alias @p g).
     */
-   void LumpedNodal(const mfem::Vector& g, mfem::Vector& nodal) const;
+   void MassInverse(const mfem::Vector& g, mfem::Vector& nodal);
+
+   /// @return Whether the mass is diagonal (inverted pointwise, no solves).
+   bool MassIsDiagonal() const { return mass_diagonal_; }
+
+   /// @return CG iterations of the substeps' mass solves so far (0 when the
+   ///         mass is diagonal).
+   long MassSolveIterations() const { return mass_iterations_; }
 
 private:
    /**
     * @brief The advection right-hand side, zero on the imposed dofs.
     * @param s    Time (selects the wind's interpolation weights).
     * @param phi  Field (true dofs).
-    * @param dphi Output: @f$ -M_L^{-1} C(w(s))\,\phi @f$.
+    * @param dphi Output: @f$ -M^{-1} C(w(s))\,\phi @f$ (the full inverse),
+    *             zero on the imposed dofs.
     */
    void Rhs(double s, const mfem::Vector& phi, mfem::Vector& dphi);
+   /**
+    * @brief Diagonal or not, the inverses, and the consistency check
+    *        (aborts when @f$ M^{-1}(Mz) \ne z @f$).
+    * @param mass_diag The assembled diagonal of mass_.
+    */
+   void SetupMass(const mfem::Vector& mass_diag);
    /**
     * @brief phi on the imposed Dirichlet dofs := weight * u_D(s).
     * @param s      Time of the boundary data.
@@ -164,7 +194,17 @@ private:
    int last_substeps_ = 0;      ///< Substeps of the last Advect().
    /// Scalar companion of the velocity space (same mesh and collection).
    std::unique_ptr<mfem::ParFiniteElementSpace> sfes_;
-   mfem::Vector inv_mass_;      ///< 1 / row-sum-lumped GLL mass (scalar tdofs).
+   mfem::Operator& mass_;       ///< The BDF step's velocity mass (borrowed).
+   bool mass_diagonal_ = false; ///< mass_ is exactly diagonal.
+   mfem::Vector mass_diag_;     ///< Diagonal of mass_ (true dofs).
+   mfem::Vector inv_mass_diag_; ///< 1 / mass_diag_ (the diagonal inverse).
+   long mass_iterations_ = 0;   ///< CG iterations of the mass solves.
+   /// CG on mass_ (non-diagonal mass only).
+   std::unique_ptr<mfem::CGSolver> mass_cg_;
+   std::unique_ptr<mfem::OperatorJacobiSmoother>
+   mass_jacobi_; ///< Its preconditioner.
+   mfem::Vector mass_rhs_;      ///< Mass-solve right-hand side scratch.
+   mfem::Array<int> no_dofs_;   ///< Empty list (the unconstrained Jacobi).
    std::unique_ptr<ConvectiveCfl> cfl_; ///< CFL rate of the advecting velocity.
    std::vector<std::unique_ptr<mfem::ParGridFunction>>
    vel_; ///< History velocities.

@@ -68,7 +68,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       MFEM_VERIFY(!opts_.adaptive, "time_integrator: OIFS supports fixed and "
                   "CFL-controlled steps, not error control (by design: its "
                   "step is a CFL multiple)");
-      oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_, opts_.oifs_cfl);
+      // oifs_ itself is built below, once the BDF step's mass exists.
       oifs_conv_ = std::make_unique<Convection>(spaces_, rules_);
       // Directional do-nothing: explicit and extrapolated in the BDF step,
       // exactly as IMEX treats it (SubtractOifsDirectionalDoNothing). Inside
@@ -130,6 +130,16 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.print_level = opts_.print_level;
       trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
       trap_c0_ = 1.0 / dt_;
+   }
+
+   if (oifs_conv_)
+   {
+      // The substeps invert the BDF step's own mass (every solver's Mass() is
+      // the same plain M; the right-hand side uses trap_'s). OifsAdvector
+      // aborts if its inverse does not reproduce it.
+      oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_,
+                                             opts_.oifs_cfl, trap_->Blocks().Mass(),
+                                             trap_->Blocks().MassDiagonal());
    }
 
    if (opts_.adaptive)
@@ -419,7 +429,7 @@ void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
       oifs_conv_->Mult(hist_[l], nj);
       q.Add(g[l], nj);
    }
-   oifs_->LumpedNodal(q, q); // (u.grad)u at the nodes
+   oifs_->MassInverse(q, q); // (u.grad)u at the nodes
    bd.Add(-ctau, q);
    const Array<int>& imp = oifs_->ImposedDofs();
    Vector vals;
@@ -559,7 +569,7 @@ void StokesTimeIntegrator::StepStartup()
          // u^0 - dt (u^0.grad)u^0 (see OifsBoundaryValues).
          Vector q(n_u);
          oifs_conv_->Mult(hist_[0], q);
-         oifs_->LumpedNodal(q, q);
+         oifs_->MassInverse(q, q);
          Vector bd(hist_[0]), vals;
          bd.Add(-dt_, q);
          bd.GetSubVector(oifs_->ImposedDofs(), vals);
