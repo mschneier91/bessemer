@@ -17,7 +17,17 @@ Jacobi-CG per RK stage otherwise (consistent mass; collocated at hanging nodes, 
 its/stage), always the FULL inverse (a constrained solve left 3.6e-4 vs IMEX). Setup
 checks M^-1(Mz) = z and aborts otherwise. OIFS now matches IMEX with either mass (wall MMS
 3.0e-6 both; was 1.6e-3 mismatched). AMR runs change slightly (exact P^T D P instead of
-row-sum lumping). Benchmark plan (3D TGV, channel Re_tau 180/395, sphere, DFG 3D,
+row-sum lumping). Deck option `discretization.mass: auto | collocated | consistent`
+(replaces `collocated_mass`; auto = collocated under OIFS, consistent under IMEX).
+
+**To evaluate later (human 2026-10-10: "we'll do a bunch of numerical experiments at a
+later date"): collocated vs consistent mass in general**, for IMEX and OIFS, as the
+default. Questions: accuracy per DOF on resolved benchmarks (TGV, channel, DFG), cost
+(the consistent mass under OIFS adds a CG solve per substep stage: ~2x wall on the 6x6
+cavity, ~6 its/stage at hanging nodes), and robustness. Data so far: on the Re 200 square
+cylinder the collocated mass moves IMEX by C_D -0.4% / C_L,rms -1.8% (a resolution
+effect: both should converge to the same answer); on the 6x6 cavity, KE differs 1.1%.
+Benchmark plan (3D TGV, channel Re_tau 180/395, sphere, DFG 3D,
 Ethier-Steinman) proposed; waiting on the human's answers (Re_tau pair, forcing,
 directory layout, GPU-hours).
 

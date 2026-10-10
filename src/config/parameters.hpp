@@ -126,6 +126,15 @@ struct OutputParameters
    bool history = false;
 };
 
+/// The velocity mass matrix (deck `discretization.mass`). OIFS's substeps
+/// always invert the same mass as the BDF step (time/oifs.hpp).
+enum class VelocityMass
+{
+   Auto,       ///< Collocated under OIFS, consistent under IMEX.
+   Collocated, ///< GLL quadrature: diagonal on conforming meshes.
+   Consistent  ///< Exact (Gauss) quadrature.
+};
+
 /// The case geometry (deck `mesh.geometry`); MakeCaseMesh builds it.
 enum class MeshGeometry
 {
@@ -216,10 +225,9 @@ struct Parameters
    // --- discretization (default Q3/Q2 Taylor-Hood) ---------------------------
    int order_u = 3;              ///< Velocity polynomial order k_u.
    int order_p = 2;              ///< Pressure polynomial order k_p.
-   /// GLL collocated (diagonal) velocity mass (deck
-   /// `discretization.collocated_mass`). OIFS always uses it: read it
-   /// through CollocatedMass().
-   bool collocated_mass = false;
+   /// Velocity mass matrix (deck `discretization.mass`); Auto resolves by the
+   /// convection treatment: read it through CollocatedMass().
+   VelocityMass mass = VelocityMass::Auto;
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;
@@ -376,15 +384,17 @@ struct Parameters
       return convection_treatment == ConvectionTreatment::Oifs ? 3 : 2;
    }
 
-   /// @return Whether the velocity mass is the GLL collocated (diagonal) one:
-   ///         collocated_mass, and always under OIFS. OIFS's substeps invert
-   ///         the BDF step's own mass, whatever it is (OifsAdvector aborts if
-   ///         they differ); the collocated mass keeps that inverse pointwise
-   ///         on conforming meshes instead of a CG solve per RK stage.
+   /// @return Whether the velocity mass is the GLL collocated one: mass =
+   ///         Collocated, or Auto under OIFS. OIFS's substeps invert the BDF
+   ///         step's own mass, whatever it is (OifsAdvector aborts if they
+   ///         differ); the collocated mass keeps that inverse pointwise on
+   ///         conforming meshes instead of a CG solve per RK stage, hence
+   ///         OIFS's default.
    bool CollocatedMass() const
    {
-      return collocated_mass ||
-             convection_treatment == ConvectionTreatment::Oifs;
+      return mass == VelocityMass::Collocated ||
+             (mass == VelocityMass::Auto &&
+              convection_treatment == ConvectionTreatment::Oifs);
    }
 
    /// @return True when the step is CFL-controlled: StepControl::Cfl on a

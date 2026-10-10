@@ -87,8 +87,19 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                                       "Finite element orders and mass.");
    r.Read(disc, "order_u", p.order_u, "Velocity polynomial order k_u.");
    r.Read(disc, "order_p", p.order_p, "Pressure polynomial order k_p (k_u - 1).");
-   r.Read(disc, "collocated_mass", p.collocated_mass,
-          "Use the diagonal GLL collocated velocity mass (always on under OIFS).");
+   MFEM_VERIFY(!disc.Has("collocated_mass"), "parameters: "
+               "discretization.collocated_mass was replaced by "
+               "discretization.mass: auto | collocated | consistent");
+   r.ReadEnum(disc, "mass", p.mass,
+   {
+      {"auto", VelocityMass::Auto}, {"collocated", VelocityMass::Collocated},
+      {"consistent", VelocityMass::Consistent}
+   },
+   "Velocity mass matrix. auto: collocated under OIFS, consistent under IMEX. "
+   "collocated: GLL quadrature, diagonal on conforming meshes (OIFS's substeps "
+   "then invert it pointwise). consistent: exact quadrature (under OIFS, a "
+   "mass solve per substep stage). OIFS's substeps always invert this same "
+   "mass.");
 
    const DeckSection mesh = r.Section(root, "mesh",
                                       "Box mesh (quads/hexes) for apps/run_case.");
@@ -207,7 +218,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.ReadEnum(time, "convection", p.convection_treatment,
    {{"imex", ConvectionTreatment::Imex}, {"oifs", ConvectionTreatment::Oifs}},
    "Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS "
-   "sub-stepping (CFL 2 practical; BDF3 and the collocated mass automatically).");
+   "sub-stepping (CFL 2 practical; BDF3 and, with discretization.mass auto, the "
+   "collocated mass by default).");
    r.Read(time, "oifs_cfl", p.oifs_cfl, "CFL number of each OIFS substep.");
    r.Read(time, "order", p.time_order,
           "BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX).");

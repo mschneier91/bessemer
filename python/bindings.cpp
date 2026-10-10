@@ -397,6 +397,11 @@ PYBIND11_MODULE(_core, m)
    .value("Convective", ConvectiveForm::Convective)
    .value("Rotational", ConvectiveForm::Rotational);
 
+   py::enum_<VelocityMass>(m, "VelocityMass")
+   .value("Auto", VelocityMass::Auto)
+   .value("Collocated", VelocityMass::Collocated)
+   .value("Consistent", VelocityMass::Consistent);
+
    py::enum_<ConvectionTreatment>(m, "ConvectionTreatment")
    .value("Imex", ConvectionTreatment::Imex)
    .value("Oifs", ConvectionTreatment::Oifs);
@@ -592,7 +597,7 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("oifs_cfl", &Parameters::oifs_cfl)
    .def_readwrite("order_u", &Parameters::order_u)
    .def_readwrite("order_p", &Parameters::order_p)
-   .def_readwrite("collocated_mass", &Parameters::collocated_mass)
+   .def_readwrite("mass", &Parameters::mass)
    .def("collocated_mass_in_effect", &Parameters::CollocatedMass)
    .def_readwrite("dt", &Parameters::dt)
    .def_readwrite("t_final", &Parameters::t_final)

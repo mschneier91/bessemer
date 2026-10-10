@@ -53,7 +53,7 @@ closest valid key. **Every key, with its default and allowed values:
 |---|---|
 | (top level) | `equation: stokes \| navier_stokes`, `initial_velocity: zero \| taylor_green_2d`, `device`, `restart` |
 | `physics` | `nu`, `grad_div`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
-| `discretization` | `order_u`, `order_p`, `collocated_mass` |
+| `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol` |
 | `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `a_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `rotation_pc`, `rotation_schur`, ... |

@@ -46,7 +46,7 @@ Finite element orders and mass.
 |---|---|---|---|
 | `discretization.order_u` | int | `3` | Velocity polynomial order k_u. |
 | `discretization.order_p` | int | `2` | Pressure polynomial order k_p (k_u - 1). |
-| `discretization.collocated_mass` | bool | `false` | Use the diagonal GLL collocated velocity mass (always on under OIFS). |
+| `discretization.mass` | auto \| collocated \| consistent | `auto` | Velocity mass matrix. auto: collocated under OIFS, consistent under IMEX. collocated: GLL quadrature, diagonal on conforming meshes (OIFS's substeps then invert it pointwise). consistent: exact quadrature (under OIFS, a mass solve per substep stage). OIFS's substeps always invert this same mass. |
 
 ## `mesh`
 
@@ -99,7 +99,7 @@ Time integration.
 | `time.cfl_target` | real | `0.5` | Target CFL number (Nek5000's definition) under step_control cfl: ~0.5 for IMEX, 2 for OIFS. |
 | `time.cfl_max` | real | `0` | CFL ceiling (0 = off): caps error-controlled dt, aborts fixed steps above it. |
 | `time.dt_max` | real | `0` | Largest step under cfl control (0 = no cap). |
-| `time.convection` | imex \| oifs | `imex` | Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS sub-stepping (CFL 2 practical; BDF3 and the collocated mass automatically). |
+| `time.convection` | imex \| oifs | `imex` | Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS sub-stepping (CFL 2 practical; BDF3 and, with discretization.mass auto, the collocated mass by default). |
 | `time.oifs_cfl` | real | `0.5` | CFL number of each OIFS substep. |
 | `time.order` | int | `0` | BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX). |
 | `time.ext_order` | int | `2` | Extrapolation order of the explicit/lagged nonlinear term, 2 or 3. |

@@ -61,9 +61,10 @@ the largest CFL rate over the wind's history velocities.
 **Defaults under OIFS** (all automatic at the case level):
 - BDF3 (`time.order` auto = 0 → `Parameters::BdfOrder()`; human decision, 2026-10-09),
   which extrapolates the wind at order 3;
-- the collocated GLL mass (`Parameters::CollocatedMass()`). It is the default because it
-  keeps the substeps' inverse pointwise; the substeps follow whatever mass the Stokes step
-  uses.
+- the collocated GLL mass (deck `discretization.mass: auto`, resolved by
+  `Parameters::CollocatedMass()`). It is the default because it keeps the substeps'
+  inverse pointwise; `mass: consistent` works too, with a mass solve per substep stage.
+  Either way the substeps invert the Stokes step's mass.
 
 ## Edge cases
 

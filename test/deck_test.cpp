@@ -285,12 +285,17 @@ TEST(Deck, ConvectionKeys)
    EXPECT_DOUBLE_EQ(p.oifs_cfl, 0.75);
    EXPECT_DOUBLE_EQ(p.cfl_target, 2.0);
    EXPECT_EQ(p.BdfOrder(), 3); // auto: BDF3 with OIFS
-   EXPECT_FALSE(p.collocated_mass);
-   EXPECT_TRUE(p.CollocatedMass()); // OIFS always uses the collocated mass
+   EXPECT_EQ(p.mass, incns::VelocityMass::Auto);
+   EXPECT_TRUE(p.CollocatedMass()); // auto: collocated under OIFS
    p = load("  convection: oifs\n  order: 2\n");
    EXPECT_EQ(p.BdfOrder(), 2); // explicit order wins
    p = load("  convection: imex\n");
    EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Imex);
+   // discretization.mass: an explicit choice wins under either treatment.
+   p = load("  convection: oifs\ndiscretization:\n  mass: consistent\n");
+   EXPECT_FALSE(p.CollocatedMass());
+   p = load("  convection: imex\ndiscretization:\n  mass: collocated\n");
+   EXPECT_TRUE(p.CollocatedMass());
 }
 
 // Time step control: `time.step_control: fixed|error|cfl` (the older

@@ -159,9 +159,9 @@ int main(int argc, char* argv[])
    args.AddOption(&oifs, "-oifs", "--oifs", "-imex", "--imex",
                   "Convection: OIFS (advected BDF history, CFL > 1) or IMEX.");
    args.AddOption(&oifs_cfl, "-ocfl", "--oifs-cfl", "OIFS substep CFL number.");
-   args.AddOption(&cmass, "-cm", "--collocated-mass", "-gm", "--gauss-mass",
-                  "Velocity mass: GLL collocated (diagonal) or Gauss (consistent; "
-                  "OIFS always uses the collocated one).");
+   args.AddOption(&cmass, "-cm", "--collocated-mass", "-gm", "--default-mass",
+                  "Velocity mass: GLL collocated (diagonal), or the default "
+                  "(consistent under IMEX, collocated under OIFS).");
    args.AddOption(&classical_out, "-cdn", "--classical-do-nothing", "-ddn",
                   "--directional-do-nothing", "Outflow condition.");
    args.AddOption(&n_periods, "-np", "--n-periods",
@@ -182,7 +182,7 @@ int main(int argc, char* argv[])
    p.convection_treatment = oifs ? incns::ConvectionTreatment::Oifs
                             : incns::ConvectionTreatment::Imex;
    p.oifs_cfl = oifs_cfl;
-   p.collocated_mass = cmass;
+   p.mass = cmass ? incns::VelocityMass::Collocated : incns::VelocityMass::Auto;
    p.outflow = classical_out ? incns::OutflowCondition::Classical
                : incns::OutflowCondition::Directional;
    p.nu = U * D / re;
