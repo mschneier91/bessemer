@@ -20,7 +20,7 @@ Then, as needed:
 ```sh
 scripts/build.sh cpu            # the solver, tests and drivers  -> build/cpu/
 scripts/build.sh cpu-python     # also the Python module         -> build/cpu-python/
-scripts/test.sh cpu -L fast     # optional: the fast test tier (~3.5 min, 171 tests)
+scripts/test.sh cpu -L fast     # optional: the fast test tier (~4 min, 180 tests)
 ```
 
 The scripts activate the environment themselves. To run `mpirun` by hand, activate it in
@@ -37,11 +37,18 @@ All three go through the same `incns::Case`, so they behave identically.
 mpirun -np 4 build/cpu/apps/run_case cases/tgv2d_stokes.yaml
 ```
 
-`run_case` builds the box (periodic and/or walled, optionally stretched), the square
-cylinder in a large domain, or the DFG cylinder channel (`mesh.geometry`). Boundary groups
-select box faces (`xmin` ... `zmax`) or the geometry's named boundaries (`inflow`,
-`outflow`, `sides` / `walls`, `body` / `cylinder`); a constant or parabolic velocity
-(optionally ramped or sine-modulated in time) is given right in the deck. Every real
+`run_case` builds the mesh named by `mesh.geometry`:
+- `box`: periodic and/or walled, optionally stretched;
+- `square_cylinder`: a square cylinder in a large domain;
+- `cylinder_channel`: the DFG cylinder channel, 2D, or extruded in z with `mesh.dim: 3`
+  (the DFG 3D benchmarks);
+- `file`: any quad or hex mesh from a Gmsh or MFEM file (`mesh.file`).
+
+Boundary groups select box faces (`xmin` ... `zmax`) or the geometry's named boundaries:
+`inflow`, `outflow`, `sides` / `walls`, `body` / `cylinder`, and for a Gmsh file its
+physical-group names (more with `mesh.boundary_names`). A constant or parabolic velocity
+is given right in the deck, optionally ramped or sine-modulated in time; in 3D the
+parabolic profile is a product of parabolas in y and z. Every real
 boundary must be in exactly one group: a deck that leaves one out is refused with the
 boundary named, rather than run with a silent do-nothing wall. Omitted
 keys take library defaults, and a key the loader doesn't know is an error that names the
@@ -51,16 +58,19 @@ closest valid key. **Every key, with its default and allowed values:
 
 | Section | Keys |
 |---|---|
-| (top level) | `equation: stokes \| navier_stokes`, `initial_velocity: zero \| taylor_green_2d`, `device`, `restart` |
+| (top level) | `equation: stokes \| navier_stokes`, `initial_velocity: zero \| uniform \| channel \| taylor_green_2d \| taylor_green_3d`, `device`, `restart` |
+| `initial` | `velocity`, `perturbation`, `perturbation_center` (uniform), `seed` (channel) |
+| `forcing` | `body_force`: a constant force per unit mass, e.g. a channel's mean pressure gradient |
 | `physics` | `nu`, `grad_div`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
 | `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent` |
-| `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch` |
+| `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol` |
 | `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `a_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `rotation_pc`, `rotation_schur`, ... |
 | `boundary_conditions` | a list of `{select: [xmin, ymax, ...] or attributes, type: no_slip \| outflow \| velocity_dirichlet}` |
 | `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, ... |
-| `forces` | `enabled`, `attributes`, `reference_velocity`, `reference_area`, `interval` |
-| `output` | `enabled`, `path`, `name`, `interval`, `diagnostics` |
+| `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
+| `channel_statistics` | `enabled`, `start_time`, `interval`: plane and time averages for a channel (below) |
+| `output` | `enabled`, `path`, `name`, `interval`, `diagnostics`, `progress`, `history` |
 | `checkpoint` | `enabled`, `path`, `interval` |
 | `nondimensionalization` | dimensionless (default) or dimensional reference scales |
 
@@ -85,6 +95,10 @@ and all numerics stay in C++. Run it as `mpirun -np N python case.py`; there is 
 Geometries beyond boxes have drivers in `apps/`: `dfg_cylinder` (the DFG channel with a
 cylinder) and `square_cylinder` (a square cylinder in a large domain). Each prints its
 options with `--help`.
+
+**Standard benchmarks** (Taylor–Green Re 1600, turbulent channel Re_τ 180/395, DFG 3D)
+have their own decks, reference data and comparison scripts in
+[../benchmarks/](../benchmarks/README.md).
 
 ## 3. Example decks
 
@@ -131,8 +145,18 @@ stability limit; pass `-dt 0.001`.)
   number over the last `forces.average_periods` shedding periods.
 - **ParaView:** `output.enabled: true` writes `<path>/<name>/` with high-order output; open
   the `.pvd` file.
-- **Diagnostics CSV:** `output.diagnostics: true` writes kinetic energy, dissipation and
-  ‖∇·u‖ per step.
+- **Diagnostics CSV:** `output.diagnostics: true` writes t, kinetic energy ½∫|u|²,
+  dissipation ν∫|∇u|² and ‖∇·u‖ to `<path>/<name>_diagnostics.csv` every
+  `output.interval` steps. It works without field output, and a restart appends to it.
+- **Channel statistics:** `channel_statistics.enabled` (walls normal to y; a box mesh
+  without refinement).
+  - **What:** x–z plane averages at every velocity-node height, time-averaged from
+    `start_time` on: U, V, W and the Reynolds stresses u'u', v'v', w'w', u'v'. Also the
+    wall shear stress and from it u_τ and Re_τ, plus the bulk velocity.
+  - **Where:** the summary's `channel` section, and `<path>/<name>_profiles.csv` (raw and
+    wall units), written at the end of the run and at every checkpoint.
+  - **Restarts:** the averages travel with the checkpoint, so a restarted run continues
+    them exactly.
 - **Forces:** `forces.enabled` with the body's attributes gives lift and drag coefficients
   (John's volume-integral method) in `<path>/<name>_forces.csv`.
 - **Checkpoints:** `checkpoint.enabled`; restart with `restart: <dir>` at the same rank

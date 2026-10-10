@@ -107,8 +107,9 @@ case that needs a source change exposes a missing library feature.
 src/
   mesh/        periodic_box (box factory: periodic flags, per-direction stretching),
                case_mesh (THE factory: MakeCaseMesh/PartitionMesh; NC-ready with AMR),
-               cylinder_channel (DFG geometry), square_cylinder (Joly et al. 2012 domain),
-               mesh_size_coefficient (gamma = c h_K)
+               cylinder_channel (DFG geometry; 3D = Extrude2D, end faces join the
+               walls), square_cylinder (Joly et al. 2012 domain), mesh_file (Gmsh/MFEM
+               files, Gmsh $PhysicalNames -> boundary names), mesh_size_coefficient
   amr/         amr_parameters, gradient_indicator (nvcc), refinement_marker, mesh_adapter
                (refine/rebalance + exact transfer, RefinementRecord), history_projection
   spaces/      mixed_spaces (velocity/pressure ParFESpaces, block offsets)
@@ -126,13 +127,16 @@ src/
                adaptive_controller, integrator_state, cfl (nvcc)
   post/        pressure_mean, kinetic_head (nvcc), body_force (lift/drag), diagnostics,
                output (ParaView), checkpoint, force_statistics (period averages, peaks),
-               run_monitor (progress lines, history CSV, divergence; owned by Case)
+               run_monitor (progress lines, history CSV, divergence; owned by Case),
+               channel_statistics (plane + time averages at node heights, tau_w, u_tau,
+               Re_tau; Save/Load exact through checkpoints; owned by Case)
   quadrature/  rule_book (OWNS all rules; order + 1D family per operator)
   bc/          boundary_conditions (Dirichlet/no-slip/outflow per attribute; null-space detection),
                boundary_names (box faces / geometry names -> attributes), deck_boundary
                (the deck's groups -> BoundaryConditions + coverage check; Case and Python)
   config/      parameters (+ YAML), deck_reader (declares every key: the generated deck
                reference, unknown-key errors), nondimensionalization, initial_conditions
+               (zero, uniform, channel = Reichardt + curl perturbation, taylor_green_2d/3d)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
@@ -140,6 +144,10 @@ apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2
                hello_mpi
 bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest);
                dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
+benchmarks/    standard benchmarks: decks, reference data (CSV + citation, fetched by
+               fetch_references.py, git-ignored: not redistributed), plot.py
+               --selftest (skipped until fetched) (tgv_re1600, channel, dfg_3d;
+               sphere_re300 awaits a mesh). Not run yet (2026-10-10).
 cases/         example decks (square_cylinder_re200[_oifs], dfg_2d1, dfg_2d3),
                cavity.yaml (smoke), tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
 python/        bindings.cpp (module incns), incns/__init__.py (@incns.field)

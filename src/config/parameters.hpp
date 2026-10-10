@@ -94,6 +94,9 @@ struct BcSpec
    BcProfile profile = BcProfile::Constant;           ///< BcType::Velocity shape.
    double u_max = 1.0;   ///< Parabolic: peak velocity.
    double height = 1.0;  ///< Parabolic: channel height (y from 0 to height).
+   /// Parabolic in 3D: channel width (z from 0 to width; 0 = height). The
+   /// profile is then the product 16 u_max y (h - y) z (w - z) / (h w)^2.
+   double width = 0.0;
    BcTimeProfile time_profile = BcTimeProfile::Constant; ///< Time modulation.
    double time_scale = 1.0; ///< T of the Ramp / Sine modulation.
 };
@@ -140,21 +143,51 @@ enum class MeshGeometry
 {
    Box,            ///< The box of `mesh` (periodic and/or walled).
    SquareCylinder, ///< A square cylinder in a large domain (mesh/square_cylinder).
-   CylinderChannel ///< The DFG channel with a circular cylinder (mesh/cylinder_channel).
+   /// The DFG channel with a circular cylinder (mesh/cylinder_channel); in 3D
+   /// extruded in z (the DFG 3D-xZ benchmarks).
+   CylinderChannel,
+   File ///< A mesh file (`mesh.file`: Gmsh or MFEM; mesh/mesh_file).
 };
 
-/// A uniform initial flow with an optional shedding trigger (deck
-/// `initial_velocity: uniform`, section `initial`).
+/// Settings of the named initial conditions (deck section `initial`).
 struct InitialFlowParameters
 {
-   /// The uniform velocity.
+   /// uniform: the uniform velocity.
    std::array<double, 3> velocity = {1.0, 0.0, 0.0};
-   /// Amplitude, relative to |velocity|, of a Gaussian bump
-   /// exp(-|x - c|^2) added to the second velocity component; it breaks the
-   /// symmetry so vortex shedding starts early. 0 = none.
+   /// uniform: amplitude, relative to |velocity|, of a Gaussian bump
+   /// exp(-|x - c|^2) added to the second velocity component (breaks the
+   /// symmetry so vortex shedding starts early). channel: amplitude of the
+   /// divergence-free perturbation relative to the centreline velocity.
+   /// 0 = none.
    double perturbation = 0.0;
-   /// The bump's centre c.
+   /// uniform: the bump's centre c.
    std::array<double, 3> perturbation_center = {0.0, 0.0, 0.0};
+   /// channel: seed of the perturbation's random mode phases.
+   int seed = 1;
+};
+
+/// A constant body force per unit mass (deck section `forcing`), e.g. the
+/// mean pressure gradient that drives a periodic channel.
+struct ForcingParameters
+{
+   /// The force f (zero = none; Case::SetForcing overrides it).
+   std::array<double, 3> body_force = {0.0, 0.0, 0.0};
+   /// @return True when any component is non-zero.
+   bool Active() const
+   {
+      return body_force[0] != 0.0 || body_force[1] != 0.0 ||
+             body_force[2] != 0.0;
+   }
+};
+
+/// Channel statistics (deck section `channel_statistics`; post/
+/// channel_statistics): time averages of plane-averaged velocity moments and
+/// the wall shear stress, for walls normal to y.
+struct ChannelStatisticsParameters
+{
+   bool enabled = false;     ///< Collect them.
+   double start_time = 0.0;  ///< Average over t >= start_time (skip transients).
+   int interval = 1;         ///< Sample every this many steps.
 };
 
 /// Point probes evaluated at the end of the run (Case::WriteSummary).
@@ -181,6 +214,7 @@ struct ReferenceValues
    double cl_max = std::nan("");      ///< Maximum lift coefficient.
    double t_cl_max = std::nan("");    ///< Its time.
    double pressure_difference = std::nan(""); ///< The probe's p1 - p2.
+   double re_tau = std::nan(""); ///< Channel: the achieved Re_tau.
 };
 
 /**
@@ -241,6 +275,16 @@ struct Parameters
    /// Geometry::CylinderChannel: uniform refinement level of the base mesh
    /// (cell counts x 2^level, gradings nested).
    int cylinder_channel_level = 0;
+   /// Geometry::CylinderChannel in 3D: element layers in z (x 2^level).
+   int cylinder_channel_nz = 4;
+   /// Geometry::CylinderChannel in 3D: extent in z (the DFG 3D channel is
+   /// square: 0.41).
+   double cylinder_channel_depth = 0.41;
+   /// Geometry::File: the mesh file (Gmsh .msh or MFEM .mesh).
+   std::string mesh_file;
+   /// Boundary names -> attributes: from the file (Gmsh $PhysicalNames) and
+   /// deck `mesh.boundary_names` (which wins).
+   std::vector<std::pair<std::string, int>> boundary_names;
 
    /// Adaptive mesh refinement (deck section `amr:`; off by default).
    AmrParameters amr;
@@ -354,11 +398,16 @@ struct Parameters
    }
 
    // --- case data ---------------------------------------------------------------
-   /// Named initial velocity: "zero" or "taylor_green_2d" (uses nu). Decks
+   /// Named initial velocity: "zero", "uniform", "channel",
+   /// "taylor_green_2d" (uses nu) or "taylor_green_3d". Decks
    /// select analytic ICs by name so no recompilation is needed per case.
    std::string initial_velocity = "zero";
-   /// The uniform initial flow (initial_velocity: uniform).
+   /// Settings of the named initial conditions.
    InitialFlowParameters initial;
+   /// A constant body force (deck section `forcing`).
+   ForcingParameters forcing;
+   /// Channel statistics (deck section `channel_statistics`).
+   ChannelStatisticsParameters channel_statistics;
    /// Point probes reported in the run summary.
    ProbeParameters probes;
    /// Reference values the run summary compares against.

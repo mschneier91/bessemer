@@ -1,0 +1,72 @@
+# DFG benchmark 3D-1Z (Schaefer & Turek 1996): steady flow past a cylinder
+# spanning a square channel, Re = 20. Channel 2.5 x 0.41 x 0.41, cylinder of
+# diameter 0.1 along z at (0.5, 0.2); inflow 16 U_m y z (H - y)(H - z) / H^4
+# with U_m = 0.45 (mean 0.2), ramped from rest over t in [0, 1]; no-slip walls
+# (z faces included) and cylinder; do-nothing outflow. Marched to steady state
+# with error-controlled steps.
+#
+# Coefficients c = 2 F / (rho U_mean^2 D H), U_mean = 0.2, D H = 0.041.
+# Reference: c_D = 6.18533, c_L = 0.009401 (featflow.de, dfg_flow3d; the
+# pressure difference is not tabulated there).
+#
+# Mesh: the 2D DFG channel mesh (n_up raised for the longer inlet) extruded in
+# z, 4 layers; level 1 doubles every count (8 x the elements).
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/dfg_3d/dfg_3d_1z.yaml
+#   python3 benchmarks/dfg_3d/plot.py 1z dfg_3d_1z/dfg_3d_1z_summary.json
+
+equation: navier_stokes
+
+physics:
+  nu: 1.0e-3
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 3
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    cx: 0.5
+    cy: 0.2
+    n_up: 4
+    nz: 4
+    depth: 0.41
+
+time:
+  dt: 0.01
+  t_final: 8
+  step_control: error
+  atol: 1.0e-6
+  rtol: 1.0e-5
+  cfl_max: 0.24
+
+solver:
+  rtol: 1.0e-10
+
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 0.45, height: 0.41,
+     time_profile: ramp, time_scale: 1.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [outflow], type: outflow}
+
+forces:
+  enabled: true
+  boundaries: [cylinder]
+  reference_velocity: 0.2      # the mean inflow velocity, 4/9 of the peak
+  reference_area: 0.041        # D H
+  interval: 0
+
+probes:
+  pressure_difference: [[0.45, 0.2, 0.205], [0.55, 0.2, 0.205]]   # front, back
+
+output:
+  path: dfg_3d_1z
+  name: dfg_3d_1z
+  progress: 1
+
+reference:
+  cd: 6.18533
+  cl: 0.009401

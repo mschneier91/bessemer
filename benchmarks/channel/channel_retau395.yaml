@@ -1,0 +1,79 @@
+# Turbulent channel flow, Re_tau = 392.24 (Moser, Kim & Mansour 1999; the DNS
+# profiles are in benchmarks/channel/reference/mkm_chan395.csv). Walls at y = 0
+# and y = 2 (half-height delta = 1), periodic in x (streamwise, 2 pi) and z
+# (spanwise, pi), driven by a constant pressure gradient f_x = 1, so u_tau = 1
+# and the statistically steady Re_tau is exactly 1 / nu = 392.24.
+#
+# Start: Reichardt's mean profile plus a divergence-free perturbation of 10% of
+# the centreline velocity (initial_velocity: channel). Statistics: plane and
+# time averages over t in [50, 100] (delta / u_tau units), every 5 steps;
+# u_tau and Re_tau from the averaged wall shear stress (the run summary's
+# re_tau against reference.re_tau checks the momentum balance and the wall
+# resolution). Profiles: <path>/<name>_profiles.csv, rewritten at every
+# checkpoint; a restart continues the averages.
+#
+# Resolution: dx+ ~ 17, dz+ ~ 8.6 (the MKM 395 domain, 2 pi x 2 x pi);
+# tanh wall clustering, first velocity node at y+ ~ 2.
+# 48 x 30 x 48 = 69,120 elements: beyond the desktop limits (AGENTS.md
+# rule 3) -- a GPU or many-rank run; ask the human first.
+# OIFS (BDF3, collocated mass) at CFL 2.
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/channel/channel_retau395.yaml
+#   python3 benchmarks/channel/plot.py channel_retau395/chan395_profiles.csv
+
+equation: navier_stokes
+
+physics:
+  nu: 2.54945951458e-3       # 1 / 392.24
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 3
+  elements: [48, 30, 48]
+  lengths: [6.283185307179586, 2.0, 3.141592653589793]
+  periodic: [true, false, true]
+  stretch: [none, tanh, none]
+  stretch_beta: [1.0, 3.2, 1.0]     # only y is stretched
+
+initial_velocity: channel
+initial:
+  perturbation: 0.1
+  seed: 1
+
+forcing:
+  body_force: [1.0, 0.0, 0.0]    # the mean pressure gradient: u_tau = sqrt(f_x delta) = 1
+
+time:
+  dt: 0.001                      # the first step; CFL control after it
+  t_final: 100
+  step_control: cfl
+  cfl_target: 2.0
+  convection: oifs
+
+boundary_conditions:
+  - {select: [ymin, ymax], type: no_slip}
+
+channel_statistics:
+  enabled: true
+  start_time: 50
+  interval: 5
+
+output:
+  path: channel_retau395
+  name: chan395
+  progress: 1.0
+  history: true
+  diagnostics: true
+  interval: 50
+
+checkpoint:
+  enabled: true
+  path: channel_retau395/chk
+  interval: 500
+  at_time: 50                   # the developed flow, to branch more runs from
+
+reference:
+  re_tau: 392.24

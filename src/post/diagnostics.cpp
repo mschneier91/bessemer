@@ -74,13 +74,15 @@ double DivergenceNorm(const ParGridFunction& u, const RuleBook& rules)
    return u.ComputeDivError(&zero, irs);
 }
 
-DiagnosticsLog::DiagnosticsLog(const std::string& path, MPI_Comm comm)
+DiagnosticsLog::DiagnosticsLog(const std::string& path, MPI_Comm comm,
+                               bool append)
 {
    MPI_Comm_rank(comm, &rank_);
    if (rank_ != 0) { return; }
-   os_.open(path);
+   const bool exists = std::ifstream(path).good();
+   os_.open(path, (append && exists) ? std::ios::app : std::ios::trunc);
    MFEM_VERIFY(os_.is_open(), "DiagnosticsLog: cannot open '" << path << "'");
-   os_ << "t,kinetic_energy,dissipation,divergence\n";
+   if (!(append && exists)) { os_ << "t,kinetic_energy,dissipation,divergence\n"; }
 }
 
 void DiagnosticsLog::Write(double t, double energy, double dissipation,

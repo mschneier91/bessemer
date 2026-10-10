@@ -1,0 +1,50 @@
+# Taylor-Green vortex, Re = 1600 (International Workshop on High-Order CFD
+# Methods, case C3.5): u = (sin x cos y cos z, -cos x sin y cos z, 0) on a
+# 2 pi periodic box (V0 = L = 1), nu = 1 / 1600, t in [0, 20]. Transition to
+# turbulence; the dissipation rate peaks near t = 9 (spectral DNS on 512^3:
+# eps_max = 0.01286 at t = 8.97, benchmarks/tgv_re1600/reference).
+#
+# Resolution: 32^3 Q3/Q2 elements (96 velocity nodes per direction).
+# 4 MPI ranks on a desktop (within the default limits; long: hours).
+# OIFS (BDF3, collocated mass) at CFL 2; rerun at cfl_target 1 to check the
+# time error.
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/tgv_re1600/tgv_re1600_n32.yaml
+#   python3 benchmarks/tgv_re1600/plot.py tgv_n32/tgv_diagnostics.csv
+
+equation: navier_stokes
+
+physics:
+  nu: 6.25e-4
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 3
+  elements: [32, 32, 32]
+  lengths: [6.283185307179586, 6.283185307179586, 6.283185307179586]
+  periodic: [true, true, true]
+
+initial_velocity: taylor_green_3d
+
+time:
+  dt: 0.005                    # the first step; CFL control after it
+  t_final: 20
+  step_control: cfl
+  cfl_target: 2.0
+  convection: oifs
+
+output:
+  path: tgv_n32
+  name: tgv
+  diagnostics: true            # E(t) and eps(t) for plot.py, every step
+  interval: 1
+  progress: 0.5
+  history: true
+
+checkpoint:
+  enabled: true
+  path: tgv_n32/chk
+  interval: 200

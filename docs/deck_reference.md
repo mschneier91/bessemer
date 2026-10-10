@@ -10,9 +10,9 @@ Every key a YAML deck (`apps/run_case <deck.yaml>`) understands, with its defaul
 |---|---|---|---|
 | `equation` | stokes \| navier_stokes | `stokes` | Equation set: unsteady Stokes or incompressible Navier-Stokes. |
 | `device` | string | `cpu` | MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins. |
-| `initial_velocity` | string | `zero` | Named initial condition: zero, uniform (see the initial section) or taylor_green_2d; anything else comes from Python or C++. |
+| `initial_velocity` | string | `zero` | Named initial condition: zero, uniform, channel (see the initial section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, -cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes from Python or C++. |
 | `restart` | string | `""` | Checkpoint directory to restart from (same number of MPI ranks). |
-| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}. Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
+| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}. Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
 
 ## `physics`
 
@@ -60,7 +60,9 @@ Box mesh (quads/hexes) for apps/run_case.
 | `mesh.periodic` | bool[dim] | `[true, true]` | Periodic directions; non-periodic faces need boundary_conditions. |
 | `mesh.stretch` | none \| tanh | `[none, none]` | Per-direction node clustering: uniform, or two-sided tanh toward both ends. |
 | `mesh.stretch_beta` | real[dim] | `[2, 2]` | tanh clustering strength per direction. |
-| `mesh.geometry` | box \| square_cylinder \| cylinder_channel | `box` | Domain: the box above, a square cylinder in a large domain (Joly et al. 2012; boundaries inflow, outflow, sides, body), or the DFG channel with a cylinder (boundaries inflow, outflow, walls, cylinder). The cylinder geometries are 2D. |
+| `mesh.geometry` | box \| square_cylinder \| cylinder_channel \| file | `box` | Domain: the box above; a square cylinder in a large domain (Joly et al. 2012; 2D; boundaries inflow, outflow, sides, body); the DFG channel with a cylinder (2D, or extruded in z in 3D; boundaries inflow, outflow, walls, cylinder); or a mesh file (mesh.file; boundaries named by the file's Gmsh physical groups and mesh.boundary_names). |
+| `mesh.file` | string | `""` | geometry file: a Gmsh (.msh, ASCII 2.2 or 4.x) or MFEM (.mesh) file of quadrilaterals (2D) or hexahedra (3D); relative paths are relative to the working directory. |
+| `mesh.boundary_names` | name: attribute | `{}` | geometry file: boundary names for attribute numbers, added to (and overriding) the Gmsh file's named physical groups, e.g. {inlet: 1, walls: 3}. |
 | `mesh.square_cylinder.side` | real | `1` | Square side D. |
 | `mesh.square_cylinder.upstream` | real | `60` | Inlet distance from the square's centre. |
 | `mesh.square_cylinder.downstream` | real | `120` | Outlet distance from the centre. |
@@ -71,20 +73,45 @@ Box mesh (quads/hexes) for apps/run_case.
 | `mesh.square_cylinder.wake_ratio` | real | `1.15` | Cell growth from the square into the near wake. |
 | `mesh.square_cylinder.wake_h` | real | `0.5` | Cell width in the near wake. |
 | `mesh.square_cylinder.wake_end` | real | `10` | x where the near wake's uniform cells end. |
+| `mesh.cylinder_channel.length` | real | `2.2` | Channel length (x). |
+| `mesh.cylinder_channel.cx` | real | `0.2` | Cylinder centre x. |
+| `mesh.cylinder_channel.cy` | real | `0.2` | Cylinder centre y. |
 | `mesh.cylinder_channel.n_side` | int | `4` | Cells along each side of the O-grid square. |
 | `mesh.cylinder_channel.n_ring` | int | `3` | Radial cell layers around the cylinder. |
+| `mesh.cylinder_channel.n_up` | int | `2` | Cells upstream of the O-grid. |
 | `mesh.cylinder_channel.n_down` | int | `16` | Cells downstream of the O-grid. |
 | `mesh.cylinder_channel.level` | int | `0` | Nested uniform refinement level (cell counts x 2^level). |
+| `mesh.cylinder_channel.nz` | int | `4` | 3D: element layers in z (x 2^level). |
+| `mesh.cylinder_channel.depth` | real | `0.41` | 3D: extent in z; the z = 0 and z = depth faces join the walls. |
 
 ## `initial`
 
-initial_velocity: uniform -- a uniform flow with an optional shedding trigger.
+Settings of the named initial conditions. uniform: a uniform flow with an optional shedding trigger. channel (walls at y = 0 and y = 2 delta, x streamwise): Reichardt's mean profile for Re_tau = u_tau delta / nu, u_tau = sqrt(f_x delta) from forcing, plus a divergence-free perturbation that vanishes with its normal derivative at the walls.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `initial.velocity` | real[dim] | `[1, 0]` | The uniform velocity. |
-| `initial.perturbation` | real | `0` | Amplitude (relative to \|velocity\|) of a Gaussian bump exp(-\|x - c\|^2) added to the second velocity component; breaks the symmetry so vortex shedding starts early (0 = none). |
-| `initial.perturbation_center` | real[dim] | `[0, 0]` | The bump's centre c. |
+| `initial.velocity` | real[dim] | `[1, 0]` | uniform: the uniform velocity. |
+| `initial.perturbation` | real | `0` | uniform: amplitude (relative to \|velocity\|) of a Gaussian bump exp(-\|x - c\|^2) added to the second velocity component, which starts vortex shedding early. channel: amplitude of the perturbation relative to the centreline velocity. 0 = none. |
+| `initial.perturbation_center` | real[dim] | `[0, 0]` | uniform: the bump's centre c. |
+| `initial.seed` | int | `1` | channel: seed of the perturbation's random mode phases. |
+
+## `forcing`
+
+A constant body force per unit mass.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `forcing.body_force` | real[dim] | `[0, 0]` | The force f, e.g. a mean pressure gradient: [1, 0, 0] drives a channel of half-height 1 at u_tau = 1, so Re_tau = 1 / nu. Zero = none. |
+
+## `channel_statistics`
+
+Channel statistics (walls normal to y, x and z homogeneous; a box mesh without refinement): time averages of x-z plane-averaged U, V, W and the Reynolds stresses at every velocity-node height, the wall shear stress, u_tau and Re_tau. Written to <path>/<name>_profiles.csv and the run summary; carried through checkpoints.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `channel_statistics.enabled` | bool | `false` | Collect them. |
+| `channel_statistics.start_time` | real | `0` | Average over t >= start_time (skip the transient). |
+| `channel_statistics.interval` | int | `1` | Sample every this many steps. |
 
 ## `time`
 
@@ -149,7 +176,7 @@ ParaView output and diagnostics.
 | `output.path` | string | `.` | Output directory prefix. |
 | `output.name` | string | `case` | Collection name. |
 | `output.interval` | int | `1` | Write every N accepted steps. |
-| `output.diagnostics` | bool | `false` | Also log kinetic energy, dissipation and \|\|div u\|\| to a CSV. |
+| `output.diagnostics` | bool | `false` | Log t, kinetic energy (1/2 int \|u\|^2), dissipation (nu int \|grad u\|^2) and \|\|div u\|\| to <path>/<name>_diagnostics.csv every interval steps (independent of enabled; appended on restart). |
 | `output.progress` | real | `0` | Print a progress line every this many time units (0 = never): t, dt and its range, CFL and where it peaks, forces, iterations, cells, wall time, ETA. |
 | `output.history` | bool | `false` | Write a per-step <path>/<name>_history.csv (t, dt, c_d, c_l, iterations, cells, step wall time). |
 
@@ -230,3 +257,4 @@ Benchmark values the run summary compares against (relative errors; absolute for
 | `reference.cl_max` | real | `unset` | Maximum lift coefficient. |
 | `reference.t_cl_max` | real | `unset` | Time of the maximum lift. |
 | `reference.pressure_difference` | real | `unset` | The pressure-difference probe's value. |
+| `reference.re_tau` | real | `unset` | Channel: Re_tau from the time-averaged wall shear stress. |

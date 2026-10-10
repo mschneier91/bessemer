@@ -9,7 +9,33 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**On branch `oifs-mass` (not merged yet):** OIFS's substeps invert the BDF step's own mass
+**Just landed (`benchmark-infra`, merged to `main` and pushed 2026-10-10): the benchmark
+infrastructure** (human
+2026-10-10: "do not run any of the actual test problems, I will do that at a later time, I
+just want the test infrastructure set up"). Re_tau pair 180/395, constant pressure
+gradient and `benchmarks/<case>/` were the agent's choices (the human didn't pick).
+- Deck `forcing.body_force`; initial conditions `taylor_green_3d` and `channel` (Reichardt
+  + curl perturbation, exactly divergence-free, zero with its normal derivative at the
+  walls); `mesh.geometry: file` (`mesh.file`, Gmsh `$PhysicalNames` -> boundary names,
+  `mesh.boundary_names`); the DFG channel in 3D (`Extrude2D`, curved nodes kept, z faces
+  join `walls`; product parabolic inflow); `output.diagnostics` without field output,
+  appended on restart; `reference.re_tau`.
+- `post/channel_statistics`: plane and time averages at every velocity-node height
+  (U, V, W, u'u', v'v', w'w', u'v'), tau_w, u_tau, Re_tau, bulk velocity; Save/Load exact,
+  carried by Case's checkpoints; summary section `channel`, `<name>_profiles.csv`.
+- `benchmarks/`: tgv_re1600 (n16/32/64), channel (Re_tau 180/395), dfg_3d (3D-1Z/3Z),
+  sphere_re300 (README: needs a hex mesh). Reference data is NOT committed (human: the
+  sources state no redistribution terms): `python3 benchmarks/fetch_references.py`
+  downloads it from the original sources into git-ignored `*/reference/*.csv`;
+  `plot.py --selftest` is in the fast tier and skips (exit 77) until it's fetched.
+- Tests: `channel_statistics_test` S1-S5 (exact plane averages, wall shear, trapezoid,
+  Save/Load, restart through a checkpoint == uninterrupted), `benchmark_setup_test`
+  F1-F2, I1-I2, M1-M2, B1. None of the benchmarks has been run.
+- Found while testing: `solver.atol` defaults to 0, so a step that starts from an exact
+  steady state aborts ("implicit solve did not converge"): its residual cannot drop by
+  rtol. Worth a small absolute floor by default (changes baselines: the human's call).
+
+**Just landed (`oifs-mass`, merged to `main` and pushed 2026-10-10):** OIFS's substeps invert the BDF step's own mass
 operator, so the two can no longer differ (human: "I literally want it to error out if
 the two aren't consistent, using the diagonal for both of them as the default is fine").
 Pointwise for a diagonal mass (collocated, conforming: the default, unchanged results),

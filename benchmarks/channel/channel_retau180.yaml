@@ -1,0 +1,82 @@
+# Turbulent channel flow, Re_tau = 178.12 (Moser, Kim & Mansour 1999; the DNS
+# profiles are in benchmarks/channel/reference/mkm_chan180.csv). Walls at y = 0
+# and y = 2 (half-height delta = 1), periodic in x (streamwise, 2 pi) and z
+# (spanwise, pi), driven by a constant pressure gradient f_x = 1, so u_tau = 1
+# and the statistically steady Re_tau is exactly 1 / nu = 178.12.
+#
+# Start: Reichardt's mean profile plus a divergence-free perturbation of 10% of
+# the centreline velocity (initial_velocity: channel). Statistics: plane and
+# time averages over t in [60, 120] (delta / u_tau units), every 5 steps;
+# u_tau and Re_tau from the averaged wall shear stress (the run summary's
+# re_tau against reference.re_tau checks the momentum balance and the wall
+# resolution). Profiles: <path>/<name>_profiles.csv, rewritten at every
+# checkpoint; a restart continues the averages.
+#
+# Resolution: dx+ ~ 15.5, dz+ ~ 7.8 (MKM 180 used 4 pi x 2 x 4 pi/3 with
+# 128 x 129 x 128 modes; this 2 pi x 2 x pi box is the usual smaller domain for
+# one-point statistics);
+# tanh wall clustering, first velocity node at y+ ~ 2.
+# 24 x 18 x 24 = 10,368 elements (Q3: 72 x 54 x 72 velocity nodes):
+# within the desktop limits but slow at 4 ranks (not timed); a GPU run is the
+# practical one.
+# OIFS (BDF3, collocated mass) at CFL 2.
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/channel/channel_retau180.yaml
+#   python3 benchmarks/channel/plot.py channel_retau180/chan180_profiles.csv
+
+equation: navier_stokes
+
+physics:
+  nu: 5.61419267909e-3       # 1 / 178.12
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 3
+  elements: [24, 18, 24]
+  lengths: [6.283185307179586, 2.0, 3.141592653589793]
+  periodic: [true, false, true]
+  stretch: [none, tanh, none]
+  stretch_beta: [1.0, 3.0, 1.0]     # only y is stretched
+
+initial_velocity: channel
+initial:
+  perturbation: 0.1
+  seed: 1
+
+forcing:
+  body_force: [1.0, 0.0, 0.0]    # the mean pressure gradient: u_tau = sqrt(f_x delta) = 1
+
+time:
+  dt: 0.001                      # the first step; CFL control after it
+  t_final: 120
+  step_control: cfl
+  cfl_target: 2.0
+  convection: oifs
+
+boundary_conditions:
+  - {select: [ymin, ymax], type: no_slip}
+
+channel_statistics:
+  enabled: true
+  start_time: 60
+  interval: 5
+
+output:
+  path: channel_retau180
+  name: chan180
+  progress: 1.0
+  history: true
+  diagnostics: true
+  interval: 50
+
+checkpoint:
+  enabled: true
+  path: channel_retau180/chk
+  interval: 500
+  at_time: 60                   # the developed flow, to branch more runs from
+
+reference:
+  re_tau: 178.12

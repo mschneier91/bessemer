@@ -66,10 +66,13 @@ class DiagnosticsLog
 public:
    /**
     * @brief Open the CSV and write the header (rank 0 only).
-    * @param path Full CSV path.
-    * @param comm Communicator (used to pick the writer rank).
+    * @param path   Full CSV path.
+    * @param comm   Communicator (used to pick the writer rank).
+    * @param append Continue an existing file (a restart) instead of starting
+    *               a new one; rows the interrupted run wrote after its
+    *               checkpoint then repeat (readers keep the last per time).
     */
-   DiagnosticsLog(const std::string& path, MPI_Comm comm);
+   DiagnosticsLog(const std::string& path, MPI_Comm comm, bool append = false);
 
    /**
     * @brief Append one row (rank 0 only); values are already MPI-reduced.

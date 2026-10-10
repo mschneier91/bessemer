@@ -16,3 +16,7 @@ environments/.machine
 __pycache__/
 .cache/
 compile_commands.json
+
+# Benchmark reference data: fetched, not committed (the sources state no
+# redistribution terms): python3 benchmarks/fetch_references.py
+benchmarks/*/reference/*.csv

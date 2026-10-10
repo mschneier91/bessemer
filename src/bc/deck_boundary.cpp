@@ -145,6 +145,12 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
                {
                   const double h = spec.height, y = x(1);
                   u(0) = sc * 4.0 * spec.u_max * y * (h - y) / (h * h);
+                  if (dim == 3)
+                  {
+                     // The DFG 3D inflow: a product of parabolas in y and z.
+                     const double w = (spec.width > 0.0) ? spec.width : h;
+                     u(0) *= 4.0 * x(2) * (w - x(2)) / (w * w);
+                  }
                }
             }));
             for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *coeffs_.back()); }

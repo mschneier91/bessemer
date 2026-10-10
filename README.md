@@ -66,7 +66,8 @@ scripts/doctor.sh                                   # check the setup, build, sm
 mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d1.yaml
 ```
 
-[docs/using.md](docs/using.md) covers running cases, [docs/install/spack.md](docs/install/spack.md)
+[benchmarks/](benchmarks/README.md) holds the standard benchmarks (decks, reference data,
+comparison scripts). [docs/using.md](docs/using.md) covers running cases, [docs/install/spack.md](docs/install/spack.md)
 the setup (`scripts/setup.sh`), [docs/developing.md](docs/developing.md) changing the solver, and
 [docs/deck_reference.md](docs/deck_reference.md) lists every deck key.
 

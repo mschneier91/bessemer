@@ -1,0 +1,66 @@
+# DFG benchmark 3D-3Z (Schaefer & Turek 1996): unsteady flow past a cylinder
+# spanning a square channel, the inflow U_m(t) = 2.25 sin(pi t / 8) over
+# t in [0, 8] (Re(t) up to 100). Geometry and boundaries as 3D-1Z.
+#
+# Coefficients c = 2 F / (rho U^2 D H) with U = 1 (the largest mean inflow
+# velocity, 4/9 of 2.25) and D H = 0.041. Reference (FeatFlow, finest level;
+# Bayraktar, Mierka & Turek 2012): c_D,max = 3.2978, c_L,min = -0.010999, and
+# their full histories in benchmarks/dfg_3d/reference/featflow_3d3z.csv.
+#
+# OIFS (BDF3, collocated mass) at CFL 1; c_D and c_L every step in the
+# history file for plot.py.
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/dfg_3d/dfg_3d_3z.yaml
+#   python3 benchmarks/dfg_3d/plot.py 3z dfg_3d_3z/dfg_3d_3z_history.csv
+
+equation: navier_stokes
+
+physics:
+  nu: 1.0e-3
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 3
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    cx: 0.5
+    cy: 0.2
+    n_up: 4
+    nz: 4
+    depth: 0.41
+
+time:
+  dt: 0.001                    # the first step; CFL control after it
+  t_final: 8
+  step_control: cfl
+  cfl_target: 1.0
+  convection: oifs
+
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 2.25, height: 0.41,
+     time_profile: sine, time_scale: 8.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [outflow], type: outflow}
+
+forces:
+  enabled: true
+  boundaries: [cylinder]
+  reference_velocity: 1.0
+  reference_area: 0.041
+  statistics: true
+
+probes:
+  pressure_difference: [[0.45, 0.2, 0.205], [0.55, 0.2, 0.205]]
+
+output:
+  path: dfg_3d_3z
+  name: dfg_3d_3z
+  progress: 0.5
+  history: true
+
+reference:
+  cd_max: 3.2978

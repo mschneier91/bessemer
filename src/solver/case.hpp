@@ -13,6 +13,7 @@
 #include "post/checkpoint.hpp"
 #include "post/diagnostics.hpp"
 #include "post/body_force.hpp"
+#include "post/channel_statistics.hpp"
 #include "post/output.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -134,6 +135,21 @@ public:
 
    /// @return The velocity field.
    mfem::ParGridFunction& Velocity();
+
+   /// @return The channel statistics (deck channel_statistics), or null.
+   const ChannelStatistics* ChannelStats() const { return channel_stats_.get(); }
+
+   /**
+    * @brief Write the channel profiles CSV (ChannelStatistics::WriteCsv) to
+    *        @p path, its directory created. No-op without channel statistics.
+    *        Collective; rank 0 writes.
+    * @param path Output file.
+    */
+   void WriteChannelProfiles(const std::string& path) const;
+
+   /// @return <output.path>/<output.name>_profiles.csv, where Run() and every
+   ///         checkpoint write the channel profiles.
+   std::string ChannelProfilesPath() const;
 
    /// @return The pressure field.
    mfem::ParGridFunction& Pressure();
@@ -312,6 +328,10 @@ private:
    bool amr_time_started_ = false;  ///< A time-based AMR event has run.
    bool chk_at_written_ = false;    ///< checkpoint.at_time written.
    int amr_events_ = 0;             ///< AMR events that changed the mesh.
+   /// The deck's constant body force (forcing.body_force), when given.
+   std::unique_ptr<mfem::VectorConstantCoefficient> deck_forcing_;
+   /// Plane and time averages (deck channel_statistics), when enabled.
+   std::unique_ptr<ChannelStatistics> channel_stats_;
 };
 
 } // namespace incns

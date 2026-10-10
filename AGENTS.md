@@ -38,6 +38,7 @@ may not be CFD specialists; match their vocabulary.
 
 | Task | Read |
 |---|---|
+| Run a standard benchmark (Taylor–Green, channel, DFG 3D) | [benchmarks/README.md](benchmarks/README.md) |
 | Run a simulation: an example deck, a new deck, a Python case | [docs/using.md](docs/using.md); every deck key: [docs/deck_reference.md](docs/deck_reference.md) |
 | Install or build on a machine; how the Spack environments work | [docs/install/spack.md](docs/install/spack.md) (new machines: `scripts/setup.sh`); [docs/install/bridges2.md](docs/install/bridges2.md) (PSC GPU cluster) |
 | Change the solver (`src/`, `test/`, `apps/`) | [docs/developing.md](docs/developing.md): read it fully before planning |
@@ -77,7 +78,7 @@ may not be CFD specialists; match their vocabulary.
 scripts/doctor.sh                        # FIRST: check the setup, build if needed, smoke-run
 scripts/setup.sh --plan                  # set up a new machine (plan first; --yes does it)
 scripts/build.sh cpu                     # build (build/cpu/)
-scripts/test.sh cpu -L fast              # fast tier: 171 tests, ~3.5 min
+scripts/test.sh cpu -L fast              # fast tier: 180 tests, ~4 min
 . scripts/env.sh                         # activate the toolchain in this shell
 mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d3.yaml   # an example deck
 build/cpu/apps/run_case --deck-reference                  # every deck key

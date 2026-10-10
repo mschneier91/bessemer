@@ -1,6 +1,7 @@
 #include "config/parameters.hpp"
 
 #include "config/deck_reader.hpp"
+#include "mesh/mesh_file.hpp"
 
 #include "mfem.hpp" // MFEM_VERIFY
 
@@ -30,8 +31,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(root, "device", p.device,
           "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
    r.Read(root, "initial_velocity", p.initial_velocity,
-          "Named initial condition: zero, uniform (see the initial section) or "
-          "taylor_green_2d; anything else comes from Python or C++.");
+          "Named initial condition: zero, uniform, channel (see the initial "
+          "section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, "
+          "-cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes "
+          "from Python or C++.");
    r.Read(root, "restart", p.restart_from,
           "Checkpoint directory to restart from (same number of MPI ranks).");
 
@@ -131,12 +134,21 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.ReadEnum(mesh, "geometry", p.geometry,
    {
       {"box", MeshGeometry::Box}, {"square_cylinder", MeshGeometry::SquareCylinder},
-      {"cylinder_channel", MeshGeometry::CylinderChannel}
+      {"cylinder_channel", MeshGeometry::CylinderChannel}, {"file", MeshGeometry::File}
    },
-   "Domain: the box above, a square cylinder in a large domain (Joly et al. "
-   "2012; boundaries inflow, outflow, sides, body), or the DFG channel with a "
-   "cylinder (boundaries inflow, outflow, walls, cylinder). The cylinder "
-   "geometries are 2D.");
+   "Domain: the box above; a square cylinder in a large domain (Joly et al. "
+   "2012; 2D; boundaries inflow, outflow, sides, body); the DFG channel with a "
+   "cylinder (2D, or extruded in z in 3D; boundaries inflow, outflow, walls, "
+   "cylinder); or a mesh file (mesh.file; boundaries named by the file's Gmsh "
+   "physical groups and mesh.boundary_names).");
+   r.Read(mesh, "file", p.mesh_file,
+          "geometry file: a Gmsh (.msh, ASCII 2.2 or 4.x) or MFEM (.mesh) file of "
+          "quadrilaterals (2D) or hexahedra (3D); relative paths are relative to "
+          "the working directory.");
+   r.Declare(mesh, "boundary_names", "map", "{}", "name: attribute",
+             "geometry file: boundary names for attribute numbers, added to (and "
+             "overriding) the Gmsh file's named physical groups, e.g. {inlet: 1, "
+             "walls: 3}.");
    {
       SquareCylinderSpec& sq = p.square_cylinder;
       const DeckSection s = r.Section(mesh, "square_cylinder",
@@ -161,32 +173,110 @@ void FillFromDeck(DeckReader& r, Parameters& p)
       CylinderChannelSpec& cc = p.cylinder_channel;
       const DeckSection s = r.Section(mesh, "cylinder_channel",
                                       "geometry cylinder_channel: the DFG channel "
-                                      "(2.2 x 0.41, cylinder of radius 0.05 at "
-                                      "(0.2, 0.2)) and its base mesh.");
+                                      "(default 2.2 x 0.41, cylinder of radius 0.05 "
+                                      "at (0.2, 0.2); the DFG 3D benchmarks use "
+                                      "length 2.5, cx 0.5) and its base mesh.");
+      r.Read(s, "length", cc.length, "Channel length (x).");
+      r.Read(s, "cx", cc.cx, "Cylinder centre x.");
+      r.Read(s, "cy", cc.cy, "Cylinder centre y.");
       r.Read(s, "n_side", cc.n_side, "Cells along each side of the O-grid square.");
       r.Read(s, "n_ring", cc.n_ring, "Radial cell layers around the cylinder.");
+      r.Read(s, "n_up", cc.n_up, "Cells upstream of the O-grid.");
       r.Read(s, "n_down", cc.n_down, "Cells downstream of the O-grid.");
       r.Read(s, "level", p.cylinder_channel_level,
              "Nested uniform refinement level (cell counts x 2^level).");
+      r.Read(s, "nz", p.cylinder_channel_nz,
+             "3D: element layers in z (x 2^level).");
+      r.Read(s, "depth", p.cylinder_channel_depth,
+             "3D: extent in z; the z = 0 and z = depth faces join the walls.");
    }
 
-   if (p.geometry != MeshGeometry::Box)
+   if (p.geometry == MeshGeometry::SquareCylinder)
    {
-      MFEM_VERIFY(p.mesh.dim == 2, "parameters: the cylinder geometries are 2D "
+      MFEM_VERIFY(p.mesh.dim == 2, "parameters: the square cylinder is 2D "
                   "(mesh.dim 2)");
+   }
+   if (p.geometry == MeshGeometry::CylinderChannel)
+   {
+      MFEM_VERIFY(p.mesh.dim == 2 || p.mesh.dim == 3, "parameters: the "
+                  "cylinder channel is 2D or 3D");
+      MFEM_VERIFY(p.cylinder_channel_nz >= 1 && p.cylinder_channel_depth > 0.0,
+                  "parameters: cylinder_channel nz >= 1 and depth > 0");
+   }
+   if (p.geometry == MeshGeometry::File)
+   {
+      MFEM_VERIFY(!p.mesh_file.empty(), "parameters: geometry file needs "
+                  "mesh.file");
+      if (p.mesh_file.size() > 4 &&
+          p.mesh_file.compare(p.mesh_file.size() - 4, 4, ".msh") == 0)
+      {
+         p.boundary_names = GmshPhysicalNames(p.mesh_file, p.mesh.dim - 1);
+      }
+   }
+   if (mesh.Has("boundary_names"))
+   {
+      MFEM_VERIFY(p.geometry == MeshGeometry::File, "parameters: "
+                  "mesh.boundary_names is for geometry file");
+      const YAML::Node names = mesh.Get("boundary_names");
+      MFEM_VERIFY(names.IsMap(), "parameters: mesh.boundary_names must be a "
+                  "map of name: attribute");
+      for (const auto& kv : names)
+      {
+         const std::string name = kv.first.as<std::string>();
+         const int attr = kv.second.as<int>();
+         MFEM_VERIFY(attr > 0, "parameters: boundary attribute of '" << name
+                     << "' must be positive");
+         bool replaced = false;
+         for (auto& nb : p.boundary_names)
+         {
+            if (nb.first == name) { nb.second = attr; replaced = true; }
+         }
+         if (!replaced) { p.boundary_names.emplace_back(name, attr); }
+      }
    }
 
    const DeckSection init = r.Section(root, "initial",
-                                      "initial_velocity: uniform -- a uniform flow "
-                                      "with an optional shedding trigger.");
+                                      "Settings of the named initial conditions. "
+                                      "uniform: a uniform flow with an optional "
+                                      "shedding trigger. channel (walls at y = 0 "
+                                      "and y = 2 delta, x streamwise): Reichardt's "
+                                      "mean profile for Re_tau = u_tau delta / nu, "
+                                      "u_tau = sqrt(f_x delta) from forcing, plus a "
+                                      "divergence-free perturbation that vanishes "
+                                      "with its normal derivative at the walls.");
    r.ReadArray(init, "velocity", p.initial.velocity, p.mesh.dim,
-               "The uniform velocity.");
+               "uniform: the uniform velocity.");
    r.Read(init, "perturbation", p.initial.perturbation,
-          "Amplitude (relative to |velocity|) of a Gaussian bump exp(-|x - c|^2) "
-          "added to the second velocity component; breaks the symmetry so vortex "
-          "shedding starts early (0 = none).");
+          "uniform: amplitude (relative to |velocity|) of a Gaussian bump "
+          "exp(-|x - c|^2) added to the second velocity component, which starts "
+          "vortex shedding early. channel: amplitude of the perturbation relative "
+          "to the centreline velocity. 0 = none.");
    r.ReadArray(init, "perturbation_center", p.initial.perturbation_center,
-               p.mesh.dim, "The bump's centre c.");
+               p.mesh.dim, "uniform: the bump's centre c.");
+   r.Read(init, "seed", p.initial.seed,
+          "channel: seed of the perturbation's random mode phases.");
+
+   const DeckSection forcing = r.Section(root, "forcing",
+                                         "A constant body force per unit mass.");
+   r.ReadArray(forcing, "body_force", p.forcing.body_force, p.mesh.dim,
+               "The force f, e.g. a mean pressure gradient: [1, 0, 0] drives a "
+               "channel of half-height 1 at u_tau = 1, so Re_tau = 1 / nu. Zero = "
+               "none.");
+
+   const DeckSection chs = r.Section(root, "channel_statistics",
+                                     "Channel statistics (walls normal to y, x "
+                                     "and z homogeneous; a box mesh without "
+                                     "refinement): time averages of x-z "
+                                     "plane-averaged U, V, W and the Reynolds "
+                                     "stresses at every velocity-node height, the "
+                                     "wall shear stress, u_tau and Re_tau. Written "
+                                     "to <path>/<name>_profiles.csv and the run "
+                                     "summary; carried through checkpoints.");
+   r.Read(chs, "enabled", p.channel_statistics.enabled, "Collect them.");
+   r.Read(chs, "start_time", p.channel_statistics.start_time,
+          "Average over t >= start_time (skip the transient).");
+   r.Read(chs, "interval", p.channel_statistics.interval,
+          "Sample every this many steps.");
 
    const DeckSection time = r.Section(root, "time", "Time integration.");
    r.Read(time, "dt", p.dt,
@@ -363,7 +453,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
              "outflow | velocity | velocity_dirichlet, ...}. Names: box faces xmin, "
              "xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. "
              "type velocity takes value: [u, v] (constant), or profile: parabolic "
-             "with u_max and height (u_x = 4 u_max y (height - y) / height^2), "
+             "with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D "
+             "times 4 z (width - z) / width^2, width defaulting to height), "
              "optionally time_profile: ramp | sine with time_scale T (ramp: "
              "sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet "
              "takes its field from Python or C++ by the group name. Every real "
@@ -390,15 +481,15 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          static const std::set<std::string> entry_keys =
          {
             "group", "type", "select", "value", "profile", "u_max", "height",
-            "time_profile", "time_scale"
+            "width", "time_profile", "time_scale"
          };
          for (const auto& kv : e)
          {
             const std::string k = kv.first.as<std::string>();
             MFEM_VERIFY(entry_keys.count(k), "parameters: unknown "
                         "boundary_conditions key '" << k << "' (group, type, "
-                        "select, value, profile, u_max, height, time_profile, "
-                        "time_scale)");
+                        "select, value, profile, u_max, height, width, "
+                        "time_profile, time_scale)");
          }
          BcSpec s;
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
@@ -437,6 +528,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                            "parabolic needs u_max and height");
                s.u_max = e["u_max"].as<double>();
                s.height = e["height"].as<double>();
+               if (e["width"]) { s.width = e["width"].as<double>(); }
             }
             else
             {
@@ -461,7 +553,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          else
          {
             for (const char* k :
-                 {"value", "profile", "u_max", "height",
+                 {"value", "profile", "u_max", "height", "width",
                   "time_profile", "time_scale"
                  })
             {
@@ -487,7 +579,9 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(output, "name", p.output.name, "Collection name.");
    r.Read(output, "interval", p.output.interval, "Write every N accepted steps.");
    r.Read(output, "diagnostics", p.output.diagnostics,
-          "Also log kinetic energy, dissipation and ||div u|| to a CSV.");
+          "Log t, kinetic energy (1/2 int |u|^2), dissipation (nu int |grad u|^2) "
+          "and ||div u|| to <path>/<name>_diagnostics.csv every interval steps "
+          "(independent of enabled; appended on restart).");
    r.Read(output, "progress", p.output.progress,
           "Print a progress line every this many time units (0 = never): t, dt "
           "and its range, CFL and where it peaks, forces, iterations, cells, wall "
@@ -610,6 +704,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(ref, "t_cl_max", rv.t_cl_max, "Time of the maximum lift.");
    r.Read(ref, "pressure_difference", rv.pressure_difference,
           "The pressure-difference probe's value.");
+   r.Read(ref, "re_tau", rv.re_tau,
+          "Channel: Re_tau from the time-averaged wall shear stress.");
 }
 
 // Abort with every unknown key a deck sets, each with its closest valid key.
@@ -705,6 +801,13 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                "parameters: forces.average_periods must be >= 1");
    MFEM_VERIFY(p.output.progress >= 0.0 && p.checkpoint.at_time >= 0.0,
                "parameters: output.progress and checkpoint.at_time must be >= 0");
+   MFEM_VERIFY(p.channel_statistics.interval >= 1 &&
+               p.channel_statistics.start_time >= 0.0,
+               "parameters: channel_statistics needs interval >= 1 and "
+               "start_time >= 0");
+   MFEM_VERIFY(!p.channel_statistics.enabled || !p.amr.enabled,
+               "parameters: channel_statistics needs a fixed mesh (amr off): "
+               "every node height must span the whole x-z plane");
    p.Normalize();
    return p;
 }
@@ -743,7 +846,13 @@ void Parameters::Normalize()
       nu = 1.0 / nondim.Re;
       controller.atol /= nondim.U_ref; // the LTE norm carries velocity units
       MFEM_VERIFY(geometry == MeshGeometry::Box, "parameters: the cylinder "
-                  "geometries are nondimensional (mode dimensionless)");
+                  "and file geometries are nondimensional (mode dimensionless)");
+      // A force per unit mass is an acceleration: U^2 / L.
+      for (double& f : forcing.body_force)
+      {
+         f *= nondim.L_ref / (nondim.U_ref * nondim.U_ref);
+      }
+      channel_statistics.start_time *= U_over_L;
       // Times, lengths and velocities of the scheduling, boundary and probe
       // settings.
       amr.every_time *= U_over_L;
@@ -756,6 +865,7 @@ void Parameters::Normalize()
          for (double& v : s.value) { v /= nondim.U_ref; }
          s.u_max /= nondim.U_ref;
          s.height /= nondim.L_ref;
+         s.width /= nondim.L_ref;
          s.time_scale *= U_over_L;
       }
       for (auto& x : probes.pressure_difference)

@@ -240,7 +240,8 @@ private:
    std::vector<DeckKey> keys_;      ///< Declared keys, in order.
    std::set<std::string> key_set_;  ///< Paths of declared keys.
    std::set<std::string> sections_; ///< Paths of declared sections.
-   std::set<std::string> lists_;    ///< Paths of list-valued keys (not walked).
+   std::set<std::string>
+   lists_;    ///< Paths of list/map-valued keys (not walked).
 };
 
 } // namespace incns

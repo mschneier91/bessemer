@@ -31,6 +31,14 @@ Case::Case(ParMesh& mesh, const Parameters& params)
    MFEM_VERIFY(params_.nondim.normalized,
                "case: call Parameters::Normalize() before building the "
                "mesh and the case (LoadYAML does it automatically)");
+   // The deck's constant body force; SetForcing still overrides it.
+   if (params_.forcing.Active())
+   {
+      Vector f(params_.mesh.dim);
+      for (int d = 0; d < params_.mesh.dim; ++d) { f(d) = params_.forcing.body_force[d]; }
+      deck_forcing_ = std::make_unique<VectorConstantCoefficient>(f);
+      forcing_ = deck_forcing_.get();
+   }
 }
 
 Case::~Case()
@@ -207,6 +215,24 @@ void Case::EnsureSetup()
       cycle_ = integrator_->StepCount(); // output/checkpoint cycles continue
    }
 
+   // Channel statistics: restored with a restart (the averages continue),
+   // otherwise starting with the initial state.
+   if (params_.channel_statistics.enabled)
+   {
+      channel_stats_ = std::make_unique<ChannelStatistics>(
+                          spaces_.Velocity(), params_.nu,
+                          params_.channel_statistics.start_time);
+      const std::string saved = params_.restart_from + "/channel_statistics.txt";
+      if (!params_.restart_from.empty() && std::filesystem::exists(saved))
+      {
+         channel_stats_->Load(saved);
+      }
+      else if (params_.restart_from.empty())
+      {
+         channel_stats_->Sample(integrator_->Velocity(), integrator_->Time());
+      }
+   }
+
    SetupCfl();
    ne_ = mesh_.GetGlobalNE();
    monitor_ = std::make_unique<RunMonitor>(params_, mesh_.GetComm());
@@ -221,14 +247,18 @@ void Case::EnsureSetup()
    {
       BuildOutput(/*restart=*/false);
       output_->MaybeSave(0, 0.0); // initial state
-
-      if (params_.output.diagnostics)
-      {
-         const std::string csv =
-            params_.output.path + "/" + params_.output.name + "_diagnostics.csv";
-         diag_log_ = std::make_unique<DiagnosticsLog>(csv, mesh_.GetComm());
-         MaybeLogDiagnostics(0, 0.0); // initial state
-      }
+   }
+   // The diagnostics CSV does not need the field output (a 3D benchmark
+   // wants the energy history without ParaView files every interval).
+   if (params_.output.diagnostics)
+   {
+      if (Mpi::Root()) { std::filesystem::create_directories(params_.output.path); }
+      MPI_Barrier(mesh_.GetComm());
+      const std::string csv =
+         params_.output.path + "/" + params_.output.name + "_diagnostics.csv";
+      diag_log_ = std::make_unique<DiagnosticsLog>(csv, mesh_.GetComm(),
+                  !params_.restart_from.empty());
+      MaybeLogDiagnostics(cycle_, integrator_->Time()); // the start
    }
 }
 
@@ -247,6 +277,10 @@ void Case::Step()
    const double step_wall = MPI_Wtime() - wall0;
    ++cycle_;
    RecordStep(t_prev, step_wall);
+   if (channel_stats_ && cycle_ % params_.channel_statistics.interval == 0)
+   {
+      channel_stats_->Sample(integrator_->Velocity(), integrator_->Time());
+   }
    // Forces and the rotation log use the step's own solver: log them before
    // an event rebuilds the integrator.
    MaybeLogForces();
@@ -317,6 +351,7 @@ void Case::Run()
    EnsureSetup();
    while (!integrator_->Done() && !monitor_->Diverged()) { Step(); }
    monitor_->FlushHistory();
+   WriteChannelProfiles(ChannelProfilesPath());
    if (monitor_->Diverged() && Mpi::Root())
    {
       mfem::out << "[incns] DIVERGED: " << monitor_->DivergenceReason() << std::endl;
@@ -640,6 +675,29 @@ void Case::WriteCheckpoint(const std::string& dir)
 {
    EnsureSetup();
    Checkpoint::Write(dir, *integrator_, params_, &refine_log_);
+   if (channel_stats_)
+   {
+      // The averaging state travels with the checkpoint (a restart continues
+      // the same averages); the profiles so far are written alongside.
+      channel_stats_->Save(dir + "/channel_statistics.txt");
+      WriteChannelProfiles(ChannelProfilesPath());
+   }
+}
+
+std::string Case::ChannelProfilesPath() const
+{
+   return params_.output.path + "/" + params_.output.name + "_profiles.csv";
+}
+
+void Case::WriteChannelProfiles(const std::string& path) const
+{
+   if (!channel_stats_) { return; }
+   if (Mpi::Root())
+   {
+      const std::filesystem::path out(path);
+      if (out.has_parent_path()) { std::filesystem::create_directories(out.parent_path()); }
+   }
+   channel_stats_->WriteCsv(path);
 }
 
 void Case::SetupCfl()
@@ -807,6 +865,7 @@ const char* GeometryName(MeshGeometry g)
       case MeshGeometry::Box: return "box";
       case MeshGeometry::SquareCylinder: return "square_cylinder";
       case MeshGeometry::CylinderChannel: return "cylinder_channel";
+      case MeshGeometry::File: return "file";
    }
    return "?";
 }
@@ -907,6 +966,27 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
          }
       }
    }
+   if (channel_stats_ && channel_stats_->Samples() > 0)
+   {
+      const ChannelStatistics& cs = *channel_stats_;
+      Json& ch = j["channel"];
+      ch["samples"].Set(static_cast<long long>(cs.Samples()));
+      ch["averaging_time"].Set(cs.AveragingTime());
+      ch["tau_wall"].Set(cs.TauWall());
+      ch["u_tau"].Set(cs.UTau());
+      ch["re_tau"].Set(cs.ReTau());
+      ch["re_tau_now"].Set(std::sqrt(std::max(cs.TauWallNow(), 0.0)) *
+                           cs.Delta() / params_.nu);
+      if (params_.forcing.body_force[0] > 0.0)
+      {
+         // The constant pressure gradient fixes tau_w = f_x delta.
+         ch["re_tau_target"].Set(std::sqrt(params_.forcing.body_force[0] *
+                                           cs.Delta()) * cs.Delta() / params_.nu);
+      }
+      ch["u_bulk"].Set(cs.BulkVelocity());
+      ch["profiles"].Set(ChannelProfilesPath());
+      got.push_back({"re_tau", cs.ReTau()});
+   }
    if (params_.probes.pressure_difference.size() == 2)
    {
       const double dp = PointValue(mesh_, Pressure(),
@@ -922,7 +1002,7 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
       {"cd", rv.cd}, {"cl", rv.cl}, {"cd_mean", rv.cd_mean}, {"cl_mean", rv.cl_mean},
       {"cl_rms", rv.cl_rms}, {"strouhal", rv.strouhal}, {"cd_max", rv.cd_max},
       {"t_cd_max", rv.t_cd_max}, {"cl_max", rv.cl_max}, {"t_cl_max", rv.t_cl_max},
-      {"pressure_difference", rv.pressure_difference}
+      {"pressure_difference", rv.pressure_difference}, {"re_tau", rv.re_tau}
    };
    for (const auto& [key, ref] : refs)
    {

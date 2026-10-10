@@ -43,6 +43,12 @@ std::vector<std::string> BoundaryNames(const Parameters& p)
          return {"inflow", "outflow", "sides", "body"};
       case MeshGeometry::CylinderChannel:
          return {"inflow", "outflow", "walls", "cylinder"};
+      case MeshGeometry::File:
+      {
+         std::vector<std::string> out;
+         for (const auto& nb : p.boundary_names) { out.push_back(nb.first); }
+         return out;
+      }
       case MeshGeometry::Box:
       {
          std::vector<std::string> out;
@@ -83,6 +89,18 @@ int NamedBoundaryAttribute(const Parameters& p, ParMesh& mesh,
          if (name == "outflow") { return kCylinderOutflow; }
          if (name == "walls") { return kCylinderWalls; }
          return kCylinderBody; // "cylinder" or "body"
+      case MeshGeometry::File:
+      {
+         for (const auto& nb : p.boundary_names)
+         {
+            if (nb.first != name) { continue; }
+            MFEM_VERIFY(mesh.bdr_attributes.Find(nb.second) >= 0,
+                        "boundary_names: '" << name << "' is attribute "
+                        << nb.second << ", which the mesh does not have");
+            return nb.second;
+         }
+         return 0; // unreachable: the name was checked above
+      }
       case MeshGeometry::Box:
          return BoxFaceAttribute(p, mesh, name);
    }
@@ -92,6 +110,13 @@ int NamedBoundaryAttribute(const Parameters& p, ParMesh& mesh,
 std::vector<int> AllBoundaryAttributes(const Parameters& p, ParMesh& mesh)
 {
    std::vector<int> out;
+   if (p.geometry == MeshGeometry::File)
+   {
+      // Every boundary of a file mesh is real, named or not (the coverage
+      // check then reports an unnamed one by its attribute).
+      for (int a : mesh.bdr_attributes) { out.push_back(a); }
+      return out;
+   }
    for (const std::string& n : BoundaryNames(p))
    {
       out.push_back(NamedBoundaryAttribute(p, mesh, n));

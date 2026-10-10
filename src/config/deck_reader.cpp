@@ -75,7 +75,9 @@ void DeckReader::Declare(const DeckSection& s, const char* key,
                          const std::string& values, const char* description)
 {
    Record(s, key, type, default_value, values, description);
-   if (type == "list") { lists_.insert(s.KeyPath(key)); }
+   // Lists and maps hold user data (entries, names): their own parsers check
+   // them, so they are not walked for unknown keys.
+   if (type == "list" || type == "map") { lists_.insert(s.KeyPath(key)); }
 }
 
 void DeckReader::Record(const DeckSection& s, const char* key,

@@ -3,6 +3,7 @@
 add_library(incns STATIC
   mesh/periodic_box.cpp
   mesh/case_mesh.cpp
+  mesh/mesh_file.cpp
   mesh/cylinder_channel.cpp
   mesh/square_cylinder.cpp
   amr/amr_parameters.cpp
@@ -41,6 +42,7 @@ add_library(incns STATIC
   post/checkpoint.cpp
   post/body_force.cpp
   post/diagnostics.cpp
+  post/channel_statistics.cpp
   post/force_statistics.cpp
   post/run_monitor.cpp
   precond/cahouet_chabard.cpp

@@ -162,6 +162,20 @@ incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
 incns_add_mpi_test(run_monitor_test run_monitor_test.cpp)
 incns_add_mpi_test(deck_boundary_test deck_boundary_test.cpp)
+incns_add_mpi_test(channel_statistics_test channel_statistics_test.cpp)
+incns_add_mpi_test(benchmark_setup_test benchmark_setup_test.cpp
+  INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# The benchmark comparison scripts against their own reference data
+# (benchmarks/*/plot.py --selftest; standard library only).
+foreach(_bench tgv_re1600 channel dfg_3d)
+  add_test(NAME benchmark_plot_${_bench}
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/${_bench}/plot.py --selftest)
+  # Skipped (exit 77) until benchmarks/fetch_references.py has fetched the
+  # reference data, which is not committed.
+  set_tests_properties(benchmark_plot_${_bench} PROPERTIES LABELS "fast"
+    PASS_REGULAR_EXPRESSION "selftest.*ok" FAIL_REGULAR_EXPRESSION "FAILED"
+    SKIP_RETURN_CODE 77)
+endforeach()
 incns_add_mpi_test(deck_test deck_test.cpp
   INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml"
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
