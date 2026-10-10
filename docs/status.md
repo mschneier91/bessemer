@@ -28,12 +28,12 @@ The dated log below keeps the history.
 **Validated:** `dfg_2d1.yaml` (relative errors C_D 1.05e-4, C_L 2.79e-3, dp 4.06e-3 = the
 slow-tier values, 70 s), `dfg_2d3.yaml` (dt 0.001; C_D,max 0.08%, 172 s),
 `square_cylinder_re200_oifs.yaml` (C_D 1.4265, C_L,rms 0.3923, St 0.1565 in 2,191 steps,
-13 min: the driver's run to every digit). **Open:** the full IMEX deck run
-(`square_cylinder_re200.yaml`, 4 ranks) stopped silently at t = 90.0125 (step 6239, the
-last step of the AMR window `end_time: 90`): no error output, summary left at "running",
-no OOM record, and no kill or reap in the agent's commands at that time. Cause unknown;
-next: rerun it alone (~70 min) and see if it reproduces at t = 90 (OIFS crossed the same
-point fine). Debug-device sweep: green, 114/114. The full sweep after the merge failed only
+13 min: the driver's run to every digit). **IMEX deck run (resolved, not a solver problem):** the run that "stopped at t = 90" was
+killed by the agent itself, to restart it on the corrected deck (`corner_ratio`,
+`wake_ratio`); the restart never launched because `scripts/env.sh` was sourced from a
+scratch directory without `INCNS_REPO_ROOT` (output hidden by `>/dev/null`, `&&` chain
+stopped). The log just ended between progress lines. Rerun of the committed deck in flight.
+Debug-device sweep: green, 114/114. The full sweep after the merge failed only
 `run_monitor_test` R3 (AMR on a periodic Taylor-Green box), the known MFEM periodic-NC
 debug-device false positive; R3 now skips there like `amr_flow_test.cpp:88`. Bridges-2: its lock must be
 re-resolved on the cluster (MUMPS + pin edit).
