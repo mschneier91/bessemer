@@ -9,7 +9,8 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**On branch `license` (not merged yet):** BSD-3-Clause `LICENSE` (copyright Michael
+**Just landed (branch `license`, merged to `main` and pushed 2026-10-09, human: "merge and
+push"):** BSD-3-Clause `LICENSE` (copyright Michael
 Schneier; human: "it should be me"). README rewritten so the agent is the way in: what to
 ask, what the agent asks first, what comes back. Human: the test cases are not the
 standard CFD benchmarks to showcase (literature table removed; `cases/` decks are now
