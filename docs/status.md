@@ -28,6 +28,18 @@ after). Do these before relying on them:**
   the CUDA backend; the hypre ones match the July note about a CUDA-built hypre on the
   host. Not confirmed against a CPU build: that needs the desktop, or `psc_cpu`.
 
+**In flight (branch `macos-gcc`, 2026-10-10, first cold-start run of `setup.sh` on a
+fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
+- **`setup.sh --yes` failed building `gcc@14.3.0`** at configure: `Configuration
+  aarch64-apple-darwin24.6.0 not supported`. Spack's gcc recipe carries Iain Sandoe's
+  aarch64-darwin patches only up to 14.2.0. Fix on the branch: `setup.sh` uses
+  `gcc@14.2.0` on Apple Silicon (`docs/install/spack.md`, "The compiler"). The rest of the
+  setup on macOS is **not yet verified**: resolve, install, build and the fast tier are
+  still ahead on this machine; update this entry with what they find.
+- **Not fixed, seen on the way:** `JOBS` falls back to 4 on macOS (no `nproc`; the plan
+  said `-j 4` on an 8-core machine): use `sysctl -n hw.ncpu`. `docs/install/spack.md` and
+  `desktop.md` still say 14.3.0 as the one compiler.
+
 **Just landed (`gpu-validation`, merged to `main` and pushed 2026-10-10): the Bridges-2
 GPU environment rebuilt, the setup machinery made machine-neutral, and the first GPU run
 of the fast tier.**

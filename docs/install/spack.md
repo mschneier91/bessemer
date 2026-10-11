@@ -100,6 +100,11 @@ workstation, `setup.sh` first builds `gcc@14.3.0` with Spack (the system compile
 it), then points the environment at it. On a cluster, `--compiler <prefix>` uses the
 site's GCC module instead; `psc_gpu` does this.
 
+**Apple Silicon Macs use `gcc@14.2.0`, not 14.3.0.** Spack's gcc recipe carries Iain
+Sandoe's aarch64-darwin patches only up to 14.2.0; 14.3.0 stops at configure with
+`Configuration aarch64-apple-darwin24.6.0 not supported`. `setup.sh` picks the version by
+platform. Every `14.3.0` in the YAML above is then the GCC version `setup.sh` built.
+
 The `desktop` environment predates this pattern: there Spack chose to build gcc 14.3.0 as
 an ordinary dependency, because the system GCC has no Fortran. The result is the same.
 

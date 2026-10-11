@@ -12,6 +12,7 @@
 #                      scripts/machine.sh picks, else this machine's hostname)
 #   --compiler PREFIX  use an existing GCC with gfortran installed at PREFIX
 #                      (e.g. a cluster module's) instead of building gcc@14.3.0
+#                      (gcc@14.2.0 on an Apple Silicon Mac)
 #   --env-only         stop once environments/NAME/spack.yaml exists, to add
 #                      machine settings (cluster MPI, CUDA) before resolving
 #   --jobs N           parallel build jobs (default: all cores)
@@ -26,6 +27,12 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 INCNS_REPO_ROOT=$REPO
 export INCNS_REPO_ROOT
 GCC_SPEC=gcc@14.3.0
+# Spack's gcc recipe has no aarch64-darwin patches for 14.3.0 (only up to 14.2.0):
+# the build stops at configure with "Configuration aarch64-apple-darwin... not
+# supported". Apple Silicon Macs get 14.2.0, which Spack prefers there.
+if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+  GCC_SPEC=gcc@14.2.0
+fi
 SPACK_URL=https://github.com/spack/spack.git
 : "${SPACK_ROOT:=$HOME/spack}"
 
