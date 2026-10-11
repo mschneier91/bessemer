@@ -267,6 +267,7 @@ int main(int argc, char* argv[])
    p.amr.enabled = (initial_passes > 0 || amr_interval > 0);
    p.amr.initial_passes = initial_passes;
    p.amr.interval = amr_interval;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = theta;
    p.amr.anisotropic = aniso;
    p.amr.max_elements = max_elements;

@@ -147,10 +147,11 @@ New module `src/amr/refinement_marker.{hpp,cpp}`: host-side, operating on the in
 
 Two threshold modes (`amr.threshold_mode`):
 
-- `relative` (default): mark K if $\eta_K \ge \theta \max_K \eta_K$, with the max a global
+- `relative`: mark K if $\eta_K \ge \theta \max_K \eta_K$, with the max a global
   `MPI_Allreduce` and $\theta$ = `amr.theta` (default 0.5). It always marks something unless the
   field is constant, so it suits tests and short studies.
-- `absolute`: mark K if $\eta_K \ge \tau$, with $\tau$ = `amr.tolerance` in nondimensional
+- `absolute` (default, human 2026-10-10: refine to the tolerance you need, not to an element
+  count): mark K if $\eta_K \ge \tau$, with $\tau$ = `amr.tolerance` in nondimensional
   velocity units. It stops refining once the flow is resolved, so it suits production runs.
 
 Caps, applied in this order:
@@ -162,7 +163,11 @@ Caps, applied in this order:
 2. **Maximum elements.** The projected global count
    $NE + \sum_{\text{marked}} (2^{|\text{mask}|} - 1)$ must not exceed `amr.max_elements`. If it
    would, raise the threshold by bisection on $\eta$, one `MPI_Allreduce` of the projected count
-   per iteration, until it fits. The effect is "refine the largest indicators first". Forced
+   per iteration, until it fits. The effect is "refine the largest indicators first". Indicators
+   that agree to within 1e-8 relative (symmetric flows have many) are taken together: when the
+   threshold would split such a group, the whole group is marked if that exceeds the cap by at
+   most 10% (human 2026-10-10: a small overshoot is fine), and none of it otherwise. The marked set then does
+   not depend on roundoff (a restart or a GPU reproduces the state to ~1e-11, not bitwise). Forced
    refinements from the NC limit (3.3) can add a few more elements; log the overshoot rather
    than iterating on it.
 
@@ -375,7 +380,7 @@ amr:
   passes_per_event: 1
   anisotropic: false
   aniso_ratio: 0.5          # rho in Section 3.2
-  threshold_mode: relative  # relative | absolute
+  threshold_mode: absolute  # relative | absolute
   theta: 0.5                # relative mode
   tolerance: 0.05           # absolute mode, nondimensional velocity units
   min_size: 0.0             # nondimensional length; 0 = no limit
@@ -576,7 +581,7 @@ re-blessing. AMR-on runs get their own baselines, per np for AMG.
 | | Question | Proposal |
 |---|---|---|
 | D1 | Indicator field | Full velocity gradient, directional (Section 2). Vorticity magnitude is the common alternative but has no natural per-direction split |
-| D2 | Marking | Both modes; `relative` as the default for studies, `absolute` for production. Dörfler (bulk) marking needs a global sort: later, if wanted |
+| D2 | Marking | Both modes; `absolute` is the default (human 2026-10-10; it was `relative` until then), `relative` for tests and studies. Dörfler (bulk) marking needs a global sort: later, if wanted |
 | D3 | Anisotropy ratio $\rho$ | 0.5 |
 | D4 | `nc_limit` | 1 (2:1 balance) |
 | D5 | Project history onto divergence-free after transfer | On by default; E4 measures what it buys |

@@ -111,6 +111,7 @@ TEST(AmrMarker, K2_Directions)
       AmrParameters o;
       o.anisotropic = k.aniso;
       o.aniso_ratio = k.ratio;
+      o.threshold_mode = incns::AmrThreshold::Relative;
       o.theta = 1e-6; // mark everything
       Array<Refinement> refs;
       RefinementMarker(o).Mark(*mesh, g, refs);
@@ -132,6 +133,7 @@ TEST(AmrMarker, K3_MinSizeAndElementCap)
    });
    {
       AmrParameters o;
+      o.threshold_mode = incns::AmrThreshold::Relative;
       o.theta = 1e-6;
       o.min_size = 0.1; // x child 0.125 >= 0.1 ok, y child 0.0625 < 0.1 dropped
       Array<Refinement> refs;
@@ -150,6 +152,7 @@ TEST(AmrMarker, K3_MinSizeAndElementCap)
          G[1] = 0.5 * G[0];
       });
       AmrParameters o;
+      o.threshold_mode = incns::AmrThreshold::Relative;
       o.theta = 1e-6;
       o.max_elements = 32 + 3 * 5;
       Array<Refinement> refs;
@@ -172,6 +175,39 @@ TEST(AmrMarker, K3_MinSizeAndElementCap)
                     MPI_COMM_WORLD);
       EXPECT_GE(min_marked, max_unmarked);
    }
+   {
+      // Ties: the top row (4 elements) shares the largest eta up to 1e-12, the
+      // rest are distinct and smaller. Indicators equal to roundoff are marked
+      // together, whichever way the roundoff falls: a cap that would split the
+      // group is exceeded by the rest of it when that is within 10% of the
+      // cap, and otherwise none of the group is marked.
+      for (const double sign : {1.0, -1.0})
+      {
+         const Vector g = SyntheticG(*mesh, [sign](const Vector & c, double * G)
+         {
+            G[0] = (c(1) > 0.9)
+                   ? 2.0 * (1.0 + sign * 1e-12 * std::sin(40.0 * c(0)))
+                   : 0.1 * (1.0 + c(0) + 10.0 * c(1));
+            G[1] = 0.5 * G[0];
+         });
+         const auto marked_with_cap = [&](int room)
+         {
+            AmrParameters o;
+            o.threshold_mode = incns::AmrThreshold::Relative;
+            o.theta = 1e-6;
+            o.max_elements = 32 + 3 * room;
+            Array<Refinement> refs;
+            MarkStats st;
+            RefinementMarker(o).Mark(*mesh, g, refs, &st);
+            EXPECT_EQ(st.projected_ne, 32 + 3 * st.marked);
+            return st.marked;
+         };
+         EXPECT_EQ(marked_with_cap(2), 0); // 44 elements against a cap of 38: none
+         EXPECT_EQ(marked_with_cap(3), 4); // 44 against 41, within 10%: all of it
+         EXPECT_EQ(marked_with_cap(4), 4); // the whole group fits
+         EXPECT_EQ(marked_with_cap(5), 5); // the group and the next largest
+      }
+   }
 }
 
 TEST(AmrMarker, K4_AnisotropicConflictsResolved3D)
@@ -189,6 +225,7 @@ TEST(AmrMarker, K4_AnisotropicConflictsResolved3D)
    AmrParameters o;
    o.anisotropic = true;
    o.aniso_ratio = 0.9;
+   o.threshold_mode = incns::AmrThreshold::Relative;
    o.theta = 1e-6;
    Array<Refinement> refs;
    MarkStats st;
@@ -257,6 +294,7 @@ TEST(AmrMarker, K5_IndicatorDrivesDirections)
       ind.Compute(u, g);
       AmrParameters o;
       o.anisotropic = true;
+      o.threshold_mode = incns::AmrThreshold::Relative;
       o.theta = 0.2;
       Array<Refinement> refs;
       MarkStats st;

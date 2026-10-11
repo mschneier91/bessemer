@@ -9,6 +9,73 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**NOT YET TESTED on the changes below (human 2026-10-10: merge and push anyway, test
+after). Do these before relying on them:**
+- **The CPU fast tier on the desktop** (`scripts/test.sh cpu -L fast`, `cpu` preset). The
+  changes were only run on Bridges-2, where the one build is the CUDA one. Watch the AMR
+  tests: the marker's element cap now treats equal indicators as a group (below), which
+  can change which elements are refined near `amr.max_elements`.
+- **`scripts/docs.sh`**: Bridges-2 has no Doxygen.
+- **The Python tests and the debug-device sweep**: queued on Bridges-2 when this was
+  written, not yet seen to pass.
+- **The GPU fast tier at np 4 and the slow tier.** With two H100s (two ranks per card) the
+  np 4 pass got through 16 of 60 tests in 28 minutes (15 passed, `nse_mms_test` timed out)
+  and was stopped; the slow tier never ran. They need one GPU per rank: 4 H100s.
+- **The CPU backend of the CUDA build is not a CPU reference.** `INCNS_DEVICE=cpu` in
+  `build/cuda` passes 175 of 183; the 8 failures are inside hypre ("Error during solve",
+  `amr_checkpoint_test`, `amr_event_test`, `unsteady_mms_test` at np 1 and 2; they pass at
+  np 4) and MFEM's cuSPARSE path (`point_block_jacobi_test` np 2 and 4). All eight pass on
+  the CUDA backend; the hypre ones match the July note about a CUDA-built hypre on the
+  host. Not confirmed against a CPU build: that needs the desktop, or `psc_cpu`.
+
+**Just landed (`gpu-validation`, merged to `main` and pushed 2026-10-10): the Bridges-2
+GPU environment rebuilt, the setup machinery made machine-neutral, and the first GPU run
+of the fast tier.**
+- **GPU fast tier (H100, CUDA backend, MFEM `1c19aba`, hypre 2.33.0 +cuda):** np 2 60/60.
+  np 1 61/63: `nse_mms_test` and `tgv_nse_test` timed out at 15 min while sharing one card
+  (every np 1 test uses GPU 0); both pass at np 2 (428 s, 224 s), and `nse_mms_test` passed
+  alone at np 1 (13/13, 291 s) before the last changes. Run GPU tests two at a time at
+  most, and with Open MPI's core binding off (`PRTE_MCA_hwloc_default_binding_policy=none`):
+  concurrent `mpirun`s otherwise pin to the same cores.
+- **AMR marker, element cap** (`refinement_marker.cpp`): indicators equal to within 1e-8
+  relative are marked together. When the cap would split such a group, the whole group is
+  marked if that exceeds `amr.max_elements` by at most 10% (human: a small overshoot is
+  fine), and none of it otherwise. Why: the bisection used exact comparisons, so in a
+  symmetric flow roundoff chose which members of a tied group were refined. A CPU restart
+  is bitwise, a GPU one reproduces the state to ~1e-11: `amr_checkpoint_test` 2D differed
+  by 74% on the GPU. It now matches to 1e-13 (112 elements; 118 before, cap 120).
+- **`amr.threshold_mode` defaults to `absolute`** (human: refine to the tolerance you
+  need, not to an element count; no cap by default). It was `relative`. Every test, app
+  and example that sets `theta` now sets `relative` explicitly, so their results are
+  unchanged. A deck that sets only `amr.theta` must add `threshold_mode: relative`.
+- **Tolerances (human-approved):** `amr_event_test` E2 compares attempted steps to 1e-9
+  on every backend (GPU: ~2e-11). `nc_stokes_test` S4 allows iteration counts to differ by
+  3 (was 1): on a GPU hypre's coarsening draws from one random stream per process, so an
+  AMG hierarchy depends on every setup before it (the same problem took 21 to 24
+  iterations depending on what had run; the two meshes differed by up to 2; counts are
+  identical on a host backend). `HYPRE_SetUseGpuRand(0)` removes the effect but made the
+  GPU tests 3 to 11 times slower, so it is not used. **Open:** reseed the GPU stream per
+  AMG setup instead; until then a restarted GPU run builds different hierarchies from the
+  uninterrupted one.
+- **Build:** the CUDA compute capability comes from the environment's `cuda_arch`
+  (`scripts/env.sh` exports `INCNS_CUDA_ARCH`), no longer a hardcoded 90.
+- **Setup machinery:** `scripts/setup.sh --plan` is the one entry point. An environment
+  can carry `INSTALL` (its own procedure; `setup.sh` reports and runs nothing), `hosts`
+  (full-hostname patterns), `preset` and `spack.yaml.sha256` (written by
+  `scripts/envlock.sh`: a lock is stale when its `spack.yaml` changed, whatever the file
+  times say). `scripts/doctor.sh` only checks; `--run` builds and smoke-runs.
+  `scripts/test.sh` takes the preset as its first argument. `setup.sh --yes` refuses on a
+  cluster login node without `--on-login-node`.
+- **Agents:** rule 3 asks before any job or allocation and says nothing in the repo is
+  permission; the committed `.claude/settings.json` only denies or asks. Allow rules are
+  personal (`.claude/settings.local.json`, git-ignored).
+- **Bridges-2:** `psc_gpu` re-resolved (MUMPS, the MFEM pin, `py-pip`) and installed with
+  `environments/psc_gpu/install.sbatch` (one H100, 10 min for the five new packages);
+  numba 0.66.0 from the wheel folder. `psc_cpu` (the same stack, no CUDA) is resolved and
+  mirrored, not installed; it resolved hypre 3.1.0 where `psc_gpu` has 2.33.0, and is
+  pinned to the GPU nodes' compiler until there is an RM allocation. Neither has
+  `py-matplotlib`.
+
 **Just landed (`benchmark-infra`, merged to `main` and pushed 2026-10-10): the benchmark
 infrastructure** (human
 2026-10-10: "do not run any of the actual test problems, I will do that at a later time, I
@@ -80,7 +147,7 @@ fresh machine. Next: that test (host terminal, clean VM or container); the TGV e
 - Agent-first front door: `AGENTS.md`, short README, `docs/using.md`,
   `docs/install/desktop.md`, CLAUDE.md split into `developing.md` + this file.
 - Generated deck reference (`docs/deck_reference.md`); unknown deck keys are errors.
-- `scripts/doctor.sh`: setup check + smoke run (seconds).
+- `scripts/doctor.sh`: setup check; `--run` adds the build-if-missing and smoke run (seconds).
 - Benchmarks as decks: `mesh.geometry` (square cylinder, DFG channel), deck velocity
   BCs (constant / parabolic, ramp / sine), boundary coverage check, `uniform` initial
   flow, time-based AMR, force statistics, progress / history, pressure probe,
@@ -99,8 +166,8 @@ the restart never launched.) Against the OIFS deck: C_D 1.2% and C_L,rms 2.8% hi
 equal; the "within 1%" figure is IMEX with OIFS's collocated mass, not this deck.
 Debug-device sweep: green, 114/114. The full sweep after the merge failed only
 `run_monitor_test` R3 (AMR on a periodic Taylor-Green box), the known MFEM periodic-NC
-debug-device false positive; R3 now skips there like `amr_flow_test.cpp:88`. Bridges-2: its lock must be
-re-resolved on the cluster (MUMPS + pin edit).
+debug-device false positive; R3 now skips there like `amr_flow_test.cpp:88`. Bridges-2: `psc_gpu` was
+re-resolved on the cluster on 2026-10-10 (MUMPS and the pin).
 
 **Next, in order:**
 1. A cold-start test: a fresh agent with no context, given real tasks (install check,
@@ -188,7 +255,7 @@ untracked in the repo root (do not commit it; copyright).
   scheduling (start / interval / end) in Case/Parameters for decks (now only in the
   driver); statistics with error bars; same-np restart constrains job chaining. OIFS now
   exists (`oifs` branch: CFL 2 within 1% of IMEX at Re 200, see above). Batch
-  scripts: drafted by Claude, submitted by the human (guardrail).
+  scripts: submitted by the agent once the human approves the cost (changed 2026-10-10).
 - **AMR stays refinement-only (human 2026-10-08):** derefinement breaks the multistep
   history (refinement transfers every BDF/EXT level exactly; coarsening must project them),
   and single-step schemes are order-bound. For a statistically stationary turbulent wake,
@@ -227,8 +294,8 @@ whether the case-level default for HPC runs should become OIFS CFL 2.
 MFEM 4.10.1-dev **+MUMPS**, hypre 3.2.0, libCEED 1.0.0, SuiteSparse 7.14 (developing.md
 §3). MFEM's head broke 3D parallel anisotropic AMR (PR #5297; reported upstream), so MFEM
 is **pinned to `1c19aba`** in both `spack.yaml` files until it is fixed. On the pinned
-stack: fast tier 159/159, Python 12/12. The Bridges-2 lock still has to be re-resolved on
-that machine (its `spack.yaml` carries the same MUMPS + pin edit).
+stack: fast tier 159/159, Python 12/12. The Bridges-2 lock (`psc_gpu`) was re-resolved on that
+machine on 2026-10-10 with the same MUMPS + pin edit.
 
 **`agent-first` (branch, 2026-10-09, human: "an agent first repo where someone can just
 point their agent at it"):** `AGENTS.md` front door, short README, `docs/using.md`,

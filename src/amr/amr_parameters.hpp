@@ -45,8 +45,9 @@ struct AmrParameters
    /// Anisotropic mode: split direction d of a marked element when
    /// G_{K,d} >= aniso_ratio * max_d' G_{K,d'}. 1 = dominant direction only.
    double aniso_ratio = 0.5;
-   /// Marking rule (relative to the maximum, or absolute).
-   AmrThreshold threshold_mode = AmrThreshold::Relative;
+   /// Marking rule. Absolute by default (human 2026-10-10): refine to the
+   /// tolerance the flow needs; the mesh stops growing once it is met.
+   AmrThreshold threshold_mode = AmrThreshold::Absolute;
    /// Relative mode: mark eta_K >= theta * max eta.
    double theta = 0.5;
    /// Absolute mode: mark eta_K >= tolerance (nondimensional velocity units).

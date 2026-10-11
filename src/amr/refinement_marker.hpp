@@ -35,7 +35,10 @@ struct MarkStats
  *    element left with no direction is unmarked.
  * 4. Element cap: if NE + sum(2^(number of split directions) - 1) would
  *    exceed max_elements, the threshold is raised by bisection until it fits
- *    (largest eta first).
+ *    (largest eta first). Indicators equal to within 1e-8 relative are taken
+ *    together, so the choice does not depend on roundoff: when the threshold
+ *    would split such a group, the whole group is marked if that exceeds the
+ *    cap by at most 10%, and none of it otherwise.
  * 5. 3D, np > 1: anisotropic entries in conflict with a face neighbour are
  *    upgraded to XYZ (ResolveAnisotropicConflicts) -- MFEM's parallel
  *    anisotropic hex refinement requires it.

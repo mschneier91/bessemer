@@ -114,6 +114,7 @@ TEST(AmrCheckpoint, C1_RestartOfAdaptedRunMatchesUninterrupted2D)
    p.amr.enabled = true;
    p.amr.interval = 3;
    p.amr.anisotropic = true;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = 0.7;
    p.amr.max_elements = 120;
    p.Normalize();
@@ -138,6 +139,7 @@ TEST(AmrCheckpoint, C1_RestartOfAdaptedRunMatchesUninterrupted3D)
    p.amr.enabled = true;
    p.amr.interval = 2;
    p.amr.anisotropic = true;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = 0.6;
    p.amr.max_elements = 60;
    p.Normalize();

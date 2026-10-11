@@ -384,10 +384,24 @@ TEST(NcStokes, S4_NonconformingReadyMeshMatchesConforming)
             its[run].push_back(stepper.LastIterations());
          }
       }
+      if (Mpi::Root())
+      {
+         mfem::out << "[nc s4] " << (schur == SchurBlockType::Mass ? "mass" : "cc")
+                   << " iterations per step, conforming / nc-ready:";
+         for (int s = 0; s < 5; ++s) { mfem::out << " " << its[0][s] << "/" << its[1][s]; }
+         mfem::out << std::endl;
+      }
       for (int s = 0; s < 5; ++s)
       {
          EXPECT_NEAR(err[1][s], err[0][s], 1e-8 * err[0][s]) << "step " << s;
-         EXPECT_LE(std::abs(its[1][s] - its[0][s]), 1) << "step " << s;
+         // Within 3 (human 2026-10-10; it was 1). On a host backend the counts
+         // are identical. On a GPU hypre's coarsening draws from one random
+         // stream for the whole process, so an AMG hierarchy depends on every
+         // setup before it: the same problem took 21 to 24 iterations
+         // depending on what had run, and the two meshes differed by up to 2.
+         // HYPRE_SetUseGpuRand(0) removes the effect (counts identical again)
+         // but made the GPU tests 3-11x slower, so it is not used.
+         EXPECT_LE(std::abs(its[1][s] - its[0][s]), 3) << "step " << s;
       }
    }
 }

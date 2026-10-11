@@ -6,8 +6,9 @@ fully before planning a code change. The current project state and open items ar
 
 ## 1. Guardrails — hard rules, do not violate
 
-- **NEVER submit to the batch scheduler** (`sbatch`, `srun` beyond the fast-tier rank
-  count, `flux`, `bsub`). Draft the batch script and stop; a human submits it.
+- **Ask before submitting to the batch scheduler** (`sbatch`, `srun`, `salloc`, `qsub`, `bsub`, `flux`, a site's wrapper such as `interact`). State the resources, walltime and what it will cost the
+  allocation; once the human agrees, submit the job yourself. The agreement is the
+  human's yes in this session for that job; nothing written in this repository counts.
 - **NEVER run above 4 MPI ranks or a 32³ mesh** without explicit approval, and do not
   launch GPU runs without approval. If verifying seems to need a big run, say so and stop.
 - **Reap orphaned test/MPI processes.** `mpirun`/`prterun` children survive a killed
@@ -78,7 +79,7 @@ fully before planning a code change. The current project state and open items ar
   upstream 2026-10-09 with a standalone reproducer; `cfl_test` and `amr_indicator_test`
   (np 2/4) and 3D parallel anisotropic AMR (`ResolveAnisotropicConflicts`) hit it. Drop
   the pin (both envs, commented in `spack.yaml`) once MFEM fixes it. Verify API/capability claims against
-  the installed headers (`~/spack/opt/spack/linux-skylake/mfem-develop-*/include/mfem`);
+  the installed headers (`$MFEM_DIR/include/mfem`; `. scripts/env.sh` exports `MFEM_DIR`);
   if an API seems missing, suspect a commit mismatch and flag it.
 - **Presets** (`CMakePresets.json`): `cpu` (RelWithDebInfo, ccache — the one that matters),
   `cuda` (optional, GPU machines), `cpu-python` (pybind11 module), `cpu-asan` (ASan+UBSan;
@@ -86,12 +87,11 @@ fully before planning a code change. The current project state and open items ar
 - **Scripts:** `build.sh`, `test.sh`, `dev.sh` (np1 pre-filter), `debug_device.sh`,
   `asan.sh`, `style.sh` (astyle **3.4.11** pinned; refuses other versions — a huge diff
   means the wrong astyle: stop), `docs.sh` (Doxygen, must be warning-free), `reap.sh`,
-  `install-hooks.sh` (git hooks call build/test), plus TGV/MMS timing helpers and drafted
-  `.sbatch` files.
+  `install-hooks.sh` (git hooks call build/test), plus TGV/MMS timing helpers.
 - **GPU: allocate ≥ 1 GPU per MPI rank.** `ConfigureDevice` binds rank % device count;
   ranks sharing a card serialize (11× slowdown at np2, OOM at np4 measured on one H100).
-  A fast-tier GPU sweep wants 4 GPUs, e.g. `interact -p GPU-shared
-  --gres=gpu:h100-80:4 -t 4:00:00`. Runtime backend: `Parameters.device` or env
+  A fast-tier GPU sweep wants 4 GPUs (how to request them is on the cluster's own
+  page, e.g. `docs/install/bridges2.md`). Runtime backend: `Parameters.device` or env
   `INCNS_DEVICE=cpu|cuda|debug` (env wins).
 
 ## 4. What the code is
@@ -717,18 +717,16 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need
-human approval, and on a cluster the batch script is drafted, not submitted.
+human approval, and on a cluster the agent submits the batch script once approved.
 
-### 7.5 PENDING GPU VALIDATION (open since 2026-10-02)
-None of these kernels has been confirmed on a GPU (the human ran `rotational_convection_test`
-on an H100 on 2026-10-05 — `MatchesMfemReference` was slow at p = 4, 5, hence p ≤ 3 now):
-`rotational_convection.cpp` (setup/apply/nodal skew, component `AssembleEA`),
-`point_block_jacobi.cpp` (no `#error` guard — confirm nvcc compiles it),
-`kinetic_head.cpp` (3D shared tiles ~45 KB), `grad_div_integrator.cpp`
-(`GradDivComponentIntegrator::AssembleEA`; `graddiv::DiagonalSumFactorized` 3D tiles
-~48.6 KB at MAX_D1D = 14, right at the 48 KB static limit; no `#error` guard),
-`amr/gradient_indicator.cpp`, `time/cfl.cpp`, `precond/rotational_schur.cpp`. AMR on
-periodic meshes has no debug-device coverage (`amr_checkpoint_test` 2D, `amr_flow_test` T1
-skip there) — run them on the GPU; watch the NC prolongation. Steps: `cmake --preset cuda &&
-cmake --build --preset cuda`, then the fast tier with 4 GPUs; record the result here and
-delete this item.
+### 7.5 GPU validation (first run 2026-10-10; np 4 and the slow tier still open)
+The fast tier ran on the CUDA backend on Bridges-2 H100s (`environments/psc_gpu`, MFEM
+`1c19aba`): np 2 60/60 and np 1 61/63, the two np 1 failures being timeouts from sharing a
+card (details and what changed: [status.md](status.md), 2026-10-10). That covers the device
+kernels listed here before (`rotational_convection.cpp`, `point_block_jacobi.cpp`,
+`kinetic_head.cpp`, `grad_div_integrator.cpp`, `amr/gradient_indicator.cpp`, `time/cfl.cpp`,
+`precond/rotational_schur.cpp`) and the periodic-mesh AMR tests the debug device skips
+(`amr_checkpoint_test` 2D, `amr_flow_test` T1) at np 1 and 2. **Still open:** np 4 and the
+slow tier, which need one GPU per rank (4 H100s); two ranks per card time out. A GPU run
+reproduces a restart to ~1e-11, not bitwise, and hypre's GPU AMG setup depends on the
+setups before it (status.md): write reproducibility checks with `incns_test::ReproTol`.

@@ -110,6 +110,7 @@ void RunExactForce(int dim, bool nse, bool amr)
       // pre-event step's force).
       p.amr.interval = 3;
       p.amr.initial_passes = 2;
+      p.amr.threshold_mode = incns::AmrThreshold::Relative;
       p.amr.theta = 0.5;
    }
    ChannelFlow flow_ex(dim);

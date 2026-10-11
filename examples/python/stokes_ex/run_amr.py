@@ -48,6 +48,7 @@ def main():
     p.amr.enabled = True
     p.amr.interval = 2
     p.amr.anisotropic = True
+    p.amr.threshold_mode = incns.AmrThreshold.Relative
     p.amr.theta = 0.6
     p.amr.max_elements = 200
 

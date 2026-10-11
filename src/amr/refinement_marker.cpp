@@ -70,6 +70,13 @@ int RefinementMarker::ResolveAnisotropicConflicts(ParMesh& mesh,
    return upgraded;
 }
 
+// Relative width within which two indicators count as equal for the element
+// cap: far above the reproducibility floor of a GPU run (~1.5e-11, see
+// test/repro_tolerance.hpp), far below any difference the indicator resolves.
+static constexpr double kTieBand = 1e-8;
+// How far past max_elements a group of equal indicators may take the mesh.
+static constexpr double kCapSlack = 0.1;
+
 void RefinementMarker::Mark(ParMesh& mesh, const Vector& g,
                             Array<Refinement>& refs, MarkStats* stats) const
 {
@@ -145,6 +152,30 @@ void RefinementMarker::Mark(ParMesh& mesh, const Vector& g,
          else { hi = mid; }
       }
       threshold = hi;
+      // Indicators that agree to roundoff (a symmetric flow has many) are
+      // marked together. The bisection can end inside such a group, and which
+      // of its members lie above hi is then decided by their last bits: bits
+      // that differ on a restart or on another backend, where the state is
+      // reproduced to ~1e-11 and not bitwise. When hi splits a group, the
+      // whole group goes one way: marked, if that exceeds the cap by at most
+      // kCapSlack (human 2026-10-10: a small overshoot is fine), and left out
+      // otherwise (in a symmetric flow one group can be a third of the mesh).
+      // Either way the marked set is a function of the flow, not of roundoff.
+      long long near[2] = {0, 0}; // within the band: [0] at or above hi, [1] below
+      for (int e = 0; e < ne; ++e)
+      {
+         if (mask[e] == 0 || eta[e] <= 0.0) { continue; }
+         if (eta[e] >= hi && eta[e] < hi * (1.0 + kTieBand)) { ++near[0]; }
+         else if (eta[e] < hi && eta[e] >= hi * (1.0 - kTieBand)) { ++near[1]; }
+      }
+      MPI_Allreduce(MPI_IN_PLACE, near, 2, MPI_LONG_LONG, MPI_SUM, comm);
+      if (near[0] > 0 && near[1] > 0)
+      {
+         const double with_group = hi * (1.0 - kTieBand);
+         const bool fits = static_cast<double>(projected(with_group)) <=
+                           (1.0 + kCapSlack) * opts_.max_elements;
+         threshold = fits ? with_group : hi * (1.0 + kTieBand);
+      }
    }
 
    MarkStats st;

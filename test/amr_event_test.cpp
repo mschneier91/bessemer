@@ -127,6 +127,7 @@ Parameters MmsParams(int dim, bool adaptive)
    p.amr.enabled = true;
    p.amr.interval = 2;
    p.amr.anisotropic = true;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = 0.6;
    p.amr.max_elements = (dim == 2) ? 200 : 60; // keep the fast tier fast
    p.Normalize();
@@ -280,7 +281,9 @@ TEST(AmrEvent, E2_NoOpEventReproducesUninterruptedRun)
       ASSERT_EQ(ev.dts.size(), ref.dts.size());
       for (std::size_t i = 0; i < ref.dts.size(); ++i)
       {
-         EXPECT_NEAR(ev.dts[i], ref.dts[i], 1e-12 * ref.dts[i]) << "attempt " << i;
+         // 1e-9 on every backend (human 2026-10-10): a GPU reproduces the
+         // attempted steps to ~2e-11 relative, a CPU to roundoff.
+         EXPECT_NEAR(ev.dts[i], ref.dts[i], 1e-9 * ref.dts[i]) << "attempt " << i;
       }
    }
 }
@@ -353,6 +356,7 @@ TEST(AmrEvent, E5_InitialPassesStartFromTheProjectedIc)
    p.amr.enabled = true;
    p.amr.interval = 0;
    p.amr.initial_passes = 2;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = 0.8;
    p.Normalize();
    auto mesh = incns::MakeCaseMesh(p);

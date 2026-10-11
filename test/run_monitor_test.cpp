@@ -118,6 +118,7 @@ TEST(RunMonitor, R3_TimeBasedAmrEvents)
    p.amr.every_time = 0.1;
    p.amr.start_time = 0.15;
    p.amr.end_time = 0.35;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = 0.9;
    p.amr.max_elements = 64;
    auto mesh = incns::MakeCaseMesh(p);

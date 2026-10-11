@@ -56,6 +56,7 @@ TgvRun RunTgv(incns::ConvectiveForm form, bool amr)
    p.krylov_rtol = 1e-12;
    p.amr.enabled = amr;
    p.amr.interval = 4;
+   p.amr.threshold_mode = incns::AmrThreshold::Relative;
    p.amr.theta = 0.6;
    p.amr.max_elements = 100;
    p.Normalize();
@@ -126,6 +127,7 @@ TEST(AmrFlow, A1_AnisotropicRefinementResolvesALayerCheaply)
       p.amr.interval = 0;
       p.amr.initial_passes = 4;
       p.amr.anisotropic = aniso;
+      p.amr.threshold_mode = incns::AmrThreshold::Relative;
       p.amr.theta = 0.5;
       p.Normalize();
       auto mesh = incns::MakeCaseMesh(p);

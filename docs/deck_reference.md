@@ -192,7 +192,7 @@ Adaptive mesh refinement (refinement only).
 | `amr.passes_per_event` | int | `1` | Refinement passes per adaptation event. |
 | `amr.anisotropic` | bool | `false` | Split only the directions with large gradients. |
 | `amr.aniso_ratio` | real | `0.5` | Anisotropic: split direction d if its gradient >= ratio * the largest. |
-| `amr.threshold_mode` | relative \| absolute | `relative` | Mark where the indicator >= theta * its max (relative) or >= tolerance (absolute). |
+| `amr.threshold_mode` | relative \| absolute | `absolute` | Mark where the indicator >= theta * its max (relative) or >= tolerance (absolute). |
 | `amr.theta` | real | `0.5` | Relative marking fraction. |
 | `amr.tolerance` | real | `0.05` | Absolute marking threshold (velocity units). |
 | `amr.min_size` | real | `0` | Do not split below this element extent. |
