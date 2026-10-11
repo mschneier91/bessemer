@@ -66,7 +66,7 @@ public:
    MassInverse(const mfem::Operator& mass, const mfem::Vector& diag,
                MPI_Comm comm, MassInvType type = MassInvType::Auto,
                int cheb_order = 4)
-      : mfem::Solver(diag.Size()), comm_(comm)
+      : mfem::Solver(diag.Size())
    {
       iterative_mode = false;
 
@@ -184,7 +184,6 @@ private:
       return err2 <= 1e-24 * ref2; // relative ~1e-12: exact-diagonal or not
    }
 
-   MPI_Comm comm_;                 ///< Communicator (probe / power iteration).
    MassInvType resolved_ = MassInvType::Auto; ///< Post-Auto strategy.
    mfem::Vector d_inv_;            ///< Reciprocal diagonal (DiagDirect only).
    mfem::Array<int> empty_ess_;    ///< No essential dofs on mass solves.

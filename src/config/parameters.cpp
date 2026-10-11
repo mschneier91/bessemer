@@ -744,7 +744,7 @@ std::vector<std::string> Parameters::UnknownDeckKeys(const std::string& text)
 std::vector<DeckKey> Parameters::DeckSchema()
 {
    Parameters p;
-   DeckReader r(YAML::Node(YAML::NodeType::Map));
+   DeckReader r{YAML::Node(YAML::NodeType::Map)};
    FillFromDeck(r, p);
    return r.Keys();
 }

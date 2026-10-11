@@ -110,7 +110,9 @@ std::string DeckReader::ToString(const std::vector<int>& v)
 
 std::string DeckReader::Suggest(const std::string& path) const
 {
-   const auto [parent, leaf] = SplitPath(path);
+   const auto split = SplitPath(path);
+   const std::string& parent = split.first;
+   const std::string& leaf = split.second;
    std::string best;
    std::size_t best_d = std::max<std::size_t>(2, leaf.size() / 3) + 1;
    auto consider = [&](const std::string & cand)
