@@ -82,7 +82,15 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   `src/precond/mass_inverse.hpp:187:13: error: private field 'comm_' is not used
   [-Werror,-Wunused-private-field]` (clang-only warning, GCC doesn't have it; header
   included from `cahouet_chabard.hpp`). Not fixed: it is a `src/` change (ask). A
-  keep-going pass (`ninja -k 0`) was run to list every error at once; see below.
+  keep-going pass (`ninja -k 0`) compiled 106 of 173 targets and found three distinct
+  causes, all clang-only (GCC accepts them), all in `src/`; the other 67 targets depend
+  on the failed ones, so more may appear once these are fixed:
+  1. `src/precond/mass_inverse.hpp:187` `comm_` is set (line 69) and never read:
+     `-Wunused-private-field`; 57 of the errors, via every includer of the header.
+  2. `src/config/parameters.cpp:747` `DeckReader r(YAML::Node(YAML::NodeType::Map));` is a
+     most-vexing parse for clang (`-Wvexing-parse`, then three follow-on errors).
+  3. `src/config/deck_reader.cpp:119-120` a lambda captures the structured bindings
+     `parent`/`leaf`: a C++20 feature, the build is C++17 (`-Wc++20-extensions`).
 - **`scripts/env.sh` fails when sourced from zsh** (the macOS login shell, and what
   AGENTS.md's `. scripts/env.sh` runs in): `'gcc' -> '/usr/bin/gcc' is NOT inside
   spack`. Passes under `sh` and `bash` (checked). Cause (diagnosed, not fixed): the
