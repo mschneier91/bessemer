@@ -1,5 +1,7 @@
 #!/bin/sh
-# scripts/test.sh [ctest args...]  -- run the test suite via ctest.
+# scripts/test.sh [preset] [ctest args...]  -- run the test suite via ctest.
+# The preset names the build tree to test, as for build.sh (default: cpu):
+# `scripts/test.sh cuda -L fast`. Everything from the first `-` on goes to ctest.
 # Tests self-register at np in {1, 2, 4} (see test/CMakeLists.txt), so a plain
 # ctest run exercises all rank counts. Pass e.g. `-L fast` to select a label.
 #
@@ -7,7 +9,8 @@
 # `-L fast` is the real gate and is what "green" means. See test/CMakeLists.txt.
 #
 # Overrides:
-#   INCNS_PRESET  -- which build/<preset> tree to test (default: cpu)
+#   INCNS_PRESET  -- which build/<preset> tree to test when no preset argument
+#                    is given (default: cpu)
 #   INCNS_JOBS    -- ctest parallelism (default 1 = serial, as before).
 #                    Passed as `ctest -j N`. ctest schedules by each test's
 #                    PROCESSORS property (= its MPI rank count), so N is a
@@ -26,6 +29,10 @@ export INCNS_REPO_ROOT=$(cd "$_script_dir/.." && pwd)
 
 set -e
 PRESET=${INCNS_PRESET:-cpu}
+case "${1:-}" in
+  "" | -*) ;;
+  *) PRESET=$1; shift ;;
+esac
 BUILD_DIR="$INCNS_REPO_ROOT/build/$PRESET"
 if [ ! -d "$BUILD_DIR" ]; then
   echo "test.sh: no build at $BUILD_DIR -- run scripts/build.sh first" >&2

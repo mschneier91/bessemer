@@ -6,7 +6,9 @@
 #   1. $INCNS_MACHINE, if set;
 #   2. environments/.machine, one line, written by scripts/setup.sh (not
 #      committed: it belongs to this checkout on this machine);
-#   3. hostname patterns of shared clusters with a committed environment.
+#   3. the hostname patterns in environments/<name>/hosts (shell globs, one per
+#      line, matched against the full hostname): shared clusters with a
+#      committed environment.
 # Exits 1 with a hint when none applies (a machine that hasn't been set up).
 
 REPO=${INCNS_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
@@ -24,14 +26,20 @@ if [ -s "$REPO/environments/.machine" ]; then
   fi
 fi
 
-host=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)
-case "$host" in
-  # Bridges-2: br0xx login nodes + w0xx H100 nodes. psc_gpu is pinned to
-  # cuda_arch=90 (H100 only, see docs/install/bridges2.md) -- v0xx (V100) and
-  # gl0xx (L40S) are deliberately NOT matched, since a cuda_arch=90 binary is
-  # the wrong SM arch on them.
-  br0* | w0* ) echo psc_gpu; exit 0 ;;
-esac
+# The full name where there is one: a short pattern such as "w0*" would also
+# match somebody's laptop.
+host=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo unknown)
+for hosts in "$REPO"/environments/*/hosts; do
+  [ -f "$hosts" ] || continue
+  set -f # the patterns are matched against $host, never expanded as file names
+  for pat in $(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' "$hosts"); do
+    # shellcheck disable=SC2254
+    case "$host" in
+      $pat) basename "$(dirname "$hosts")"; exit 0 ;;
+    esac
+  done
+  set +f
+done
 
 echo "machine.sh: no environment selected for this machine (hostname '$host')." >&2
 echo "  Set one up: scripts/setup.sh --plan (docs/install/spack.md)," >&2

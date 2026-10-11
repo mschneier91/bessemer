@@ -13,13 +13,19 @@ environments/
   stack.yaml        what bessemer needs, for any machine (the portable spec list)
   desktop/          the maintainer's workstation: spack.yaml + spack.lock (committed)
   psc_gpu/          PSC Bridges-2 H100 nodes: spack.yaml + spack.lock (committed)
+  psc_cpu/          PSC Bridges-2 without CUDA: spack.yaml + spack.lock
   <name>/           any other machine: created by scripts/setup.sh (untracked)
+    spack.yaml.sha256   checksum of the spack.yaml its lock was resolved from
+    hosts               optional: hostname patterns of the machines that use it
+    INSTALL             optional: the document it installs by, instead of setup.sh
+    preset              optional: its build preset, when that isn't cpu
   .machine          which environment this checkout uses (untracked, one line)
 scripts/
   setup.sh          sets a machine up: shows a plan, then does it with --yes
   machine.sh        picks the environment
   env.sh            activates it and checks the toolchain (every script sources it)
-  doctor.sh         checks the whole setup and smoke-runs a case
+  envlock.sh        checks that a lock was resolved from its spack.yaml
+  doctor.sh         checks the whole setup; with --run, builds and smoke-runs a case
 ```
 
 - **`stack.yaml`** lists the packages and variants bessemer needs, with the reasons for
@@ -32,8 +38,13 @@ scripts/
 - **Committed environments** are the maintainer's known-good machines. Their locks are the
   reference when something resolves differently elsewhere: `environments/desktop/spack.lock`
   says exactly which versions worked. `psc_gpu` also works for any Bridges-2 user, since
-  its paths are the cluster's own; it installs by [bridges2.md](bridges2.md), not by
-  `setup.sh`.
+  its paths are the cluster's own.
+- **An environment `setup.sh` can't install** (a cluster where builds and downloads
+  happen on different nodes) carries an `INSTALL` file naming its own procedure.
+  `setup.sh --plan` prints it and stops; the Bridges-2 environments have one.
+- **`spack.yaml.sha256`** is written whenever an environment is resolved and committed
+  with the lock. It is how the scripts know a lock is stale: file times say nothing
+  after a clone, where every file is equally new.
 - **Other machines' environments stay in their checkout.** Commit one only when the project
   maintains that machine.
 
@@ -43,8 +54,8 @@ scripts/
 
 1. `$INCNS_MACHINE`, if set;
 2. `environments/.machine`, written by `setup.sh`;
-3. hostname patterns of shared clusters with a committed environment (`br0*`/`w0*`:
-   `psc_gpu`).
+3. an environment's `hosts` file: patterns for the full hostname (`hostname -f`), one
+   per line, for shared clusters with a committed environment.
 
 With none of these it fails and points to `scripts/setup.sh --plan`. There is no default
 machine: running someone else's environment on your machine fails in confusing ways.
@@ -99,7 +110,8 @@ This is the agent's procedure. The user's permission comes before any install.
 1. **Plan:** run `scripts/setup.sh --plan` and show the user the output. It lists each step
    as done or to do: prerequisites, Spack, compiler, environment, resolve, install,
    select, build, check. Tell them what it costs the first time: a few hours of
-   compiling (llvm for numba is the longest part) and about 20 GB under `~/spack`. It
+   compiling (llvm for numba is the longest part) and about 20 GB under `$SPACK_ROOT`; those are a
+   workstation's numbers, starting from nothing. It
    changes nothing.
 2. **Blocked on prerequisites:** the system tools (`git`, `python3`, `make`, a C/C++
    compiler…) come from the system package manager, which usually needs an administrator.
@@ -110,10 +122,10 @@ This is the agent's procedure. The user's permission comes before any install.
    background and report progress. Every step checks whether it's already done, so
    rerunning `--yes` after a failure resumes. Report a failure verbatim. Don't "fix" it by
    pinning or swapping versions or by using a system tool: that's the user's decision.
-5. **Check:** `setup.sh` ends with `scripts/doctor.sh`; a clean doctor means the machine is
-   ready.
+5. **Check:** `setup.sh` ends with `scripts/doctor.sh --run`; a clean doctor means the
+   machine is ready.
 
-Options: `--name` (default: the hostname), `--compiler <prefix>`, `--jobs N`, and
+Options: `--name` (default: what `machine.sh` picks, else the hostname), `--compiler <prefix>`, `--jobs N`, and
 `--env-only` to stop after writing `environments/<name>/spack.yaml`.
 
 Status (2026-10-09): `--plan`, the generated `spack.yaml` (Spack parses it; `env.sh`'s
@@ -131,10 +143,15 @@ interconnect and the scheduler.
    externals with `buildable: false`: the MPI (or build OpenMPI against the site's UCX and
    Slurm, as `psc_gpu` does), `slurm`, and `cuda` for GPUs. Then add the GPU variants to
    the specs (`+cuda cuda_arch=<sm>` on mfem, hypre, libceed).
-3. `scripts/setup.sh --yes --name <cluster>`.
+3. `scripts/setup.sh --yes --name <cluster>`, inside an allocation. On a login node
+   (a batch scheduler on `PATH`, no job around the shell) `--yes` refuses unless you add
+   `--on-login-node`, for sites that allow building there.
 
-[bridges2.md](bridges2.md) is the worked example (and on Bridges-2 itself, the procedure
-to follow). Cluster rules still apply: ask the human
+When part of the install can't run where `setup.sh` runs (no internet on compute nodes,
+no building on login nodes), write the procedure down, name it in
+`environments/<cluster>/INSTALL`, and list the cluster's hostname patterns in
+`environments/<cluster>/hosts`. [bridges2.md](bridges2.md) is the worked example.
+Cluster rules still apply: ask the human
 before any batch job or GPU use (AGENTS.md rule 3). Follow the site's policy on building
 on login nodes.
 
@@ -144,10 +161,13 @@ To add a package that `stack.yaml` gained, change a variant, or move a pin:
 
 1. In a host terminal, edit `environments/<name>/spack.yaml`.
 2. Right away, in the same session: `scripts/setup.sh --yes --name <name>`. It sees that
-   the lock is older than `spack.yaml`, then resolves and installs. Or do it by hand:
-   `spack -e environments/<name> concretize --force` followed by
-   `spack -e environments/<name> install -j <N>`.
-3. `scripts/build.sh cpu`, then `scripts/test.sh cpu -L fast`. Re-bless test baselines only
+   `spack.yaml` no longer matches the checksum recorded with the lock, then resolves and
+   installs. Or do it by hand: `spack -e environments/<name> concretize --force`,
+   `scripts/envlock.sh record environments/<name>`, then
+   `spack -e environments/<name> install -j <N>`. An environment with an `INSTALL` file
+   updates by the document it names.
+3. `scripts/build.sh cpu`, then `scripts/test.sh cpu -L fast`. For a committed
+   environment, commit `spack.yaml`, `spack.lock` and `spack.yaml.sha256` together. Re-bless test baselines only
    with a stated reason ([developing.md](../developing.md) §1).
 
 `scripts/doctor.sh` warns when a machine's spec list has drifted from `stack.yaml`. That's

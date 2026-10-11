@@ -1,13 +1,22 @@
 #!/bin/sh
-# scripts/doctor.sh [--build] -- can this checkout build and run bessemer?
+# scripts/doctor.sh [--run | --build] -- can this checkout build and run bessemer?
 #
-# Checks the setup step by step and says how to fix whatever fails, then runs
-# a small deck (cases/cavity.yaml, ~5 s at 2 MPI ranks) and reads its run
-# summary. Exit status 0 when nothing failed. Written for people and coding
+# Checks the setup step by step and says how to fix whatever fails. By default
+# it only looks: it starts no build and no MPI run, so it is safe anywhere, a
+# shared login node included. With --run it also builds if the build is missing
+# and runs a small deck (cases/cavity.yaml, ~5 s at 2 MPI ranks), reading its
+# run summary. Exit status 0 when nothing failed. Written for people and coding
 # agents arriving cold (AGENTS.md).
 #
-#   scripts/doctor.sh           # check; build only if the build is missing
-#   scripts/doctor.sh --build   # also (re)build the cpu preset first
+#   scripts/doctor.sh           # check only: nothing is built or run
+#   scripts/doctor.sh --run     # also build if the build is missing, then smoke-run
+#   scripts/doctor.sh --build   # also (re)build, then smoke-run
+#
+# The build is the environment's preset (CMakePresets.json): cpu, unless
+# environments/<name>/preset names another one.
+#
+# Use --run and --build where builds and MPI runs are allowed: on a cluster that
+# is a compute node, not a login node.
 #
 # It never edits the Spack environment and never activates one whose
 # spack.yaml changed since its last resolve (activation would re-resolve it;
@@ -17,7 +26,13 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 INCNS_REPO_ROOT=$REPO
 export INCNS_REPO_ROOT
 BUILD=0
-[ "${1:-}" = "--build" ] && BUILD=1
+RUN=0
+case "${1:-}" in
+  "") ;;
+  --run) RUN=1 ;;
+  --build) BUILD=1; RUN=1 ;;
+  *) echo "usage: doctor.sh [--run | --build]" >&2; exit 2 ;;
+esac
 
 fails=0
 warns=0
@@ -28,11 +43,21 @@ hint() { printf '        -> %s\n' "$*"; }
 finish()
 {
   echo
-  if [ "$fails" -eq 0 ]; then
+  if [ "$fails" -eq 0 ] && [ "$RUN" -eq 1 ]; then
     echo "doctor: all good ($warns warning(s)). Next: docs/using.md"
     exit 0
   fi
-  echo "doctor: $fails problem(s) to fix (see the -> lines). Setup: scripts/setup.sh --plan"
+  if [ "$fails" -eq 0 ]; then
+    echo "doctor: the setup checks pass ($warns warning(s)); nothing was built or run."
+    echo "Smoke run: scripts/doctor.sh --run (on a cluster: on a compute node)"
+    exit 0
+  fi
+  if [ "${wrong_machine:-0}" -eq 1 ]; then
+    echo "doctor: $fails problem(s) (see the -> lines). The setup itself may be fine:"
+    echo "run the doctor again on a machine the environment is built for."
+  else
+    echo "doctor: $fails problem(s) to fix (see the -> lines). Setup: scripts/setup.sh --plan"
+  fi
   exit 1
 }
 
@@ -71,6 +96,8 @@ if [ ! -f "$envdir/spack.yaml" ] || [ ! -f "$envdir/spack.lock" ]; then
   finish
 fi
 ok "machine '$INCNS_MACHINE', environment $envdir"
+preset=$(sed -n '1{s/[[:space:]]//g;p;}' "$envdir/preset" 2>/dev/null)
+[ -n "$preset" ] || preset=cpu
 # Spec names in a spack.yaml's specs: list.
 spec_names()
 {
@@ -87,12 +114,16 @@ if [ -n "$drift" ]; then
   warn "this machine's environment differs from environments/stack.yaml ($drift)"
   hint "fine until you need those packages; to update: docs/install/spack.md, \"Updating\""
 fi
-yaml_t=$(stat -c %Y "$envdir/spack.yaml")
-lock_t=$(stat -c %Y "$envdir/spack.lock")
-if [ "$yaml_t" -gt $((lock_t + 2)) ]; then
-  fail "spack.yaml changed after the last resolve (spack.lock is older)"
-  hint "activating now would re-resolve the environment and hide the installed stack."
-  hint "From a host terminal: scripts/setup.sh --yes --name $INCNS_MACHINE (resolves and installs)"
+if ! "$REPO/scripts/envlock.sh" check "$envdir"; then
+  fail "spack.yaml changed since spack.lock was resolved"
+  hint "the lock, and whatever is installed from it, no longer matches spack.yaml;"
+  hint "activating can re-resolve the environment and hide the installed stack."
+  if [ -f "$envdir/INSTALL" ]; then
+    hint "Resolve and install by this environment's own procedure:" \
+         "$(grep -v '^[[:space:]]*#' "$envdir/INSTALL" | sed -n '1p')"
+  else
+    hint "From a host terminal: scripts/setup.sh --yes --name $INCNS_MACHINE (resolves and installs)"
+  fi
   hint "(or, if the edit was unintended: git checkout -- $envdir/spack.yaml)"
   finish
 fi
@@ -101,7 +132,18 @@ ok "spack.yaml and spack.lock agree"
 # --- 4. activation + toolchain -------------------------------------------------
 out=$(mktemp)
 if . "$REPO/scripts/env.sh" >"$out" 2>&1; then
-  ok "toolchain: $(grep -m1 '^\[env\]' "$out" | sed 's/^\[env\] //')"
+  # In a subshell with core dumps off: a compiler built for another CPU dies
+  # with SIGILL, and neither the shell's report nor a core file belongs here.
+  if (ulimit -c 0; gcc -dumpversion) >/dev/null 2>&1; then
+    ok "toolchain: $(grep -m1 '^\[env\] ' "$out" | sed 's/^\[env\] //')"
+  else
+    fail "the environment's compiler does not run on this machine ($(command -v gcc))"
+    hint "this machine is not one the environment was built for. On a cluster, that is"
+    hint "usually a login node: build and run on the compute nodes it targets."
+    wrong_machine=1
+    rm -f "$out"
+    finish
+  fi
 else
   fail "activating the environment failed:"
   sed 's/^/          /' "$out" | tail -5
@@ -129,36 +171,47 @@ else
   finish
 fi
 
-# --- 6. the build ------------------------------------------------------------------
-if [ "$BUILD" -eq 1 ] || [ ! -x "$REPO/build/cpu/apps/run_case" ]; then
-  echo "  ..    building the cpu preset (scripts/build.sh cpu)"
-  if "$REPO/scripts/build.sh" cpu >"$REPO/build-doctor.log" 2>&1; then
-    ok "build/cpu built (log: build-doctor.log)"
-    rm -f "$REPO/build-doctor.log"
+# --- 6-7. the build and a smoke run: only when asked ----------------------------------
+if [ "$RUN" -eq 0 ]; then
+  if [ -x "$REPO/build/$preset/apps/run_case" ]; then
+    ok "build/$preset present (not run; smoke-run it: scripts/doctor.sh --run)"
   else
-    fail "the build failed; the end of build-doctor.log:"
-    tail -15 "$REPO/build-doctor.log" | sed 's/^/          /'
-    finish
+    warn "no build yet (build/$preset)"
+    hint "scripts/doctor.sh --run builds it and smoke-runs a case"
+    hint "(on a cluster: on a compute node, not a login node)"
   fi
 else
-  ok "build/cpu present (rebuild with scripts/build.sh cpu)"
-fi
+  # --- 6. the build ------------------------------------------------------------------
+  if [ "$BUILD" -eq 1 ] || [ ! -x "$REPO/build/$preset/apps/run_case" ]; then
+    echo "  ..    building the $preset preset (scripts/build.sh $preset)"
+    if "$REPO/scripts/build.sh" "$preset" >"$REPO/build-doctor.log" 2>&1; then
+      ok "build/$preset built (log: build-doctor.log)"
+      rm -f "$REPO/build-doctor.log"
+    else
+      fail "the build failed; the end of build-doctor.log:"
+      tail -15 "$REPO/build-doctor.log" | sed 's/^/          /'
+      finish
+    fi
+  else
+    ok "build/$preset present (rebuild with scripts/build.sh $preset)"
+  fi
 
-# --- 7. a smoke run ------------------------------------------------------------------
-run_dir=$(mktemp -d)
-summary="$run_dir/summary.json"
-start=$(date +%s)
-if (cd "$run_dir" && mpirun -np 2 "$REPO/build/cpu/apps/run_case" \
-      "$REPO/cases/cavity.yaml" --summary "$summary") >"$run_dir/run.log" 2>&1 \
-   && grep -q '"status": "ok"' "$summary" 2>/dev/null; then
-  steps=$(awk -F': *' '/"steps"/ {gsub(/,/,"",$2); print $2; exit}' "$summary")
-  ok "smoke run: lid-driven cavity at 2 ranks, $steps steps, $(( $(date +%s) - start )) s"
-else
-  fail "the smoke run (cases/cavity.yaml at 2 MPI ranks) failed; its output:"
-  tail -12 "$run_dir/run.log" | sed 's/^/          /'
-  hint "if mpirun refuses to start: is another MPI job holding the cores? scripts/reap.sh --dry"
+  # --- 7. a smoke run ------------------------------------------------------------------
+  run_dir=$(mktemp -d)
+  summary="$run_dir/summary.json"
+  start=$(date +%s)
+  if (cd "$run_dir" && mpirun -np 2 "$REPO/build/$preset/apps/run_case" \
+        "$REPO/cases/cavity.yaml" --summary "$summary") >"$run_dir/run.log" 2>&1 \
+     && grep -q '"status": "ok"' "$summary" 2>/dev/null; then
+    steps=$(awk -F': *' '/"steps"/ {gsub(/,/,"",$2); print $2; exit}' "$summary")
+    ok "smoke run: lid-driven cavity at 2 ranks, $steps steps, $(( $(date +%s) - start )) s"
+  else
+    fail "the smoke run (cases/cavity.yaml at 2 MPI ranks) failed; its output:"
+    tail -12 "$run_dir/run.log" | sed 's/^/          /'
+    hint "if mpirun refuses to start: is another MPI job holding the cores? scripts/reap.sh --dry"
+  fi
+  rm -rf "$run_dir"
 fi
-rm -rf "$run_dir"
 
 # --- 8. stray processes ----------------------------------------------------------------
 n=$(ps -eo args | grep -cE 'build/[a-z-]+/(test|apps|bench)/' | tr -d ' ')

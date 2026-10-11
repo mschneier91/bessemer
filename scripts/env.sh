@@ -51,7 +51,7 @@ spack env activate "$_env_dir" || {
 _spack_view="$_env_dir/.spack-env/view"
 
 # --- pin bare gcc/g++ to the spack compiler ---------------------------------
-# The spack compiler (gcc@14.3.0) is registered but NOT symlinked into the env
+# The environment's compiler is registered but NOT symlinked into the env
 # view, so a bare `gcc` would fall through to the system compiler. Derive the
 # exact compiler that MPI/MFEM were built with from the mpicc wrapper and put its
 # bin dir on PATH -- self-consistent and rebuild-robust (no hardcoded version).
@@ -67,11 +67,19 @@ fi
 # Export MFEM_DIR so FindMFEM.cmake need not re-query spack.
 MFEM_DIR=$(spack location -i mfem 2>/dev/null) && export MFEM_DIR
 
+# A CUDA environment says which compute capability its MFEM was built for
+# (cuda_arch=NN in its spack.yaml); the cuda preset builds our kernels to match.
+_cuda_arch=$(sed -n 's/.*cuda_arch=\([0-9][0-9]*\).*/\1/p' "$_env_dir/spack.yaml" 2>/dev/null | head -n 1)
+if [ -n "$_cuda_arch" ]; then
+  INCNS_CUDA_ARCH=$_cuda_arch
+  export INCNS_CUDA_ARCH
+fi
+
 # --- gather compiler/MPI/cmake prefixes THIS env's own spack.yaml declares
 # as externals (buildable:false) -- e.g. a cluster's vetted per-node-class
-# compiler module (environments/psc_gpu pins gcc to /opt/packages/.../b2gpu).
+# compiler module (a cluster environment pins the site's GCC this way).
 # These are legitimate, not a system-toolchain leak: the exception already
-# carved out for vendor MPI (see CLAUDE.md, Environment & build) generalizes
+# carved out for vendor MPI (AGENTS.md rule 1) generalizes
 # to any declared external for the packages that actually provide these
 # tools. Scoped to THIS file (not the merged/site Spack config, which can
 # carry its own unrelated system-compiler fallbacks) and to a fixed whitelist
@@ -84,7 +92,7 @@ _spack_ext_prefixes=$(awk '
   }
 ' "$_env_dir/spack.yaml" 2>/dev/null)
 
-# --- assert: no system-toolchain leak (CLAUDE.md guardrail) ----------------
+# --- assert: no system-toolchain leak (AGENTS.md rule 1) ----------------
 # "Inside spack" == the install tree ($SPACK_ROOT/...), the activated view,
 # or one of the declared-external prefixes gathered just above.
 _incns_assert_spack() {

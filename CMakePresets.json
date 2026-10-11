@@ -5,7 +5,7 @@
     {
       "name": "cpu",
       "displayName": "CPU (RelWithDebInfo, ccache, Ninja)",
-      "description": "The build that matters for Sprint 1. Toolchain comes from the activated spack env.",
+      "description": "The default build. Toolchain comes from the activated spack env.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/cpu",
       "cacheVariables": {

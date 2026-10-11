@@ -8,13 +8,15 @@
 #   scripts/setup.sh --yes      do it (hours the first time)
 #
 # Options (give the same ones to --plan and --yes):
-#   --name NAME        environment name: environments/NAME/ (default: the one in
-#                      environments/.machine, else this machine's hostname)
+#   --name NAME        environment name: environments/NAME/ (default: the one
+#                      scripts/machine.sh picks, else this machine's hostname)
 #   --compiler PREFIX  use an existing GCC with gfortran installed at PREFIX
 #                      (e.g. a cluster module's) instead of building gcc@14.3.0
 #   --env-only         stop once environments/NAME/spack.yaml exists, to add
 #                      machine settings (cluster MPI, CUDA) before resolving
 #   --jobs N           parallel build jobs (default: all cores)
+#   --on-login-node    let --yes install and build on a cluster's login node
+#                      (only where the site allows it)
 #
 # Every step checks whether it's already done, so rerunning --yes resumes where
 # a previous run stopped. The Spack steps refuse to run inside a sandboxed
@@ -31,6 +33,7 @@ MODE=plan
 NAME=
 COMPILER=
 ENV_ONLY=0
+LOGIN_OK=0
 JOBS=$(nproc 2>/dev/null || echo 4)
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,16 +43,17 @@ while [ $# -gt 0 ]; do
     --compiler) COMPILER=$2; shift ;;
     --env-only) ENV_ONLY=1 ;;
     --jobs) JOBS=$2; shift ;;
-    -h | --help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --on-login-node) LOGIN_OK=1 ;;
+    -h | --help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "setup.sh: unknown option '$1' (see --help)" >&2; exit 2 ;;
   esac
   shift
 done
 
 if [ -z "$NAME" ]; then
-  if [ -s "$REPO/environments/.machine" ]; then
-    NAME=$(sed -n '1{s/[[:space:]]//g;p;}' "$REPO/environments/.machine")
-  fi
+  # scripts/machine.sh is the single source of truth for an existing choice:
+  # $INCNS_MACHINE, environments/.machine, a committed environment's hosts file.
+  NAME=$("$REPO/scripts/machine.sh" 2>/dev/null) || NAME=
   if [ -z "$NAME" ]; then
     NAME=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo machine)
     NAME=$(echo "$NAME" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_\n-' '_')
@@ -110,11 +114,11 @@ fi
 resolve_state="to do"
 resolve_msg="spack concretize (minutes)"
 if [ -f "$ENVDIR/spack.lock" ]; then
-  if [ "$(stat -c %Y "$ENVDIR/spack.yaml")" -gt $(( $(stat -c %Y "$ENVDIR/spack.lock") + 2 )) ]; then
-    resolve_msg="re-resolve: spack.yaml changed after spack.lock (minutes)"
-  else
+  if "$REPO/scripts/envlock.sh" check "$ENVDIR"; then
     resolve_state=done
     resolve_msg="spack.lock is current"
+  else
+    resolve_msg="re-resolve: spack.yaml changed since spack.lock was resolved (minutes)"
   fi
 fi
 
@@ -125,20 +129,44 @@ if [ -f "$ENVDIR/.spack-env/view/include/mfem.hpp" ] && [ "$resolve_state" = don
   install_msg="installed (the view has MFEM)"
 fi
 
-select_state="to do"
-if [ "$(sed -n '1{s/[[:space:]]//g;p;}' "$REPO/environments/.machine" 2>/dev/null)" = "$NAME" ]; then
-  select_state=done
+if [ -f "$ENVDIR/INSTALL" ]; then
+  if [ "$install_state" = done ]; then
+    install_msg="Spack packages installed; its procedure may have further steps (below)"
+  else
+    install_msg="by this environment's own procedure (below)"
+  fi
 fi
 
+# Selected already when scripts/machine.sh picks this environment by itself
+# ($INCNS_MACHINE, environments/.machine, or a hosts file).
+select_state="to do"
+select_msg="environments/.machine = $NAME"
+if [ "$("$REPO/scripts/machine.sh" 2>/dev/null)" = "$NAME" ]; then
+  select_state=done
+  select_msg="scripts/machine.sh picks $NAME on this machine"
+fi
+
+# The build preset this environment is for (CMakePresets.json): cpu, unless
+# environments/NAME/preset names another one.
+PRESET=$(sed -n '1{s/[[:space:]]//g;p;}' "$ENVDIR/preset" 2>/dev/null)
+[ -n "$PRESET" ] || PRESET=cpu
+
 build_state="to do"
-build_msg="scripts/build.sh cpu (about 15 min)"
-if [ -x "$REPO/build/cpu/apps/run_case" ]; then
+build_msg="scripts/build.sh $PRESET (about 15 min)"
+if [ -x "$REPO/build/$PRESET/apps/run_case" ]; then
   if [ "$install_state" = done ] && [ "$select_state" = done ]; then
     build_state=done
-    build_msg="build/cpu exists (rebuild: scripts/build.sh cpu)"
+    build_msg="build/$PRESET exists (rebuild: scripts/build.sh $PRESET)"
   else
-    build_msg="scripts/build.sh cpu: rebuild against the new environment"
+    build_msg="scripts/build.sh $PRESET: rebuild against the new environment"
   fi
+fi
+check_msg="scripts/doctor.sh --run"
+
+# An environment with its own procedure: this script reports, and runs nothing.
+if [ -f "$ENVDIR/INSTALL" ]; then
+  [ "$build_state" = done ] || build_msg="scripts/build.sh $PRESET, where its procedure says (below)"
+  check_msg="scripts/doctor.sh; --run where its procedure says (below)"
 fi
 
 # --- the plan --------------------------------------------------------------------
@@ -166,9 +194,9 @@ if [ "$ENV_ONLY" -eq 1 ]; then
 else
   row 5 resolve "$resolve_state" "$resolve_msg"
   row 6 install "$install_state" "$install_msg"
-  row 7 select "$select_state" "environments/.machine = $NAME"
+  row 7 select "$select_state" "$select_msg"
   row 8 build "$build_state" "$build_msg"
-  row 9 check always "scripts/doctor.sh"
+  row 9 check always "$check_msg"
 fi
 echo
 
@@ -180,18 +208,22 @@ spack_todo=0
 blocked=0
 if [ -n "$missing" ]; then
   echo "Blocked: install the missing tools with the system package manager first"
-  echo "(they need the machine's administrator; e.g. Debian/Ubuntu: sudo apt install"
-  echo " build-essential git python3 patch unzip bzip2 xz-utils file curl)."
+  echo "(apt, dnf, zypper, pacman, brew ...; that may need the machine's administrator)."
+  echo "On Debian/Ubuntu, for example, the packages are:"
+  echo "  build-essential git python3 patch unzip bzip2 xz-utils file curl"
   blocked=1
 fi
 if [ "$compiler_state" = FAIL ]; then
   echo "Blocked: --compiler $COMPILER is not a usable GCC."
   blocked=1
 fi
-if [ "$NAME" = psc_gpu ] && [ "$spack_todo" -eq 1 ]; then
-  echo "Bridges-2 (psc_gpu) installs follow docs/install/bridges2.md, not this script:"
-  echo "there, builds run on GPU compute nodes and downloads on the login node."
-  blocked=1
+own_procedure=0
+if [ -f "$ENVDIR/INSTALL" ]; then
+  echo "Environment '$NAME' has its own install procedure, which this script doesn't run:"
+  grep -v '^[[:space:]]*#' "$ENVDIR/INSTALL" | sed -e '/^[[:space:]]*$/d' -e 's/^/  /'
+  echo "Rows marked done above are done: skip those parts of the procedure. In particular,"
+  echo "don't resolve again when row 5 says done: that rewrites a spack.lock that is current."
+  own_procedure=1
 elif [ "$SANDBOX" -eq 1 ] && [ "$spack_todo" -eq 1 ]; then
   echo "This is a sandboxed editor (Flatpak): the Spack steps must run in a host terminal."
   echo "Give the user this command to run there:"
@@ -199,13 +231,35 @@ elif [ "$SANDBOX" -eq 1 ] && [ "$spack_todo" -eq 1 ]; then
   blocked=1
 fi
 
+# A batch scheduler on PATH and no job around this shell: a cluster's login node.
+login_node=0
+if [ -z "${SLURM_JOB_ID:-}${PBS_JOBID:-}${LSB_JOBID:-}${FLUX_JOB_ID:-}" ]; then
+  for _s in sbatch qsub bsub; do
+    command -v "$_s" >/dev/null 2>&1 && login_node=1
+  done
+fi
+if [ "$login_node" -eq 1 ] && [ "$own_procedure" -eq 0 ] && [ "$LOGIN_OK" -eq 0 ]; then
+  echo "This looks like a cluster login node (a batch scheduler, and no job around this"
+  echo "shell). --yes compiles for hours on all cores, then builds and runs a smoke case:"
+  echo "run it inside an allocation, or add --on-login-node where the site allows that."
+  echo "If compute nodes have no internet, the install needs its own procedure"
+  echo "(docs/install/spack.md, \"Clusters\")."
+  [ "$MODE" = yes ] && blocked=1
+fi
+
 if [ "$MODE" = plan ]; then
-  if [ "$blocked" -eq 0 ]; then
+  if [ "$own_procedure" -eq 1 ]; then
+    echo "Nothing has been changed."
+  elif [ "$blocked" -eq 0 ]; then
     echo "Nothing has been changed. To do it: scripts/setup.sh --yes (same options)."
   fi
   exit "$blocked"
 fi
 [ "$blocked" -eq 0 ] || exit 1
+if [ "$own_procedure" -eq 1 ]; then
+  echo "setup.sh: --yes does nothing for '$NAME': follow the procedure named above." >&2
+  exit 1
+fi
 
 # --- doing it ----------------------------------------------------------------------
 die() { echo "setup.sh: $*" >&2; exit 1; }
@@ -283,6 +337,7 @@ export SPACK_DISABLE_LOCAL_CONFIG
 if [ "$resolve_state" != done ]; then
   step "5 resolve: spack concretize"
   run spack -e "$ENVDIR" concretize --force || die "resolving the environment failed"
+  run "$REPO/scripts/envlock.sh" record "$ENVDIR" || die "cannot record the spack.yaml checksum"
   if grep -q freedesktop "$ENVDIR/spack.lock"; then
     die "spack.lock targets a Flatpak runtime OS: this ran inside a sandbox (docs/install/spack.md, trap 1)"
   fi
@@ -302,9 +357,9 @@ unset SPACK_DISABLE_LOCAL_CONFIG
 INCNS_MACHINE=$NAME
 export INCNS_MACHINE
 if [ "$build_state" != done ]; then
-  step "8 build: scripts/build.sh cpu"
-  run "$REPO/scripts/build.sh" cpu || die "the build failed"
+  step "8 build: scripts/build.sh $PRESET"
+  run "$REPO/scripts/build.sh" "$PRESET" || die "the build failed"
 fi
 
-step "9 check: scripts/doctor.sh"
-"$REPO/scripts/doctor.sh"
+step "9 check: scripts/doctor.sh --run"
+"$REPO/scripts/doctor.sh" --run

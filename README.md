@@ -19,7 +19,7 @@ claude                 # or whichever coding agent you use
 ```
 
 Then ask it to set things up. It shows you a plan first: what gets installed where. The
-first setup builds the whole toolchain from Spack, compiler included, which takes a few
+first setup builds the whole toolchain from Spack, compiler included, which on a workstation takes a few
 hours and about 20 GB; the agent starts only when you agree. Later sessions start in
 seconds.
 
@@ -34,7 +34,7 @@ seconds.
 | "Where did development leave off?" | Reads [docs/status.md](docs/status.md) and summarizes the open items |
 
 **What the agent asks you first:** using more than 4 MPI ranks, a 3D mesh larger than 32³,
-or any GPU; submitting a batch job (it drafts the script, you submit it); changing the
+or any GPU; submitting a batch job (it tells you the cost, then submits once you agree); changing the
 Spack environment; merging to `main`. These are rules in [AGENTS.md](AGENTS.md).
 
 **What you get back:** every run writes a `summary.json` with its status, step statistics,
@@ -61,7 +61,8 @@ and per-step history.
 Everything the agent does goes through scripts and decks, so you can do it by hand:
 
 ```sh
-scripts/doctor.sh                                   # check the setup, build, smoke-run
+scripts/doctor.sh --run                             # check the setup, build, smoke-run
+                                                    # (on a cluster: on a compute node)
 . scripts/env.sh                                    # the Spack toolchain in this shell
 mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d1.yaml
 ```

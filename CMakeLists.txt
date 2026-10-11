@@ -12,8 +12,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# The presets hardcode a ccache compiler launcher, but environments/psc_gpu has
-# no ccache: there, every single compile died with code=127 until the launcher
+# The presets hardcode a ccache compiler launcher, but not every environment
+# has ccache: without it, every single compile died with code=127 until the launcher
 # was overridden by hand on the command line. Keeping that override alive only
 # in the cache is fragile -- anything that wipes the cache (e.g. CMake deciding
 # the compiler changed, which happens if the spack env is not active) silently
@@ -38,20 +38,31 @@ add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall>
                     $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
                     $<$<COMPILE_LANGUAGE:CXX>:-Werror>)
 
-# CUDA is optional and off by default (CLAUDE.md). ON compiles the TUs that
+# CUDA is optional and off by default. ON compiles the TUs that
 # define their own device kernels with nvcc -- see src/CMakeLists.txt for the
 # list, which is deliberately as short as possible.
 option(USE_CUDA "Enable the optional CUDA build" OFF)
 if(USE_CUDA)
   message(STATUS "incns: USE_CUDA=ON requested")
 
-  # sm_90 (H100) is what environments/psc_gpu targets and what this MFEM was
-  # built against (-arch=sm_90 in its config.mk); a mismatch produces kernels
-  # the card will not run. FORCE because enable_language(CUDA) seeds the cache
-  # with CMake's own guess (52) on first configure, and that stale value would
-  # otherwise keep winning on every later configure of an existing build dir.
-  set(INCNS_CUDA_ARCH "90" CACHE STRING
-      "CUDA compute capability for device kernels (90 = H100)")
+  # The compute capability must be the one the environment's MFEM was built
+  # for (-arch=sm_NN in its config.mk, cuda_arch=NN in the environment's
+  # spack.yaml); a mismatch produces kernels the card will not run.
+  # scripts/env.sh exports it as INCNS_CUDA_ARCH; -DINCNS_CUDA_ARCH=NN overrides.
+  if(NOT INCNS_CUDA_ARCH AND DEFINED ENV{INCNS_CUDA_ARCH})
+    set(INCNS_CUDA_ARCH "$ENV{INCNS_CUDA_ARCH}")
+  endif()
+  if(NOT INCNS_CUDA_ARCH)
+    message(FATAL_ERROR "incns: USE_CUDA=ON needs the CUDA compute capability. "
+                        "Build through scripts/build.sh (it takes cuda_arch= from the "
+                        "environment's spack.yaml) or pass -DINCNS_CUDA_ARCH=<NN>, "
+                        "e.g. 90 for an H100.")
+  endif()
+  set(INCNS_CUDA_ARCH "${INCNS_CUDA_ARCH}" CACHE STRING
+      "CUDA compute capability for device kernels (e.g. 90 = H100)")
+  # FORCE because enable_language(CUDA) seeds the cache with CMake's own guess
+  # (52) on first configure, and that stale value would otherwise keep winning
+  # on every later configure of an existing build dir.
   set(CMAKE_CUDA_ARCHITECTURES "${INCNS_CUDA_ARCH}" CACHE STRING "" FORCE)
 
   set(CMAKE_CUDA_STANDARD 17)
@@ -75,7 +86,7 @@ if(USE_CUDA)
   # error demanding the cache be deleted, and deleting build/cuda would force a
   # --preset reconfigure, which re-stamps the ccache launcher this env lacks.
   # It also keeps the device TUs on the spack toolchain rather than whatever
-  # bare g++ nvcc defaults to (CLAUDE.md: no system-toolchain leak). MFEM
+  # bare g++ nvcc defaults to (AGENTS.md rule 1: no system-toolchain leak). MFEM
   # resolves it identically (-ccbin in its config.mk).
   add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-ccbin=${CMAKE_CXX_COMPILER}>)
 

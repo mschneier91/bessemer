@@ -54,6 +54,6 @@ a comment naming the upstream issue. Drop the pin once it's fixed.
 ## Verifying
 
 ```sh
-scripts/doctor.sh             # environment, toolchain, MFEM (+MUMPS), build, smoke run
+scripts/doctor.sh --run       # environment, toolchain, MFEM (+MUMPS), build, smoke run
 scripts/test.sh cpu -L fast   # the fast tier, ~3.5 min
 ```

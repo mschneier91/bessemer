@@ -1,6 +1,6 @@
 #!/bin/sh
 # scripts/build.sh [preset]  -- configure + build via spack toolchain.
-# Default preset: cpu (the build that matters for Sprint 1).
+# Default preset: cpu.
 # NOTE: never `rm -rf build/` -- it dumps the warm ccache. Ask before wiping.
 
 _script_dir=$(cd "$(dirname "$0")" && pwd)

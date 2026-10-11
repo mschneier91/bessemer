@@ -8,11 +8,13 @@ a case; if one seems necessary, that is a missing library feature (see
 ## 1. Check the setup, build once
 
 The toolchain comes entirely from Spack (see [install/](install/)). Start with the doctor:
-it checks the environment step by step, builds if needed, runs a 2-second smoke case, and
-says how to fix whatever fails.
+it checks the environment step by step and says how to fix whatever fails. With `--run` it
+also builds if needed and runs a 2-second smoke case; do that where builds and MPI runs are
+allowed (on a cluster, a compute node rather than a login node).
 
 ```sh
-scripts/doctor.sh               # add --build to force a rebuild
+scripts/doctor.sh               # check only: builds and runs nothing
+scripts/doctor.sh --run         # also build if needed and smoke-run; --build forces a rebuild
 ```
 
 Then, as needed:
@@ -165,7 +167,8 @@ stability limit; pass `-dt 0.001`.)
 ## 6. Resources
 
 - Stay at 4 MPI ranks or fewer on a workstation. Larger runs belong on a cluster, and batch
-  jobs are submitted by a human (see [install/bridges2.md](install/bridges2.md)).
+  jobs are submitted by the agent once you approve the cost (AGENTS.md rule 3; a cluster with
+  its own page is listed in [environments/README.md](../environments/README.md)).
 - After interrupting a run, reap stray MPI processes with `scripts/reap.sh`.
 - GPU runs are not validated yet ([developing.md](developing.md) §7.5).
 

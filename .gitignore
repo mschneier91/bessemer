@@ -7,8 +7,14 @@
 # Spack env internals live under environments/<machine>/.spack-env; keep the
 # committed spack.yaml + spack.lock, ignore the generated view/state.
 environments/*/.spack-env/
+# Output of an environment's install job (environments/<name>/install.sbatch).
+environments/*/spack-install-*.out
 # Which environment this checkout uses on this machine (scripts/setup.sh).
 environments/.machine
+
+# Personal agent permissions. The committed .claude/settings.json only restricts
+# (deny, ask); what an agent may do unprompted is each user's own choice.
+.claude/settings.local.json
 
 # Editor / OS / tooling cruft
 *.orig
