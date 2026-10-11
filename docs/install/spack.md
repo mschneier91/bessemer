@@ -100,21 +100,32 @@ workstation, `setup.sh` first builds `gcc@14.3.0` with Spack (the system compile
 it), then points the environment at it. On a cluster, `--compiler <prefix>` uses the
 site's GCC module instead; `psc_gpu` does this.
 
-**Apple Silicon Macs use `gcc@14.2.0`, not 14.3.0.** Spack's gcc recipe carries Iain
-Sandoe's aarch64-darwin patches only up to 14.2.0; 14.3.0 stops at configure with
-`Configuration aarch64-apple-darwin24.6.0 not supported`. `setup.sh` picks the version by
-platform. Every `14.3.0` in the YAML above is then the GCC version `setup.sh` built.
-It builds it `~libsanitizer` too: linking `libasan.8.dylib` crashes Apple's linker (CLT 16.3,
-`Assertion failed: (entry.toAddend < 0x400000)`). A Mac therefore has no GCC ASan/UBSan
-runtime, and `scripts/asan.sh` (the `cpu-asan` preset) is not available there.
+### Platforms
 
-**On a Mac, C and C++ are Apple's clang; GCC is the Fortran compiler only.** Spack refuses
-CPython with GCC on macOS (`CPython does not compile with GCC on macOS yet, use clang`), and
-Python is in the stack. So the generated environment requires `apple-clang` for the `c` and
-`cxx` virtuals (declared external, prefix `/usr`), `gcc@14.2.0` for `fortran` (MUMPS and
-ScaLAPACK need it; Apple's toolchain has none), and `scripts/env.sh` accepts the declared
-`apple-clang` external. This is a deliberate exception to "never build with the system
-compiler" (AGENTS.md rule 1): on a Mac the system clang is the toolchain.
+What differs between machine types lives in `scripts/platform/<uname -s>.sh` (`linux.sh`,
+`darwin.sh`), sourced by `setup.sh`; `INCNS_PLATFORM=linux scripts/setup.sh --plan` shows
+another platform's plan. Each file sets the GCC to build (`PLATFORM_GCC_SPEC`), which
+compiler the `c`/`cxx` virtuals require (`PLATFORM_C_COMPILER`), the default job count
+(`PLATFORM_JOBS`), and may print extra `packages:` entries
+(`platform_compiler_externals`). `darwin.sh` documents the contract and why each line is
+there. To support a new platform, add a file there. Every `14.3.0` in the YAML above is
+then the GCC version `setup.sh` built.
+
+**macOS (Apple Silicon, found 2026-10-10/11):**
+- **`gcc@14.2.0~libsanitizer`, not 14.3.0.** Spack's gcc recipe carries Iain Sandoe's
+  aarch64-darwin patches only up to 14.2.0; 14.3.0 stops at configure with
+  `Configuration aarch64-apple-darwin24.6.0 not supported`. Linking `libasan.8.dylib`
+  crashes Apple's linker (CLT 16.3, `Assertion failed: (entry.toAddend < 0x400000)`).
+- **C and C++ are Apple's clang; GCC is the Fortran compiler only** (OpenBLAS, MUMPS,
+  ScaLAPACK, gslib, ...). Spack refuses CPython with GCC on macOS (`CPython does not
+  compile with GCC on macOS yet, use clang`), and Python is in the stack. The environment
+  requires `apple-clang` for `c` and `cxx` (declared external, prefix `/usr`), and
+  `scripts/env.sh` accepts a declared `apple-clang` external. This is a deliberate
+  exception to "never build with the system compiler" (AGENTS.md rule 1): on a Mac the
+  system clang is the toolchain.
+- **`ccache` is not installed**, so rebuilds are full rebuilds; `nproc` does not exist.
+- **Sanitizers:** GCC's own `libasan` is not built. bessemer is compiled by clang, which
+  brings its own runtime, so `scripts/asan.sh` should work there. Not yet run.
 
 The `desktop` environment predates this pattern: there Spack chose to build gcc 14.3.0 as
 an ordinary dependency, because the system GCC has no Fortran. The result is the same.

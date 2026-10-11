@@ -41,8 +41,8 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   failed: (entry.toAddend < 0x400000), function encodeSectionReloc` (CLT 16.3.0,
   ld-1167.4.1, macOS 15.6.1, arm64). Spack's gcc has a `libsanitizer` variant (default on).
   Fix on the branch (human 2026-10-10): `gcc@14.2.0~libsanitizer` on macOS. Cost: no GCC
-  `libasan`, so the `cpu-asan` preset / `scripts/asan.sh` is not available on a Mac; the
-  sanitizer sweep is not tested there (Apple clang's runtime is an untested alternative).
+  `libasan`. That matters less than first thought: bessemer is compiled by Apple clang
+  (below), whose own sanitizer runtime `scripts/asan.sh` should use; not yet run there.
   `-ld_classic` still exists in this ld but is deprecated.
 - **`spack concretize` then failed** (human 2026-10-10: "we just need to use system
   clang"): `python: CPython does not compile with GCC on macOS yet, use clang` (a Spack
@@ -53,9 +53,58 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   in ~20 s with that (hypre resolved 3.1.0 there, `desktop` has 3.2.0). **Not yet
   verified:** the install, the build, and `env.sh`'s assertion with `gcc`/`g++` resolving
   to `/usr/bin` (its banner also prints clang's version as `gcc=`).
-- **Not fixed, seen on the way:** `JOBS` falls back to 4 on macOS (no `nproc`; the plan
-  said `-j 4` on an 8-core machine): use `sysctl -n hw.ncpu`. `docs/install/spack.md` and
-  `desktop.md` still say 14.3.0 as the one compiler.
+- **`spack install` hung at 33/69 on `python@3.12.13`** (human's Terminal panel in the
+  Claude desktop app; stopped, 0% CPU, for an hour; the progress line kept counting).
+  Observed: the build worker, `make` and `python.exe check_extension_modules.py` were in
+  `ps` state `T` (job-control stop), in a process group that was not the terminal's
+  foreground group. **Cause not established**: the theory is a terminal-mode call
+  (`readline` import) from a background group; the signal was not captured, and the gcc
+  build ran fine from the same kind of tab. Rerunning with stdin detached
+  (`spack -e ENV install < /dev/null`) was started; whether that is the fix is not
+  confirmed until that Python build passes the extension check. Not tried in Terminal.app.
+- **`setup.sh`'s install check is wrong after an interrupted install.** It reports step 6
+  "done" when the environment's view contains MFEM; Spack refreshes the view on Ctrl-C
+  with whatever is built so far (MFEM was, python/numpy/ninja were not), so a rerun went
+  straight to the build, which failed with "unable to find ... Ninja". The check needs to
+  ask Spack whether every spec in the lock is installed (how is still to decide).
+  Until then, resume an interrupted install with `spack -e environments/NAME install`,
+  not `setup.sh --yes`. That run also wrote `environments/.machine`.
+- **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
+  machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
+  AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck
+  (`cases/square_cylinder_re200_oifs.yaml`) reproducing on this machine, after the
+  install, build and doctor. Everything past it (Re 500 calibration, Re 1000
+  self-convergence, Re 10k) waits for the human. Open before step 2: whether a restart
+  may change Re, whether error-bar statistics exist, what Re 1000 costs here (the
+  desktop's IMEX estimate was ~5 h at np 4).
+- **First build on clang (`scripts/build.sh cpu`), 2026-10-11:** configure passed (AppleClang
+  17.0.0 through the Spack `mpicxx`, MFEM and GTest found). Then compile stopped at
+  `src/precond/mass_inverse.hpp:187:13: error: private field 'comm_' is not used
+  [-Werror,-Wunused-private-field]` (clang-only warning, GCC doesn't have it; header
+  included from `cahouet_chabard.hpp`). Not fixed: it is a `src/` change (ask). A
+  keep-going pass (`ninja -k 0`) was run to list every error at once; see below.
+- **`scripts/env.sh` fails when sourced from zsh** (the macOS login shell, and what
+  AGENTS.md's `. scripts/env.sh` runs in): `'gcc' -> '/usr/bin/gcc' is NOT inside
+  spack`. Passes under `sh` and `bash` (checked). Cause (diagnosed, not fixed): the
+  declared-external prefixes are one newline-separated string iterated with an unquoted
+  `for _p in $_spack_ext_prefixes`; zsh does not word-split unquoted expansions, so with
+  TWO declared externals (the Spack gcc and `apple-clang`, /usr) the pattern match never
+  sees `/usr`. With one external it works, which is why Linux never saw it. Use
+  `sh -c '. scripts/env.sh && ...'` until fixed.
+- **`ccache` is not installed** on this machine: the build prints "compiler launcher
+  'ccache' not found on PATH -- building without it". AGENTS.md rule 4 (never
+  `rm -rf build/`) assumes the cache; here every rebuild is a full one.
+- **Setup layer restructured (human 2026-10-11, "keep one setup.sh as the single entry
+  point ... move platform facts into small sourced files"):** `scripts/platform/darwin.sh`
+  and `linux.sh` hold the GCC spec, the `c`/`cxx` compiler, the job count and the
+  `apple-clang` external; `setup.sh` sources the one `uname -s` picks (`INCNS_PLATFORM`
+  overrides). Checked on this Mac: the generated `spack.yaml` machine settings are
+  identical to before, `--plan` shows `gcc@14.2.0~libsanitizer` here and `gcc@14.3.0` under
+  `INCNS_PLATFORM=linux`, an unknown platform exits 2 with a message, and `nproc` -> `sysctl
+  -n hw.ncpu` fixes the `-j 4` fallback. **Not run on Linux.** `env.sh`'s zsh bug, the
+  install check and the `src/` warnings are NOT part of this change (shared bugs, below).
+- **Still stale:** `docs/install/desktop.md` and the YAML examples in `docs/install/spack.md`
+  name 14.3.0 as the one compiler (true for Linux)
 
 **Just landed (`gpu-validation`, merged to `main` and pushed 2026-10-10): the Bridges-2
 GPU environment rebuilt, the setup machinery made machine-neutral, and the first GPU run

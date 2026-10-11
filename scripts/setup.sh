@@ -26,18 +26,17 @@
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 INCNS_REPO_ROOT=$REPO
 export INCNS_REPO_ROOT
-GCC_SPEC=gcc@14.3.0
-# Spack's gcc recipe has no aarch64-darwin patches for 14.3.0 (only up to 14.2.0):
-# the build stops at configure with "Configuration aarch64-apple-darwin... not
-# supported". Apple Silicon Macs get 14.2.0, which Spack prefers there. Without
-# libsanitizer too: linking libasan.8.dylib crashes Apple's ld (CLT 16.3,
-# "Assertion failed: (entry.toAddend < 0x400000)"). So no GCC ASan/UBSan runtime
-# on a Mac: scripts/asan.sh is not available there.
-# On a Mac this GCC is the Fortran compiler only (MUMPS, ScaLAPACK): Spack refuses
-# CPython with GCC on macOS ("use clang"), so C and C++ are Apple's clang (below).
-if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
-  GCC_SPEC=gcc@14.2.0~libsanitizer
+# Platform facts (the GCC to build, which compiler the c/cxx virtuals require,
+# the default job count) live in scripts/platform/<uname -s>.sh; INCNS_PLATFORM
+# overrides the choice (e.g. INCNS_PLATFORM=linux --plan shows the Linux plan).
+PLATFORM=${INCNS_PLATFORM:-$(uname -s | tr 'A-Z' 'a-z')}
+if [ ! -f "$REPO/scripts/platform/$PLATFORM.sh" ]; then
+  echo "setup.sh: no platform file scripts/platform/$PLATFORM.sh (see scripts/platform/darwin.sh for the contract)" >&2
+  exit 2
 fi
+# shellcheck disable=SC1090
+. "$REPO/scripts/platform/$PLATFORM.sh"
+GCC_SPEC=$PLATFORM_GCC_SPEC
 SPACK_URL=https://github.com/spack/spack.git
 : "${SPACK_ROOT:=$HOME/spack}"
 
@@ -46,7 +45,7 @@ NAME=
 COMPILER=
 ENV_ONLY=0
 LOGIN_OK=0
-JOBS=$(nproc 2>/dev/null || echo 4)
+JOBS=$PLATFORM_JOBS
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan) MODE=plan ;;
@@ -297,13 +296,13 @@ fi
 if [ "$have_env" -eq 0 ]; then
   step "4 environment: creating environments/$NAME/spack.yaml"
   gcc_version=$("$GCC_PREFIX/bin/gcc" -dumpfullversion)
-  # C and C++: the Spack GCC, except on a Mac, where it is Apple's clang
-  # (declared as an external below) and GCC supplies only Fortran.
-  C_REQ=gcc@$gcc_version
-  if [ "$(uname -s)" = Darwin ]; then
-    C_REQ=apple-clang
-    CLANG_VERSION=$(/usr/bin/clang --version | sed -n 's/^Apple clang version \([0-9.]*\).*/\1/p')
-    [ -n "$CLANG_VERSION" ] || die "cannot read the version of /usr/bin/clang (are the Xcode command line tools installed?)"
+  # C and C++: the Spack GCC unless the platform file names another compiler
+  # (macOS: Apple's clang, declared external by platform_compiler_externals;
+  # GCC then supplies only Fortran).
+  if [ "$PLATFORM_C_COMPILER" = gcc ]; then
+    C_REQ=gcc@$gcc_version
+  else
+    C_REQ=$PLATFORM_C_COMPILER
   fi
   mkdir -p "$ENVDIR" || die "cannot create $ENVDIR"
   {
@@ -338,18 +337,8 @@ if [ "$have_env" -eq 0 ]; then
             cxx: $GCC_PREFIX/bin/g++
             fortran: $GCC_PREFIX/bin/gfortran
 EOF
-    if [ "$(uname -s)" = Darwin ]; then
-      cat <<EOF
-    apple-clang:
-      buildable: false
-      externals:
-      - spec: apple-clang@$CLANG_VERSION
-        prefix: /usr
-        extra_attributes:
-          compilers:
-            c: /usr/bin/clang
-            cxx: /usr/bin/clang++
-EOF
+    if type platform_compiler_externals >/dev/null 2>&1; then
+      platform_compiler_externals
     fi
   } >"$ENVDIR/spack.yaml" || die "cannot write $ENVDIR/spack.yaml"
   echo "  wrote $ENVDIR/spack.yaml"
