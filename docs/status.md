@@ -71,6 +71,71 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   Checked: this environment reads "installed (all 12 root specs)"; the marker format of an
   uninstalled root was confirmed on a scratch environment; a half-installed real
   environment was not reproduced (the parsing was tested on canned output).
+- **Re 200 OIFS deck reproduced on the Mac (2026-10-11, M3 MacBook Air, clang, np 4):**
+  `cases/square_cylinder_re200_oifs.yaml`, status ok, 2,191 steps, 3,000 elements (the
+  deck's cap, reached at t ~ 50; 47 AMR events), 53,526 velocity + 11,842 pressure dofs,
+  wall 1,936 s (32.3 min; the deck says ~13 min on the desktop, so ~2.5x here: a
+  fanless Air with four performance cores). Periodic statistics, 10 periods,
+  period spread 0.04%:
+
+  | | this run | desktop (GCC, validated 2026-10-09) | paper | vs paper |
+  |---|---|---|---|---|
+  | C_D mean | 1.4265 | 1.4265 | 1.44 | -0.9% |
+  | C_L,rms | 0.3924 | 0.3923 | 0.42 | -6.6% |
+  | St | 0.1565 | 0.1565 | 0.151 | +3.6% |
+
+  So the clang build agrees with the GCC desktop run to the digits quoted (same step
+  count), and the C_L,rms gap to the paper is the desktop's too, not a platform effect.
+  One run on one AMR level: not a mesh-converged answer. This is step 0 of the Re
+  1000 -> 10000 ramp below.
+- **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
+  machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
+  AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck
+  (`cases/square_cylinder_re200_oifs.yaml`) reproducing on this machine, after the
+  install, build and doctor. Everything past it (Re 500 calibration, Re 1000
+  self-convergence, Re 10k) waits for the human. Open before step 2: whether a restart
+  may change Re, whether error-bar statistics exist, what Re 1000 costs here (the
+  desktop's IMEX estimate was ~5 h at np 4).
+- **First build on clang (`scripts/build.sh cpu`), 2026-10-11:** configure passed (AppleClang
+  17.0.0 through the Spack `mpicxx`, MFEM and GTest found). Then compile stopped at
+  `src/precond/mass_inverse.hpp:187:13: error: private field 'comm_' is not used
+  [-Werror,-Wunused-private-field]` (clang-only warning, GCC doesn't have it; header
+  included from `cahouet_chabard.hpp`). Not fixed: it is a `src/` change (ask). A
+  keep-going pass (`ninja -k 0`) compiled 106 of 173 targets and found three distinct
+  causes, all clang-only (GCC accepts them), all in `src/`; the other 67 targets depend
+  on the failed ones, so more may appear once these are fixed:
+  1. `src/precond/mass_inverse.hpp:187` `comm_` is set (line 69) and never read:
+     `-Wunused-private-field`; 57 of the errors, via every includer of the header.
+  2. `src/config/parameters.cpp:747` `DeckReader r(YAML::Node(YAML::NodeType::Map));` is a
+     most-vexing parse for clang (`-Wvexing-parse`, then three follow-on errors).
+  3. `src/config/deck_reader.cpp:119-120` a lambda captures the structured bindings
+     `parent`/`leaf`: a C++20 feature, the build is C++17 (`-Wc++20-extensions`).
+  **Fixed (2026-10-11, human approved):** commit `2870c38` (remove the unused member;
+  brace-initialize the `DeckReader`; hold the `SplitPath` pair and take references). The
+  whole `cpu` preset then built, 125/125, with no further clang errors (only the
+  linker's "ignoring duplicate libraries" warnings); `scripts/style.sh check` clean;
+  `scripts/doctor.sh --run` all good (cavity smoke run at 2 ranks, 3 s).
+- **`scripts/env.sh` failed when sourced from zsh** (the macOS login shell, and what
+  AGENTS.md's `. scripts/env.sh` runs in): `'gcc' -> '/usr/bin/gcc' is NOT inside
+  spack`. Cause: the declared-external prefixes are one newline-separated string
+  iterated with an unquoted `for _p in $_spack_ext_prefixes`; zsh does not word-split
+  unquoted expansions, so with TWO declared externals (the Spack gcc and `apple-clang`,
+  /usr) the pattern match never saw `/usr`. One external worked, which is why Linux
+  never saw it. **Fixed (2026-10-11, human asked):** a `while read` loop over a here-doc
+  (and an empty line is skipped, since the pattern would be `/*`). Checked: `. scripts/
+  env.sh` returns 0 under `sh`, `bash` and `zsh` on this Mac. Not run on Linux.
+- **`ccache` is not installed** on this machine: the build prints "compiler launcher
+  'ccache' not found on PATH -- building without it". AGENTS.md rule 4 (never
+  `rm -rf build/`) assumes the cache; here every rebuild is a full one.
+- **Setup layer restructured (human 2026-10-11, "keep one setup.sh as the single entry
+  point ... move platform facts into small sourced files"):** `scripts/platform/darwin.sh`
+  and `linux.sh` hold the GCC spec, the `c`/`cxx` compiler, the job count and the
+  `apple-clang` external; `setup.sh` sources the one `uname -s` picks (`INCNS_PLATFORM`
+  overrides). Checked on this Mac: the generated `spack.yaml` machine settings are
+  identical to before, `--plan` shows `gcc@14.2.0~libsanitizer` here and `gcc@14.3.0` under
+  `INCNS_PLATFORM=linux`, an unknown platform exits 2 with a message, and `nproc` -> `sysctl
+  -n hw.ncpu` fixes the `-j 4` fallback. **Not run on Linux.** `env.sh`'s zsh bug, the
+  install check and the `src/` warnings are NOT part of this change (shared bugs, below).
 - **Compiler version in the docs (fixed 2026-10-11):** `docs/install/spack.md` and the
   `setup.sh` header, `desktop.md` and the YAML examples no longer name a version: the
   GCC version is written once, in `scripts/platform/<uname -s>.sh` (human 2026-10-11: a
