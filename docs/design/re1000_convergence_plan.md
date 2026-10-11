@@ -21,13 +21,23 @@ the force means; memory per unknown; whether a restart accepts changed AMR param
 
 ## 1. What "converged" can mean for an irregular flow
 
-The 2D flow at Re 1000 is not periodic here, so there is no period to average over and no
-single "right" time series: two runs at the same resolution differ in detail. What can
-converge are **statistical means**, to within their own sampling error. Therefore:
+The flow **does shed**: C_L swings +-2.4 and changes sign every ~6 time units on average.
+But at Re 1000 the shedding is modulated and broadband, not one clean period (checked on
+the level-1 history, t = 60-105, 45 time units: C_L rms 1.26 against 0.39 at Re 200; the
+C_L up-crossing periods run 3.3-9.2 with mean 6.1 and std 2.2, against 6.39 +- 0.01 at
+Re 200; only ~35 % of the spectral power lies within +-20 % of the peak, against all of it
+at Re 200). The same script reproduces the Re 200 deck's St = 0.1565 exactly, so the
+method is sound. Consequences: there is no single period to average over and two runs at
+the same resolution differ in detail; what can converge are **statistical means**, to
+within their own sampling error. Therefore:
 
-- Quantities: C_D mean, C_L rms, a Strouhal number from the spectral peak of C_L (Welch,
-  not the deck's period finder, which needs periodic shedding), and the mean wake length if
-  a probe or field statistic is added later (not available now).
+- Quantities (human 2026-10-11: these three, nothing else): **C_D mean, C_L rms
+  (the mean C_L is ~0 by symmetry), and the Strouhal number**. The Strouhal number is
+  taken from the spectral peak of C_L (Welch; the deck's period finder needs near-periodic
+  shedding and may report `found: false`). With a broadband signal the peak and the
+  mean up-crossing period can differ (0.09 against 0.164 on that 45-unit window, whose
+  frequency resolution is only 0.022), so the *definition* has to be fixed once and
+  applied to every level, and the window has to be long enough to resolve the peak.
 - Sampling error: **batch means** on the per-step history (`output.history: true` writes
   `<name>_history.csv`: t, dt, C_D, C_L, iterations, cells), non-uniform dt handled by time
   weights. No solver change is needed; this is post-processing (Python is in the stack).
@@ -76,6 +86,14 @@ a factor 2.9, so the dt factor may be nearer 0.35).
 Memory: ~22 dofs per element, so L2 is ~0.7-1.1 M dofs and L3 ~1.7-2.8 M. Bytes per dof
 are **not measured**; on 8 GB total, L2 is doubtful on the Air and L3 is out.
 
+**These element counts are assumptions, not measurements** (human 2026-10-11 questioned
+them, rightly): "halving tolerance and `min_size` gives x2-3 elements" is a rule of thumb
+extrapolated from a mesh that the cap was holding at 9,003. 9,000 Q3 elements is already
+~200 k dofs, which is a lot for 2D at Re 1000, and level 1 may be close to converged;
+L2 and L3 may turn out smaller than tabulated, or unnecessary. The census (T2) replaces
+the guesses with a number; until then read the L2 and L3 rows as upper-end planning
+figures. The Re 10 000 figure (1-3 M unknowns) is from status.md, not from this plan.
+
 Decision rule: run L1' and L2, compare with the criterion of section 1. If they agree,
 Re 1000 is converged at L2 resolution and L3 is not needed. If not, L3 is the HPC job
 and Re 10 000 waits.
@@ -112,11 +130,13 @@ the human's yes with resources, walltime and cost stated (AGENTS.md rule 3).
 5. CFL 1 branch; seed independence.
 6. Decide L3 / HPC / Re 10 000 from the comparison.
 
-## Decisions for the human
+## Decisions
 
-1. The criterion in section 1 (1-2 % or 2 sigma, whichever is larger).
-2. Where L2 runs (desktop, or Bridges-2 with an allocation).
-3. Whether a Welch-spectrum Strouhal number replaces the deck's period-based one (the
-   deck's `strouhal` needs periodic shedding).
-4. Whether to add a field-based statistic (mean wake length) before L2: it is a solver
-   feature, not a deck key.
+1. Criterion: **decided** (human 2026-10-11): 1-2 % between levels, against the
+   statistical error (the larger of the two).
+2. Where L2 runs: **the human's** (desktop, or Bridges-2 with an allocation).
+3. Strouhal from the spectral peak of C_L: **agreed in principle** (it reproduces the
+   Re 200 value exactly); the definition for a broadband spectrum is to be fixed once
+   the longer window is available (section 1).
+4. A field-based statistic (mean wake length): **not wanted** (human 2026-10-11: drag,
+   lift and Strouhal are the three quantities).
