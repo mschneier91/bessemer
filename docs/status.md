@@ -88,6 +88,14 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   count), and the C_L,rms gap to the paper is the desktop's too, not a platform effect.
   One run on one AMR level: not a mesh-converged answer. This is step 0 of the Re
   1000 -> 10000 ramp below.
+- **Fast tier on the Mac (2026-10-11, `scripts/test.sh cpu -L fast`, clang, M3 Air):**
+  180 of 180 pass (0 failed), 269 s of test time (4 min 31 s wall), after the three
+  clang fixes. 3 of the 180 were *skipped*, as designed: `benchmark_plot_tgv_re1600`,
+  `_channel` and `_dfg_3d` need `python3 benchmarks/fetch_references.py` (exit 77, not
+  fetched on this machine). This closes the macOS bring-up of `scripts/setup.sh` ->
+  build -> doctor -> case -> fast tier. **Not run on the Mac:** the slow tier,
+  `scripts/asan.sh`, the Python tests (`cpu-python` preset), `scripts/docs.sh` (Doxygen),
+  `scripts/debug_device.sh`.
 - **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
   machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
   AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck
