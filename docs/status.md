@@ -103,7 +103,42 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   install, build and doctor. Everything past it (Re 500 calibration, Re 1000
   self-convergence, Re 10k) waits for the human. Open before step 2: whether a restart
   may change Re, whether error-bar statistics exist, what Re 1000 costs here (the
-  desktop's IMEX estimate was ~5 h at np 4).
+  desktop's IMEX estimate was ~5 h at np 4): answered by the probe below.
+- **Re 1000 cost probe (2026-10-11, this Mac, np 4, OIFS CFL 2, BDF3):**
+  `runs/re1000/re1000_l1_probe.yaml` = the Re 200 OIFS deck with Re 1000, `min_size`
+  0.1, `max_elements` 6000, `t_final` 30. Status ok, 1,076 steps, 17.2 min wall (Re 200
+  took 3.9 min to t = 30). The C_D, C_L numbers in it (C_D up to 3.2, C_L +-2.4) are
+  the start-up transient, not results.
+
+  | t | elements | dt | s/step | its |
+  |---|---|---|---|---|
+  | 5 | ~1,600 | 0.034 | ~0.6 | 19-21 |
+  | 14 | 1,908 | 0.028 | ~0.7 | 19 |
+  | 20 | 2,782 | 0.025 | ~0.9 | 16 |
+  | 26 | 4,167 | 0.026 | ~1.3 | 16 |
+  | 30 | 4,994 | 0.016 (last step, cut to land on t_final) | ~1.7 | 15 |
+
+  **Measured:** cost is ~0.33-0.40 ms per element per step at np 4 (the Re 200 run
+  gave the same), so per-step cost follows the element count; dt stayed at 0.021-0.026
+  for t = 8-28 (Re 200: 0.072); the mesh reached 4,994 elements at t = 30 (Re 200 reached
+  3,000 only at t ~ 50), still growing ~120/time unit, so the 6,000 cap will bind from
+  about t ~ 35 and level 1 is cap-limited, not tolerance-limited.
+  **Extrapolated (assumptions in brackets):**
+  - Full t = 160 at level 1: ~5,200-7,200 more steps [dt 0.018-0.025, mesh at the 6,000
+    cap from t ~ 35] x 1.9-2.4 s [0.35 ms/element] = 2.7-4.8 h, so **~3-5 h in total**.
+    Risk: the transient is long (|C_L| up to 2.4 at t = 30), the Re 200 deck averages
+    over t = 90-160 and Re 1000 in 2D may not be periodic, so t_final may need to be
+    longer; not measured.
+  - Convergence series [halving `tolerance` and `min_size`, cap raised to match, elements
+    x2-3 and dt x0.4-0.5 per level, so wall x4-7.5]: L2 ~12-38 h (~20 h), L3 ~50-280 h
+    (~4 days or more). L1 is an overnight run, L2 a day, **L3 is not realistic on this
+    machine** (and thermal behaviour of a fanless Air over days is unknown).
+  - Re 2000 / 5000 at level-1 resolution [work ~ Re^1.5, status.md]: ~11 h / ~45 h.
+  - **Re 10000 does not fit here.** 1-3e6 unknowns (status.md) at the measured ~22
+    dofs/element is ~45-140k elements, ~16-48 s/step [0.35 ms/element, optimistic: no
+    iteration growth], ~200k steps at dt ~8e-4 = 37-110 days; memory ~4-12 GB [~4 KB per
+    unknown, NOT measured] against 8 GB total RAM (`sysctl hw.memsize` = 8,589,934,592).
+    That is HPC work (status.md: Bridges-2).
 - **First build on clang (`scripts/build.sh cpu`), 2026-10-11:** configure passed (AppleClang
   17.0.0 through the Spack `mpicxx`, MFEM and GTest found). Then compile stopped at
   `src/precond/mass_inverse.hpp:187:13: error: private field 'comm_' is not used
