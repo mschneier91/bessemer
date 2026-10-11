@@ -96,8 +96,9 @@ declares that GCC as an external:
 ```
 
 Don't use `all: require: '%gcc'` instead: it breaks externals such as Slurm. On a
-workstation, `setup.sh` first builds `gcc@14.3.0` with Spack (the system compiler builds
-it), then points the environment at it. On a cluster, `--compiler <prefix>` uses the
+workstation, `setup.sh` first builds the GCC its platform file names (`gcc@14.3.0` on
+Linux, `gcc@14.2.0~libsanitizer` on macOS: "Platforms" below) with Spack (the system
+compiler builds it), then points the environment at it. On a cluster, `--compiler <prefix>` uses the
 site's GCC module instead; `psc_gpu` does this.
 
 ### Platforms

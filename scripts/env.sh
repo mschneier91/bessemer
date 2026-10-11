@@ -101,11 +101,18 @@ _incns_assert_spack() {
   case "$_path" in
     "$SPACK_ROOT"/*|"$_spack_view"/*) return 0 ;;
   esac
-  for _p in $_spack_ext_prefixes; do
+  # One prefix per line. Read them with `while read`, not `for _p in $var`: zsh
+  # (the macOS login shell, where this file is sourced) does not word-split an
+  # unquoted expansion, so with two declared externals no prefix ever matched.
+  # An empty line must not become the pattern "/*", which matches everything.
+  while IFS= read -r _p; do
+    [ -n "$_p" ] || continue
     case "$_path" in
       "$_p"/*) return 0 ;;
     esac
-  done
+  done <<INCNS_EXT_PREFIXES
+$_spack_ext_prefixes
+INCNS_EXT_PREFIXES
   echo "env.sh: '$_tool' -> '${_path:-MISSING}' is NOT inside spack" \
        "($SPACK_ROOT, the env view, or a declared external prefix in" \
        "$_env_dir/spack.yaml). System-toolchain leak -- aborting." >&2

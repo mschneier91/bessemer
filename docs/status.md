@@ -62,57 +62,18 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   build ran fine from the same kind of tab. Rerunning with stdin detached
   (`spack -e ENV install < /dev/null`) was started; whether that is the fix is not
   confirmed until that Python build passes the extension check. Not tried in Terminal.app.
-- **`setup.sh`'s install check is wrong after an interrupted install.** It reports step 6
-  "done" when the environment's view contains MFEM; Spack refreshes the view on Ctrl-C
-  with whatever is built so far (MFEM was, python/numpy/ninja were not), so a rerun went
-  straight to the build, which failed with "unable to find ... Ninja". The check needs to
-  ask Spack whether every spec in the lock is installed (how is still to decide).
-  Until then, resume an interrupted install with `spack -e environments/NAME install`,
-  not `setup.sh --yes`. That run also wrote `environments/.machine`.
-- **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
-  machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
-  AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck
-  (`cases/square_cylinder_re200_oifs.yaml`) reproducing on this machine, after the
-  install, build and doctor. Everything past it (Re 500 calibration, Re 1000
-  self-convergence, Re 10k) waits for the human. Open before step 2: whether a restart
-  may change Re, whether error-bar statistics exist, what Re 1000 costs here (the
-  desktop's IMEX estimate was ~5 h at np 4).
-- **First build on clang (`scripts/build.sh cpu`), 2026-10-11:** configure passed (AppleClang
-  17.0.0 through the Spack `mpicxx`, MFEM and GTest found). Then compile stopped at
-  `src/precond/mass_inverse.hpp:187:13: error: private field 'comm_' is not used
-  [-Werror,-Wunused-private-field]` (clang-only warning, GCC doesn't have it; header
-  included from `cahouet_chabard.hpp`). Not fixed: it is a `src/` change (ask). A
-  keep-going pass (`ninja -k 0`) compiled 106 of 173 targets and found three distinct
-  causes, all clang-only (GCC accepts them), all in `src/`; the other 67 targets depend
-  on the failed ones, so more may appear once these are fixed:
-  1. `src/precond/mass_inverse.hpp:187` `comm_` is set (line 69) and never read:
-     `-Wunused-private-field`; 57 of the errors, via every includer of the header.
-  2. `src/config/parameters.cpp:747` `DeckReader r(YAML::Node(YAML::NodeType::Map));` is a
-     most-vexing parse for clang (`-Wvexing-parse`, then three follow-on errors).
-  3. `src/config/deck_reader.cpp:119-120` a lambda captures the structured bindings
-     `parent`/`leaf`: a C++20 feature, the build is C++17 (`-Wc++20-extensions`).
-- **`scripts/env.sh` fails when sourced from zsh** (the macOS login shell, and what
-  AGENTS.md's `. scripts/env.sh` runs in): `'gcc' -> '/usr/bin/gcc' is NOT inside
-  spack`. Passes under `sh` and `bash` (checked). Cause (diagnosed, not fixed): the
-  declared-external prefixes are one newline-separated string iterated with an unquoted
-  `for _p in $_spack_ext_prefixes`; zsh does not word-split unquoted expansions, so with
-  TWO declared externals (the Spack gcc and `apple-clang`, /usr) the pattern match never
-  sees `/usr`. With one external it works, which is why Linux never saw it. Use
-  `sh -c '. scripts/env.sh && ...'` until fixed.
-- **`ccache` is not installed** on this machine: the build prints "compiler launcher
-  'ccache' not found on PATH -- building without it". AGENTS.md rule 4 (never
-  `rm -rf build/`) assumes the cache; here every rebuild is a full one.
-- **Setup layer restructured (human 2026-10-11, "keep one setup.sh as the single entry
-  point ... move platform facts into small sourced files"):** `scripts/platform/darwin.sh`
-  and `linux.sh` hold the GCC spec, the `c`/`cxx` compiler, the job count and the
-  `apple-clang` external; `setup.sh` sources the one `uname -s` picks (`INCNS_PLATFORM`
-  overrides). Checked on this Mac: the generated `spack.yaml` machine settings are
-  identical to before, `--plan` shows `gcc@14.2.0~libsanitizer` here and `gcc@14.3.0` under
-  `INCNS_PLATFORM=linux`, an unknown platform exits 2 with a message, and `nproc` -> `sysctl
-  -n hw.ncpu` fixes the `-j 4` fallback. **Not run on Linux.** `env.sh`'s zsh bug, the
-  install check and the `src/` warnings are NOT part of this change (shared bugs, below).
-- **Still stale:** `docs/install/desktop.md` and the YAML examples in `docs/install/spack.md`
-  name 14.3.0 as the one compiler (true for Linux)
+- **`setup.sh`'s install check was wrong after an interrupted install.** It reported
+  step 6 "done" when the environment's view contained MFEM; Spack refreshes the view on
+  Ctrl-C with whatever is built so far (MFEM was, python/numpy/ninja were not), so a
+  rerun went straight to the build, which failed with "unable to find ... Ninja".
+  **Fixed (2026-10-11):** it asks Spack (`spack -e ENV find -L`: every root spec marked
+  `[+]`, none ` -  `), only when the lock is current (so `--plan` still changes nothing).
+  Checked: this environment reads "installed (all 12 root specs)"; the marker format of an
+  uninstalled root was confirmed on a scratch environment; a half-installed real
+  environment was not reproduced (the parsing was tested on canned output).
+- **Compiler version in the docs (fixed 2026-10-11):** `docs/install/spack.md` and the
+  `setup.sh` header now say the GCC is whatever the platform file names. `desktop.md`
+  still says `gcc@14.3.0`, which is correct: it describes the Linux desktop.
 
 **Just landed (`gpu-validation`, merged to `main` and pushed 2026-10-10): the Bridges-2
 GPU environment rebuilt, the setup machinery made machine-neutral, and the first GPU run

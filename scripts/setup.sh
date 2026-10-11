@@ -11,8 +11,8 @@
 #   --name NAME        environment name: environments/NAME/ (default: the one
 #                      scripts/machine.sh picks, else this machine's hostname)
 #   --compiler PREFIX  use an existing GCC with gfortran installed at PREFIX
-#                      (e.g. a cluster module's) instead of building gcc@14.3.0
-#                      (gcc@14.2.0 on an Apple Silicon Mac)
+#                      (e.g. a cluster module's) instead of building the GCC
+#                      scripts/platform/<uname -s>.sh names (gcc@14.3.0 on Linux)
 #   --env-only         stop once environments/NAME/spack.yaml exists, to add
 #                      machine settings (cluster MPI, CUDA) before resolving
 #   --jobs N           parallel build jobs (default: all cores)
@@ -135,9 +135,22 @@ fi
 
 install_state="to do"
 install_msg="spack install -j $JOBS (hours; about 20 GB under $SPACK_ROOT)"
-if [ -f "$ENVDIR/.spack-env/view/include/mfem.hpp" ] && [ "$resolve_state" = done ]; then
-  install_state=done
-  install_msg="installed (the view has MFEM)"
+# Done means every root spec of the environment is installed, which only Spack can
+# say. (The view holds MFEM as soon as MFEM is built, long before the Python packages
+# are: an interrupted install used to read as done.) Only asked when the lock is
+# current: activating an environment with a stale lock makes Spack re-resolve it,
+# and --plan changes nothing.
+if [ "$resolve_state" = done ] && [ -x "$SPACK_ROOT/bin/spack" ]; then
+  _roots=$(SPACK_DISABLE_LOCAL_CONFIG=1 "$SPACK_ROOT/bin/spack" -e "$ENVDIR" find -L 2>/dev/null) || _roots=
+  # `spack find -L` marks a root "[+] hash name" when installed and " -  ---- name" when not.
+  _roots_missing=$(printf '%s\n' "$_roots" | grep -cE '^ -  |^\[-\]')
+  _roots_ok=$(printf '%s\n' "$_roots" | grep -cE '^\[[+e^]\] ')
+  if [ "$_roots_ok" -gt 0 ] && [ "$_roots_missing" -eq 0 ]; then
+    install_state=done
+    install_msg="installed (all $_roots_ok root specs)"
+  elif [ "$_roots_missing" -gt 0 ]; then
+    install_msg="spack install -j $JOBS resumes: $_roots_missing of $((_roots_ok + _roots_missing)) root specs not installed yet"
+  fi
 fi
 
 if [ -f "$ENVDIR/INSTALL" ]; then
