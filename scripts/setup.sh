@@ -33,6 +33,8 @@ GCC_SPEC=gcc@14.3.0
 # libsanitizer too: linking libasan.8.dylib crashes Apple's ld (CLT 16.3,
 # "Assertion failed: (entry.toAddend < 0x400000)"). So no GCC ASan/UBSan runtime
 # on a Mac: scripts/asan.sh is not available there.
+# On a Mac this GCC is the Fortran compiler only (MUMPS, ScaLAPACK): Spack refuses
+# CPython with GCC on macOS ("use clang"), so C and C++ are Apple's clang (below).
 if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
   GCC_SPEC=gcc@14.2.0~libsanitizer
 fi
@@ -295,6 +297,14 @@ fi
 if [ "$have_env" -eq 0 ]; then
   step "4 environment: creating environments/$NAME/spack.yaml"
   gcc_version=$("$GCC_PREFIX/bin/gcc" -dumpfullversion)
+  # C and C++: the Spack GCC, except on a Mac, where it is Apple's clang
+  # (declared as an external below) and GCC supplies only Fortran.
+  C_REQ=gcc@$gcc_version
+  if [ "$(uname -s)" = Darwin ]; then
+    C_REQ=apple-clang
+    CLANG_VERSION=$(/usr/bin/clang --version | sed -n 's/^Apple clang version \([0-9.]*\).*/\1/p')
+    [ -n "$CLANG_VERSION" ] || die "cannot read the version of /usr/bin/clang (are the Xcode command line tools installed?)"
+  fi
   mkdir -p "$ENVDIR" || die "cannot create $ENVDIR"
   {
     echo "# environments/$NAME/spack.yaml -- this machine's bessemer environment."
@@ -310,10 +320,10 @@ if [ "$have_env" -eq 0 ]; then
     # doesn't apply to building the compiler itself.
     c:
       require:
-      - gcc@$gcc_version
+      - $C_REQ
     cxx:
       require:
-      - gcc@$gcc_version
+      - $C_REQ
     fortran:
       require:
       - gcc@$gcc_version
@@ -328,6 +338,19 @@ if [ "$have_env" -eq 0 ]; then
             cxx: $GCC_PREFIX/bin/g++
             fortran: $GCC_PREFIX/bin/gfortran
 EOF
+    if [ "$(uname -s)" = Darwin ]; then
+      cat <<EOF
+    apple-clang:
+      buildable: false
+      externals:
+      - spec: apple-clang@$CLANG_VERSION
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/clang
+            cxx: /usr/bin/clang++
+EOF
+    fi
   } >"$ENVDIR/spack.yaml" || die "cannot write $ENVDIR/spack.yaml"
   echo "  wrote $ENVDIR/spack.yaml"
 fi

@@ -88,7 +88,7 @@ fi
 _spack_ext_prefixes=$(awk '
   /^    [a-zA-Z0-9_-]+:[[:space:]]*$/ { key=$1; sub(":", "", key); next }
   /^[[:space:]]+prefix:/ {
-    if (key ~ /^(gcc|llvm|intel-oneapi-compilers|openmpi|mpich|cmake)$/) print $2
+    if (key ~ /^(gcc|apple-clang|llvm|intel-oneapi-compilers|openmpi|mpich|cmake)$/) print $2
   }
 ' "$_env_dir/spack.yaml" 2>/dev/null)
 

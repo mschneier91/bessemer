@@ -44,6 +44,15 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   `libasan`, so the `cpu-asan` preset / `scripts/asan.sh` is not available on a Mac; the
   sanitizer sweep is not tested there (Apple clang's runtime is an untested alternative).
   `-ld_classic` still exists in this ld but is deprecated.
+- **`spack concretize` then failed** (human 2026-10-10: "we just need to use system
+  clang"): `python: CPython does not compile with GCC on macOS yet, use clang` (a Spack
+  conflict `platform=darwin %gcc`; it reaches Python through numba/llvmlite, matplotlib
+  and `ninja`). Fix on the branch: `c`/`cxx` require `apple-clang@<detected>` (external,
+  prefix `/usr`), `fortran` stays the Spack-built `gcc@14.2.0~libsanitizer`; `setup.sh`
+  writes both on Darwin and `env.sh` whitelists the `apple-clang` external. Concretizes
+  in ~20 s with that (hypre resolved 3.1.0 there, `desktop` has 3.2.0). **Not yet
+  verified:** the install, the build, and `env.sh`'s assertion with `gcc`/`g++` resolving
+  to `/usr/bin` (its banner also prints clang's version as `gcc=`).
 - **Not fixed, seen on the way:** `JOBS` falls back to 4 on macOS (no `nproc`; the plan
   said `-j 4` on an 8-core machine): use `sysctl -n hw.ncpu`. `docs/install/spack.md` and
   `desktop.md` still say 14.3.0 as the one compiler.

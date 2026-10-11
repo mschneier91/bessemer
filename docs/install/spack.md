@@ -108,6 +108,14 @@ It builds it `~libsanitizer` too: linking `libasan.8.dylib` crashes Apple's link
 `Assertion failed: (entry.toAddend < 0x400000)`). A Mac therefore has no GCC ASan/UBSan
 runtime, and `scripts/asan.sh` (the `cpu-asan` preset) is not available there.
 
+**On a Mac, C and C++ are Apple's clang; GCC is the Fortran compiler only.** Spack refuses
+CPython with GCC on macOS (`CPython does not compile with GCC on macOS yet, use clang`), and
+Python is in the stack. So the generated environment requires `apple-clang` for the `c` and
+`cxx` virtuals (declared external, prefix `/usr`), `gcc@14.2.0` for `fortran` (MUMPS and
+ScaLAPACK need it; Apple's toolchain has none), and `scripts/env.sh` accepts the declared
+`apple-clang` external. This is a deliberate exception to "never build with the system
+compiler" (AGENTS.md rule 1): on a Mac the system clang is the toolchain.
+
 The `desktop` environment predates this pattern: there Spack chose to build gcc 14.3.0 as
 an ordinary dependency, because the system GCC has no Fortran. The result is the same.
 
