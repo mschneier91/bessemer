@@ -72,8 +72,9 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   uninstalled root was confirmed on a scratch environment; a half-installed real
   environment was not reproduced (the parsing was tested on canned output).
 - **Compiler version in the docs (fixed 2026-10-11):** `docs/install/spack.md` and the
-  `setup.sh` header now say the GCC is whatever the platform file names. `desktop.md`
-  still says `gcc@14.3.0`, which is correct: it describes the Linux desktop.
+  `setup.sh` header, `desktop.md` and the YAML examples no longer name a version: the
+  GCC version is written once, in `scripts/platform/<uname -s>.sh` (human 2026-10-11: a
+  different gcc is coming).
 
 **Just landed (`gpu-validation`, merged to `main` and pushed 2026-10-10): the Bridges-2
 GPU environment rebuilt, the setup machinery made machine-neutral, and the first GPU run

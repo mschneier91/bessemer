@@ -85,20 +85,20 @@ declares that GCC as an external:
 
 ```yaml
   packages:
-    c:       {require: [gcc@14.3.0]}
-    cxx:     {require: [gcc@14.3.0]}
-    fortran: {require: [gcc@14.3.0]}
+    c:       {require: [gcc@<version>]}
+    cxx:     {require: [gcc@<version>]}
+    fortran: {require: [gcc@<version>]}
     gcc:
       buildable: false
       externals:
-      - spec: gcc@14.3.0 languages:='c,c++,fortran'
+      - spec: gcc@<version> languages:='c,c++,fortran'
         prefix: /path/to/gcc
 ```
 
 Don't use `all: require: '%gcc'` instead: it breaks externals such as Slurm. On a
-workstation, `setup.sh` first builds the GCC its platform file names (`gcc@14.3.0` on
-Linux, `gcc@14.2.0~libsanitizer` on macOS: "Platforms" below) with Spack (the system
-compiler builds it), then points the environment at it. On a cluster, `--compiler <prefix>` uses the
+workstation, `setup.sh` first builds the GCC its platform file names (`PLATFORM_GCC_SPEC`
+in `scripts/platform/`: "Platforms" below) with Spack (the system compiler builds it),
+then points the environment at it. On a cluster, `--compiler <prefix>` uses the
 site's GCC module instead; `psc_gpu` does this.
 
 ### Platforms
@@ -109,8 +109,9 @@ another platform's plan. Each file sets the GCC to build (`PLATFORM_GCC_SPEC`), 
 compiler the `c`/`cxx` virtuals require (`PLATFORM_C_COMPILER`), the default job count
 (`PLATFORM_JOBS`), and may print extra `packages:` entries
 (`platform_compiler_externals`). `darwin.sh` documents the contract and why each line is
-there. To support a new platform, add a file there. Every `14.3.0` in the YAML above is
-then the GCC version `setup.sh` built.
+there. To support a new platform, add a file there. The GCC version is set in exactly
+that one place; `<version>` in the YAML above is the version `setup.sh` built, and an
+existing environment keeps the GCC in its lock until it is re-resolved.
 
 **macOS (Apple Silicon, found 2026-10-10/11):**
 - **`gcc@14.2.0~libsanitizer`, not 14.3.0.** Spack's gcc recipe carries Iain Sandoe's
@@ -128,7 +129,7 @@ then the GCC version `setup.sh` built.
 - **Sanitizers:** GCC's own `libasan` is not built. bessemer is compiled by clang, which
   brings its own runtime, so `scripts/asan.sh` should work there. Not yet run.
 
-The `desktop` environment predates this pattern: there Spack chose to build gcc 14.3.0 as
+The `desktop` environment predates this pattern: there Spack chose to build its GCC as
 an ordinary dependency, because the system GCC has no Fortran. The result is the same.
 
 ## Setting up a new machine

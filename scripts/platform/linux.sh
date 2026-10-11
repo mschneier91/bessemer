@@ -3,7 +3,9 @@
 # scripts/platform/darwin.sh for the contract and docs/install/spack.md, "Platforms".
 
 # The GCC that setup.sh builds with Spack on a workstation (the system compiler
-# builds it). A cluster passes --compiler PREFIX instead.
+# builds it). A cluster passes --compiler PREFIX instead. This is the one place the
+# version is written: change it here for a new environment; an existing environment
+# keeps the GCC in its spack.lock until it is re-resolved.
 PLATFORM_GCC_SPEC=gcc@14.3.0
 
 # Which compiler the environment requires for the c and cxx virtuals: the Spack

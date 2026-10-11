@@ -12,7 +12,7 @@
 #                      scripts/machine.sh picks, else this machine's hostname)
 #   --compiler PREFIX  use an existing GCC with gfortran installed at PREFIX
 #                      (e.g. a cluster module's) instead of building the GCC
-#                      scripts/platform/<uname -s>.sh names (gcc@14.3.0 on Linux)
+#                      scripts/platform/<uname -s>.sh names (PLATFORM_GCC_SPEC)
 #   --env-only         stop once environments/NAME/spack.yaml exists, to add
 #                      machine settings (cluster MPI, CUDA) before resolving
 #   --jobs N           parallel build jobs (default: all cores)

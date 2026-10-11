@@ -9,7 +9,7 @@ pattern and the two traps.
 | | |
 |---|---|
 | Spack | `~/spack`, develop at `5ca6d8e` (1.3.0.dev0) at the 2026-10-09 refresh |
-| Compiler | Spack-built `gcc@14.3.0`. The system GCC (11.4, no Fortran) builds a few bootstrap tools only |
+| Compiler | A Spack-built GCC (the version is in `environments/desktop/spack.yaml` and its lock; a new environment gets `PLATFORM_GCC_SPEC` from `scripts/platform/linux.sh`). The system GCC (11.4, no Fortran) builds a few bootstrap tools only |
 | Stack (2026-10-09) | MFEM 4.10.1-dev at `1c19aba` (pinned) with MPI, MUMPS, SuiteSparse, gslib, libCEED, LAPACK; hypre 3.2.0; libCEED 1.0.0; SuiteSparse 7.14; OpenMPI; CMake; Ninja; googletest; astyle; yaml-cpp; Python 3.12 with pybind11, NumPy, numba |
 | Selected by | `environments/.machine` containing `desktop` |
 
