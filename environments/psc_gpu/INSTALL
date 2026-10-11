@@ -1,0 +1,5 @@
+# Read by scripts/setup.sh and scripts/doctor.sh: this environment is not
+# installed by scripts/setup.sh. First line: the document with its procedure.
+# Further lines: why, printed as they are.
+docs/install/bridges2.md
+Builds run on GPU compute nodes and downloads on the login node.

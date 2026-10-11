@@ -1,0 +1,10 @@
+# Hostname patterns (shell globs, one per line) of the machines that use this
+# environment; read by scripts/machine.sh and matched against the full
+# hostname (`hostname -f`). Keep the domain in: a bare "w0*" matches too much.
+#
+# Bridges-2: br0xx login nodes and w0xx H100 nodes; their full names look like
+# br012.ib.bridges2.psc.edu, and the * below also covers the ".ib" part. v0xx (V100) and gl0xx (L40S)
+# are deliberately not matched: this environment is cuda_arch=90 (H100 only, see
+# docs/install/bridges2.md), the wrong SM arch for them.
+br0*.bridges2.psc.edu
+w0*.bridges2.psc.edu

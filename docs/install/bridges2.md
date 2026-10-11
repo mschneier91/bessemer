@@ -11,6 +11,13 @@ network-facing runs on the login node* (spack mirror, pip wheel download) and
 *everything that executes builds runs on a GPU compute node*. Every step below is
 labeled with which side of that wall it runs on.
 
+**Agents:** this page describes the procedure; it does not authorize it. Every
+step that requests an allocation or submits a job (Steps 2, 3 and 5) spends the
+human's allocation and needs their explicit go-ahead first (AGENTS.md rule 3).
+`projects` shows what is left of it. Steps 0 and 1 download software and write
+configuration (`~/.bashrc`, the Spack checkout, the mirror): show the human the
+plan and get a go-ahead for those too, as for any install.
+
 ---
 
 ## System facts that drive the design
@@ -38,84 +45,9 @@ environment (Gotchas #1, #6). Note numba is intentionally absent: it installs vi
 pip wheels (see step 4) because building it in Spack drags in a multi-hour LLVM
 source build for zero solver benefit.
 
-```yaml
-spack:
-  specs:
-    - mfem@develop+cuda cuda_arch=90 +gslib+lapack+libceed+mpi+shared+suite-sparse
-      ^gslib@1.0.9 cflags="-fPIC"
-      ^hypre+cuda cuda_arch=90 ldflags="-ldl"
-      ^libceed+cuda cuda_arch=90
-      ^suite-sparse~cuda
-
-    - cmake
-    - ninja
-    - openmpi+cuda fabrics=ucx schedulers=slurm
-      ^ucx+cuda~gdrcopy+verbs+rc+ud+dc+mlx5_dv cuda_arch=90
-
-    - googletest
-    - astyle
-    - yaml-cpp
-
-    # Python interface: our own pybind11 bindings over the incns Case surface
-    # (PyMFEM is never used). numba provides the @cfunc fast path for
-    # user-defined ICs/BCs/forcing -- a raw C function pointer the bindings wrap
-    # as an mfem::Coefficient. No mpi4py: Python is a pure SPMD driver.
-    # numba is NOT built by Spack: it is pip-installed as a manylinux wheel
-    # (llvmlite ships LLVM statically) to avoid a multi-hour LLVM source build.
-    # Keep py-numpy pinned inside numba's supported window.
-    - python@3.12
-    - py-pybind11
-    - py-numpy
-
-  packages:
-    all:
-      require:
-      - target=x86_64_v3
-      providers:
-        mpi: [openmpi]
-    # Spack v1.x: compilers are dependencies. Do NOT put "%gcc" under
-    # all:require (breaks externals like slurm). Use language virtuals:
-    c:
-      require:
-      - gcc@13.3.1
-    cxx:
-      require:
-      - gcc@13.3.1
-    fortran:
-      require:
-      - gcc@13.3.1
-    gcc:
-      externals:
-      - spec: gcc@13.3.1 languages:='c,c++,fortran'
-        prefix: /opt/packages/gcc/v13.3.1-p20240614/b2gpu
-        modules:
-        - gcc/13.3.1-p20240614
-        extra_attributes:
-          compilers:
-            c: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gcc
-            cxx: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/g++
-            fortran: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gfortran
-          environment:
-            prepend_path:
-              LD_LIBRARY_PATH: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/lib64
-      buildable: false
-    cuda:
-      buildable: false
-      externals:
-      - spec: cuda@12.6.1
-        prefix: /opt/packages/cuda/v12.6.1
-    slurm:
-      buildable: false
-      externals:
-      - spec: slurm@22.05.11
-        prefix: /usr
-
-  concretizer:
-    unify: when_possible
-    reuse: true
-
-  view: true
-```
+The file is the reference, so it isn't copied here:
+[environments/psc_gpu/spack.yaml](../../environments/psc_gpu/spack.yaml). The reason
+for each pin is in a comment beside it.
 
 Design decisions in brief:
 
@@ -132,13 +64,35 @@ Design decisions in brief:
   halo-exchange / AMG traffic.
 - **No openssl external** — system openssl is 1.1.x; curl requires ≥3, so Spack
   builds openssl 3 itself (Gotcha #10).
-- **`~static` on mfem** — pybind11 module links the shared lib only.
+- **`+shared` on mfem** — the pybind11 module links the shared library.
 - **`unify: when_possible`, `reuse: true`** — avoids the numpy/python chain
   dictating versions DAG-wide; keeps installed packages across re-concretizations.
-- **`mfem@develop`** — moving branch; the mirror freezes whatever commit was
-  current at `spack mirror create` time. Consider pinning a commit.
+- **`mfem@develop commit=...`** — develop is a moving branch, so the commit is
+  pinned in `spack.yaml` (the comment there says why that one). The same pin is
+  in `environments/stack.yaml`; move them together.
+- **`+mumps`, `^mumps+metis+parmetis~openmp`** — the direct solver; see the
+  comment in `spack.yaml`.
 
 ---
+
+## Before you start: what is already done?
+
+This page is written as a first install, but most visits are not one. Check
+first, and skip what is done:
+
+- `scripts/setup.sh --plan` (changes nothing). If row 5 says "resolve done", the
+  `spack.lock` matches `spack.yaml`: do not run `spack concretize -f` again. If
+  it says "re-resolve", follow "Updating after `spack.yaml` changes" below.
+- `squeue -u $USER`: is an install job already queued or running, for this or
+  the other Bridges-2 environment? Then wait for it: they share one Spack. A
+  second job, or a re-resolve underneath it, breaks the first.
+- The plan's "install done" covers the Spack packages only. Step 4 (numba) is
+  separate: `ls environments/psc_gpu/.spack-env/view/lib/python3*/site-packages`
+  shows whether numba is there.
+- `spack mirror list` shows `local_sources`, and `ls $PROJECT/pip-wheels` shows
+  the numba wheels: Step 1's downloads are done.
+- `spack -e environments/psc_gpu find` lists what is installed. Only the rest
+  gets built, so a top-up is minutes, not hours.
 
 ## Fresh-install procedure
 
@@ -147,24 +101,43 @@ Design decisions in brief:
 Spack lives on Ocean, not `$HOME` (quota):
 
 ```bash
-cd $PROJECT     # /ocean/projects/mth260019p/schneier
+cd $PROJECT     # your Ocean directory: /ocean/projects/<group>/<user>
 git clone -c feature.manyFiles=true https://github.com/spack/spack.git
 . $PROJECT/spack/share/spack/setup-env.sh     # add to ~/.bashrc
 ```
 
+Put that last line in `~/.bashrc`. Sourcing it sets `SPACK_ROOT`, which is how
+the repository's scripts find this Spack; without it they look in `~/spack`,
+their default, and `scripts/setup.sh --plan` offers to clone one there.
+
 ### Step 1 — fetch all sources into mirrors [LOGIN NODE]
 
 ```bash
+export HOSTNAME=$(hostname)        # Gotcha #15
 module load gcc/13.3.1-p20240614 cuda/12.6.1
 . $PROJECT/spack/share/spack/setup-env.sh
 cd $PROJECT/bessemer/environments/psc_gpu
 spack env activate .
 
+export SPACK_DISABLE_LOCAL_CONFIG=1      # as scripts/env.sh: nothing from ~/.spack
 spack bootstrap now                      # clingo etc. while online
+
+# ONLY when `scripts/setup.sh --plan` says resolve is to do (see "Before you
+# start"). On a current lock these two lines must be skipped:
 spack concretize -f
+../../scripts/envlock.sh record .        # the lock now matches spack.yaml
+
 spack mirror create -d $PROJECT/spack-mirror --all
-spack mirror add local_sources file://$PROJECT/spack-mirror
+spack mirror list | grep -q local_sources \
+  || spack mirror add --scope site local_sources file://$PROJECT/spack-mirror
 ```
+
+`--scope site` stores the mirror in your own Spack checkout
+(`$PROJECT/spack/etc/spack/site/`), not in the tracked `spack.yaml`, which stays
+the same for every Bridges-2 user. It is needed once per Spack checkout.
+`spack mirror create --all` is needed again after every re-resolve: it downloads
+only what the mirror lacks, and without it the install job fails at its first
+fetch (no internet on compute nodes).
 
 The warning `mirror ... cannot be used in concretization (no index found)` is
 benign — it refers to a *binary* index; this is a source mirror.
@@ -173,10 +146,9 @@ benign — it refers to a *binary* index; this is a source mirror.
 download on login, install later wherever you like, no network needed):
 
 ```bash
-$PROJECT/spack/opt/spack/.../python3 --version 2>/dev/null || true
-# use the env view's python once it exists; on a truly fresh system where the
-# view doesn't exist yet, defer this command to after Step 2 and run it on the
-# login node then. Wheel downloads need internet but not a working compiler.
+# Use the environment view's python3 (`which python3` -> .spack-env/view/bin).
+# On a truly fresh system the view doesn't exist yet: do this after Step 2,
+# on the login node. Wheel downloads need internet but not a working compiler.
 python3 -m pip download --only-binary=:all: -d $PROJECT/pip-wheels numba
 ```
 
@@ -187,6 +159,8 @@ distribution", the python/numpy pins need adjusting; nothing was harmed.
 **Checklist on `spack concretize -f` output:**
 
 - `mfem`, `hypre`, `libceed` all `+cuda cuda_arch=90`; hypre shows `ldflags=-ldl`
+- `mfem` shows `+mumps` and the commit pinned in `spack.yaml`; `mumps` is in the DAG
+- `py-pip` is a root (Step 4 needs it)
 - `suite-sparse ~cuda`; `ucx ~gdrcopy`
 - everything `target=x86_64_v3`, gcc 13.3.1
 - `cuda@12.6.1`, `slurm@22.05.11`, `gcc@13.3.1` flagged `[e]`
@@ -195,26 +169,24 @@ distribution", the python/numpy pins need adjusting; nothing was harmed.
 
 ### Step 2 — build [GPU COMPUTE NODE]
 
-Preferred: batch job (survives disconnects; see Gotcha #7). Script:
+Preferred: the batch job in the environment's directory (it survives
+disconnects; see Gotcha #7):
 
 ```bash
-#!/bin/bash
-#SBATCH -p GPU-shared
-#SBATCH --gres=gpu:v100-32:2
-#SBATCH -t 8:00:00
-#SBATCH -o spack-install-%j.out
-
-module load gcc/13.3.1-p20240614 cuda/12.6.1
-. $PROJECT/spack/share/spack/setup-env.sh
 cd $PROJECT/bessemer/environments/psc_gpu
-spack env activate .
-module list
-spack install -j $(nproc) --dirty --use-buildcache never
+sbatch install.sbatch
 ```
 
+[install.sbatch](../../environments/psc_gpu/install.sbatch) requests one H100
+slice for two hours, loads this node's compiler build and stops at once if it
+got the wrong one, installs from `spack.lock`, then runs Step 3's checks and
+Step 4's numba install, so one allocation covers Steps 2 to 4. Its output is
+`spack-install-<jobid>.out` in that directory.
+
 Or interactively (run inside `tmux` on the login node so disconnects don't kill
-it): `interact -p GPU-shared --gres=gpu:v100-32:2 -t 8:00:00`, then the same
-module/activate/install block by hand.
+it): `interact -p GPU-shared --gres=gpu:h100-80:1 -t 2:00:00`, then the
+commands of `install.sbatch` by hand, in its order. The order of its first
+lines matters (Gotcha #15).
 
 Flag rationale (all three matter):
 - `--dirty`: do NOT sanitize the build environment. Required so perl's direct
@@ -225,12 +197,18 @@ Flag rationale (all three matter):
 - `-j $(nproc)`: the cgroup-limited core share; `$nproc` without parens is an
   empty variable and means unlimited.
 
+Cost: you are charged for the time the job actually runs, not for the walltime
+limit, so the limit is only a ceiling. Rebuilding a few changed packages is far
+shorter than a from-scratch install.
+
 Walltime expiry mid-build is harmless: resubmit/re-request and rerun the same
 install command; Spack resumes at the first uninstalled package. `gmake` is the
 canary — if the first package configures past "checking whether the C compiler
 works... yes", the toolchain is sound.
 
 ### Step 3 — verify the compiled stack [GPU COMPUTE NODE]
+
+`install.sbatch` runs these at its end; by hand:
 
 ```bash
 which mpicxx                  # -> .spack-env/view/bin
@@ -240,7 +218,8 @@ ucx_info -v                   # cuda listed (gdrcopy absent, by design)
 
 ### Step 4 — install numba from the wheel mirror [ANY NODE]
 
-Works on compute nodes (no network needed — wheels are local) or the login node.
+`install.sbatch` does this at its end. By hand, it works on compute nodes (no
+network needed — wheels are local) or the login node.
 Compute node is the conservative choice since the view's python is guaranteed
 happy there:
 
@@ -270,63 +249,87 @@ interact -p GPU-shared --gres=gpu:h100-80:1 -t 2:00:00
 # module loads + setup-env + env activate, then:
 nvidia-smi --query-gpu=name,compute_cap --format=csv   # must report 9.0
 cd $PROJECT/bessemer
-./scripts/build.sh cuda                                # Gotcha #14 re: ccache
-INCNS_PRESET=cuda ./scripts/test.sh -L 'smoke|fast'    # CPU backend
+./scripts/build.sh cuda
+./scripts/test.sh cuda -L 'smoke|fast'                 # CPU backend
 ```
 
 `scripts/build.sh` and `scripts/test.sh` source `scripts/env.sh`, which resolves
 the machine and activates the env — no manual `cmake -DMFEM_DIR=...` needed.
 
-**Verified 2026-07-20:** builds clean on `w001`, and the fast tier passes 91/93
-on the **CPU** backend from the cuda build.
+**Verified 2026-10-10** (H100 nodes, `./scripts/test.sh cuda -L 'smoke|fast'` with
+`INCNS_DEVICE=cuda`): the fast tier passes on the CUDA backend at np 2 (60/60) and at
+np 1 except for two tests that time out when they share a card. np 4 and the slow tier
+have not been run with one GPU per rank. The details are in
+[docs/status.md](../status.md).
 
-**The `cuda` backend does not work yet — do not plan around it.** The runtime
-backend knob is the `INCNS_DEVICE` env var (there is no `-d` flag);
-`INCNS_DEVICE=cuda` currently segfaults across the solve path with
-`Signal code: Invalid permissions (2)`, i.e. host code dereferencing device
-memory. This is expected: the device port has not landed, and
-`scripts/debug_device.sh` says so explicitly and is the fitness function gating
-that work. **Hunt those violations with `scripts/debug_device.sh` on any
-machine** — it mprotects the host mirror and faults with a stack trace at the
-exact line, so a GPU allocation adds nothing.
+How to run the tests here:
 
-Known-open on this env as of 2026-07-20:
-
-- `unsteady_mms_test` np1/np2 fail inside hypre (`HypreSolver::Mult`, error code
-  1) on the 3D Cahouet–Chabard subtest; it passes at np4 and passes against a
-  desktop CPU hypre, so `hypre@2.33.0 +cuda` is the isolated variable.
-- `StokesOperator.CollocatedMassDiagonal2D/3D` fail *numerically* on `cuda`
-  (offdiag ~1.7e-3 against a 4.3e-16 tolerance): the collocated quadrature rule
-  does not survive the device partial-assembly kernels. Not a memory bug, so
-  device-annotation work will not fix it.
-- np4 against a single GPU hits `CUDA error: out of memory` — one rank per GPU.
+- **One GPU per rank.** Two ranks on a card are several times slower, four run out of
+  memory. Every np 1 test uses GPU 0, so run at most two tests at a time (`-j 2`).
+- **Turn Open MPI's core binding off** when tests run concurrently:
+  `export PRTE_MCA_hwloc_default_binding_policy=none`. Otherwise every `mpirun` pins
+  to the same first cores.
+- **`INCNS_DEVICE=cpu` in the cuda build is not a CPU reference.** Eight fast-tier tests
+  fail there inside the CUDA-built hypre and MFEM's cuSPARSE path (`amr_checkpoint_test`,
+  `amr_event_test`, `unsteady_mms_test` at np 1 and 2; `point_block_jacobi_test` at np 2
+  and 4); all pass on the CUDA backend.
 
 First GPU validation target is a Stokes case (e.g. TGV-Stokes), **not** the
 Re_tau=180 channel — that is gated Sprint-2 NSE work.
 
-### Production job template
+---
 
-```bash
-#!/bin/bash
-#SBATCH -p GPU
-#SBATCH -N 1
-#SBATCH --gres=gpu:h100-80:8
-#SBATCH -t 8:00:00
+## Updating after `spack.yaml` changes
 
-module load gcc/13.3.1-p20240614 cuda/12.6.1
-. $PROJECT/spack/share/spack/setup-env.sh
-cd $PROJECT/bessemer/environments/psc_gpu
-spack env activate .
+When `environments/psc_gpu/spack.yaml` changes (a new variant, a moved pin), the
+committed `spack.lock` can be older than it. `scripts/setup.sh --plan` and
+`scripts/doctor.sh` then report "spack.yaml changed since spack.lock was
+resolved". To bring the install up to date:
 
-cd $PROJECT/bessemer
-INCNS_DEVICE=cuda mpirun -np 8 ./build/cuda/apps/run_case <case>   # one rank per GPU
-```
+1. **[LOGIN NODE]** the Step 1 block again: `spack concretize -f`,
+   `envlock.sh record`, `spack mirror create --all`. With `reuse: true` only the
+   changed packages and what depends on them are new, and the mirror step
+   downloads just their sources. Go through the checklist.
+2. **[GPU COMPUTE NODE]** the Step 2 job. Spack builds only what isn't installed
+   yet, so this is much shorter than the first install.
+3. Step 3's checks, then rebuild bessemer (Step 5).
+4. Commit `spack.lock` and `spack.yaml.sha256` together (an agent: only when
+   the human asks; AGENTS.md rule 8).
 
-(`INCNS_DEVICE` is the backend knob; there is no `-d` flag. This template is
-aspirational until the device port lands — see Step 5.)
+---
 
-GPU partition = whole nodes, GPU counts in multiples of 8, 16 SU/node-hr on
-H100. `srun --mpi=pmix -n 8` also works.
+## The CPU-only environment (`psc_cpu`)
+
+`environments/psc_cpu` is the same stack with no CUDA in it: MFEM, hypre,
+libCEED, Open MPI, UCX and hwloc are all `~cuda`. It is for CPU reference runs
+and the `cpu` build preset; `psc_gpu` stays the environment for the `cuda`
+preset.
+
+- **Same procedure, other directory.** Every step on this page applies with
+  `environments/psc_cpu` in place of `environments/psc_gpu`, including its own
+  `install.sbatch`. Load only the `gcc` module (no `cuda/12.6.1`); Step 3's CUDA
+  checks don't apply. The two
+  environments share one Spack and one source mirror, and most packages are the
+  same builds, so the second install is short.
+- **Selecting it.** Hostnames map Bridges-2 to `psc_gpu`
+  (`environments/psc_gpu/hosts`). For the CPU environment set
+  `INCNS_MACHINE=psc_cpu` in the shell or job, or make it this checkout's
+  default with `echo psc_cpu > environments/.machine`.
+- **Building bessemer with it** (Step 5): on a compute node, with
+  `INCNS_MACHINE=psc_cpu` set, `./scripts/build.sh cpu` and
+  `./scripts/test.sh cpu -L fast`.
+- **One preset per environment.** Build trees are named by preset, not by
+  environment: build `cpu` (and `cpu-python`) with `psc_cpu` and `cuda` with
+  `psc_gpu`. Building the same preset with both in one checkout mixes two MFEMs
+  in one build tree.
+- **Nodes.** It uses the `b2gpu` compiler build, because GPU nodes are where an
+  allocation with only GPU service units builds and runs. The code is plain
+  x86_64_v3 with no GPU dependency. For the RM (CPU) partitions, which need a
+  Regular Memory allocation, pin the `b2rm` compiler build instead and resolve
+  again.
+- **Status (2026-10-10):** resolved and mirrored, not installed.
+- **Every `~cuda` in its `spack.yaml` is needed**: with `reuse: true` Spack
+  would otherwise pick up `psc_gpu`'s CUDA builds from the shared store.
 
 ---
 
@@ -388,9 +391,11 @@ nodes where you hold a job). A dying Ocean mount or expiring walltime produces
 `[Errno 108] ... transaction_lock` and a cascade of phantom package "failures"
 that vanish on retry. Defenses: batch jobs for anything long; `tmux` on the
 login node wrapping any interactive session; short walltimes + resume semantics.
-Stale lock after a crash: `rm .spack-env/transaction_lock` (safe when no spack
-process is running). Also: only one GPU-shared job may be queued/running at
-once (QOSMaxSubmitJobPerUserLimit) — a zombie session blocks new requests.
+Stale lock after a crash: `rm .spack-env/transaction_lock` (safe only when no
+spack process is running anywhere: check `squeue -u $USER` for an install job
+first). Also: only one interactive (`interact`) GPU session may be queued/running
+at once (QOSMaxSubmitJobPerUserLimit) — a zombie session blocks new requests.
+Batch jobs are not limited this way.
 
 ### 8. hypre+cuda needs explicit `-ldl` on RHEL8
 
@@ -426,7 +431,10 @@ occur.
 ### 12. Scheduling economics
 
 - Compiling doesn't need H100s: nvcc needs only the toolkit, and cuda_arch is a
-  compile-time flag. V100-32 slices (1 SU/GPU-hr, 24 nodes) are the sweet spot;
+  compile-time flag. `install.sbatch` still asks for one H100, because that is
+  the configuration that has been run (2026-10-10: a five-package top-up took
+  10 minutes); a V100 build of the current stack is untried. On paper V100-32
+  slices (1 SU/GPU-hr, 24 nodes) are the cheaper cores;
   v100-16 is the same price but only 9 nodes (often the slower queue). CPU
   share scales with GPU count (~5 cores/GPU on V100 nodes; more on H100).
 - Check availability before queueing: `sinfo -N -p GPU-shared -o "%N %G %t %C"`
@@ -449,43 +457,63 @@ passthrough was correct only by accident — which is why this never reproduced 
 the desktop, and why it will resurface on the next CUDA cluster if that
 translation is ever removed.
 
-### 14. `ccache` is absent from the env, but the CMake presets require it
+### 14. `ccache` is absent from the env; the build goes without it
 
-The first build dies instantly: every compile line exits `code=127` with
-`/bin/sh: ccache: command not found`. The `cpu` preset (which `cuda` inherits)
-hardcodes `CMAKE_CXX_COMPILER_LAUNCHER=ccache`, and psc_gpu's spack.yaml does
-not include ccache. Workaround:
-`cmake --preset cuda -DCMAKE_CXX_COMPILER_LAUNCHER=`. Proper fix (**not yet
-done**): add `ccache` to `environments/psc_gpu` — that is a source fetch, so it
-belongs in Step 1 on the login node. Until then every rebuild on Bridges-2 is a
-cold full build, which makes iterating inside a walltime-limited allocation
-needlessly slow.
+The `cpu` preset (which `cuda` inherits) sets
+`CMAKE_CXX_COMPILER_LAUNCHER=ccache`, and neither Bridges-2 environment includes
+ccache. The first builds here died instantly, every compile line exiting
+`code=127` with `/bin/sh: ccache: command not found`. `CMakeLists.txt` now drops
+the launcher when it isn't on `PATH` (it prints "building without it"), so
+`scripts/build.sh` works as it is. The cost is that every rebuild is a cold
+build. To get warm rebuilds, add `ccache` to the environment's `spack.yaml` and
+update it (it is a source fetch, so the login-node step comes first).
+
+### 15. The gcc module needs `HOSTNAME` exported, and it must be this node's
+
+The gcc modulefile chooses `b2rm` or `b2gpu` from the `HOSTNAME` environment
+variable. Two ways that goes wrong:
+
+- **Unset:** only `/etc/profile` exports it, so only login shells have it. A
+  command sent over ssh (`ssh bridges2 '<cmd>'`, which is how an agent on
+  another machine works) gets a non-login shell: `module load gcc/...` fails
+  with `attempt to index a nil value (local 'hostname')` and every later
+  command silently uses the system gcc 8.5.
+- **Stale:** bash keeps an inherited `HOSTNAME` instead of recomputing it, and
+  `sbatch` passes the submitting shell's environment to the job. A job
+  submitted from a login node can therefore load the `b2rm` build on a GPU
+  node (not yet confirmed on a compute node; same family as Gotcha #1).
+
+Fix for both: `export HOSTNAME=$(hostname)` immediately before the
+`module load` line, as every block in this document does. In a batch job the
+submitting shell's loaded gcc module is inherited as well, so `install.sbatch`
+first unloads it (while `HOSTNAME` still names the login node, so the right
+paths are removed) and then checks that `gcc` is the `b2gpu` build. Check with
+`which gcc`: it must be under `/opt/packages/gcc/`, not `/usr/bin`.
 
 ---
 
 ## Quick-reference: rebuild from absolute zero
 
+For a machine with nothing installed. Anywhere else, start at "Before you
+start": this block re-resolves the lock, which must not happen under a queued
+or running install job.
+
 ```bash
 # LOGIN NODE ---------------------------------------------------------------
 cd $PROJECT && git clone -c feature.manyFiles=true https://github.com/spack/spack.git
 . $PROJECT/spack/share/spack/setup-env.sh
+export HOSTNAME=$(hostname)        # Gotcha #15
 module load gcc/13.3.1-p20240614 cuda/12.6.1
 cd $PROJECT/bessemer/environments/psc_gpu
 spack env activate .
+export SPACK_DISABLE_LOCAL_CONFIG=1
 spack bootstrap now
 spack concretize -f                      # verify checklist; no b2rm; no llvm
+../../scripts/envlock.sh record .
 spack mirror create -d $PROJECT/spack-mirror --all
-spack mirror add local_sources file://$PROJECT/spack-mirror
+spack mirror add --scope site local_sources file://$PROJECT/spack-mirror
 python3 -m pip download --only-binary=:all: -d $PROJECT/pip-wheels numba
 
-# GPU COMPUTE NODE (batch preferred; else interact inside tmux) -------------
-module load gcc/13.3.1-p20240614 cuda/12.6.1
-. $PROJECT/spack/share/spack/setup-env.sh
-cd $PROJECT/bessemer/environments/psc_gpu
-spack env activate .
-spack install -j $(nproc) --dirty --use-buildcache never
-ompi_info | grep -i cuda && ucx_info -v            # verify MPI stack
-which python3                                      # -> .spack-env/view/bin
-python3 -m pip install --no-index --find-links=$PROJECT/pip-wheels numba
-python3 -c "from numba import cfunc; print('cfunc OK')"
+# GPU COMPUTE NODE: the install job (Steps 2-4). Ask the human first. -------
+sbatch install.sbatch                    # output: spack-install-<jobid>.out
 ```

@@ -1,3 +1,7 @@
+# environments/psc_gpu/spack.yaml -- PSC Bridges-2 H100 nodes: the stack with
+# CUDA (cuda_arch=90). The compiler is the GPU nodes' build of GCC (b2gpu), so
+# the compiler and most of what it built run on the GPU nodes and crash on the
+# login nodes ("Illegal instruction"). Procedure: docs/install/bridges2.md.
 spack:
   specs:
     # MUMPS (human 2026-10-09): MFEM's +mumps (MFEM_USE_MUMPS; pulls MUMPS and
@@ -35,6 +39,9 @@ spack:
     - py-pybind11
     - py-numpy
     #- py-numba
+    # pip installs the numba wheel (docs/install/bridges2.md, Step 4); the
+    # environment's Python has none otherwise.
+    - py-pip
 
   packages:
     all:

@@ -1,0 +1,91 @@
+# environments/psc_cpu/spack.yaml -- PSC Bridges-2, CPU only: the psc_gpu stack
+# with no CUDA anywhere (MFEM, hypre, libCEED, Open MPI, UCX, hwloc). For CPU
+# reference runs and the cpu preset on Bridges-2. It uses the same compiler
+# build as psc_gpu (b2gpu), because the GPU nodes are where it is built and
+# run; the code is plain x86_64_v3. Procedure: docs/install/bridges2.md.
+#
+# Every ~cuda below is deliberate. With `reuse: true` Spack prefers what is
+# already installed, and psc_gpu's CUDA builds share this Spack: without the
+# explicit ~cuda it would quietly pick those up.
+spack:
+  specs:
+    # MUMPS (human 2026-10-09): MFEM's +mumps (MFEM_USE_MUMPS; pulls MUMPS and
+    # ScaLAPACK). No OpenMP in MUMPS: one MPI rank per core here, and OpenMP
+    # threads per rank would oversubscribe. METIS/ParMETIS orderings.
+    # MFEM pinned (human 2026-10-09) to master just before PR #5297 ("General
+    # NC mesh spacing in parallel", https://github.com/mfem/mfem/pull/5297):
+    # its ParMesh::AnisotropicConflict segfaults on nonconforming 3D hex meshes
+    # at np >= 2 (reported upstream 2026-10-09). Drop the pin once fixed.
+    - mfem@develop commit=1c19aba72a2b91ee918a332e668cf00922848321
+      ~cuda+gslib+lapack+libceed+mpi+mumps+shared+suite-sparse
+      ^gslib@1.0.9 cflags="-fPIC"
+      ^mumps+metis+parmetis~openmp
+      ^hypre~cuda
+      ^libceed~cuda
+      ^suite-sparse~cuda
+
+    - cmake
+    - ninja
+    - openmpi~cuda fabrics=ucx schedulers=slurm
+      ^ucx~cuda~gdrcopy+verbs+rc+ud+dc+mlx5_dv
+      ^hwloc~cuda
+
+    - googletest
+    - astyle
+    - yaml-cpp
+
+    # Python interface: our own pybind11 bindings over the incns Case surface
+    # (PyMFEM is never used). numba is NOT built by Spack: it is pip-installed
+    # as a manylinux wheel (docs/install/bridges2.md, Step 4), which avoids a
+    # multi-hour LLVM source build. Keep py-numpy inside numba's supported window.
+    - python@3.12
+    - py-pybind11
+    - py-numpy
+    #- py-numba
+    # pip installs the numba wheel (docs/install/bridges2.md, Step 4); the
+    # environment's Python has none otherwise.
+    - py-pip
+
+  packages:
+    all:
+      require:
+      - target=x86_64_v3
+      providers:
+        mpi: [openmpi]
+    # Spack v1.x: compilers are dependencies. Do NOT put "%gcc" under
+    # all:require (breaks externals like slurm). Use language virtuals:
+    c:
+      require:
+      - gcc@13.3.1
+    cxx:
+      require:
+      - gcc@13.3.1
+    fortran:
+      require:
+      - gcc@13.3.1
+    gcc:
+      externals:
+      - spec: gcc@13.3.1 languages:='c,c++,fortran'
+        prefix: /opt/packages/gcc/v13.3.1-p20240614/b2gpu
+        modules:
+        - gcc/13.3.1-p20240614
+        extra_attributes:
+          compilers:
+            c: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gcc
+            cxx: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/g++
+            fortran: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gfortran
+          environment:
+            prepend_path:
+              LD_LIBRARY_PATH: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/lib64
+      buildable: false
+    slurm:
+      buildable: false
+      externals:
+      - spec: slurm@22.05.11
+        prefix: /usr
+
+  concretizer:
+    unify: when_possible
+    reuse: true
+
+  view: true
