@@ -36,6 +36,14 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   `gcc@14.2.0` on Apple Silicon (`docs/install/spack.md`, "The compiler"). The rest of the
   setup on macOS is **not yet verified**: resolve, install, build and the fast tier are
   still ahead on this machine; update this entry with what they find.
+- **`gcc@14.2.0` then failed in libsanitizer** (~50 min in; configure and everything
+  before it passed): linking `libasan.8.dylib` crashes Apple's linker, `ld: Assertion
+  failed: (entry.toAddend < 0x400000), function encodeSectionReloc` (CLT 16.3.0,
+  ld-1167.4.1, macOS 15.6.1, arm64). Spack's gcc has a `libsanitizer` variant (default on).
+  Fix on the branch (human 2026-10-10): `gcc@14.2.0~libsanitizer` on macOS. Cost: no GCC
+  `libasan`, so the `cpu-asan` preset / `scripts/asan.sh` is not available on a Mac; the
+  sanitizer sweep is not tested there (Apple clang's runtime is an untested alternative).
+  `-ld_classic` still exists in this ld but is deprecated.
 - **Not fixed, seen on the way:** `JOBS` falls back to 4 on macOS (no `nproc`; the plan
   said `-j 4` on an 8-core machine): use `sysctl -n hw.ncpu`. `docs/install/spack.md` and
   `desktop.md` still say 14.3.0 as the one compiler.

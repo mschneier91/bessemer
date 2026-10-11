@@ -29,9 +29,12 @@ export INCNS_REPO_ROOT
 GCC_SPEC=gcc@14.3.0
 # Spack's gcc recipe has no aarch64-darwin patches for 14.3.0 (only up to 14.2.0):
 # the build stops at configure with "Configuration aarch64-apple-darwin... not
-# supported". Apple Silicon Macs get 14.2.0, which Spack prefers there.
+# supported". Apple Silicon Macs get 14.2.0, which Spack prefers there. Without
+# libsanitizer too: linking libasan.8.dylib crashes Apple's ld (CLT 16.3,
+# "Assertion failed: (entry.toAddend < 0x400000)"). So no GCC ASan/UBSan runtime
+# on a Mac: scripts/asan.sh is not available there.
 if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
-  GCC_SPEC=gcc@14.2.0
+  GCC_SPEC=gcc@14.2.0~libsanitizer
 fi
 SPACK_URL=https://github.com/spack/spack.git
 : "${SPACK_ROOT:=$HOME/spack}"

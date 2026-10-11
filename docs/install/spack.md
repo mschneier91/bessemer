@@ -104,6 +104,9 @@ site's GCC module instead; `psc_gpu` does this.
 Sandoe's aarch64-darwin patches only up to 14.2.0; 14.3.0 stops at configure with
 `Configuration aarch64-apple-darwin24.6.0 not supported`. `setup.sh` picks the version by
 platform. Every `14.3.0` in the YAML above is then the GCC version `setup.sh` built.
+It builds it `~libsanitizer` too: linking `libasan.8.dylib` crashes Apple's linker (CLT 16.3,
+`Assertion failed: (entry.toAddend < 0x400000)`). A Mac therefore has no GCC ASan/UBSan
+runtime, and `scripts/asan.sh` (the `cpu-asan` preset) is not available there.
 
 The `desktop` environment predates this pattern: there Spack chose to build gcc 14.3.0 as
 an ordinary dependency, because the system GCC has no Fortran. The result is the same.
