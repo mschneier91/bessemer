@@ -55,6 +55,46 @@ within their own sampling error. Therefore:
 2. **Keep the level-1 final checkpoint** (`runs/re1000/l1/chk`, rolling, written at the end)
    before anything reuses the directory. It is a developed state at 9,003 elements.
 
+### 2a. Result of the first full run (level 1, 2026-10-11)
+
+`runs/re1000/l1/re1000_l1.yaml`: tolerance 0.25, `min_size` 0.1, cap 9,000, t_final 160,
+np 4. Status ok, 6,429 steps, **295 min** (4.9 h), 9,003 elements from t = 40 to the end
+(**cap-limited again**: 160,062 velocity + 35,348 pressure dofs), dt 0.0188 at the
+smallest after start-up, median 0.025. Post-processed with `runs/re1000/l1_stats.py`
+(history, t >= 90, mesh fixed; t >= 60 for comparison):
+
+| Quantity | t in [90, 160] | t in [60, 160] | Note |
+|---|---|---|---|
+| C_D mean | 2.07-2.10 +- ~0.07 (3 %) | 2.06 +- ~0.03-0.05 (2 %) | ten-unit blocks run 1.84-2.29 |
+| C_L rms | 1.28 +- ~0.06 (5 %) | 1.30 +- ~0.02-0.05 (1-4 %) | blocks 1.09-1.48 |
+| Strouhal, spectral peak | 0.100 (res. 0.014) | 0.100 (res. 0.010) | next peaks 0.19 (0.186, 0.190) |
+| Strouhal, C_L up-crossing rate | 0.157 (11 crossings) | 0.160 (16) | blocks 0.15-0.20 |
+
+**What this says.**
+- The sampling error is **2-5 % at 70-100 time units**, well above the 1-2 % target. The
+  batch-means estimates themselves are crude with 4-9 batches (lag-1 correlations of the
+  batch means run from -0.8 to +0.8), so the "window needed for 1 %" scatters from ~130 to
+  ~1,500 time units; the honest reading is **several hundred**, and perhaps a thousand.
+- At this cost (~40 steps x 3 s = ~2 min per time unit at 9,000 elements, np 4 on the
+  Air) 500 time units is ~17 h and 1,000 is ~33 h, **per level**, before any mesh is
+  refined. The averaging window, not the mesh, is what dominates the campaign.
+- The Strouhal number is not one number: the spectrum has two comparable peaks (~0.10 and
+  ~0.19, about a factor 2), and the mean up-crossing rate (0.16) sits between them. A
+  convergence criterion has to be stated on the spectrum (peak positions), not on one St.
+- The deck's `forces.periodic` reports `found: true` with a **period spread of 1.34**,
+  i.e. the "10 periods" are 10 up-crossings of very unequal length; its `strouhal`
+  (0.1657) is the crossing rate and carries no warning. Do not read it as a periodic result.
+- The summary's `reference` block compares with the **Re 200 paper values** (C_D 1.44,
+  C_L,rms 0.42, St 0.151): the Re 1000 deck inherited them (agent error: the block should
+  have been removed). Its relative errors (44 %, 201 %, 10 %) mean nothing.
+
+**Consequence for the plan.** A 1-2 % check between levels needs either (a) windows of
+hundreds of time units per level, ~17-33 h each here, or (b) an ensemble of independent
+shorter windows, which parallelises across machines but not across this Mac's four
+cores. Or the criterion is stated as it can be tested: differences between levels
+against the sampling error (which is 2-5 % per 100 time units). That is the human's
+decision (section "Decisions").
+
 ## 3. Two cheap tests (<= 30 min each, np 4)
 
 - **T1, restart with changed AMR parameters.** Restart from the level-1 checkpoint with
@@ -73,7 +113,9 @@ enough that it never binds (check at the end: final elements < cap, count levell
 itself; a flat count equal to the cap means the level is cost-limited and does not count).
 
 Cost model (assumptions): wall = steps x 0.35 ms x elements; steps = T / dt with
-T = 30 (equilibrate after restart) + T_avg (taken as 100, to be set by section 2);
+T = 30 (equilibrate after restart) + T_avg (taken as 100 in the table; section 2a shows
+100 gives a 2-5 % sampling error, so for 1 % it is several hundred and the wall times
+below scale by 3-8x);
 elements x2-3 and dt x0.4-0.5 per level (dt at `min_size` 0.1 -> 0.2 went 0.025 -> 0.072,
 a factor 2.9, so the dt factor may be nearer 0.35).
 
