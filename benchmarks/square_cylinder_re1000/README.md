@@ -33,9 +33,11 @@ Memory is about 44 KB per element (measured at 12 k elements), so a cap of 100 k
   bar is above the target), add `restart: <chk dir>` to the deck at the same rank count and
   raise `time.t_final` (a restart with a larger `t_final` has **not been tried yet**; the
   checkpoint is written, so try it before relying on it).
-- No `reference:` block, and `forces.statistics` is off: at Re 1000 the shedding is
-  modulated and broadband, so the deck's period finder reports meaningless "periods".
-  Statistics come from the per-step history (`output.history`).
+- No `reference:` block. Keep `forces.statistics: true`: it also enables the per-step force
+  evaluation, and with it off the history's C_D and C_L are `nan` (found the hard way:
+  two runs were lost). At Re 1000 the shedding is modulated and broadband, so the summary's
+  `forces.periodic` block (the period finder) is meaningless: ignore it. Statistics come from
+  the per-step history (`output.history`) and `analyze.py`.
 - More than 4 ranks, or a 3D mesh above 32^3, or a GPU, needs the human's approval
   (AGENTS.md rule 3).
 

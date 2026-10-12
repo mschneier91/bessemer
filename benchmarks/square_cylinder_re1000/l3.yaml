@@ -16,9 +16,11 @@
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/square_cylinder_re1000/l3.yaml
 #   python3 benchmarks/square_cylinder_re1000/analyze.py sqcyl_re1000_l3/sqcyl_re1000_l3_history.csv
 #
-# The deck's own summary has no `reference` block (the published values are for Re 200) and
-# `forces.statistics` is off: at Re 1000 the shedding is broadband, so its period finder
-# reports meaningless "periods". Use the per-step history and analyze.py.
+# The deck's own summary has no `reference` block (the published values are for Re 200).
+# `forces.statistics` must stay on: it also switches on the per-step force evaluation, and
+# with it off the history's C_D and C_L are nan. At Re 1000 the shedding is broadband, so the
+# summary's forces.periodic block (the period finder) is meaningless: ignore it, and use the
+# per-step history with analyze.py.
 
 equation: navier_stokes
 
@@ -77,7 +79,8 @@ forces:
   reference_velocity: 1.0
   reference_area: 1.0       # D (a length in 2D)
   interval: 0               # no CSV log; the history and summary carry them
-  statistics: false         # the period finder needs periodic shedding; use the history CSV
+  statistics: true          # REQUIRED for the per-step C_D, C_L in the history (false gives nan);
+  average_periods: 10       # the summary's forces.periodic block is meaningless at Re 1000: ignore it
 
 output:
   path: sqcyl_re1000_l3

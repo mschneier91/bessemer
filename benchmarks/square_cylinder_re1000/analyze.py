@@ -41,6 +41,9 @@ def load(path):
         for r in csv.DictReader(f):
             t.append(float(r["t"])); cd.append(float(r["c_d"])); cl.append(float(r["c_l"]))
             el.append(int(r["elements"])); dt.append(float(r["dt"])); wall.append(float(r["step_wall"]))
+    if not np.isfinite(np.array(cd)).any():
+        sys.exit(f"{path}: C_D and C_L are all nan: the run had forces.statistics: false "
+                 "(it also switches the force evaluation off). Rerun with it on.")
     return [np.array(x) for x in (t, cd, cl, el, dt, wall)]
 
 
