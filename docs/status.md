@@ -9,6 +9,18 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Branch `mesh-census` (2026-10-12, not merged): `apps/mesh_census`**, to check the
+`amr.end_time: 60` freeze of the Re 1000 ladder (human: "how are we confident that having
+the mesh stopping expanding at t=60 is the right call?"; "go build check2 now, make sure
+you document somewhere what it is used for": documented in
+benchmarks/square_cylinder_re1000/README.md, "Is the mesh freeze safe?"). `amr/mesh_census`
+counts elements per streamwise band; `ReplayMeshCensus` rebuilds a checkpointed run's mesh
+pass by pass (as a restart does). Test `mesh_census_test` C1 (exact band counts on a box),
+C2 (replay = the run's final mesh). First reading on L2's t = 29 checkpoint: the band
+around the square saturated by t ~ 24, the growth is a front moving downstream; to be
+repeated on the t ~ 40 and t = 60 checkpoints. Next for the freeze question: the A/B
+branch from a t = 60 checkpoint (AMR continuing vs frozen), cheapest at l1.
+
 **Branch `re10k-plan` (2026-10-12, not merged): the Re 10 000 plan and its files, and two
 restart bugs fixed.** Human: "write all the stuff for the Re=10k case"; Bridges-2
 allocation 5 000 core-hours, CPU only ("I don't want to use GPUs for the 2D stuff").

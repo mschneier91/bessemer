@@ -23,3 +23,8 @@ target_link_libraries(dfg_cylinder PRIVATE incns)
 # CFL-controlled steps, AMR in simulated time, live dt/force progress.
 add_executable(square_cylinder square_cylinder.cpp)
 target_link_libraries(square_cylinder PRIVATE incns)
+
+# Where a checkpointed AMR run put its elements, pass by pass (checks an
+# amr.end_time freeze; benchmarks/square_cylinder_re1000/README.md).
+add_executable(mesh_census mesh_census.cpp)
+target_link_libraries(mesh_census PRIVATE incns)

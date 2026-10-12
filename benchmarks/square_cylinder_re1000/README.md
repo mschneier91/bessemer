@@ -69,6 +69,49 @@ exceeds both twice the sampling error and 2 % of the value. `--save DIR` writes
 element count, the wall time, the commit). Those files are what gets committed; the raw
 histories and the field output stay in the git-ignored `runs/`.
 
+## Is the mesh freeze safe? (`apps/mesh_census`)
+
+AMR here only refines (coarsening would break the time-stepping history), so behind the
+shed vortices the mesh grows for as long as AMR runs. `amr.end_time: 60` freezes it. That is
+safe for the forces if the region near the body is fully refined well before t = 60 and
+the growth that is cut off is far downstream, where it does not reach the forces. Whether
+it is, nobody had measured (human 2026-10-12: "how are we confident that having the mesh
+stopping expanding at t=60 is the right call?").
+
+`apps/mesh_census` answers the first half. It rebuilds a run's mesh from a checkpoint,
+one refinement pass at a time exactly as a restart does, and counts the elements per band
+of distance downstream of the square after each pass. It only reads; run it at the run's
+rank count, on a copy of the checkpoint (a running job overwrites it in place):
+
+```sh
+cp -r chk_l2 /tmp/chk_l2_copy
+mpirun -np 4 build/cpu/apps/mesh_census -d benchmarks/square_cylinder_re1000/l2.yaml \
+    -c /tmp/chk_l2_copy -H sqcyl_re1000_l2/sqcyl_re1000_l2_history.csv \
+    -b -2,2,5,10,20,40,60 -e 3 -o l2_census.csv
+```
+
+Reading it: the freeze is safe for the near field if the bands within ~10 D of the square
+have stopped growing well before t = 60. The second half, whether the forces depend on the
+far wake left coarse, needs a run: branch a level from its t = 60 checkpoint with AMR
+continuing (`amr.end_time` 130) and compare the statistics over t = 60-130 with the frozen
+run (cheapest at l1).
+
+**First reading, L2 at t = 29 (checkpoint of 2026-10-12, 29 passes):** elements per band of
+x (the square at 0):
+
+| t | total | < -2 | -2..2 | 2..5 | 5..10 | 10..20 | >= 20 |
+|---|---|---|---|---|---|---|---|
+| 21 | 5,980 | 229 | 1,946 | 2,704 | 467 | 274 | 360 |
+| 24 | 8,274 | 229 | 1,948 | 3,502 | 1,940 | 295 | 360 |
+| 27 | 11,214 | 229 | 2,038 | 3,630 | 4,609 | 348 | 360 |
+| 29 | 13,083 | 229 | 2,042 | 3,899 | 5,858 | 695 | 360 |
+
+The band around the square stopped growing by t ~ 24 (its smallest cells, 0.058, are close
+to the `min_size` floor of 0.05); 2-5 D is slowing (+7 % from t = 27 to 29); the growth is a front moving
+downstream (5-10 D filling now, 10-20 D starting, nothing refined beyond 20 D yet). Refined
+elements reach |y| = 7 D in 2-20 D: the wake is wide. Not conclusive yet: the same reading
+at the t ~ 40 and t = 60 checkpoints says whether 2-10 D stop growing before the freeze.
+
 ## What to quote, and what not to
 
 - **C_D mean, C_L rms and the Strouhal number** are the quantities (human 2026-10-11). C_L

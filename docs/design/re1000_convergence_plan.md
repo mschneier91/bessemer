@@ -31,7 +31,7 @@ mesh was cost-limited; that happened to the first 9,000-element run).
 | Item | Value | Why |
 |---|---|---|
 | `t_final` | 130 | spin-up ~30 (the first level-1 run was stationary from t ~ 20-30) + 100 averaging; extend from the checkpoint while the error bar is above target |
-| `amr.end_time` | 60 | the mesh is fixed for the averaging window, and the far wake is not refined for ever (to be checked: it assumes the forces do not depend on it) |
+| `amr.end_time` | 60 | the mesh is fixed for the averaging window, and the far wake is not refined for ever (to be checked: it assumes the forces do not depend on it; `apps/mesh_census` measures where the mesh grows: benchmarks/square_cylinder_re1000/README.md, "Is the mesh freeze safe?") |
 | averaging window | t >= 30 | |
 | `forces.statistics` | off | the period finder needs periodic shedding; it reports `found: true` with a period spread of 1.34 at Re 1000 and a Strouhal number that is just the crossing rate |
 | `reference:` block | none | the paper values are for Re 200 |

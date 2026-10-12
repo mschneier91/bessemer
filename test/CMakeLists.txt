@@ -163,6 +163,7 @@ incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
 incns_add_mpi_test(run_monitor_test run_monitor_test.cpp)
 incns_add_mpi_test(deck_boundary_test deck_boundary_test.cpp)
 incns_add_mpi_test(channel_statistics_test channel_statistics_test.cpp)
+incns_add_mpi_test(mesh_census_test mesh_census_test.cpp)
 incns_add_mpi_test(benchmark_setup_test benchmark_setup_test.cpp
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # The benchmark comparison scripts against their own reference data

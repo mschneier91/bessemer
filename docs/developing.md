@@ -111,7 +111,8 @@ src/
                walls), square_cylinder (Joly et al. 2012 domain), mesh_file (Gmsh/MFEM
                files, Gmsh $PhysicalNames -> boundary names), mesh_size_coefficient
   amr/         amr_parameters, gradient_indicator (nvcc), refinement_marker, mesh_adapter
-               (refine/rebalance + exact transfer, RefinementRecord), history_projection
+               (refine/rebalance + exact transfer, RefinementRecord), history_projection,
+               mesh_census (elements per streamwise band; replays a checkpoint's passes)
   spaces/      mixed_spaces (velocity/pressure ParFESpaces, block offsets)
   operators/   stokes_operator (blocks, PA; grad-div; LOR source; rotation term N),
                convection (dealiased (u.grad)u), rotational_convection (N(w*), nvcc),
@@ -141,7 +142,7 @@ src/
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
                square_cylinder (Joly et al. 2012, AMR + live dt tracking), unsteady_mms_3d,
-               hello_mpi
+               mesh_census (where a checkpointed AMR run refined, pass by pass), hello_mpi
 bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not ctest);
                dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
 benchmarks/    standard benchmarks: decks, reference data (CSV + citation, fetched by

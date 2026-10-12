@@ -163,6 +163,9 @@ stability limit; pass `-dt 0.001`.)
   (John's volume-integral method) in `<path>/<name>_forces.csv`.
 - **Checkpoints:** `checkpoint.enabled`; restart with `restart: <dir>` at the same rank
   count.
+- **Where an AMR run refined:** `apps/mesh_census -d <deck> -c <checkpoint>` rebuilds the
+  mesh from a checkpoint pass by pass and counts elements per streamwise band (for
+  checking an `amr.end_time` freeze; benchmarks/square_cylinder_re1000/README.md).
 
 ## 6. Resources
 
