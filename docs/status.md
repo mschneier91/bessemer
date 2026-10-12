@@ -96,6 +96,13 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   build -> doctor -> case -> fast tier. **Not run on the Mac:** the slow tier,
   `scripts/asan.sh`, the Python tests (`cpu-python` preset), `scripts/docs.sh` (Doxygen),
   `scripts/debug_device.sh`.
+- **Re 1000 convergence benchmark added (2026-10-11):** `benchmarks/square_cylinder_re1000/`
+  (decks l05, l1, l2, l3; `analyze.py`: batch-means statistics and spectral peaks, level
+  differences against the error bar, `--save`; README with the protocol). Plan:
+  `docs/design/re1000_convergence_plan.md`. The ladder halves AMR tolerance and `min_size`
+  per level; `t_final` 130, AMR to t = 60. L0.5 and L1 were started on the Mac; L2 and L3
+  are for the desktop or HPC. **Not yet verified:** a restart with a larger `t_final`, and
+  everything on Linux. `analyze.py` was tested only on the Mac's histories.
 - **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
   machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
   AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck
