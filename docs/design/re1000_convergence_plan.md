@@ -95,6 +95,44 @@ cores. Or the criterion is stated as it can be tested: differences between level
 against the sampling error (which is 2-5 % per 100 time units). That is the human's
 decision (section "Decisions").
 
+### 2b. Resolution study of the start-up transient (2026-10-11, t <= 30, same start)
+
+Decks `runs/re1000/study/*.yaml` (Re 1000 deck, `reference` block removed, OIFS CFL 2
+unless stated, np 4, cap 20,000-40,000 as a fuse that never bound). Level 1 is the probe.
+
+| Run | tol / `min_size` | elements at t = 30 | steps | dt median | wall |
+|---|---|---|---|---|---|
+| L0.5 | 0.5 / 0.2 | 2,182 | 529 | 0.057 | 5.6 min |
+| L1 | 0.25 / 0.1 | 4,994 | 1,076 | 0.027 | 17 min |
+| L2 | 0.125 / 0.05 | 13,083 | 2,072 | 0.014 | 80 min |
+| L1, CFL 1 | 0.25 / 0.1 | 5,015 | 2,127 | 0.013 | 24.5 min |
+
+Elements grew x2.3 then x2.6 per level (the planning rule of x2-3 held at t = 30; at t = 18
+L2 had only 4,598, the wake refines late). Events and window statistics (t in [10, 30]):
+
+| Run | first C_D peak after t = 3 | C_D mean | C_L rms | max |C_L| |
+|---|---|---|---|---|
+| L0.5 | (8.6, 1.45): misses the early spike | 1.61 | 1.14 | 2.27 |
+| L1 | (4.2, 2.10) | 1.94 | 1.24 | 2.74 |
+| L2 | (4.4, 2.08) | 1.79 | 1.15 | 2.54 |
+| L1, CFL 1 | (4.1, 2.10) | 1.97 | 1.27 | 2.68 |
+
+**Reading (what is and is not established).**
+- **Time step:** CFL 2 against CFL 1 on the same mesh track each other (C_D within ~5 %) out
+  to t ~ 12-16, and the window means differ by 1-2 %, inside what 20 time units can
+  resolve. No sign that CFL 2 is the limiting error at this level.
+- **Space:** L0.5 is under-resolved (it never forms the early C_D spike). L1 and L2 agree on
+  the first C_D peak (time 4.2 vs 4.4, value 2.10 vs 2.08), but their trajectories separate
+  from t ~ 8-10 (first C_L excursion -0.73 vs -0.35) and the window means differ by 7-8 %,
+  the same size as the sampling error of a 20-unit window. **So convergence in space is
+  not shown between L1 and L2, and not refuted either.** The aggregate pointwise
+  differences (~130-175 % of the signal rms) say little: an oscillation that is shifted in
+  phase scores as a large difference.
+- **Not yet known:** whether L2 -> L3 changes less than L1 -> L2. That is the next point
+  on the curve.
+- Mean drag over [10, 30] is not a statistic (20 time units, transient). Use events and
+  spectra, then windows only once the resolution is chosen.
+
 ## 3. Two cheap tests (<= 30 min each, np 4)
 
 - **T1, restart with changed AMR parameters.** Restart from the level-1 checkpoint with
