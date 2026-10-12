@@ -23,6 +23,10 @@ differ. Same initial condition, same adaptive CFL-controlled stepping (OIFS CFL 
 `l1_q5.yaml` is the element-order experiment (human 2026-10-12): l1's AMR with Q5/Q4
 elements. Compared with l2 (about the same unknowns) and l1 (the same mesh), it says
 whether higher order is cheaper per unit of accuracy here, which sets the order for Re 10 000.
+**Started and stopped 2026-10-12 at t = 5** (human: "seems like it won't help us much"):
+~2 ms per element per step against Q3's ~0.4 on the same desktop (sharing it with l2), and
+21 solver iterations per step against 17, so about 2x Q3's cost per unknown; extrapolated to
+~4 days. Not resumed.
 
 The expected figures are extrapolated from short runs (docs/status.md); the measured ones
 go in the results table below. **A level counts only if its final element count is below
@@ -109,8 +113,25 @@ x (the square at 0):
 The band around the square stopped growing by t ~ 24 (its smallest cells, 0.058, are close
 to the `min_size` floor of 0.05); 2-5 D is slowing (+7 % from t = 27 to 29); the growth is a front moving
 downstream (5-10 D filling now, 10-20 D starting, nothing refined beyond 20 D yet). Refined
-elements reach |y| = 7 D in 2-20 D: the wake is wide. Not conclusive yet: the same reading
-at the t ~ 40 and t = 60 checkpoints says whether 2-10 D stop growing before the freeze.
+elements reach |y| = 7 D in 2-20 D: the wake is wide.
+
+**Second reading, L2 at t = 42 (42 passes):**
+
+| t | total | -2..2 | 2..5 | 5..10 | 10..20 | 20..40 |
+|---|---|---|---|---|---|---|
+| 30 | 14,091 | 2,042 | 3,997 | 6,304 | 1,159 | 264 |
+| 36 | 20,715 | 2,061 | 4,001 | 8,142 | 5,882 | 304 |
+| 39 | 24,569 | 2,062 | 4,005 | 8,340 | 9,485 | 352 |
+| 42 | 28,735 | 2,067 | 4,005 | 8,387 | 13,158 | 793 |
+
+Everything within 10 D of the square is refined by t ~ 39 (2-5 D since t ~ 30; 5-10 D
++0.6 % over t = 39-42), well before the freeze at 60. The front moves downstream at about
+one diameter per time unit (the flow speed): 10-20 D fills now, 20-40 D starts, so at the
+freeze it should be near 40 D and only the wake beyond leaves coarse. **The near field is
+safe to freeze.** Whether the forces feel the coarse far wake is the A/B branch's question.
+About half the elements end up 10-40 D downstream: if the forces don't need them, refining
+only near the body would roughly halve the mesh (a cost lever for Re 10 000,
+docs/design/re10000_plan.md §5).
 
 ## What to quote, and what not to
 

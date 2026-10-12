@@ -16,10 +16,11 @@ you document somewhere what it is used for": documented in
 benchmarks/square_cylinder_re1000/README.md, "Is the mesh freeze safe?"). `amr/mesh_census`
 counts elements per streamwise band; `ReplayMeshCensus` rebuilds a checkpointed run's mesh
 pass by pass (as a restart does). Test `mesh_census_test` C1 (exact band counts on a box),
-C2 (replay = the run's final mesh). First reading on L2's t = 29 checkpoint: the band
-around the square saturated by t ~ 24, the growth is a front moving downstream; to be
-repeated on the t ~ 40 and t = 60 checkpoints. Next for the freeze question: the A/B
-branch from a t = 60 checkpoint (AMR continuing vs frozen), cheapest at l1.
+C2 (replay = the run's final mesh). Readings on L2's checkpoints (t = 29, 42): within
+10 D of the square the mesh is refined by t ~ 39; the growth is a front moving downstream
+at ~1 D per time unit, so at the freeze only the wake beyond ~40 D stays coarse; about half
+the elements are 10-40 D downstream. Next for the freeze question: the A/B branch from a
+t = 60 checkpoint (AMR continuing vs frozen), cheapest at l1. (Merged 2026-10-12.)
 
 **Branch `re10k-plan` (2026-10-12, not merged): the Re 10 000 plan and its files, and two
 restart bugs fixed.** Human: "write all the stuff for the Re=10k case"; Bridges-2
@@ -34,7 +35,8 @@ allocation 5 000 core-hours, CPU only ("I don't want to use GPUs for the 2D stuf
   desktop without Slurm; not on Bridges-2. Blocking: `psc_cpu` needs the `b2rm` compiler
   and an install (B0, the human's).
 - `benchmarks/square_cylinder_re1000/l1_q5.yaml`: the Q5/Q4 experiment (human: "the Q5
-  results will be interesting"); not started.
+  results will be interesting"); started and stopped at t = 5 (human: "seems like it won't
+  help us much"): ~2x Q3's cost per unknown; not resumed.
 - **Bugs fixed (found by the job-script tests):** a restart replaced the per-step history
   instead of continuing it (`post/run_monitor`: appends now; `analyze.py` and
   `benchmarks/common.py` drop rows a later segment supersedes, using the step's start
