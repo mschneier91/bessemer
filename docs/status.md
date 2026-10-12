@@ -4,10 +4,34 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-10)
+## Where development left off (2026-10-12)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Branch `re10k-plan` (2026-10-12, not merged): the Re 10 000 plan and its files, and two
+restart bugs fixed.** Human: "write all the stuff for the Re=10k case"; Bridges-2
+allocation 5 000 core-hours, CPU only ("I don't want to use GPUs for the 2D stuff").
+- Plan: `docs/design/re10000_plan.md` (supersedes the Re 10k estimates below and
+  re1000_convergence_plan.md §7): measured inputs from the desktop's Re 1000 L2, the
+  extrapolated levels (l1eq ~1.5-2 k core-hours fits; l2eq ~6-11 k does not), phases and
+  gates, cost levers, a literature note (no resolved 2D Re 10^4 square-cylinder study
+  with a convergence study found in a quick search; not a novelty claim).
+- Files: `benchmarks/square_cylinder_re10000/` (l1eq, l2eq, two fixed-mesh probes, Slurm
+  scripts for RM nodes: build/test, probe, chained production with restart). Tested on the
+  desktop without Slurm; not on Bridges-2. Blocking: `psc_cpu` needs the `b2rm` compiler
+  and an install (B0, the human's).
+- `benchmarks/square_cylinder_re1000/l1_q5.yaml`: the Q5/Q4 experiment (human: "the Q5
+  results will be interesting"); not started.
+- **Bugs fixed (found by the job-script tests):** a restart replaced the per-step history
+  instead of continuing it (`post/run_monitor`: appends now; `analyze.py` and
+  `benchmarks/common.py` drop rows a later segment supersedes, using the step's start
+  t - dt); a restart with forces aborted in the summary before its first step
+  (`Case::WriteSummary` gated forces on StepCount instead of an available force). Tests
+  `run_monitor_test` R5, R6 (R6 aborts without the fix: checked).
+- In flight: Re 1000 L2 on the desktop (`runs/sqcyl`, started 2026-10-12 11:49, commit
+  a0251f4; ~36-40 h). It runs the pre-fix binary: if it needs extending, restart it with a
+  binary from this branch or later.
 
 **NOT YET TESTED on the changes below (human 2026-10-10: merge and push anyway, test
 after). Do these before relying on them:**

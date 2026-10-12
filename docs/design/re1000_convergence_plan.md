@@ -99,6 +99,9 @@ the reference for each other. Results are also summarised in docs/status.md.
 
 ## 7. Gates to Re = 10 000
 
+Superseded by [re10000_plan.md](re10000_plan.md) (2026-10-12: measured costs, the
+5 000-core-hour CPU allocation, the phases and job scripts). The gates below are kept there.
+
 Resolved Re 1000 (section 1), the temporal check (section 5), error-barred statistics
 (section 4), a CPU strong-scaling or GPU np 4 validation (docs/status.md, developing.md
 7.5), and an HPC allocation (AGENTS.md rule 3: the human says yes to each job, with

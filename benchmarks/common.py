@@ -48,13 +48,29 @@ def read_csv(path):
 
 
 def last_per_time(cols, key="t"):
-    """Sort by time, keeping the last row for a repeated time (a restarted
-    run appends rows the interrupted run had already written)."""
-    seen = {}
-    for i, t in enumerate(cols[key]):
-        seen[t] = i
-    order = [seen[t] for t in sorted(seen)]
-    return {n: [v[i] for i in order] for n, v in cols.items()}
+    """The rows of a time series written across restarts. A restarted run
+    appends from its checkpoint's time, superseding what the earlier segment
+    wrote after that time (not always at the same times: the earlier segment
+    may have shortened its last steps to land on its t_final).
+
+    With a "dt" column (the per-step history) a row's step starts at t - dt,
+    and every earlier row after that is dropped. Without one (the diagnostics
+    log, whose restart writes a row at the checkpoint's time first), every
+    earlier row at or after a row's time is dropped."""
+    ts = cols[key]
+    dts = cols.get("dt")
+    keep = []
+    for i, t in enumerate(ts):
+        if dts is not None:
+            # dt is printed to 7 digits: "after" means by more than 0.1% of the step.
+            start, tol = t - dts[i], 1e-3 * dts[i]
+            stale = lambda k: ts[k] > start + tol
+        else:
+            stale = lambda k: ts[k] >= t
+        while keep and stale(keep[-1]):
+            keep.pop()
+        keep.append(i)
+    return {n: [v[i] for i in keep] for n, v in cols.items()}
 
 
 def interp(x, xs, ys):

@@ -1,0 +1,68 @@
+# Re = 10 000 square cylinder, 2D: scaling probe on a fixed 407,250-element mesh (no AMR), ~20-30
+# steps at production's CFL 2 from the uniform start. Timing only: seconds per step, solver
+# iterations and memory against the rank count, to turn the Re 10 000 cost estimates into
+# measured numbers (docs/design/re10000_plan.md, Phase B). The base mesh is refined by
+# n_face 90 and wake_h 0.008 instead of AMR (407,250 elements, measured by building it). Iteration counts from the
+# uniform start may differ from the developed flow's.
+#
+#   jobs/probe.sbatch runs it at several rank counts.
+
+equation: navier_stokes
+
+physics:
+  Re: 10000
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 2
+  geometry: square_cylinder
+  square_cylinder:          # a coarse base mesh (1,172 cells); AMR does the refinement
+    n_face: 90
+    corner_ratio: 1.0
+    far_ratio: 1.5
+    wake_ratio: 1.3
+    wake_h: 0.008
+    wake_end: 25.0
+
+initial_velocity: uniform
+initial:
+  velocity: [1, 0]
+  perturbation: 0.1         # Gaussian bump behind the square: shedding starts early
+  perturbation_center: [2, 0]
+
+time:
+  dt: 0.01                  # the first step, as in production; then CFL-controlled
+  t_final: 0.10              # ~25 steps if dt settles near 0.004 (extrapolated)
+  step_control: cfl
+  cfl_target: 2.0           # production's stepping: per-step cost includes the OIFS substeps
+  convection: oifs
+
+solver:
+  rtol: 1.0e-8
+
+boundary_conditions:
+  - {select: [inflow, sides], type: velocity, value: [1, 0]}
+  - {select: [outflow], type: outflow}
+  - {select: [body], type: no_slip}
+
+amr:
+  enabled: false            # a fixed mesh: timing only
+
+forces:
+  enabled: true
+  boundaries: [body]
+  reference_velocity: 1.0
+  reference_area: 1.0       # D (a length in 2D)
+  interval: 0               # no CSV log; the history and summary carry them
+  statistics: true          # REQUIRED for the per-step C_D, C_L in the history (false gives nan);
+  average_periods: 10       # the summary's forces.periodic block is meaningless at Re 1000: ignore it
+
+output:
+  path: probe_407k
+  name: probe_407k
+  progress: 0.01
+  history: true
+

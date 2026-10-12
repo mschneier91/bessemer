@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
 namespace incns
@@ -19,8 +20,15 @@ RunMonitor::RunMonitor(const Parameters& p, MPI_Comm comm)
    if (root_ && p.output.history)
    {
       std::filesystem::create_directories(p.output.path);
-      history_.open(p.output.path + "/" + p.output.name + "_history.csv");
-      history_ << "t,dt,c_d,c_l,iterations,substeps,elements,step_wall\n";
+      // A restart continues the run's history instead of replacing it (the
+      // statistics of a chained run need every segment). It appends from the
+      // checkpoint's time, so rows the earlier segment wrote after that time
+      // are superseded: readers drop them where time goes back
+      // (benchmarks/square_cylinder_re1000/analyze.py, benchmarks/common.py).
+      const std::string path = p.output.path + "/" + p.output.name + "_history.csv";
+      const bool append = !p.restart_from.empty() && std::ifstream(path).good();
+      history_.open(path, append ? std::ios::app : std::ios::trunc);
+      if (!append) { history_ << "t,dt,c_d,c_l,iterations,substeps,elements,step_wall\n"; }
    }
 }
 

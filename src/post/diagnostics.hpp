@@ -69,8 +69,9 @@ public:
     * @param path   Full CSV path.
     * @param comm   Communicator (used to pick the writer rank).
     * @param append Continue an existing file (a restart) instead of starting
-    *               a new one; rows the interrupted run wrote after its
-    *               checkpoint then repeat (readers keep the last per time).
+    *               a new one; rows the earlier segment wrote after the
+    *               checkpoint's time are then superseded (readers drop them
+    *               where time goes back).
     */
    DiagnosticsLog(const std::string& path, MPI_Comm comm, bool append = false);
 

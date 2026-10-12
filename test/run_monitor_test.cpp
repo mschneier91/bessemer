@@ -8,7 +8,12 @@
 //  R3 time-based AMR (amr.every_time) on a periodic Taylor-Green box: events
 //     at multiples of every_time inside [start_time, end_time] only;
 //  R4 Case::WriteSummary writes valid JSON (read back with yaml-cpp) with the
-//     status, time-step statistics and the mesh size.
+//     status, time-step statistics and the mesh size;
+//  R5 a restart continues the per-step history file instead of replacing it
+//     (chained runs need every segment's rows);
+//  R6 a restarted run with forces writes its summary before its first step
+//     (run_case's "running" summary) and then continues: no force is asked of
+//     the restored integrator before it has stepped.
 
 #include <gtest/gtest.h>
 
@@ -25,6 +30,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace mfem;
@@ -155,4 +162,95 @@ TEST(RunMonitor, R4_SummaryIsValidJson)
    EXPECT_GT(s["diagnostics"]["kinetic_energy"].as<double>(), 0.0);
    MPI_Barrier(MPI_COMM_WORLD);
    if (Mpi::Root()) { std::remove(path.c_str()); }
+}
+
+TEST(RunMonitor, R5_RestartAppendsTheHistory)
+{
+   const std::string dir = "run_monitor_r5_np" + std::to_string(Mpi::WorldSize());
+   auto deck = [&](double t_final, const std::string & extra)
+   {
+      incns::Parameters p = incns::Parameters::LoadYAMLString(
+                               "equation: navier_stokes\n"
+                               "physics:\n  nu: 0.05\n"
+                               "mesh:\n  dim: 2\n  elements: [4, 4]\n"
+                               "  lengths: [6.283185307179586, 6.283185307179586]\n"
+                               "time:\n  dt: 0.02\n  t_final: " + std::to_string(t_final) +
+                               "\n  step_control: fixed\n"
+                               "initial_velocity: taylor_green_2d\n"
+                               "output:\n  path: " + dir + "\n  name: r5\n  history: true\n"
+                               "checkpoint:\n  enabled: true\n  interval: 2\n  path: " + dir +
+                               "/chk\n" + extra);
+      auto mesh = incns::MakeCaseMesh(p);
+      incns::Case flow(*mesh, p);
+      auto u0 = incns::MakeInitialVelocity(p);
+      flow.SetInitialVelocity(*u0);
+      flow.Run();
+   };
+   deck(0.06,
+        "");                           // 3 steps; the checkpoint is at step 2
+   deck(0.08, "restart: " + dir + "/chk\n"); // steps 3 and 4 from it
+   MPI_Barrier(MPI_COMM_WORLD);
+   std::ifstream f(dir + "/r5_history.csv");
+   ASSERT_TRUE(f.good());
+   std::string line;
+   int headers = 0;
+   std::vector<double> t;
+   while (std::getline(f, line))
+   {
+      if (line.rfind("t,", 0) == 0) { ++headers; continue; }
+      t.push_back(std::stod(line.substr(0, line.find(','))));
+   }
+   EXPECT_EQ(headers, 1);
+   // Steps 1-3 of the first run, then 3-4 of the restarted one (step 3 twice).
+   ASSERT_EQ(t.size(), 5u);
+   EXPECT_NEAR(t.front(), 0.02, 1e-12);
+   EXPECT_NEAR(t[2], 0.06, 1e-12);
+   EXPECT_NEAR(t[3], 0.06, 1e-12);
+   EXPECT_NEAR(t.back(), 0.08, 1e-12);
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root()) { std::filesystem::remove_all(dir); }
+}
+
+TEST(RunMonitor, R6_RestartWithForcesWritesItsSummary)
+{
+   const std::string dir = "run_monitor_r6_np" + std::to_string(Mpi::WorldSize());
+   auto make = [&](double t_final, const std::string & extra)
+   {
+      return incns::Parameters::LoadYAMLString(
+                "equation: navier_stokes\n"
+                "physics:\n  Re: 200\n"
+                "discretization:\n  order_u: 2\n  order_p: 1\n"
+                "mesh:\n  dim: 2\n  geometry: square_cylinder\n"
+                "initial_velocity: uniform\n"
+                "time:\n  dt: 0.01\n  t_final: " + std::to_string(t_final) +
+                "\n  step_control: fixed\n"
+                "boundary_conditions:\n"
+                "  - {select: [inflow, sides], type: velocity, value: [1, 0]}\n"
+                "  - {select: [outflow], type: outflow}\n"
+                "  - {select: [body], type: no_slip}\n"
+                "forces:\n  enabled: true\n  boundaries: [body]\n  statistics: true\n"
+                "output:\n  path: " + dir + "\n  name: r6\n  history: true\n"
+                "checkpoint:\n  enabled: true\n  interval: 2\n  path: " + dir + "/chk\n" +
+                extra);
+   };
+   auto run = [&](const incns::Parameters & p, bool summary_first)
+   {
+      auto mesh = incns::MakeCaseMesh(p);
+      incns::Case flow(*mesh, p);
+      auto u0 = incns::MakeInitialVelocity(p);
+      flow.SetInitialVelocity(*u0);
+      if (summary_first) { flow.WriteSummary(dir + "/r6_summary.json", "running"); }
+      flow.Run();
+      flow.WriteSummary(dir + "/r6_summary.json", "ok");
+   };
+   run(make(0.03, ""), true);                           // checkpoint at step 2
+   run(make(0.05, "restart: " + dir + "/chk\n"),
+       true); // the "running" summary first
+   MPI_Barrier(MPI_COMM_WORLD);
+   const YAML::Node s = YAML::LoadFile(dir + "/r6_summary.json");
+   EXPECT_EQ(s["status"].as<std::string>(), "ok");
+   EXPECT_NEAR(s["time"]["t"].as<double>(), 0.05, 1e-12);
+   EXPECT_TRUE(std::isfinite(s["forces"]["cd"].as<double>()));
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root()) { std::filesystem::remove_all(dir); }
 }

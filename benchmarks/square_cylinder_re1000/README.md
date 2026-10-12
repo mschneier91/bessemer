@@ -18,6 +18,11 @@ differ. Same initial condition, same adaptive CFL-controlled stepping (OIFS CFL 
 | `l1.yaml` | 0.25 | 0.1 | 40,000 | 12-18 k | ~8-12 h on the Air |
 | `l2.yaml` | 0.125 | 0.05 | 100,000 | 35-50 k | ~2-3 days on the Air; desktop |
 | `l3.yaml` | 0.0625 | 0.025 | 250,000 | 100-150 k | HPC |
+| `l1_q5.yaml` | 0.25 | 0.1 | 40,000 | 12-18 k (Q5/Q4: about l2's unknowns) | ~2-3 days at 4 ranks, desktop |
+
+`l1_q5.yaml` is the element-order experiment (human 2026-10-12): l1's AMR with Q5/Q4
+elements. Compared with l2 (about the same unknowns) and l1 (the same mesh), it says
+whether higher order is cheaper per unit of accuracy here, which sets the order for Re 10 000.
 
 The expected figures are extrapolated from short runs (docs/status.md); the measured ones
 go in the results table below. **A level counts only if its final element count is below
@@ -31,8 +36,12 @@ Memory is about 44 KB per element (measured at 12 k elements), so a cap of 100 k
 - AMR in simulated time (an event every time unit) until `amr.end_time` 60, then a fixed mesh.
 - A rolling checkpoint every 1,000 steps. To extend a run (the plan: extend while the error
   bar is above the target), add `restart: <chk dir>` to the deck at the same rank count and
-  raise `time.t_final` (a restart with a larger `t_final` has **not been tried yet**; the
-  checkpoint is written, so try it before relying on it).
+  raise `time.t_final`, and run from the same directory. Tested on a tiny deck (2026-10-12),
+  where it found two bugs, both fixed: the history file was replaced instead of continued,
+  and a restart with forces aborted in its first summary. `analyze.py` drops the history
+  rows a later segment supersedes. **A level run before that fix must not be restarted
+  with the old binary.** On Bridges-2, `../square_cylinder_re10000/jobs/production.sbatch`
+  does all of this.
 - No `reference:` block. Keep `forces.statistics: true`: it also enables the per-step force
   evaluation, and with it off the history's C_D and C_L are `nan` (found the hard way:
   two runs were lost). At Re 1000 the shedding is modulated and broadband, so the summary's

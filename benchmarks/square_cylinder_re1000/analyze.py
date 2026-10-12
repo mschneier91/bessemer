@@ -41,6 +41,18 @@ def load(path):
         for r in csv.DictReader(f):
             t.append(float(r["t"])); cd.append(float(r["c_d"])); cl.append(float(r["c_l"]))
             el.append(int(r["elements"])); dt.append(float(r["dt"])); wall.append(float(r["step_wall"]))
+    # A restarted run appends to its history from its checkpoint's time, so the steps the
+    # earlier segment took after that time are superseded (at other times, when the earlier
+    # one shortened its last steps to land on its t_final). A step starts at t - dt: drop
+    # every earlier row after that. The history prints dt to 7 digits, so "after" means
+    # by more than 0.1% of the step.
+    keep = []
+    for i, ti in enumerate(t):
+        start = ti - dt[i]
+        while keep and t[keep[-1]] > start + 1e-3 * dt[i]:
+            keep.pop()
+        keep.append(i)
+    t, cd, cl, el, dt, wall = ([x[i] for i in keep] for x in (t, cd, cl, el, dt, wall))
     if not np.isfinite(np.array(cd)).any():
         sys.exit(f"{path}: C_D and C_L are all nan: the run had forces.statistics: false "
                  "(it also switches the force evaluation off). Rerun with it on.")

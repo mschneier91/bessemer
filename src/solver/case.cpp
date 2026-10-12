@@ -923,7 +923,10 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
 
    // Computed values the reference section may compare against.
    std::vector<std::pair<std::string, double>> got;
-   if (body_force_ && integrator_->StepCount() > 0)
+   // A force exists once the integrator has stepped (or one was cached across
+   // an AMR event). Not StepCount(): a restart restores the count but has no
+   // step of its own yet, and its "running" summary comes before any.
+   if (body_force_ && (integrator_->LastSolver() || force_cache_.Size() > 0))
    {
       Json& f = j["forces"];
       const Vector C = ForceCoefficients();

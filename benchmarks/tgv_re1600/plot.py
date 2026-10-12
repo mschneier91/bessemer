@@ -95,9 +95,9 @@ def selftest(ref):
             f.write("t,kinetic_energy,dissipation,divergence\n")
             for t, e, eps in zip(ref["t"], ref["E"], ref["eps"]):
                 f.write("%.17g,%.17g,%.17g,0\n" % (t, e * VOLUME, eps * VOLUME))
-            # A restart's repeated row must not matter.
-            f.write("%.17g,%.17g,%.17g,0\n"
-                    % (ref["t"][5], ref["E"][5] * VOLUME, ref["eps"][5] * VOLUME))
+            # A restart repeats the tail from its checkpoint: it must not matter.
+            for t, e, eps in list(zip(ref["t"], ref["E"], ref["eps"]))[1500:]:
+                f.write("%.17g,%.17g,%.17g,0\n" % (t, e * VOLUME, eps * VOLUME))
         m = compare(load_run(path), ref)
     report("selftest (reference as run)", m)
     ok = m["peak_rel_err"] < 1e-9 and m["max_err_rel_peak"] < 1e-9 \
