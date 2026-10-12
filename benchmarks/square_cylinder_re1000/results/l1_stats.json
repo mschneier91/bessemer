@@ -1,0 +1,39 @@
+{
+ "name": "l1",
+ "history": "runs/re1000/series/l1/l1_history.csv",
+ "t_end": 130.0,
+ "window": [
+  30.0,
+  129.95000000000002
+ ],
+ "window_length": 99.95000000000002,
+ "batch": 10.0,
+ "batches": 10,
+ "steps": 5291,
+ "elements_final": 19429,
+ "elements_max": 19429,
+ "dt_median": 0.02417507,
+ "dt_min_after_start": 0.01891826,
+ "wall_seconds": 34281.34698,
+ "cd_mean": 2.0630883628509182,
+ "cl_mean": -0.016591444026027604,
+ "cl_rms": 1.257714027779862,
+ "cd_mean_err": 0.06885367899299809,
+ "cl_rms_err": 0.0812026875928042,
+ "cd_batch_lag1": -0.3342861109673127,
+ "too_short": false,
+ "spectral_peaks": [
+  {
+   "f": 0.11,
+   "power_fraction": 0.16329999906325837
+  },
+  {
+   "f": 0.15,
+   "power_fraction": 0.1214905787306661
+  }
+ ],
+ "frequency_resolution": 0.01,
+ "st_crossing_rate": 0.15007503751875936,
+ "analysis_t0": 30.0,
+ "analysis_commit": "6273567"
+}

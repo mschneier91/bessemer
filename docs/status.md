@@ -141,6 +141,18 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   per level; `t_final` 130, AMR to t = 60. L0.5 and L1 were started on the Mac; L2 and L3
   are for the desktop or HPC. **Not yet verified:** a restart with a larger `t_final`, and
   everything on Linux. `analyze.py` was tested only on the Mac's histories.
+- **Re 1000 ladder, L0.5 and L1 done on the Mac (2026-10-12, t >= 30, 100 time units):**
+  l05 3,797 el, 2,276 steps: C_D 1.575 +- 0.022, C_L rms 0.869 +- 0.033, peak 0.180 (59 %).
+  l1 19,429 el (below the 40,000 fuse; mesh fixed from t = 60), 5,291 steps, ~8 h compute
+  (9.5 h wall incl. a lid-closed sleep): C_D 2.063 +- 0.069, C_L rms 1.258 +- 0.081, peaks
+  0.110 (16 %) and 0.150 (12 %). **l05 -> l1 differs (C_D +31 %, C_L rms +45 %) well beyond
+  the error: l05 is under-resolved.** l1 agrees with the earlier cap-limited 9,003-element
+  run (C_D 2.09 +- 0.04, C_L rms 1.30 +- 0.04) within error, but the spectral peak
+  positions of a broadband spectrum moved (0.092/0.185 vs 0.110/0.150): peak positions are
+  not a stable comparator at these power fractions. The 1-2 % criterion cannot be tested at
+  100-unit windows (3 % and 6 % sampling error). Two earlier runs were lost to
+  `forces.statistics: false` (it also switches off the force evaluation). Results in
+  `benchmarks/square_cylinder_re1000/results/`.
 - **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
   machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
   AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck

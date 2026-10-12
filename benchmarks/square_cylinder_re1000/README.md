@@ -148,6 +148,14 @@ docs/design/re10000_plan.md §5).
 
 ## Results
 
+Window t >= 30 (100 time units), batch means of 10 time units, np 4. `results/` holds the
+resampled series and the stats JSON for each level. Read the errors as crude: 10 batches, and
+the C_L spectrum at the finer level is broadband (the two peaks hold only 12-16 % of the power).
+**l05 -> l1 differs well beyond the sampling error** (C_D +31 %, C_L rms +45 %, 2 sigma 9 % and 20 %),
+so l05 is under-resolved. **l1 against l2 is not yet known** (l2 is running on the desktop). With
+100-unit windows the sampling error of l1 is 3 % (C_D) and 6 % (C_L rms), so the 1-2 % criterion
+cannot be tested yet: it needs a window several times longer.
+
 Fill in as levels finish (`results/`). The only number so far is from an exploratory run
 that was cap-limited (9,003 elements from t = 40, so **not** a level of this ladder):
 
@@ -157,7 +165,7 @@ that was cap-limited (9,003 elements from t = 40, so **not** a level of this lad
 
 | Level | elements | steps | wall | C_D mean | C_L rms | peaks | machine, commit |
 |---|---|---|---|---|---|---|---|
-| l05 | | | | | | | |
-| l1 | | | | | | | |
+| l05 | 3,797 | 2,276 | 0.8 h | 1.575 +- 0.022 | 0.869 +- 0.033 | 0.180 (59 % of power), 0.080 | MacBook Air M3 8 GB, Apple clang 17, src at 2870c38, 2026-10-12 |
+| l1 | 19,429 | 5,291 | 9.5 h (incl. ~1.5 h of lid-closed sleep) | 2.063 +- 0.069 | 1.258 +- 0.081 | 0.110 (16 %), 0.150 (12 %) | same |
 | l2 | | | | | | | |
 | l3 | | | | | | | |
