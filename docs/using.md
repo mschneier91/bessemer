@@ -63,11 +63,11 @@ closest valid key. **Every key, with its default and allowed values:
 | (top level) | `equation: stokes \| navier_stokes`, `initial_velocity: zero \| uniform \| channel \| taylor_green_2d \| taylor_green_3d`, `device`, `restart` |
 | `initial` | `velocity`, `perturbation`, `perturbation_center` (uniform), `seed` (channel) |
 | `forcing` | `body_force`: a constant force per unit mass, e.g. a channel's mean pressure gradient |
-| `physics` | `nu`, `grad_div`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
+| `physics` | `nu`, `grad_div_h`, `grad_div_nu`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
 | `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol` |
-| `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `a_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `rotation_pc`, `rotation_schur`, ... |
+| `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `rotation_pc`, `rotation_schur`, ... |
 | `boundary_conditions` | a list of `{select: [xmin, ymax, ...] or attributes, type: no_slip \| outflow \| velocity_dirichlet}` |
 | `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, ... |
 | `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
@@ -155,6 +155,10 @@ stability limit; pass `-dt 0.001`.)
   number over the last `forces.average_periods` shedding periods.
 - **ParaView:** `output.enabled: true` writes `<path>/<name>/` with high-order output; open
   the `.pvd` file.
+- **Grad-div is on by default.** Every run adds γ(∇·u, ∇·v) to the velocity block with
+  γ = `physics.grad_div_h`·h_K + `physics.grad_div_nu`·ν (h_K the element size; defaults
+  2 and 0, so γ = 2h). Set either part, or both; both 0 turns it off. The old keys
+  `physics.grad_div` and `physics.grad_div_scale` are rejected with a message.
 - **Diagnostics CSV:** `output.diagnostics: true` writes t, kinetic energy ½∫|u|²,
   dissipation ν∫|∇u|² and ‖∇·u‖ to `<path>/<name>_diagnostics.csv` every
   `output.interval` steps. It works without field output, and a restart appends to it.

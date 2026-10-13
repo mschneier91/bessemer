@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "operators/grad_div_integrator.hpp"
 #include "operators/grad_div_scale.hpp"
 #include "operators/rotational_convection.hpp"
 #include "quadrature/rule_book.hpp"
@@ -36,6 +37,11 @@ struct StokesOperatorOptions
    /// How @c grad_div is scaled: OrderH -> gamma = c_gd * h_K per element
    /// (default); OrderNu -> gamma = c_gd * nu (constant). See GradDivScale.
    GradDivScale grad_div_scale = GradDivScale::OrderH;
+   /// A second, constant part of the grad-div coefficient, proportional to
+   /// the viscosity and added to what @c grad_div gives:
+   /// gamma = [c_gd * h_K or c_gd * nu] + grad_div_nu * nu. Grad-div is on
+   /// when either is positive.
+   double grad_div_nu = 0.0;
    /// Build the low-order-refined (LOR) source form for the BoomerAMG velocity
    /// preconditioner (see MomentumLORForm()). Off by default -- the matrix-free
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
@@ -233,6 +239,22 @@ public:
    const mfem::Vector& MomentumDiagonal() const { return momentum_diag_; }
 
    /**
+    * @brief The grad-div integrator inside the current momentum block.
+    *
+    * Point-block Jacobi reads the nodal coupling of the velocity components
+    * from it (GradDivIntegrator::AddNodalOffDiagonalPA). The momentum form is
+    * rebuilt by every SetMassCoeff(), which replaces this object: ask again
+    * after it.
+    * @return The integrator (partially assembled), or null when grad-div is
+    *         off.
+    */
+   const GradDivIntegrator* GradDivTerm() const { return grad_div_integ_; }
+
+   /// @return The grad-div coefficient gamma(x), or null when grad-div is off
+   ///         (for the Schur preconditioner's mass term).
+   mfem::Coefficient* GradDivCoefficient() { return gamma_.get(); }
+
+   /**
     * @brief High-order source form for the LOR BoomerAMG velocity block
     *        (mass + diffusion + grad-div, the latter with the PARENT
     *        element's gamma = c_gd h_K evaluated on the LOR mesh).
@@ -264,10 +286,13 @@ private:
     * @param gamma            Grad-div coefficient to use instead of gamma_
     *                         (the LOR source passes gamma_lor_); null =
     *                         gamma_.
+    * @return The grad-div integrator added to @p form (owned by the form), or
+    *         null when none was.
     */
-   void AddMomentumIntegrators(mfem::ParBilinearForm& form, bool include_mass,
-                               bool include_grad_div,
-                               mfem::Coefficient* gamma = nullptr);
+   GradDivIntegrator* AddMomentumIntegrators(mfem::ParBilinearForm& form,
+         bool include_mass,
+         bool include_grad_div,
+         mfem::Coefficient* gamma = nullptr);
    /// (Re)build the momentum block A = c0*M + nu*K (+ grad-div), its diagonal,
    /// and the non-frozen LOR source, from the current mass_coeff_.
    void BuildMomentum();
@@ -277,8 +302,19 @@ private:
    StokesOperatorOptions opts_;      ///< Assembly options (mass_coeff mutable).
    mfem::ConstantCoefficient nu_;    ///< Viscosity coefficient (owned).
    mfem::ConstantCoefficient mass_coeff_; ///< Momentum-block mass coefficient.
-   /// Grad-div coefficient gamma(x) = c_gd * h_K (owned; null when disabled).
+   /// Grad-div coefficient gamma(x) = c_gd * h_K (+ grad_div_nu * nu) (owned;
+   /// null when disabled).
    std::unique_ptr<mfem::Coefficient> gamma_;
+   /// gamma at the momentum form's quadrature points, evaluated once: the
+   /// momentum form is reassembled at every Delta-t change and gamma does not
+   /// depend on Delta-t (null when gamma is a constant or grad-div is off).
+   std::unique_ptr<mfem::QuadratureSpace> gamma_qs_;
+   std::unique_ptr<mfem::QuadratureFunction> gamma_qf_; ///< See gamma_qs_.
+   /// gamma_qf_ as a coefficient: what the momentum form's grad-div uses.
+   std::unique_ptr<mfem::QuadratureFunctionCoefficient> gamma_quad_;
+   /// The grad-div integrator of the current momentum form (owned by that
+   /// form; null when grad-div is off). Replaced by every BuildMomentum().
+   GradDivIntegrator* grad_div_integ_ = nullptr;
    /// The same gamma for the LOR source: evaluated on the order-k_u LOR mesh,
    /// it returns the parent high-order element's value (owned; null unless
    /// grad-div and lor_momentum).

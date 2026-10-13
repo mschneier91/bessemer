@@ -102,6 +102,42 @@ TEST(Diagnostics, DissipationLinearShear)
    delete spaces;
 }
 
+// FlowDiagnostics (the assembled-operator form the solver logs with) returns
+// the same three numbers as the free functions, in 2D and 3D, on a field that
+// is neither divergence-free nor polynomial; and it reports a refined space.
+TEST(Diagnostics, AssembledFormsMatchTheFreeFunctions)
+{
+   for (const int dim : {2, 3})
+   {
+      SCOPED_TRACE(dim);
+      ParMesh mesh;
+      MixedSpaces* spaces = MakeUnit(mesh, dim, dim == 2 ? 4 : 2);
+      RuleBook rules;
+      ParGridFunction u(&spaces->Velocity());
+      VectorFunctionCoefficient f(dim, [dim](const Vector & x, Vector & v)
+      {
+         v(0) = std::sin(1.3 * x[0]) * std::cos(0.7 * x[1]) + x[1] * x[1];
+         v(1) = std::cos(0.9 * x[0] + 0.4 * x[1]) + 2.0 * x[0];
+         if (dim == 3)
+         {
+            v(0) += 0.5 * x[2];
+            v(2) = std::sin(x[0] + x[1] + 1.1 * x[2]);
+         }
+      });
+      u.ProjectCoefficient(f);
+      const incns::FlowDiagnostics d(spaces->Velocity(), rules);
+      EXPECT_FALSE(d.Stale());
+      const double ke = KineticEnergy(u, rules);
+      const double eps = DissipationRate(u, 0.37, rules);
+      const double div = DivergenceNorm(u, rules);
+      ASSERT_GT(div, 0.1);
+      EXPECT_NEAR(d.KineticEnergy(u), ke, 1e-12 * ke);
+      EXPECT_NEAR(d.DissipationRate(u, 0.37), eps, 1e-12 * eps);
+      EXPECT_NEAR(d.DivergenceNorm(u), div, 1e-12 * div);
+      delete spaces;
+   }
+}
+
 // Flagship: TGV-Stokes kinetic energy follows the exact e^{-4 nu t} law, and
 // the divergence stays ~0. Fine mesh + BDF3 (test-only 3rd order) so the
 // discretization error is well below the tolerance.

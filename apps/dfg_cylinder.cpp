@@ -227,7 +227,7 @@ int main(int argc, char* argv[])
    p.outflow = classical_out ? incns::OutflowCondition::Classical
                : incns::OutflowCondition::Directional;
    p.nu = 1e-3;
-   p.grad_div = grad_div;
+   p.grad_div_h = grad_div;
    p.order_u = order;
    p.order_p = order - 1;
    p.mesh.dim = 2;

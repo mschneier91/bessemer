@@ -120,6 +120,23 @@ public:
     */
    void AssembleDiagonalPA(mfem::Vector& diag) override;
 
+   /**
+    * @brief The off-diagonal entries of the dim x dim block that grad-div
+    *        puts at each node: for node a and components i != j,
+    *        @f$ (Q\,\partial_j\phi_a, \partial_i\phi_a) @f$, symmetric in
+    *        (i, j). With AssembleDiagonalPA (the i == j entries) this is the
+    *        whole nodal block -- what a point-block Jacobi preconditioner
+    *        inverts (precond/point_block_jacobi).
+    *
+    * Stored like a diagonal, one value per (node, component): in 3D component
+    * k holds the entry coupling the two components other than k (0: yz, 1: xz,
+    * 2: xy); in 2D component 0 holds the xy entry and component 1 is left
+    * alone. A direct sum over the quadrature points, O(p^6) per element in
+    * 3D: meant for setup, not for every apply.
+    * @param g_e E-vector in the PA diagonal's layout (accumulated into).
+    */
+   void AddNodalOffDiagonalPA(mfem::Vector& g_e) const;
+
    /// @return The scalar coefficient (null when the default 1 is in use).
    const mfem::Coefficient* GetCoefficient() const { return Q; }
 

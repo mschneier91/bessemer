@@ -257,9 +257,11 @@ struct Parameters
    /// may equivalently give `physics: Re`); in Dimensional mode it carries
    /// units and Normalize() converts it to 1/Re.
    double nu = 1.0;
-   double grad_div = 0.0; ///< Grad-div scale c_gd; 0 = off.
-   /// Grad-div scaling (deck `physics.grad_div_scale: h|nu`).
-   GradDivScale grad_div_scale = GradDivScale::OrderH;
+   /// Grad-div coefficient gamma = grad_div_h * h_K + grad_div_nu * nu on the
+   /// velocity block (deck `physics.grad_div_h`, `physics.grad_div_nu`). On
+   /// by default with gamma = 2 h_K (human 2026-10-12); both 0 = off.
+   double grad_div_h = 2.0;
+   double grad_div_nu = 0.0; ///< See grad_div_h.
    /// Nonlinear-term treatment for NavierStokes (deck
    /// `physics.convective_form: convective|rotational`); see ConvectiveForm.
    ConvectiveForm convective_form = ConvectiveForm::Convective;
@@ -409,6 +411,9 @@ struct Parameters
    {
       CahouetChabardConfig c;
       c.a_pc = APC::JacobiPCG;
+      // Grad-div is on by default at case level, and then it belongs in
+      // the Schur PC's mass term (human decision 2026-10-13).
+      c.schur_grad_div = true;
       return c;
    }
 

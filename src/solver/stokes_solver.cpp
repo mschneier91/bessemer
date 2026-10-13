@@ -1,6 +1,7 @@
 #include "solver/stokes_solver.hpp"
 
 #include "post/pressure_mean.hpp"
+#include "precond/hypre_device.hpp"
 #include "util/profiler.hpp"
 
 namespace incns
@@ -19,6 +20,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.mass_coeff = o.mass_coeff;
    so.grad_div = o.grad_div;
    so.grad_div_scale = o.grad_div_scale;
+   so.grad_div_nu = o.grad_div_nu;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lagged_velocity = o.lagged_velocity;
    so.rotation_alpha = o.rotation_alpha;
@@ -38,6 +40,8 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
 
 void MonitoredSolver::Mult(const Vector& x, Vector& y) const
 {
+   // The (1,1) block's preconditioner, or the Schur complement's.
+   INCNS_PROFILE(vel_ ? "velocity_block::apply" : "schur_block::apply");
    const double t0 = MPI_Wtime();
    s_.Mult(x, y);
    const double dt = MPI_Wtime() - t0;
@@ -117,6 +121,11 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                   cc, spaces_.Velocity(), spaces_.Pressure(), rules_,
                   op_.Divergence(), op_.Mass(), op_.MassDiagonal(),
                   bc_.OutflowAttributes(), nullspace_);
+      // Grad-div raises the Schur complement's plateau from nu to nu + gamma.
+      if (opts_.cc.schur_grad_div && op_.GradDivCoefficient())
+      {
+         cc_pc_->SetGradDiv(*op_.GradDivCoefficient());
+      }
    }
 
    // Rotation term: the rotation-number statistics and viscous ratio (Auto
@@ -221,6 +230,8 @@ void StokesSolver::BuildVelocityPreconditioner()
       lor->GetSolver().SetPrintLevel(0);
       lor->GetSolver().iterative_mode = false;
       if (cc_mode_) { lor->GetSolver().SetMaxIter(opts_.cc.a_vcycles); }
+      VerifyHypreAmgOnDevice(lor->GetSolver(),
+                             "stokes_solver: the velocity LOR-AMG");
       lor_rot_ = lor.get();
       vel_prec_ = std::move(lor);
    }
@@ -232,6 +243,8 @@ void StokesSolver::BuildVelocityPreconditioner()
       lor->GetSolver().SetPrintLevel(0);
       lor->GetSolver().iterative_mode = false;
       if (cc_mode_) { lor->GetSolver().SetMaxIter(opts_.cc.a_vcycles); }
+      VerifyHypreAmgOnDevice(lor->GetSolver(),
+                             "stokes_solver: the velocity LOR-AMG");
       vel_prec_ = std::move(lor);
    }
    else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiPCG)
@@ -241,8 +254,26 @@ void StokesSolver::BuildVelocityPreconditioner()
       // nonlinear -- legal because the outer solver is FGMRES. SetOperator
       // before SetPreconditioner: MFEM forwards SetOperator to the PC.
       vel_prec_.reset(); // it borrows vel_inner_pc_
-      vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
-                         op_.MomentumDiagonal(), op_.EssentialTrueDofs());
+      // Its preconditioner: scalar Jacobi, or point-block Jacobi with the
+      // grad-div term's coupling of the components at each node in the blocks
+      // (the default when there is a grad-div term). The blocks are symmetric
+      // positive definite here -- no skew part -- so CG stays legal.
+      const bool pbj_pc =
+         opts_.cc.a_pcg_pc == APcgPC::PointBlockJacobi ||
+         (opts_.cc.a_pcg_pc == APcgPC::Auto && op_.GradDivTerm());
+      if (pbj_pc)
+      {
+         auto pbj = std::make_unique<PointBlockJacobi>(
+                       spaces_.Velocity(), op_.EssentialTrueDofs());
+         pbj->SetDiagonal(op_.MomentumDiagonal());
+         if (op_.GradDivTerm()) { pbj->SetGradDiv(*op_.GradDivTerm()); }
+         vel_inner_pc_ = std::move(pbj);
+      }
+      else
+      {
+         vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
+                            op_.MomentumDiagonal(), op_.EssentialTrueDofs());
+      }
       auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
       cg->SetOperator(op_.Momentum());
       cg->SetPreconditioner(*vel_inner_pc_);

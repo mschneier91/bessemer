@@ -185,7 +185,10 @@ additive term inside `StokesTimeIntegrator`.
   Named ICs (`initial_velocity: zero|taylor_green_2d`) are nondimensional only; dimensional
   analytic data goes through `WrapDimensionalVelocity/Forcing`.
 - **Diagnostics** (`output.diagnostics`): kinetic energy, dissipation rate, ‖∇·u‖ to a CSV;
-  also exposed as scalars to Python.
+  also exposed as scalars to Python. In a run they come from `FlowDiagnostics`
+  (`Case::Diagnostics`): three partially assembled forms built once per mesh, each
+  quantity one operator apply and a dot product on the device. The free functions
+  (element loops on the host; 0.7 s a call at 16^3 Q3 on an H100) remain as the reference.
 - **Checkpoint/restart** (`checkpoint:`, `restart:`): rolling checkpoints of the marching
   state (`IntegratorState`); same-np restart, bitwise (adapted meshes via the refinement log).
 
@@ -222,11 +225,24 @@ additive term inside `StokesTimeIntegrator`.
 - **Dealiasing is mandatory** for the nonlinear term (both forms): Gauss–Legendre order 3k
   from the RuleBook, never GLL-collocated or default rules (MFEM's `miniapps/fluids/navier`
   collocates at 2k−1 — rejected; use it for structure only).
-- **Grad-div** γ(∇·u, ∇·v) on the velocity block: **γ = c_gd·h_K per element** (human
-  2026-07-11; `grad_div_scale: OrderH`), or γ = c_gd·ν (`OrderNu`, 2026-07-17). Integrator:
+- **Grad-div** γ(∇·u, ∇·v) on the velocity block, **on by default for every run** (human
+  2026-10-12: "grad-div is meant to be the default for every run"): **γ = c_h·h_K + c_ν·ν**,
+  deck keys `physics.grad_div_h` (default 2: "maybe 2h to start") and `physics.grad_div_nu`
+  (default 0); order h, order ν or both, and both 0 is off. The low-level
+  `StokesOperatorOptions` keep `grad_div` + `grad_div_scale` (OrderH 2026-07-11, OrderNu
+  2026-07-17) and default to OFF, so the solver tests' baselines are untouched;
+  `grad_div_nu` adds the ν part. Integrator:
   the in-repo sum-factorized `GradDivIntegrator` (elmat-identical to
-  `ElasticityIntegrator(λ=γ, μ=0)`). **γ never enters the Schur block.** With `OrderNu`,
-  γ is not negligible there — set `cc.nu_pc = ν(1+c_gd)` explicitly if wanted.
+  `ElasticityIntegrator(λ=γ, μ=0)`). **γ is in the Schur preconditioner's mass term at case level**
+  (`solver.schur_grad_div`, default true; human 2026-10-13, replacing "γ never enters the
+  Schur block"): the pressure mass weighted by 1/(ν_pc + γ) instead of ν_pc·M_p⁻¹
+  (`CahouetChabardSchurPC::SetGradDiv`), because grad-div lifts the Schur complement's
+  plateau from ν to ν + γ. Measured without it, Taylor-Green Re 1600 16³ Q3/Q2, γ = 2h:
+  28 outer iterations against 7 with no grad-div. The low-level `CahouetChabardConfig`
+  default is off (solver-test baselines); the rotation-aware Schur PC does not have it.
+  γ's values at the momentum form's quadrature points are cached per mesh
+  (`StokesOperator::gamma_qf_`): evaluating γ = c·h_K on the host at every Δt change cost
+  1.2 s per reassembly at 32³.
   **γ = h is NOT small compared with ν at low viscosity** (γ/ν ≈ 60 at h = 1/16, ν = 1e-3):
   it dominates the velocity stiffness — see the LOR-AMG fix in §5.3.
 - **Output:** ParaView with `SetHighOrderOutput(true)` and LOD ≥ k_u, or high-order fields
@@ -385,6 +401,12 @@ additive term inside `StokesTimeIntegrator`.
   assembled; diagonal mass inverses are direct fused multiplies; internal pressure
   p̃ = −p_physical with exactly one sign flip at output; the inner CG operator is fixed
   linear and its AMG relaxation symmetric. `laplacian_legacy` is a comparison mode only.
+  **On a GPU the smoother is l1-Jacobi (hypre 18), not l1 symmetric Gauss-Seidel (8)**:
+  8 runs there as cuSPARSE triangular solves, 86 ms per V-cycle against 0.74 ms at 32,768
+  unknowns on an H100, same outer iterations (2026-10-12). `precond/hypre_device.hpp`
+  chooses it (`SymmetricAmgSmoother`) and `VerifyHypreAmgOnDevice` aborts at setup if any
+  BoomerAMG option of the pressure or velocity LOR-AMG is outside hypre's GPU-supported
+  list (PMIS; interpolation 3/6/14/15/18; smoothers 7/18/11/12/16). New AMG: call it.
   Knobs: `solver.block_shape: diag|lower|upper` (upper default), `n_inner`, `lp_vcycles`,
   `pc_quadrature: inherit|gll_collocated` (its measured 20–31% win is Stokes data — re-measure
   under NSE per §2). Details: `docs/precond_cc.md`.
@@ -405,6 +427,13 @@ additive term inside `StokesTimeIntegrator`.
   At the mass-dominated steps of CFL-limited NSE, PCG ≈ Chebyshev and 4–8× faster than
   LOR-AMG; viscous-dominated (steady, large steps), LOR-AMG is mesh-independent and wins —
   set `a_pc: loramg` there. PCG is the default because it is never the worst.
+  **The PCG's preconditioner** (`solver.a_pcg_pc: auto | jacobi | pbj`; human 2026-10-12):
+  `auto` is point-block Jacobi when the operator has a grad-div term, scalar Jacobi
+  otherwise. Grad-div couples the components at a node, which a scalar diagonal cannot
+  see; `PointBlockJacobi::SetGradDiv` adds the symmetric nodal off-diagonals
+  (`GradDivIntegrator::AddNodalOffDiagonalPA`, sum-factorized, no assembled matrix) to the
+  dim x dim blocks it inverts. `pbj_grad_div_test` pins the blocks against the operator.
+  The table above predates this (scalar Jacobi under the PCG): **re-measure**.
 - **LOR-AMG details.** BoomerAMG on a Q1-on-GLL-nodes rediscretization (plain high-order
   AMG coarsens poorly); `SetSystemsOptions(dim, byNODES)`. MFEM's batched LOR handles only
   scalar mass/diffusion, so bessemer's vector forms use the legacy LOR path (integrators

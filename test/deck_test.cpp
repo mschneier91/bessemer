@@ -72,7 +72,8 @@ TEST(Deck, LoadYamlFields)
    EXPECT_EQ(p.BdfOrder(), 2);
    EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
    EXPECT_FALSE(p.CflSteps()); // the deck is Stokes
-   EXPECT_DOUBLE_EQ(p.grad_div, 0.0);
+   EXPECT_DOUBLE_EQ(p.grad_div_h, 2.0); // the defaults: gamma = 2 h
+   EXPECT_DOUBLE_EQ(p.grad_div_nu, 0.0);
 }
 
 // The deck-driven case and the equivalent in-code case produce the same

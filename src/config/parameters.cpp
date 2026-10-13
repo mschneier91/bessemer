@@ -43,11 +43,20 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Kinematic viscosity (dimensionless: 1/Re).");
    r.Declare(physics, "Re", "real", "unset", "",
              "Reynolds number; sets nu = 1/Re (dimensionless mode; not with nu).");
-   r.Read(physics, "grad_div", p.grad_div,
-          "Grad-div stabilization scale c_gd (0 = off).");
-   r.ReadEnum(physics, "grad_div_scale", p.grad_div_scale,
-   {{"h", GradDivScale::OrderH}, {"nu", GradDivScale::OrderNu}},
-   "Grad-div coefficient: c_gd * h_K per element, or c_gd * nu.");
+   MFEM_VERIFY(!physics.Has("grad_div") && !physics.Has("grad_div_scale"),
+               "parameters: physics.grad_div and physics.grad_div_scale were "
+               "replaced by physics.grad_div_h and physics.grad_div_nu "
+               "(gamma = grad_div_h * h + grad_div_nu * nu)");
+   r.Read(physics, "grad_div_h", p.grad_div_h,
+          "Grad-div stabilization gamma (div u, div v) on the velocity block, "
+          "gamma = grad_div_h * h_K + grad_div_nu * nu: the part proportional "
+          "to the element size h_K. Both 0 = off.");
+   r.Read(physics, "grad_div_nu", p.grad_div_nu,
+          "Grad-div: the part of gamma proportional to the viscosity (see "
+          "grad_div_h).");
+   MFEM_VERIFY(p.grad_div_h >= 0.0 && p.grad_div_nu >= 0.0,
+               "parameters: physics.grad_div_h and physics.grad_div_nu must be "
+               ">= 0");
    r.ReadEnum(physics, "convective_form", p.convective_form,
    {
       {"convective", ConvectiveForm::Convective},
@@ -359,6 +368,19 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    },
    "Velocity-block preconditioner (Cahouet-Chabard path): Jacobi-PCG, "
    "Jacobi-Chebyshev, or one LOR-AMG V-cycle (best when viscous-dominated).");
+   r.ReadEnum(solver, "a_pcg_pc", p.cc.a_pcg_pc,
+   {
+      {"auto", APcgPC::Auto}, {"jacobi", APcgPC::Jacobi},
+      {"pbj", APcgPC::PointBlockJacobi}
+   },
+   "jacobi_pcg: what preconditions the inner CG. jacobi: the diagonal. pbj: "
+   "point-block Jacobi, the dim x dim block at each velocity node, which "
+   "holds the grad-div term's coupling of the components. auto: pbj when "
+   "grad-div is on, jacobi otherwise.");
+   r.Read(solver, "schur_grad_div", p.cc.schur_grad_div,
+          "Cahouet-Chabard: put the grad-div coefficient gamma in the Schur "
+          "preconditioner's pressure-mass term (the mass weighted by "
+          "1/(nu + gamma) instead of nu M_p^-1).");
    r.Read(solver, "a_pcg_rtol", p.cc.a_pcg_rtol,
           "jacobi_pcg: inner CG tolerance.");
    r.Read(solver, "a_pcg_max_iter", p.cc.a_pcg_max_iter,

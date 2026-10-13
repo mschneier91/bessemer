@@ -109,8 +109,9 @@ void Case::BuildIntegrator()
    opts.adaptive = (params_.step_control == StepControl::Error);
    opts.controller = params_.controller;
    opts.collocated_mass = params_.CollocatedMass();
-   opts.grad_div = params_.grad_div;
-   opts.grad_div_scale = params_.grad_div_scale;
+   opts.grad_div = params_.grad_div_h; // the part proportional to h_K
+   opts.grad_div_scale = GradDivScale::OrderH;
+   opts.grad_div_nu = params_.grad_div_nu;
    opts.velocity_prec = params_.velocity_prec;
    opts.amg_reuse = params_.amg_reuse;
    opts.schur = params_.schur;
@@ -283,15 +284,21 @@ void Case::Step()
    integrator_->Step();
    const double step_wall = MPI_Wtime() - wall0;
    ++cycle_;
-   RecordStep(t_prev, step_wall);
+   {
+      INCNS_PROFILE("case::record_step");
+      RecordStep(t_prev, step_wall);
+   }
    if (channel_stats_ && cycle_ % params_.channel_statistics.interval == 0)
    {
       channel_stats_->Sample(integrator_->Velocity(), integrator_->Time());
    }
    // Forces and the rotation log use the step's own solver: log them before
    // an event rebuilds the integrator.
-   MaybeLogForces();
-   MaybeLogRotation(integrator_->Time() - t_prev, step_wall);
+   {
+      INCNS_PROFILE("case::forces");
+      MaybeLogForces();
+      MaybeLogRotation(integrator_->Time() - t_prev, step_wall);
+   }
    // An adaptation event comes BEFORE output and checkpoint: both then see the
    // refined mesh with the (exactly transferred) state. The rebuilt integrator
    // has no step of its own yet, so the force of the step just taken is
@@ -302,8 +309,15 @@ void Case::Step()
       Adapt();
    }
    MaybeAdaptInTime(t_prev);
-   if (output_) { output_->MaybeSave(cycle_, integrator_->Time()); }
-   MaybeLogDiagnostics(cycle_, integrator_->Time());
+   if (output_)
+   {
+      INCNS_PROFILE("case::output");
+      output_->MaybeSave(cycle_, integrator_->Time());
+   }
+   {
+      INCNS_PROFILE("case::diagnostics");
+      MaybeLogDiagnostics(cycle_, integrator_->Time());
+   }
    if (params_.checkpoint.enabled &&
        cycle_ % params_.checkpoint.interval == 0)
    {
@@ -322,6 +336,7 @@ void Case::Step()
    }
    if (monitor_->ProgressDue(integrator_->Time()))
    {
+      INCNS_PROFILE("case::progress");
       Vector where;
       const double cfl = (params_.equation == Equation::NavierStokes)
                          ? ConvectiveCflNumber(&where) : 0.0;
@@ -395,22 +410,30 @@ StokesTimeIntegrator& Case::Integrator()
    return *integrator_;
 }
 
-double Case::KineticEnergy()
+FlowDiagnostics& Case::Diagnostics()
 {
    EnsureSetup();
-   return incns::KineticEnergy(integrator_->Velocity(), rules_);
+   // Assembled once per mesh: an adaptation event changes the space.
+   if (!flow_diag_ || flow_diag_->Stale())
+   {
+      flow_diag_ = std::make_unique<FlowDiagnostics>(spaces_.Velocity(), rules_);
+   }
+   return *flow_diag_;
+}
+
+double Case::KineticEnergy()
+{
+   return Diagnostics().KineticEnergy(integrator_->Velocity());
 }
 
 double Case::DissipationRate()
 {
-   EnsureSetup();
-   return incns::DissipationRate(integrator_->Velocity(), params_.nu, rules_);
+   return Diagnostics().DissipationRate(integrator_->Velocity(), params_.nu);
 }
 
 double Case::DivergenceNorm()
 {
-   EnsureSetup();
-   return incns::DivergenceNorm(integrator_->Velocity(), rules_);
+   return Diagnostics().DivergenceNorm(integrator_->Velocity());
 }
 
 bool Case::AdaptDue() const

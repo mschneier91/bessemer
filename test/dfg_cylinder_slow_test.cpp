@@ -67,7 +67,7 @@ Result RunSteadyRe20(bool rotational, double grad_div, double t_final,
                        incns::ConvectiveForm::Convective;
    if (rotational) { p.rotation_pc = incns::RotationVelocityPC::PbjKrylov; }
    p.nu = 1e-3;
-   p.grad_div = grad_div;
+   p.grad_div_h = grad_div;
    p.order_u = 3;
    p.order_p = 2;
    p.mesh.dim = 2;

@@ -12,6 +12,7 @@
  */
 #pragma once
 
+#include "precond/hypre_device.hpp"
 #include "mfem.hpp"
 
 #include <memory>
@@ -36,8 +37,8 @@ enum class LpBC
  * mfem::LORSolver<HypreBoomerAMG> (Q1-on-GLL-nodes rediscretization, the same
  * machinery as the H5 velocity block). CG legality of the inner solve demands
  * a symmetric application, so the relaxation is SET explicitly (l1 hybrid
- * symmetric Gauss-Seidel, matched single pre/post sweeps) rather than trusting
- * library defaults. On singular (all-Neumann) operators the application is
+ * symmetric Gauss-Seidel on a host, l1-Jacobi on a GPU: SymmetricAmgSmoother;
+ * matched single pre/post sweeps) rather than trusting library defaults. On singular (all-Neumann) operators the application is
  * wrapped in mfem::OrthoSolver so iterates never accumulate the constant mode.
  *
  * MEASURED DECISION (deviation from the spec's par.4 suggestion): the spec
@@ -137,12 +138,16 @@ public:
       amg.iterative_mode = false;
       amg.SetMaxIter(vcycles); // n V-cycles from zero guess: still a fixed op
       HYPRE_Solver h = static_cast<HYPRE_Solver>(amg);
-      // l1 hybrid symmetric Gauss-Seidel relaxation, one matched sweep on the
-      // way down and up: a SYMMETRIC V-cycle (required under the inner CG).
-      HYPRE_BoomerAMGSetRelaxType(h, 8);
+      // A symmetric smoother, one matched sweep on the way down and up: a
+      // SYMMETRIC V-cycle (required under the inner CG). Host: l1 hybrid
+      // symmetric Gauss-Seidel (8). GPU: l1-Jacobi (18), because 8 runs there
+      // as triangular solves, ~100x slower (precond/hypre_device.hpp).
+      HYPRE_BoomerAMGSetRelaxType(h, SymmetricAmgSmoother());
       HYPRE_BoomerAMGSetNumSweeps(h, 1);
       // Strength-of-connection starting points per the spec (2D/3D).
       HYPRE_BoomerAMGSetStrongThreshold(h, mesh.Dimension() == 3 ? 0.25 : 0.1);
+      // On a GPU every option above must be one hypre runs there, fast.
+      VerifyHypreAmgOnDevice(amg, "lp_surrogate: the pressure LOR-AMG");
 
       singular_ = singular;
       if (singular_) { ortho_.SetSolver(*lor_); }

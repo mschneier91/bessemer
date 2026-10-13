@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "operators/grad_div_integrator.hpp"
 #include "operators/rotational_convection.hpp"
 
 #include <mfem.hpp>
@@ -123,6 +124,34 @@ public:
                     const mfem::Array<int>& ess_tdofs);
 
    /**
+    * @brief Without a rotation term: the blocks are the diagonal alone until
+    *        SetGradDiv() adds the grad-div coupling. Such blocks are symmetric
+    *        positive definite, so this one may precondition CG.
+    * @param fes       Velocity space (vdim == dim); a ParFiniteElementSpace in
+    *                  parallel.
+    * @param ess_tdofs Velocity essential true dofs (not copied; must outlive
+    *                  this object).
+    */
+   PointBlockJacobi(mfem::FiniteElementSpace& fes,
+                    const mfem::Array<int>& ess_tdofs);
+
+   /**
+    * @brief Add grad-div's coupling of the velocity components at each node
+    *        to the blocks, @f$ B_a = \mathrm{diag}(d_a) + [s_a]_\times + G_a @f$
+    *        with @f$ G_a @f$ symmetric and zero on its diagonal (the diagonal
+    *        entries of grad-div are part of d), and rebuild them.
+    *
+    * Scalar Jacobi sees only the diagonal of gamma (div u, div v); with
+    * gamma ~ h and a small viscosity that term dominates the velocity block
+    * and its coupling of the components at a node is as large as its
+    * diagonal. Call again when the integrator is reassembled with another
+    * coefficient or mesh.
+    * @param gd The grad-div integrator of the velocity operator, after its
+    *           AssemblePA() on the velocity space.
+    */
+   void SetGradDiv(const GradDivIntegrator& gd);
+
+   /**
     * @brief Set the diagonal of the velocity operator and rebuild the blocks.
     *        Call at setup and whenever dt or nu changes.
     * @param d True-dof diagonal, e.g. from velocity_form.AssembleDiagonal().
@@ -148,11 +177,19 @@ public:
    /// @return The skew vector after the essential-dof rule (true dofs; 2D
    ///         uses component 0 only).
    const mfem::Vector& GetSkew() const { return s_; }
+   /// @return The symmetric off-diagonals after the essential-dof rule (true
+   ///         dofs; 3D component k couples the two components other than k,
+   ///         2D uses component 0 only). Zero until SetGradDiv().
+   const mfem::Vector& GetSymmetric() const { return g_; }
 
 private:
    /// Invert the nodal blocks from d_ and s_ into inv_ (closed form, in place).
    void RebuildBlocks();
 
+   /// @return A partially assembled form on fes_ (parallel when fes_ is).
+   std::unique_ptr<mfem::BilinearForm> MakeForm() const;
+
+   mfem::FiniteElementSpace& fes_; ///< Velocity space (borrowed).
    int dim_;      ///< Spatial dimension (2 or 3).
    int n_;        ///< True dofs per component.
    bool by_vdim_; ///< True-dof layout: byVDIM a*dim+c, byNODES c*n+a.
@@ -160,7 +197,10 @@ private:
    mfem::Vector
    d_;              ///< Operator diagonal (dim*n), essential rule applied.
    mfem::Vector s_;              ///< Nodal skew (dim*n), essential rule applied.
-   std::unique_ptr<mfem::BilinearForm> skew_form_; ///< PA form, proxy integrator.
+   /// Nodal symmetric off-diagonals (dim*n), essential rule applied.
+   mfem::Vector g_;
+   /// PA form, proxy integrator; null without a rotation term.
+   std::unique_ptr<mfem::BilinearForm> skew_form_;
    /// Inverse nodal blocks, (dim, dim, n) column-major: inv(i, j, a).
    mfem::Vector inv_;
 };

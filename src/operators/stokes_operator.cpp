@@ -26,8 +26,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    MFEM_VERIFY(opts_.nu > 0.0, "stokes_operator: viscosity must be positive");
    MFEM_VERIFY(opts_.mass_coeff >= 0.0,
                "stokes_operator: mass_coeff must be non-negative");
-   MFEM_VERIFY(opts_.grad_div >= 0.0,
-               "stokes_operator: grad_div scale must be non-negative");
+   MFEM_VERIFY(opts_.grad_div >= 0.0 && opts_.grad_div_nu >= 0.0,
+               "stokes_operator: the grad_div scales must be non-negative");
    ParMesh& mesh = *spaces_.Velocity().GetParMesh();
    AssertTensorProductGeometry(mesh);
 
@@ -61,32 +61,45 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // per element (spatially varying). OrderNu: c_gd * nu (constant) -- note
    // this is NOT negligible in the Schur block; gamma still does not enter it
    // automatically (see the header), set cc.nu_pc to compensate if wanted.
-   if (opts_.grad_div > 0.0)
+   if (opts_.grad_div > 0.0 || opts_.grad_div_nu > 0.0)
    {
-      if (opts_.grad_div_scale == GradDivScale::OrderNu)
+      // gamma = h_part * h_K + nu_part: grad_div goes to one or the other by
+      // its scale, grad_div_nu * nu is always in the constant part.
+      const bool by_h = (opts_.grad_div_scale == GradDivScale::OrderH);
+      const double h_part = by_h ? opts_.grad_div : 0.0;
+      const double nu_part =
+         (opts_.grad_div_nu + (by_h ? 0.0 : opts_.grad_div)) * opts_.nu;
+      if (h_part > 0.0)
       {
-         gamma_ = std::make_unique<ConstantCoefficient>(opts_.grad_div * opts_.nu);
+         gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, h_part, 1, nu_part);
+         // Its values at the momentum form's quadrature points, once (the
+         // rule is the one AddMomentumIntegrators gives the grad-div term).
+         gamma_qs_ = std::make_unique<QuadratureSpace>(
+                        mesh, rules_.Get(geom_, 2 * ku_ + dim_ - 1));
+         gamma_qf_ = std::make_unique<QuadratureFunction>(*gamma_qs_);
+         gamma_->Project(*gamma_qf_);
+         gamma_quad_ =
+            std::make_unique<QuadratureFunctionCoefficient>(*gamma_qf_);
       }
       else
       {
-         gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, opts_.grad_div);
+         gamma_ = std::make_unique<ConstantCoefficient>(nu_part);
       }
       // The LOR source's gamma: MFEM's LOR assembly evaluates the
       // coefficient on the order-k_u LOR mesh (k_u^dim children per element,
-      // in order), where gamma must be the PARENT element's c_gd h_K.
+      // in order), where gamma must be the PARENT element's value.
       if (opts_.lor_momentum)
       {
          int children = 1;
          for (int d = 0; d < dim_; ++d) { children *= ku_; }
-         if (opts_.grad_div_scale == GradDivScale::OrderNu)
+         if (h_part > 0.0)
          {
-            gamma_lor_ = std::make_unique<ConstantCoefficient>(opts_.grad_div *
-                         opts_.nu);
+            gamma_lor_ = std::make_unique<MeshSizeCoefficient>(
+                            mesh, h_part, children, nu_part);
          }
          else
          {
-            gamma_lor_ = std::make_unique<MeshSizeCoefficient>(
-                            mesh, opts_.grad_div, children);
+            gamma_lor_ = std::make_unique<ConstantCoefficient>(nu_part);
          }
       }
    }
@@ -198,9 +211,11 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    BuildMomentum();
 }
 
-void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
-      bool include_mass, bool include_grad_div, Coefficient* gamma)
+GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
+   ParBilinearForm& form, bool include_mass, bool include_grad_div,
+   Coefficient* gamma)
 {
+   GradDivIntegrator* added = nullptr;
    // Diffusion at the default exactness order 2k + dim - 1 (covers the metric
    // factors on deformed elements). The mass term reuses the mass rule (incl.
    // the collocated-GLL option). Fresh integrator objects -- each form owns
@@ -214,18 +229,23 @@ void StokesOperator::AddMomentumIntegrators(ParBilinearForm& form,
       mmi->SetIntRule(mass_rule_);
       form.AddDomainIntegrator(mmi);
    }
-   if (include_grad_div && opts_.grad_div > 0.0)
+   if (include_grad_div && gamma_)
    {
       // gamma (div u, div v) via the in-repo sum-factorized
       // GradDivIntegrator -- replaces ElasticityIntegrator(lambda, mu=0),
       // elmat-identical (pinned by grad_div_integrator_test) but with fused O(p^4)
       // tensor PA kernels instead of elasticity's dense non-tensor path.
-      // Stiffness-type integrand -> the 2k + dim - 1 default rule. gamma never
-      // enters the Schur block (pressure_schur stays nu*M_p^{-1}).
-      auto* gdi = new GradDivIntegrator(gamma ? *gamma : *gamma_);
+      // Stiffness-type integrand -> the 2k + dim - 1 default rule. The
+      // high-order forms take gamma from its cached quadrature values.
+      Coefficient& g = gamma ? *gamma
+                       : gamma_quad_ ? static_cast<Coefficient&>(*gamma_quad_)
+                       : *gamma_;
+      auto* gdi = new GradDivIntegrator(g);
       gdi->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
       form.AddDomainIntegrator(gdi);
+      added = gdi;
    }
+   return added;
 }
 
 void StokesOperator::BuildMomentum()
@@ -237,8 +257,9 @@ void StokesOperator::BuildMomentum()
    // are cached), so it is cheap -- much cheaper than a full solver rebuild --
    // and it hands us the new diagonal for free.
    momentum_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
-   AddMomentumIntegrators(*momentum_form_, /*include_mass=*/true,
-                          /*include_grad_div=*/true);
+   grad_div_integ_ = AddMomentumIntegrators(*momentum_form_,
+                     /*include_mass=*/true,
+                     /*include_grad_div=*/true);
    momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
    momentum_form_->Assemble();
    momentum_form_->FormSystemMatrix(ess_tdofs_, K_);

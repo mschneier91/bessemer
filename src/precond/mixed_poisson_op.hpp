@@ -49,9 +49,10 @@ public:
     * @brief Compose the operator from its three fixed parts (all borrowed).
     * @param B      Eliminated divergence operator, velocity -> pressure true
     *               dofs (rectangular; MultTranspose applies B^T).
-    * @param mv_inv Fixed velocity mass inverse (MassInverse).
+    * @param mv_inv Fixed velocity mass inverse (a MassInverse, possibly
+    *               wrapped for profiling).
     */
-   MixedPoissonOperator(const mfem::Operator& B, const MassInverse& mv_inv)
+   MixedPoissonOperator(const mfem::Operator& B, const mfem::Operator& mv_inv)
       : mfem::Operator(B.Height()), B_(B), mv_inv_(mv_inv),
         vu_(B.Width()), vu2_(B.Width())
    {
@@ -73,7 +74,7 @@ public:
 
 private:
    const mfem::Operator& B_;      ///< Eliminated divergence block (borrowed).
-   const MassInverse& mv_inv_;    ///< Fixed velocity mass inverse (borrowed).
+   const mfem::Operator& mv_inv_; ///< Fixed velocity mass inverse (borrowed).
    mutable mfem::Vector vu_;      ///< Velocity-sized scratch (device).
    mutable mfem::Vector vu2_;     ///< Velocity-sized scratch (device).
 };

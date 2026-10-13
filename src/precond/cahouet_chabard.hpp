@@ -11,6 +11,7 @@
 #include "precond/mixed_poisson_op.hpp"
 #include "precond/nullspace.hpp"
 #include "quadrature/rule_book.hpp"
+#include "util/profiled_operator.hpp"
 #include "mfem.hpp"
 
 #include <memory>
@@ -53,6 +54,10 @@ enum class LpPC { LORAMG, PMG };
 /// tolerance (a_pcg_rtol, at most a_pcg_max_iter) -- adapts its work to the
 /// regime; nonlinear, so only inside the flexible outer Krylov.
 enum class APC { PMGChebyshev, LORAMG, JacobiChebyshev, JacobiPCG };
+/// What preconditions the inner CG of APC::JacobiPCG. Auto: point-block
+/// Jacobi when the velocity block has a grad-div term (its nodal coupling of
+/// the components is then in the blocks), scalar Jacobi otherwise.
+enum class APcgPC { Auto, Jacobi, PointBlockJacobi };
 /// Nullspace handling mode.
 enum class NullspaceMode { Auto, ForceOn, ForceOff };
 /// Preconditioner arithmetic precision (v2 hook; v1: FP64 only).
@@ -110,6 +115,11 @@ struct CahouetChabardConfig
    int a_vcycles = 1;      ///< V-cycles per A-hat application.
    double a_pcg_rtol = 1e-2; ///< JacobiPCG: inner relative tolerance.
    int a_pcg_max_iter = 50;  ///< JacobiPCG: inner iteration cap.
+   APcgPC a_pcg_pc = APcgPC::Auto; ///< JacobiPCG: the inner CG's preconditioner.
+   /// Put the grad-div coefficient in the Schur PC's mass term (the solver
+   /// then calls CahouetChabardSchurPC::SetGradDiv). Off here so the solver
+   /// tests' baselines pin what they test; the case-level default is on.
+   bool schur_grad_div = false;
    // --- nullspace ------------------------------------------------------------
    NullspaceMode nullspace = NullspaceMode::Auto; ///< Detection override.
    int k_reproj = 5; ///< Spec parity; the implementation projects every apply.
@@ -200,6 +210,24 @@ public:
     */
    void Reset(double sigma, double nu);
 
+   /**
+    * @brief Account for a grad-div term gamma (div u, div v) in the velocity
+    *        block: the mass term becomes @f$ M_{1/(\nu_{pc}+\gamma)}^{-1} @f$,
+    *        the inverse of the pressure mass weighted by 1/(nu_pc + gamma),
+    *        in place of @f$ \nu_{pc} M_p^{-1} @f$.
+    *
+    * Grad-div acts on exactly the gradient directions B^T p, so the Schur
+    * complement's high-frequency plateau is nu + gamma, not nu; with
+    * gamma ~ h and a small viscosity the two differ by orders of magnitude
+    * (measured 2026-10-12, Taylor-Green Re 1600 at 16^3: 28 outer iterations
+    * without this against 7 with no grad-div). For a constant gamma this is
+    * nu_pc -> nu_pc + gamma; a gamma that varies from element to element
+    * goes into the mass form's coefficient. Same cost per apply.
+    * @param gamma The grad-div coefficient (borrowed; must outlive this
+    *              object). Reset() reassembles when nu changes.
+    */
+   void SetGradDiv(mfem::Coefficient& gamma);
+
    /// @return True if the singular (projected) path is active.
    bool Singular() const { return singular_; }
 
@@ -231,11 +259,30 @@ private:
    mfem::OperatorPtr Mp_;               ///< Pressure mass on true dofs.
    mfem::Vector mp_diag_;               ///< Its assembled diagonal.
    std::unique_ptr<MassInverse> mp_inv_; ///< M_p^-1 (fixed op).
+   /// The mass term with grad-div (SetGradDiv): the pressure mass weighted by
+   /// 1/(nu_pc + gamma) and its inverse. All null without it.
+   mfem::Coefficient* gamma_ = nullptr; ///< Grad-div coefficient (borrowed).
+   double nu_weighted_ = -1.0; ///< The nu_pc the weighted mass was built with.
+   mfem::ParFiniteElementSpace* pfes_ = nullptr; ///< Pressure space (borrowed).
+   const mfem::IntegrationRule* mp_rule_ = nullptr; ///< M_p's rule (RuleBook's).
+   std::unique_ptr<mfem::Coefficient> mpw_coeff_; ///< 1/(nu_pc + gamma).
+   std::unique_ptr<mfem::ParBilinearForm> mpw_form_; ///< Weighted mass form.
+   mfem::OperatorPtr Mpw_;  ///< Weighted mass on true dofs.
+   mfem::Vector mpw_diag_;  ///< Its assembled diagonal.
+   std::unique_ptr<MassInverse> mpw_inv_; ///< Its inverse.
+   /// (Re)assemble the weighted mass for the current nu_pc_.
+   void BuildWeightedMass();
    std::unique_ptr<MassInverse> mv_inv_; ///< M_v^-1 (fixed op, inside BMB).
    std::unique_ptr<MixedPoissonOperator> bmb_; ///< B M_v^-1 B^T (matrix-free).
    std::unique_ptr<ConstantPressureProjector> proj_; ///< l2 projector.
    std::unique_ptr<ProjectedOperator> bmb_proj_; ///< P.S (singular CG operator).
    std::unique_ptr<LpSurrogate> lp_;    ///< Inner Poisson PC (LOR-AMG).
+   /// Named regions for the profile (no numerics): B and B^T, M_v^-1, the
+   /// inner CG's operator and its preconditioner.
+   std::unique_ptr<ProfiledOperator> b_prof_;
+   std::unique_ptr<ProfiledOperator> mv_inv_prof_; ///< See b_prof_.
+   std::unique_ptr<ProfiledOperator> bmb_prof_;    ///< See b_prof_.
+   std::unique_ptr<ProfiledOperator> lp_prof_;     ///< See b_prof_.
    std::unique_ptr<mfem::CGSolver> inner_cg_; ///< The inner CG (fixed iters).
 
    mutable mfem::Vector z_mass_; ///< M_p^{-1} r, the viscous part (device).

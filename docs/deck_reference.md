@@ -22,8 +22,8 @@ Physical parameters.
 |---|---|---|---|
 | `physics.nu` | real | `1` | Kinematic viscosity (dimensionless: 1/Re). |
 | `physics.Re` | real | `unset` | Reynolds number; sets nu = 1/Re (dimensionless mode; not with nu). |
-| `physics.grad_div` | real | `0` | Grad-div stabilization scale c_gd (0 = off). |
-| `physics.grad_div_scale` | h \| nu | `h` | Grad-div coefficient: c_gd * h_K per element, or c_gd * nu. |
+| `physics.grad_div_h` | real | `2` | Grad-div stabilization gamma (div u, div v) on the velocity block, gamma = grad_div_h * h_K + grad_div_nu * nu: the part proportional to the element size h_K. Both 0 = off. |
+| `physics.grad_div_nu` | real | `0` | Grad-div: the part of gamma proportional to the viscosity (see grad_div_h). |
 | `physics.convective_form` | convective \| rotational | `convective` | Nonlinear term: explicit (u.grad)u, or the semi-implicit rotational form (the pressure becomes the Bernoulli head). |
 | `physics.outflow` | directional \| classical | `directional` | Condition on outflow boundaries: Braack-Mucha directional do-nothing (stable under backflow) or classical do-nothing. |
 
@@ -146,6 +146,8 @@ Linear solver: FGMRES on the monolithic velocity-pressure system with a block pr
 | `solver.print_level` | int | `-1` | Solver verbosity (-1 = quiet). |
 | `solver.schur` | cc \| mass \| laplacian_legacy | `cc` | Pressure Schur block: Cahouet-Chabard, scaled pressure mass, or the legacy Laplacian CC (comparison only). |
 | `solver.a_pc` | jacobi_pcg \| jacobi_chebyshev \| loramg | `jacobi_pcg` | Velocity-block preconditioner (Cahouet-Chabard path): Jacobi-PCG, Jacobi-Chebyshev, or one LOR-AMG V-cycle (best when viscous-dominated). |
+| `solver.a_pcg_pc` | auto \| jacobi \| pbj | `auto` | jacobi_pcg: what preconditions the inner CG. jacobi: the diagonal. pbj: point-block Jacobi, the dim x dim block at each velocity node, which holds the grad-div term's coupling of the components. auto: pbj when grad-div is on, jacobi otherwise. |
+| `solver.schur_grad_div` | bool | `true` | Cahouet-Chabard: put the grad-div coefficient gamma in the Schur preconditioner's pressure-mass term (the mass weighted by 1/(nu + gamma) instead of nu M_p^-1). |
 | `solver.a_pcg_rtol` | real | `0.01` | jacobi_pcg: inner CG tolerance. |
 | `solver.a_pcg_max_iter` | int | `50` | jacobi_pcg: inner CG iteration cap. |
 | `solver.preconditioner` | jacobi \| loramg | `jacobi` | Velocity-block preconditioner on the mass Schur path. |

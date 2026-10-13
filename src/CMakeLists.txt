@@ -15,6 +15,7 @@ add_library(incns STATIC
   spaces/mixed_spaces.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp
+  util/profiled_operator.cpp
   util/device.cpp
   util/device_sync.cpp
   util/json.cpp
@@ -48,6 +49,7 @@ add_library(incns STATIC
   post/force_statistics.cpp
   post/run_monitor.cpp
   precond/cahouet_chabard.cpp
+  precond/hypre_device.cpp
   precond/point_block_jacobi.cpp
   precond/rotational_schur.cpp
   precond/viscous_ratio.cpp

@@ -1,5 +1,10 @@
 #include "post/diagnostics.hpp"
 
+#include "operators/grad_div_integrator.hpp"
+
+#include <algorithm>
+#include <cmath>
+
 namespace incns
 {
 
@@ -72,6 +77,69 @@ double DivergenceNorm(const ParGridFunction& u, const RuleBook& rules)
    // ComputeDivError of a vector H1 field = sqrt(int (div u)^2); same measure
    // as the divergence fast-tier check.
    return u.ComputeDivError(&zero, irs);
+}
+
+FlowDiagnostics::FlowDiagnostics(ParFiniteElementSpace& vfes,
+                                 const RuleBook& rules)
+   : vfes_(vfes), sequence_(vfes.GetSequence()), mass_(&vfes),
+     diffusion_(&vfes), divdiv_(&vfes)
+{
+   const Geometry::Type geom =
+      (vfes.GetParMesh()->Dimension() == 3) ? Geometry::CUBE : Geometry::SQUARE;
+   // The rule the free functions use (MeasureOrder), so the values agree.
+   const IntegrationRule& ir =
+      rules.Get(geom, 2 * vfes.GetMaxElementOrder() + 2);
+
+   auto* mi = new VectorMassIntegrator;
+   mi->SetIntRule(&ir);
+   mass_.AddDomainIntegrator(mi);
+   auto* ki = new VectorDiffusionIntegrator;
+   ki->SetIntRule(&ir);
+   diffusion_.AddDomainIntegrator(ki);
+   divdiv_.AddDomainIntegrator(new GradDivIntegrator(&ir));
+
+   Array<int> no_ess;
+   mass_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   mass_.Assemble();
+   mass_.FormSystemMatrix(no_ess, M_);
+   diffusion_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   diffusion_.Assemble();
+   diffusion_.FormSystemMatrix(no_ess, K_);
+   divdiv_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   divdiv_.Assemble();
+   divdiv_.FormSystemMatrix(no_ess, D_);
+
+   u_true_.SetSize(vfes.GetTrueVSize());
+   work_.SetSize(vfes.GetTrueVSize());
+   u_true_.UseDevice(true);
+   work_.UseDevice(true);
+}
+
+double FlowDiagnostics::Quadratic(const Operator& A,
+                                  const ParGridFunction& u) const
+{
+   MFEM_VERIFY(!Stale(), "flow_diagnostics: the space changed since this "
+               "object was built; build a new one");
+   u.GetTrueDofs(u_true_);
+   A.Mult(u_true_, work_);
+   return InnerProduct(vfes_.GetComm(), u_true_, work_);
+}
+
+double FlowDiagnostics::KineticEnergy(const ParGridFunction& u) const
+{
+   return 0.5 * Quadratic(*M_, u);
+}
+
+double FlowDiagnostics::DissipationRate(const ParGridFunction& u,
+                                        double nu) const
+{
+   return nu * Quadratic(*K_, u);
+}
+
+double FlowDiagnostics::DivergenceNorm(const ParGridFunction& u) const
+{
+   // A sum of squares up to roundoff: clip a tiny negative before the root.
+   return std::sqrt(std::max(0.0, Quadratic(*D_, u)));
 }
 
 DiagnosticsLog::DiagnosticsLog(const std::string& path, MPI_Comm comm,

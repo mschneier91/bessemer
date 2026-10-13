@@ -171,7 +171,7 @@ void CheckInteriorIndependence(incns::ConvectiveForm form, double grad_div)
    // an O(1) interior residual and make the force depend on w.
    Parameters p = ChannelParams(2, true);
    p.convective_form = form;
-   p.grad_div = grad_div;
+   p.grad_div_h = grad_div;
    p.forces.enabled = true;
    p.forces.interval = 0; // no CSV log
    Parameters q0 = p;

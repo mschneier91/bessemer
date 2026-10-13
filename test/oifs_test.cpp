@@ -159,6 +159,12 @@ TgvRun Tgv(incns::ConvectionTreatment conv, double cfl)
    p.equation = incns::Equation::NavierStokes;
    p.convection_treatment = conv;
    p.nu = 0.01;
+   // No grad-div: this compares the two convection treatments where the
+   // SPATIAL error of the 8x8 mesh dominates (IMEX 0.097, OIFS 0.074 / 0.072).
+   // With the default gamma = 2h the spatial error falls to 0.003 and the
+   // comparison becomes one of time error at 4x and 8x the step, which OIFS
+   // loses by construction (0.018 / 0.045; measured 2026-10-12).
+   p.grad_div_h = 0.0;
    p.order_u = 3;
    p.order_p = 2;
    p.mesh = PeriodicUnitBox(8);

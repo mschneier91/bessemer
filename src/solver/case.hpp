@@ -258,6 +258,10 @@ private:
     */
    void BuildOutput(bool restart);
 
+   /// @return The diagnostics for the current mesh (assembled on first use
+   ///         and again after an adaptation event).
+   FlowDiagnostics& Diagnostics();
+
    /// amr.initial_passes: refine on the analytic initial condition.
    void InitialRefinement();
 
@@ -295,6 +299,8 @@ private:
    std::unique_ptr<StokesTimeIntegrator> integrator_; ///< Built lazily.
    std::unique_ptr<OutputWriter> output_;             ///< Built when enabled.
    std::unique_ptr<DiagnosticsLog> diag_log_;         ///< Built when enabled.
+   /// The diagnostics' assembled forms; rebuilt when the mesh changes.
+   std::unique_ptr<FlowDiagnostics> flow_diag_;
    int cycle_ = 0; ///< Accepted-step counter for output.
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
    std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.

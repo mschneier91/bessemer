@@ -141,9 +141,11 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
       const int kp = pfes.FEColl()->GetOrder();
       const Geometry::Type geom = (pfes.GetParMesh()->Dimension() == 3)
                                   ? Geometry::CUBE : Geometry::SQUARE;
+      pfes_ = &pfes;
+      mp_rule_ = colloc ? &rules.CollocatedMass(geom, kp)
+                 : &rules.Get(geom, 2 * kp);
       auto* mi = new MassIntegrator;
-      mi->SetIntRule(colloc ? &rules.CollocatedMass(geom, kp)
-                     : &rules.Get(geom, 2 * kp));
+      mi->SetIntRule(mp_rule_);
       mp_form_.AddDomainIntegrator(mi);
       mp_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       mp_form_.Assemble();
@@ -186,7 +188,13 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
       mv_inv_ = std::make_unique<MassInverse>(Mv, mv_diag, pfes.GetComm(),
                                               cfg_.mv_inv, cfg_.k_mv_chebyshev);
    }
-   bmb_ = std::make_unique<MixedPoissonOperator>(B, *mv_inv_);
+   // The factors go through named regions, so the profile shows the gradient,
+   // the mass inverse and the divergence of each B M_v^-1 B^T apply.
+   b_prof_ = std::make_unique<ProfiledOperator>(B, "cc::divergence",
+             "cc::gradient");
+   mv_inv_prof_ = std::make_unique<ProfiledOperator>(
+                     *mv_inv_, "cc::velocity_mass_inverse");
+   bmb_ = std::make_unique<MixedPoissonOperator>(*b_prof_, *mv_inv_prof_);
    proj_ = std::make_unique<ConstantPressureProjector>(pfes);
    if (singular_)
    {
@@ -198,9 +206,12 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
 
    // --- the inner CG: SPD operator + symmetric PC => CG, never GMRES ----------
    inner_cg_ = std::make_unique<CGSolver>(pfes.GetComm());
-   inner_cg_->SetOperator(singular_ ? static_cast<Operator&>(*bmb_proj_)
-                          : static_cast<Operator&>(*bmb_));
-   inner_cg_->SetPreconditioner(*lp_);
+   bmb_prof_ = std::make_unique<ProfiledOperator>(
+                  singular_ ? static_cast<Operator&>(*bmb_proj_)
+                  : static_cast<Operator&>(*bmb_), "cc::bmb");
+   lp_prof_ = std::make_unique<ProfiledOperator>(*lp_, "cc::lor_amg");
+   inner_cg_->SetOperator(*bmb_prof_);
+   inner_cg_->SetPreconditioner(*lp_prof_);
    inner_cg_->iterative_mode = false;
    inner_cg_->SetPrintLevel(-1);
    if (cfg_.inner_stop == InnerStop::FixedIters)
@@ -225,12 +236,79 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    w_.UseDevice(true);
 }
 
+namespace
+{
+
+/// 1 / (shift + g): the weight of the pressure mass when the velocity block
+/// carries a grad-div term with coefficient g.
+class InverseShiftedCoefficient : public Coefficient
+{
+   Coefficient& g_; ///< The grad-div coefficient (borrowed).
+   double shift_;   ///< nu_pc.
+
+public:
+   /**
+    * @brief 1 / (shift + g).
+    * @param g     The grad-div coefficient (borrowed).
+    * @param shift The constant added to it (nu_pc).
+    */
+   InverseShiftedCoefficient(Coefficient& g, double shift)
+      : g_(g), shift_(shift) { }
+   /**
+    * @brief Evaluate at a point.
+    * @param T  Element transformation.
+    * @param ip Integration point.
+    * @return 1 / (shift + g).
+    */
+   real_t Eval(ElementTransformation& T, const IntegrationPoint& ip) override
+   {
+      return 1.0 / (shift_ + g_.Eval(T, ip));
+   }
+};
+
+} // namespace
+
+void CahouetChabardSchurPC::SetGradDiv(Coefficient& gamma)
+{
+   gamma_ = &gamma;
+   BuildWeightedMass();
+}
+
+void CahouetChabardSchurPC::BuildWeightedMass()
+{
+   INCNS_PROFILE("cc::weighted_mass_setup");
+   const bool colloc = (cfg_.pc_quadrature == PcQuadrature::GllCollocated);
+   mpw_inv_.reset(); // it borrows the operator and the diagonal
+   mpw_coeff_ = std::make_unique<InverseShiftedCoefficient>(*gamma_, nu_pc_);
+   mpw_form_ = std::make_unique<ParBilinearForm>(pfes_);
+   auto* mi = new MassIntegrator(*mpw_coeff_);
+   mi->SetIntRule(mp_rule_);
+   mpw_form_->AddDomainIntegrator(mi);
+   mpw_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   mpw_form_->Assemble();
+   Array<int> empty;
+   mpw_form_->FormSystemMatrix(empty, Mpw_);
+   mpw_diag_.SetSize(pfes_->GetTrueVSize());
+   mpw_form_->AssembleDiagonal(mpw_diag_);
+   mpw_inv_ = std::make_unique<MassInverse>(
+                 *Mpw_.Ptr(), mpw_diag_, pfes_->GetComm(),
+                 colloc ? MassInvType::DiagDirect : cfg_.mp_inv,
+                 cfg_.k_mp_chebyshev);
+   nu_weighted_ = nu_pc_;
+}
+
 void CahouetChabardSchurPC::Mult(const Vector& r, Vector& z) const
 {
    INCNS_PROFILE("cc_schur::apply");
 
    // 1. Mass term: t = M_p^-1 r (diagonal multiply or fixed Chebyshev).
-   mp_inv_->Mult(r, z_mass_);
+   {
+      INCNS_PROFILE("cc::pressure_mass_inverse");
+      // With grad-div: the mass weighted by 1/(nu_pc + gamma), whose inverse
+      // already carries the scale (SetGradDiv).
+      if (mpw_inv_) { mpw_inv_->Mult(r, z_mass_); }
+      else { mp_inv_->Mult(r, z_mass_); }
+   }
 
    // 2. Poisson term (skipped entirely at sigma = 0: steady Stokes limit).
    if (sigma_ > 0.0)
@@ -259,7 +337,7 @@ void CahouetChabardSchurPC::Mult(const Vector& r, Vector& z) const
    // the viscosity and gamma0/dt (SPEC par.2.3 scaling guard: 1/dt lives
    // entirely in sigma on the Poisson term; the mass term's coefficient is
    // the dt-independent high-frequency plateau nu).
-   z.Set(nu_pc_, z_mass_);
+   z.Set(mpw_inv_ ? 1.0 : nu_pc_, z_mass_);
    if (sigma_ > 0.0) { z.Add(sigma_, w_); }
 }
 
@@ -276,6 +354,8 @@ void CahouetChabardSchurPC::Reset(double sigma, double nu)
    sigma_ = sigma;
    // nu_pc tracks nu unless explicitly pinned by the config (an O(1) dial).
    nu_pc_ = cfg_.nu_pc < 0.0 ? nu : cfg_.nu_pc;
+   // The grad-div-weighted mass holds nu_pc in its coefficient.
+   if (gamma_ && nu_pc_ != nu_weighted_) { BuildWeightedMass(); }
    // Everything structural (mass diagonals/Chebyshev, B, the L_p AMG
    // hierarchy) is sigma/nu-independent: reused always (SPEC par.9).
 }

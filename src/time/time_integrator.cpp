@@ -107,6 +107,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       so.collocated_mass = opts_.collocated_mass;
       so.grad_div = opts_.grad_div;
       so.grad_div_scale = opts_.grad_div_scale;
+      so.grad_div_nu = opts_.grad_div_nu;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
@@ -281,6 +282,7 @@ std::size_t StokesTimeIntegrator::ExtrapolationOrder() const
 
 void StokesTimeIntegrator::ChooseCflStep()
 {
+   INCNS_PROFILE("time_integrator::cfl_step");
    MFEM_VERIFY(cfl_rate_, "time_integrator: CFL-controlled steps need "
                "SetCflRate");
    const double c = cfl_rate_();
@@ -324,6 +326,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.collocated_mass = opts_.collocated_mass;
       so.grad_div = opts_.grad_div;
       so.grad_div_scale = opts_.grad_div_scale;
+      so.grad_div_nu = opts_.grad_div_nu;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
@@ -357,6 +360,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
 
 void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
 {
+   INCNS_PROFILE("time_integrator::forcing");
    forcing_.SetTime(t);
    ParLinearForm f_form(&spaces_.Velocity());
    auto* fi = new VectorDomainLFIntegrator(forcing_);
@@ -376,6 +380,7 @@ void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
 void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
       double t_new, Vector& b, int ext)
 {
+   INCNS_PROFILE("time_integrator::bdf_rhs");
    // BDF-k: M sum_j c_j u^{n+1-j} + nu K u^{n+1} + B^T p = F^{n+1}
    // => A u^{n+1} - B^T p = F^{n+1} - M sum_{j>=1} c_j u^{n+1-j}.
    const int n_u = spaces_.Velocity().GetTrueVSize();
@@ -385,6 +390,7 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    {
       // OIFS: the history levels advected to t_new replace both the plain
       // history and the explicit convection.
+      INCNS_PROFILE("oifs::advect");
       oifs_->Advect(c, hist_, hist_times_, t_new,
                     static_cast<int>(ExtrapolationOrder()), combo);
       OifsBoundaryValues(c, t_new, combo);
@@ -409,6 +415,7 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
 void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
       double t_new, Vector& phi)
 {
+   INCNS_PROFILE("oifs::boundary_values");
    // Collective (N applies): every rank runs it, imposed dofs or not.
    const int n_u = spaces_.Velocity().GetTrueVSize();
    const std::size_t k = c.size() - 1;
@@ -519,6 +526,7 @@ void StokesTimeIntegrator::UpdateStaticPressure()
 void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
                                   ParGridFunction& u_gf, ParGridFunction& p_gf)
 {
+   INCNS_PROFILE("time_integrator::commit");
    if (&u_gf != &u_) { u_ = u_gf; }
    if (&p_gf != &p_) { p_ = p_gf; }
 

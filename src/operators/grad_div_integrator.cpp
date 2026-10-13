@@ -472,6 +472,81 @@ void DiagonalDirect(int dim, int ne, int D1D, int Q1D, const Array<real_t>& b,
    }
 }
 
+// The nodal off-diagonals: for dof a and components i != j,
+// sum_q alpha (Ghat_a . A[:,i]) (Ghat_a . A[:,j]) -- DiagonalDirect with the
+// two projections of one dof on different components. 3D component k of the
+// output holds the pair of components other than k; 2D component 0 the one
+// pair.
+void NodalOffDiagonalDirect(int dim, int ne, int D1D, int Q1D,
+                            const Array<real_t>& b, const Array<real_t>& g,
+                            const Vector& pa_data, Vector& out)
+{
+   const auto B = Reshape(b.Read(), Q1D, D1D);
+   const auto G = Reshape(g.Read(), Q1D, D1D);
+
+   if (dim == 2)
+   {
+      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, 5, ne);
+      auto Y = Reshape(out.ReadWrite(), D1D, D1D, 2, ne);
+      mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
+      {
+         for (int dy = 0; dy < D1D; ++dy)
+            for (int dx = 0; dx < D1D; ++dx)
+            {
+               real_t acc = 0.0;
+               for (int qy = 0; qy < Q1D; ++qy)
+                  for (int qx = 0; qx < Q1D; ++qx)
+                  {
+                     const real_t g0 = G(qx, dx) * B(qy, dy);
+                     const real_t g1 = B(qx, dx) * G(qy, dy);
+                     const real_t p0 = g0 * DE(qx, qy, 0, e) + g1 * DE(qx, qy, 1, e);
+                     const real_t p1 = g0 * DE(qx, qy, 2, e) + g1 * DE(qx, qy, 3, e);
+                     acc += DE(qx, qy, 4, e) * p0 * p1;
+                  }
+               Y(dx, dy, 0, e) += acc;
+            }
+      });
+   }
+   else
+   {
+      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 10, ne);
+      auto Y = Reshape(out.ReadWrite(), D1D, D1D, D1D, 3, ne);
+      mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
+      {
+         for (int dz = 0; dz < D1D; ++dz)
+            for (int dy = 0; dy < D1D; ++dy)
+               for (int dx = 0; dx < D1D; ++dx)
+               {
+                  real_t a12 = 0.0, a02 = 0.0, a01 = 0.0;
+                  for (int qz = 0; qz < Q1D; ++qz)
+                     for (int qy = 0; qy < Q1D; ++qy)
+                        for (int qx = 0; qx < Q1D; ++qx)
+                        {
+                           const real_t g0 = G(qx, dx) * B(qy, dy) * B(qz, dz);
+                           const real_t g1 = B(qx, dx) * G(qy, dy) * B(qz, dz);
+                           const real_t g2 = B(qx, dx) * B(qy, dy) * G(qz, dz);
+                           const real_t p0 = g0 * DE(qx, qy, qz, 0, e) +
+                                             g1 * DE(qx, qy, qz, 1, e) +
+                                             g2 * DE(qx, qy, qz, 2, e);
+                           const real_t p1 = g0 * DE(qx, qy, qz, 3, e) +
+                                             g1 * DE(qx, qy, qz, 4, e) +
+                                             g2 * DE(qx, qy, qz, 5, e);
+                           const real_t p2 = g0 * DE(qx, qy, qz, 6, e) +
+                                             g1 * DE(qx, qy, qz, 7, e) +
+                                             g2 * DE(qx, qy, qz, 8, e);
+                           const real_t al = DE(qx, qy, qz, 9, e);
+                           a12 += al * p1 * p2;
+                           a02 += al * p0 * p2;
+                           a01 += al * p0 * p1;
+                        }
+                  Y(dx, dy, dz, 0, e) += a12;
+                  Y(dx, dy, dz, 1, e) += a02;
+                  Y(dx, dy, dz, 2, e) += a01;
+               }
+      });
+   }
+}
+
 void DiagonalSumFactorized(int dim, int ne, int D1D, int Q1D,
                            const Array<real_t>& b, const Array<real_t>& g,
                            const Vector& pa_data, Vector& diag)
@@ -633,6 +708,14 @@ void GradDivIntegrator::AssembleDiagonalPA(Vector& diag)
                                      maps_->G, pa_data_, diag);
    }
    else { AssembleDiagonalPADirect(diag); }
+}
+
+void GradDivIntegrator::AddNodalOffDiagonalPA(Vector& g_e) const
+{
+   MFEM_VERIFY(maps_, "GradDivIntegrator::AddNodalOffDiagonalPA: AssemblePA "
+               "first");
+   graddiv::NodalOffDiagonalDirect(dim_, ne_, dofs1D_, quad1D_, maps_->B,
+                                   maps_->G, pa_data_, g_e);
 }
 
 void GradDivIntegrator::AssembleDiagonalPADirect(Vector& diag) const

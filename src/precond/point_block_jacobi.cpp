@@ -72,6 +72,33 @@ public:
    void AssembleDiagonalPA(Vector& s_e) override { rot_.AddNodalSkewPA(s_e); }
 };
 
+/**
+ * @brief The same device for grad-div: an integrator whose "diagonal" is the
+ *        grad-div term's nodal off-diagonals, so that
+ *        `form->AssembleDiagonal(g_)` sums them to the true dofs with MFEM's
+ *        own reduction (see NodalSkewProxy).
+ */
+class NodalSymmetricProxy : public BilinearFormIntegrator
+{
+   /// The grad-div integrator whose nodal blocks are assembled (not owned).
+   const GradDivIntegrator& gd_;
+
+public:
+   /**
+    * @brief Proxy for @p g's nodal off-diagonals.
+    * @param g Assembled grad-div integrator; must outlive the assembly.
+    */
+   explicit NodalSymmetricProxy(const GradDivIntegrator& g) : gd_(g) { }
+   using BilinearFormIntegrator::AssemblePA;
+   /// Nothing to set up: the data lives in the grad-div integrator.
+   void AssemblePA(const FiniteElementSpace&) override { }
+   /**
+    * @brief Adds grad-div's nodal off-diagonals instead of a diagonal.
+    * @param g_e Velocity E-vector (accumulated into).
+    */
+   void AssembleDiagonalPA(Vector& g_e) override { gd_.AddNodalOffDiagonalPA(g_e); }
+};
+
 } // namespace
 
 // Device kernels live in free functions in a NAMED namespace: nvcc rejects
@@ -121,15 +148,17 @@ void ZeroEssentialSkew(const Array<int>& ess, int dim, int n, bool by_vdim,
    });
 }
 
-// inv(i, j, a) = B_a^{-1}, B_a = diag(d_a) + [s_a]_x, column-major per node,
-// in closed form (adjugate / determinant), written in place: no allocation,
-// no batched-library call. det B_a = d0 d1 d2 + d0 s0^2 + d1 s1^2 + d2 s2^2
-// (2D: d0 d1 + s^2) > 0 for a positive diagonal, for any vorticity; essential
-// nodes carry identity rows/columns.
+// inv(i, j, a) = B_a^{-1}, B_a = diag(d_a) + [s_a]_x + G_a, column-major per
+// node, in closed form (adjugate / determinant), written in place: no
+// allocation, no batched-library call. G_a is symmetric with a zero diagonal
+// (3D: g0 couples y and z, g1 x and z, g2 x and y; 2D: g0 couples x and y).
+// diag(d_a) + G_a is a principal block of the symmetric positive definite part
+// of the operator, so it is positive definite, and adding the skew part keeps
+// the determinant positive; essential nodes carry identity rows/columns.
 void InvertBlocks(int dim, int n, bool by_vdim, const Vector& d,
-                  const Vector& s, Vector& inv)
+                  const Vector& s, const Vector& g, Vector& inv)
 {
-   const auto D = d.Read(), S = s.Read();
+   const auto D = d.Read(), S = s.Read(), Gs = g.Read();
    auto I = Reshape(inv.Write(), dim, dim, n);
    mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int a)
    {
@@ -141,10 +170,14 @@ void InvertBlocks(int dim, int n, bool by_vdim, const Vector& d,
          const real_t s0 = S[Idx(0, a, n, 3, by_vdim)];
          const real_t s1 = S[Idx(1, a, n, 3, by_vdim)];
          const real_t s2 = S[Idx(2, a, n, 3, by_vdim)];
-         // B = [[d0, -s2, s1], [s2, d1, -s0], [-s1, s0, d2]].
-         const real_t b00 = d0, b01 = -s2, b02 = s1;
-         const real_t b10 = s2, b11 = d1, b12 = -s0;
-         const real_t b20 = -s1, b21 = s0, b22 = d2;
+         const real_t g0 = Gs[Idx(0, a, n, 3, by_vdim)];
+         const real_t g1 = Gs[Idx(1, a, n, 3, by_vdim)];
+         const real_t g2 = Gs[Idx(2, a, n, 3, by_vdim)];
+         // B = [[d0, -s2, s1], [s2, d1, -s0], [-s1, s0, d2]]
+         //   + [[0, g2, g1], [g2, 0, g0], [g1, g0, 0]].
+         const real_t b00 = d0, b01 = -s2 + g2, b02 = s1 + g1;
+         const real_t b10 = s2 + g2, b11 = d1, b12 = -s0 + g0;
+         const real_t b20 = -s1 + g1, b21 = s0 + g0, b22 = d2;
          // adj(B) (B adj(B) = det(B) I).
          const real_t a00 = b11 * b22 - b12 * b21;
          const real_t a01 = b02 * b21 - b01 * b22;
@@ -162,13 +195,15 @@ void InvertBlocks(int dim, int n, bool by_vdim, const Vector& d,
       }
       else
       {
-         // B = [[d0, -s], [s, d1]] -> B^{-1} = [[d1, s], [-s, d0]] / det.
+         // B = [[d0, g - s], [g + s, d1]]
+         //   -> B^{-1} = [[d1, s - g], [-(s + g), d0]] / det.
          const real_t d0 = D[Idx(0, a, n, 2, by_vdim)];
          const real_t d1 = D[Idx(1, a, n, 2, by_vdim)];
          const real_t s0 = S[Idx(0, a, n, 2, by_vdim)];
-         const real_t r = 1.0 / (d0 * d1 + s0 * s0);
-         I(0, 0, a) = r * d1;  I(0, 1, a) = r * s0;
-         I(1, 0, a) = -r * s0; I(1, 1, a) = r * d0;
+         const real_t g0 = Gs[Idx(0, a, n, 2, by_vdim)];
+         const real_t r = 1.0 / (d0 * d1 + s0 * s0 - g0 * g0);
+         I(0, 0, a) = r * d1;         I(0, 1, a) = r * (s0 - g0);
+         I(1, 0, a) = -r * (s0 + g0); I(1, 1, a) = r * d0;
       }
    });
 }
@@ -198,28 +233,13 @@ void ApplyBlocks(int dim, int n, bool by_vdim, const Vector& inv,
 } // namespace pbj
 
 PointBlockJacobi::PointBlockJacobi(FiniteElementSpace& fes,
-                                   const VectorRotationalConvectionIntegrator& rot,
                                    const Array<int>& ess_tdofs)
-   : Solver(fes.GetTrueVSize()), dim_(fes.GetMesh()->Dimension()), n_(0),
-     by_vdim_(fes.GetOrdering() == Ordering::byVDIM), ess_(ess_tdofs)
+   : Solver(fes.GetTrueVSize()), fes_(fes), dim_(fes.GetMesh()->Dimension()),
+     n_(0), by_vdim_(fes.GetOrdering() == Ordering::byVDIM), ess_(ess_tdofs)
 {
    MFEM_VERIFY(dim_ == 2 || dim_ == 3, "PointBlockJacobi: dim must be 2 or 3");
    MFEM_VERIFY(fes.GetVDim() == dim_, "PointBlockJacobi: vdim must equal dim");
-   MFEM_VERIFY(rot.GetAssembledMesh() == fes.GetMesh(), "PointBlockJacobi: "
-               "rot must be AssemblePA()'d on the velocity space's mesh");
    n_ = fes.GetTrueVSize() / dim_;
-
-   if (auto* pfes = dynamic_cast<ParFiniteElementSpace*>(&fes))
-   {
-      skew_form_ = std::make_unique<ParBilinearForm>(pfes);
-   }
-   else
-   {
-      skew_form_ = std::make_unique<BilinearForm>(&fes);
-   }
-   skew_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
-   skew_form_->AddDomainIntegrator(new NodalSkewProxy(rot));
-   skew_form_->Assemble();
 
    d_.SetSize(dim_ * n_);
    d_.UseDevice(true);
@@ -227,8 +247,50 @@ PointBlockJacobi::PointBlockJacobi(FiniteElementSpace& fes,
    s_.SetSize(dim_ * n_);
    s_.UseDevice(true);
    s_ = 0.0;
+   g_.SetSize(dim_ * n_);
+   g_.UseDevice(true);
+   g_ = 0.0;
    inv_.SetSize(dim_ * dim_ * n_);
    inv_.UseDevice(true);
+   RebuildBlocks();
+}
+
+PointBlockJacobi::PointBlockJacobi(FiniteElementSpace& fes,
+                                   const VectorRotationalConvectionIntegrator& rot,
+                                   const Array<int>& ess_tdofs)
+   : PointBlockJacobi(fes, ess_tdofs)
+{
+   MFEM_VERIFY(rot.GetAssembledMesh() == fes.GetMesh(), "PointBlockJacobi: "
+               "rot must be AssemblePA()'d on the velocity space's mesh");
+   skew_form_ = MakeForm();
+   skew_form_->AddDomainIntegrator(new NodalSkewProxy(rot));
+   skew_form_->Assemble();
+}
+
+std::unique_ptr<BilinearForm> PointBlockJacobi::MakeForm() const
+{
+   std::unique_ptr<BilinearForm> form;
+   if (auto* pfes = dynamic_cast<ParFiniteElementSpace*>(&fes_))
+   {
+      form = std::make_unique<ParBilinearForm>(pfes);
+   }
+   else
+   {
+      form = std::make_unique<BilinearForm>(&fes_);
+   }
+   form->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   return form;
+}
+
+void PointBlockJacobi::SetGradDiv(const GradDivIntegrator& gd)
+{
+   // A form for this one assembly: the proxy only borrows gd, and the momentum
+   // form that owns gd is rebuilt whenever Delta-t changes.
+   std::unique_ptr<BilinearForm> form = MakeForm();
+   form->AddDomainIntegrator(new NodalSymmetricProxy(gd));
+   form->Assemble();
+   form->AssembleDiagonal(g_);
+   pbj::ZeroEssentialSkew(ess_, dim_, n_, by_vdim_, g_);
    RebuildBlocks();
 }
 
@@ -243,6 +305,8 @@ void PointBlockJacobi::SetDiagonal(const Vector& d)
 
 void PointBlockJacobi::UpdateSkew()
 {
+   MFEM_VERIFY(skew_form_, "PointBlockJacobi::UpdateSkew: built without a "
+               "rotation term");
    skew_form_->AssembleDiagonal(s_);
    pbj::ZeroEssentialSkew(ess_, dim_, n_, by_vdim_, s_);
    RebuildBlocks();
@@ -252,7 +316,7 @@ void PointBlockJacobi::RebuildBlocks()
 {
    // Closed-form inverses, in place: once per step (UpdateSkew) and per
    // Delta-t change (SetDiagonal), no allocation after construction.
-   pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, inv_);
+   pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, g_, inv_);
 }
 
 void PointBlockJacobi::Mult(const Vector& r, Vector& z) const

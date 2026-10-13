@@ -30,6 +30,64 @@ spent?", ahead of the 3D Taylor-Green study.
   cost the same. **Next:** regions inside the inner solve (the LOR-AMG cycle, B M^-1 B^T)
   and around the OIFS substeps, then the same at 32^3: is 0.93 s per apply a fixed cost of
   a small problem on a GPU, or does it scale?
+- **Answered (same day): the AMG smoother.** With regions inside the Schur preconditioner
+  (`cc::lor_amg`, `cc::bmb`, `cc::gradient`, `cc::divergence`,
+  `cc::velocity_mass_inverse`, `cc::pressure_mass_inverse`; `velocity_block::apply`,
+  `schur_block::apply`; the time integrator's and Case's pieces; `ProfiledOperator`),
+  `cc::lor_amg` was 88.6 % of an IMEX run: 86 ms per V-cycle at 16^3, 670 ms at 32^3. It
+  was on the GPU, but smoother 8 (l1 symmetric Gauss-Seidel) runs there as triangular
+  solves. With l1-Jacobi (18): 0.74 ms per cycle, the 16^3 run 16 s instead of 145 s, same
+  7 outer iterations. Now `SymmetricAmgSmoother()` (18 on a GPU, 8 on a host) and
+  `VerifyHypreAmgOnDevice` (aborts on any option outside hypre's GPU list), test
+  `hypre_device_test`. After that fix the diagnostics were 77 % of the run (host element
+  loops): rewritten as `FlowDiagnostics` (PA forms, device), test
+  `Diagnostics.AssembledFormsMatchTheFreeFunctions`.
+- **Grad-div on by default, point-block Jacobi under the velocity PCG** (human, same day).
+  Deck: `physics.grad_div_h` (default 2) and `physics.grad_div_nu` (default 0),
+  γ = c_h·h_K + c_ν·ν; the old `grad_div` / `grad_div_scale` deck keys are rejected.
+  `solver.a_pcg_pc: auto | jacobi | pbj`, `auto` = PBJ with the grad-div nodal blocks when
+  there is a grad-div term. New test `pbj_grad_div_test`. The TGV decks are IMEX at CFL 0.5
+  (human: "I'd rather not use OIFS for this just imex").
+- **First build and runs (jobs 49098413, 49098829; CUDA, one H100, np 1).** Built first
+  time. Fast tier np 1: 59/64; `nse_mms_test` and `tgv_nse_test` time out at 900 s as on
+  2026-10-10; `deck_test` failed on the stale deck reference; **`oifs_test` O2 fails**
+  (OIFS error 0.0175 / 0.0453 against 1.2 x the IMEX error 0.0039: moved by today's
+  defaults, cause not found); `pbj_grad_div_test` P1 failed (the test's host probing is
+  suspected, P2 passes: PBJ 665 / 1699 CG iterations against Jacobi 744 / 2021). np 2 not
+  run. Taylor-Green 16³ to t = 0.5: no grad-div 7 outer iterations, 3.0 s; γ = 2h 28
+  iterations, 11.8 s, PBJ = scalar Jacobi (uniform mesh: the nodal coupling cancels);
+  momentum reassembly 150 ms per Δt change against 3 ms. 32³: 3.6 s per step (55 s
+  before the smoother fix). Hence, human 2026-10-13: γ in the Schur PC's mass term
+  (`solver.schur_grad_div`) and γ cached per mesh -- written, see below for their state.
+- **Second round (2026-10-13, jobs 49099073, 49099090, 49099146): built, tested, NOT
+  merged.** Fast tier, CUDA, one / two H100s, without `nse_mms_test` and `tgv_nse_test`
+  (they time out on a GPU; untested on this code): **np 1 62/62; np 2 61/62**.
+  `nc_stokes_test` S4 fails at np 2: Cahouet-Chabard iterations 25 against 21 on the two
+  meshes at step 0, limit 3 (human 2026-10-10), errors equal to 1e-8. Same kind of spread
+  as the hypre GPU random-stream effect that limit was set for, but wider than seen
+  before (the AMG smoother on a GPU is now l1-Jacobi); not rerun, limit not touched: a
+  human decision. `oifs_test` O2 now pins `grad_div_h = 0` (with gamma = 2h the 8x8
+  mesh spatial error falls 30x, IMEX 0.097 -> 0.0033, and OIFS at 4-8x the step loses on
+  time error: 0.018 / 0.045). `pbj_grad_div_test` passes with host-pointer probing.
+  Taylor-Green 32^3 to t = 0.5 (25 steps): defaults 12 outer iterations, 36.3 s;
+  `schur_grad_div: false` 23, 73.5 s; `a_pcg_pc: jacobi` 12, 35.8 s; `grad_div_h: 0` 7,
+  17.5 s. Momentum reassembly 15 ms (was 1.17 s).
+- **Taylor-Green Re 1600, 32^3 Q3/Q2 to t = 20** (one H100, 39 min, 1087 steps, 15-16
+  outer iterations; `runs/tgv_re1600/tgv_n32` beside the repo on Bridges-2): max -dE/dt
+  0.01292 at t = 10.1, max viscous dissipation 0.01150 at t = 10.1 (reference 0.01286
+  at 8.97): the peak is about 1.1 late, under-resolved as expected at 96 nodes. Not yet
+  compared point by point (`plot.py`; the reference CSV is not fetched). 64^3 queued
+  (job 49099148, 6 h limit, checkpointing; estimated ~10 h to t = 20).
+- **STATE (superseded where the items above say so): written, NOT compiled, NOT run** (human: no runs until all of it is written).
+  Only the profiling regions were built and tested (CUDA, np 1 and 2, 20/20) before the
+  later edits. Uncompiled: `hypre_device`, `FlowDiagnostics`, the grad-div options,
+  `AddNodalOffDiagonalPA`, the PBJ extension, `a_pcg_pc`, both new tests. Unformatted
+  (`scripts/style.sh format`); `docs/deck_reference.md` not regenerated. **Expect Case-level
+  results to move** with γ = 2h on by default (iteration counts, forces, the Re 1000 /
+  Re 10 000 ladders if rerun: pin `grad_div_h: 0` there to reproduce old numbers — a human
+  decision, not made). List what moves; do not re-bless `test/baselines.yaml`. The Python
+  bindings do not expose `output.profile` or `a_pcg_pc`. Not pushed (human: wait until the
+  grad-div work is done).
 
 **Branch `mesh-census` (2026-10-12, not merged): `apps/mesh_census`**, to check the
 `amr.end_time: 60` freeze of the Re 1000 ladder (human: "how are we confident that having

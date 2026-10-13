@@ -34,6 +34,7 @@ struct StokesSolverOptions
    double grad_div = 0.0;
    /// Grad-div scaling: OrderH (gamma = c_gd*h) or OrderNu (gamma = c_gd*nu).
    GradDivScale grad_div_scale = GradDivScale::OrderH;
+   double grad_div_nu = 0.0; ///< Plus grad_div_nu * nu (StokesOperatorOptions).
    /// Velocity-block preconditioner (default Jacobi; LORAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;

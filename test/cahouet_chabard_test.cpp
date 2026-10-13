@@ -397,3 +397,34 @@ TEST(CahouetChabard, GllCollocatedPcQuadrature)
    bad.mv_inv = incns::MassInvType::Chebyshev;
    EXPECT_THROW(bad.Validate(false), std::invalid_argument);
 }
+
+// SetGradDiv with a CONSTANT gamma is the mass term scaled by nu_pc + gamma:
+// the same output as a PC configured with that nu_pc, at setup and after a
+// Reset to another viscosity. sigma = 0, so only the mass term is compared.
+TEST(CahouetChabard, GradDivInTheMassTerm)
+{
+   SettingCase sc;
+   const double nu = 1.0, nu2 = 0.25, g = 3.5;
+   CahouetChabardConfig c;
+   c.sigma = 0.0;
+   c.nu = nu;
+   auto pc_gd = sc.MakePC(c);
+   ConstantCoefficient gamma(g);
+   pc_gd->SetGradDiv(gamma);
+
+   const int np = sc.spaces->Pressure().GetTrueVSize();
+   Vector r(np), z_gd(np), z_ref(np);
+   r.Randomize(7);
+   for (const double v : {nu, nu2})
+   {
+      CahouetChabardConfig cr = c;
+      cr.nu = v;
+      cr.nu_pc = v + g;
+      auto pc_ref = sc.MakePC(cr);
+      pc_gd->Reset(0.0, v);
+      pc_gd->Mult(r, z_gd);
+      pc_ref->Mult(r, z_ref);
+      z_gd -= z_ref;
+      EXPECT_LE(Norm(z_gd), 1e-8 * Norm(z_ref)) << "nu " << v;
+   }
+}
