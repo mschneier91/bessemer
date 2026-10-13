@@ -65,8 +65,10 @@ spent?", ahead of the 3D Taylor-Green study.
   `nc_stokes_test` S4 fails at np 2: Cahouet-Chabard iterations 25 against 21 on the two
   meshes at step 0, limit 3 (human 2026-10-10), errors equal to 1e-8. Same kind of spread
   as the hypre GPU random-stream effect that limit was set for, but wider than seen
-  before (the AMG smoother on a GPU is now l1-Jacobi); not rerun, limit not touched: a
-  human decision. `oifs_test` O2 now pins `grad_div_h = 0` (with gamma = 2h the 8x8
+  before (the AMG smoother on a GPU is now l1-Jacobi). **Limit set to 4 (human
+  2026-10-13); the test was NOT rerun with it, and the edit is not astyle-checked.**
+  Taylor-Green 64^3 (job 49099148) ran out of GPU memory on one 80 GB H100 after the
+  first step: it needs two GPUs or a smaller mesh. `oifs_test` O2 now pins `grad_div_h = 0` (with gamma = 2h the 8x8
   mesh spatial error falls 30x, IMEX 0.097 -> 0.0033, and OIFS at 4-8x the step loses on
   time error: 0.018 / 0.045). `pbj_grad_div_test` passes with host-pointer probing.
   Taylor-Green 32^3 to t = 0.5 (25 steps): defaults 12 outer iterations, 36.3 s;
