@@ -179,6 +179,7 @@ ParaView output and diagnostics.
 | `output.diagnostics` | bool | `false` | Log t, kinetic energy (1/2 int \|u\|^2), dissipation (nu int \|grad u\|^2) and \|\|div u\|\| to <path>/<name>_diagnostics.csv every interval steps (independent of enabled; appended on restart). |
 | `output.progress` | real | `0` | Print a progress line every this many time units (0 = never): t, dt and its range, CFL and where it peaks, forces, iterations, cells, wall time, ETA. |
 | `output.history` | bool | `false` | Write a per-step <path>/<name>_history.csv (t, dt, c_d, c_l, iterations, cells, step wall time). |
+| `output.profile` | off \| wall \| sync | `wall` | Where the run's time went: at the end, apps/run_case writes the profiler's region tree (calls, inclusive and exclusive wall seconds, max and min over the ranks) to <path>/<name>_profile.csv and its top levels to the summary. wall: plain wall time; on a GPU, asynchronous kernels are charged to the region that next waits for the device. sync: wait for the device at every region boundary, so GPU time is charged where it is spent (slower: for profiling runs). off: neither. |
 
 ## `amr`
 

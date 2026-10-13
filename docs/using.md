@@ -142,6 +142,14 @@ stability limit; pass `-dt 0.001`.)
 - **Progress lines:** `output.progress: <time interval>` prints t, dt and its range, the
   CFL number and where it peaks, forces, iterations, cells, wall time and an ETA.
 - **History:** `output.history: true` writes `<path>/<name>_history.csv`, one row per step.
+- **Profile (always, unless `output.profile: off`):** `run_case` writes
+  `<path>/<name>_profile.csv` at the end: every profiled region with its nesting path,
+  call count and inclusive and exclusive wall seconds (max and min over the ranks). The
+  summary's `profile` section has the top three levels. On a GPU use
+  `output.profile: sync` for a profiling run: plain wall time charges an asynchronous
+  kernel to whichever region next waits for the device; `sync` waits at every region
+  boundary, which is slower but puts the time where it is spent. The file's second line
+  says which mode produced it.
 - **Force statistics:** `forces.statistics: true` evaluates C_D and C_L every step; the
   summary reports final values, maxima (with times), and means, rms and the Strouhal
   number over the last `forces.average_periods` shedding periods.

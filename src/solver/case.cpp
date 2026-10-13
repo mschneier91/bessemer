@@ -4,6 +4,7 @@
 #include "amr/history_projection.hpp"
 #include "amr/mesh_adapter.hpp"
 #include "bc/boundary_names.hpp"
+#include "util/device.hpp"
 #include "util/json.hpp"
 #include "util/profiler.hpp"
 
@@ -149,6 +150,12 @@ void Case::BuildOutput(bool restart)
 void Case::EnsureSetup()
 {
    if (integrator_) { return; }
+   // output.profile: sync -- wait for the device at every region boundary, from
+   // here on (process-wide, like the profiler itself).
+   if (params_.output.profile == ProfileOutput::Sync)
+   {
+      Profiler::Instance().SetSync(&DeviceSync);
+   }
    INCNS_PROFILE("case::setup");
 
    // The deck's boundary groups, unless a driver supplied the conditions:
@@ -1022,6 +1029,30 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
       }
    }
 
+   // Where the time went, down to two levels below the top (the whole tree is
+   // in the profile CSV). Not in the "running" summary: nothing has run yet.
+   if (params_.output.profile != ProfileOutput::Off && status != "running")
+   {
+      const std::vector<RegionStats> prof =
+         Profiler::Instance().Report(mesh_.GetComm()); // collective
+      Json& pj = j["profile"];
+      pj["mode"].Set(Profiler::Instance().Synchronized() ? "sync" : "wall");
+      std::vector<std::string> ancestors;
+      for (const RegionStats& s : prof)
+      {
+         ancestors.resize(s.depth);
+         std::string key;
+         for (const std::string& a : ancestors) { key += a + "/"; }
+         key += s.name;
+         ancestors.push_back(s.name);
+         if (s.depth > 2) { continue; }
+         Json& e = pj["regions"][key];
+         e["calls"].Set(s.calls);
+         e["seconds"].Set(s.incl_max);
+         e["exclusive_seconds"].Set(s.excl_max);
+      }
+   }
+
    if (Mpi::Root())
    {
       const std::filesystem::path out(path);
@@ -1030,6 +1061,19 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
       MFEM_VERIFY(f.good(), "case: cannot write the summary " << path);
       f << j.Dump();
    }
+}
+
+void Case::WriteProfile(const std::string& path) const
+{
+   std::ofstream f;
+   if (Mpi::Root())
+   {
+      const std::filesystem::path out(path);
+      if (out.has_parent_path()) { std::filesystem::create_directories(out.parent_path()); }
+      f.open(path);
+      MFEM_VERIFY(f.good(), "case: cannot write the profile " << path);
+   }
+   Profiler::Instance().WriteCsv(f, mesh_.GetComm()); // collective; rank 0 writes
 }
 
 } // namespace incns

@@ -9,6 +9,10 @@
 #include "util/profiler.hpp"
 #include "mfem.hpp"
 
+#include <sstream>
+#include <string>
+#include <vector>
+
 using incns::Profiler;
 
 TEST(Profiler, NestingAndInclusiveExclusive)
@@ -86,4 +90,80 @@ TEST(Profiler, MpiMaxMinReduction)
    EXPECT_NEAR(rep[0].incl_max, static_cast<double>(nranks), 1e-12);
    EXPECT_NEAR(rep[0].incl_min, 1.0, 1e-12);
    p.Reset();
+}
+
+TEST(Profiler, SyncHookRunsAtEveryBoundary)
+{
+   Profiler& p = Profiler::Instance();
+   p.Reset();
+   EXPECT_FALSE(p.Synchronized());
+   double now = 0.0;
+   p.SetClock([&] { return now; });
+   int syncs = 0;
+   p.SetSync([&] { ++syncs; });
+   EXPECT_TRUE(p.Synchronized());
+   {
+      INCNS_PROFILE("outer");
+      EXPECT_EQ(syncs, 1); // entering outer
+      {
+         INCNS_PROFILE("inner");
+         EXPECT_EQ(syncs, 2);
+      }
+      EXPECT_EQ(syncs, 3); // leaving inner
+   }
+   EXPECT_EQ(syncs, 4);
+   p.Reset(); // removes the hook
+   EXPECT_FALSE(p.Synchronized());
+   {
+      INCNS_PROFILE("after_reset");
+   }
+   EXPECT_EQ(syncs, 4);
+   p.Reset();
+}
+
+TEST(Profiler, CsvHasOneRowPerRegionWithItsPath)
+{
+   Profiler& p = Profiler::Instance();
+   p.Reset();
+   double now = 0.0;
+   p.SetClock([&] { return now; });
+   {
+      INCNS_PROFILE("outer");
+      now = 1.0;
+      for (int i = 0; i < 2; ++i)
+      {
+         INCNS_PROFILE("inner");
+         now += 1.0;
+      }
+      now = 4.0;
+   }
+   {
+      INCNS_PROFILE("second");
+      now = 5.0;
+   }
+   // Both writes are collective, so every rank makes both before rank 0 goes
+   // on alone to read them. Only rank 0 writes.
+   std::ostringstream os, os2;
+   p.WriteCsv(os);
+   p.SetSync([] {}); // with a hook installed the file says so
+   p.WriteCsv(os2);
+   p.Reset();
+   if (!mfem::Mpi::Root())
+   {
+      EXPECT_TRUE(os.str().empty());
+      EXPECT_TRUE(os2.str().empty());
+      return;
+   }
+   std::vector<std::string> lines;
+   std::istringstream is(os.str());
+   for (std::string l; std::getline(is, l);) { lines.push_back(l); }
+   ASSERT_EQ(lines.size(), 6u); // two comments, the header, three regions
+   EXPECT_EQ(lines[0].rfind("# bessemer profile", 0), 0u);
+   EXPECT_EQ(lines[1].rfind("# mode: wall", 0), 0u);
+   EXPECT_EQ(lines[2], "depth,region,path,calls,incl_max,incl_min,excl_max,"
+             "excl_min,pct_of_parent");
+   EXPECT_EQ(lines[3], "0,outer,outer,1,4,4,2,2,80");
+   EXPECT_EQ(lines[4], "1,inner,outer/inner,2,2,2,2,2,50");
+   EXPECT_EQ(lines[5], "0,second,second,1,1,1,1,1,20");
+   EXPECT_NE(os2.str().find("# mode: sync"), std::string::npos);
 }

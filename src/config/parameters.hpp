@@ -113,6 +113,18 @@ struct CheckpointParameters
 };
 
 /// ParaView output settings (see post/output).
+/// The profile apps/run_case writes at the end of a run (deck `output.profile`).
+enum class ProfileOutput
+{
+   Off,  ///< No profile file, no profile section in the summary.
+   /// Plain wall time per region. On a GPU, asynchronous kernels are charged
+   /// to the region that next waits for the device.
+   Wall,
+   /// Wait for the device at every region boundary (DeviceSync): GPU time is
+   /// charged where it is spent. Slower: for profiling runs.
+   Sync
+};
+
 struct OutputParameters
 {
    bool enabled = false;      ///< Write ParaView output during Run().
@@ -127,6 +139,9 @@ struct OutputParameters
    /// Write a per-step history `<path>/<name>_history.csv` (t, dt, c_d,
    /// c_l, iterations, cells, step wall time).
    bool history = false;
+   /// Where the time went: `<path>/<name>_profile.csv` and the summary's
+   /// `profile` section, written by apps/run_case at the end of the run.
+   ProfileOutput profile = ProfileOutput::Wall;
 };
 
 /// The velocity mass matrix (deck `discretization.mass`). OIFS's substeps

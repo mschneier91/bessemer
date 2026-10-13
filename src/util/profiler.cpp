@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <ostream>
+#include <string>
+#include <vector>
 
 namespace incns
 {
@@ -36,22 +38,32 @@ void Profiler::SetClock(ClockFn clock)
    clock_ = std::move(clock);
 }
 
+void Profiler::SetSync(SyncFn sync)
+{
+   sync_ = std::move(sync);
+}
+
 void Profiler::Reset()
 {
    root_ = std::make_unique<Node>();
    current_ = root_.get();
    clock_ = [] { return MPI_Wtime(); };
+   sync_ = nullptr;
 }
 
 double Profiler::Enter(const char* name)
 {
    current_ = current_->FindOrAdd(name);
    current_->calls += 1;
+   // Work launched before this region belongs to its parent.
+   if (sync_) { sync_(); }
    return clock_();
 }
 
 void Profiler::Exit(double start)
 {
+   // Work launched inside this region belongs to it.
+   if (sync_) { sync_(); }
    current_->inclusive += clock_() - start;
    current_ = current_->parent;
 }
@@ -151,6 +163,38 @@ void Profiler::Print(std::ostream& os, MPI_Comm comm) const
          << std::setw(12) << s.excl_max
          << std::setw(8) << std::setprecision(1) << s.pct_of_parent << "%"
          << "\n";
+   }
+}
+
+void Profiler::WriteCsv(std::ostream& os, MPI_Comm comm) const
+{
+   const std::vector<RegionStats> stats = Report(comm); // collective
+
+   int rank = 0;
+   MPI_Comm_rank(comm, &rank);
+   if (rank != 0) { return; }
+
+   os << "# bessemer profile: wall seconds per region, reduced over the MPI "
+      "ranks (max, min)\n";
+   os << "# mode: "
+      << (sync_ ? "sync (the device is synchronized at every region boundary)"
+          : "wall (on a GPU, asynchronous kernels are charged to the region "
+          "that next waits for the device)")
+      << "\n";
+   os << "depth,region,path,calls,incl_max,incl_min,excl_max,excl_min,"
+      "pct_of_parent\n";
+   std::vector<std::string> ancestors; // ancestors[d]: the open region at depth d
+   os << std::setprecision(9);
+   for (const RegionStats& s : stats)
+   {
+      ancestors.resize(s.depth);
+      std::string path;
+      for (const std::string& a : ancestors) { path += a + "/"; }
+      path += s.name;
+      ancestors.push_back(s.name);
+      os << s.depth << "," << s.name << "," << path << "," << s.calls << ","
+         << s.incl_max << "," << s.incl_min << "," << s.excl_max << ","
+         << s.excl_min << "," << s.pct_of_parent << "\n";
    }
 }
 

@@ -589,6 +589,18 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(output, "history", p.output.history,
           "Write a per-step <path>/<name>_history.csv (t, dt, c_d, c_l, "
           "iterations, cells, step wall time).");
+   r.ReadEnum(output, "profile", p.output.profile,
+   {
+      {"off", ProfileOutput::Off}, {"wall", ProfileOutput::Wall},
+      {"sync", ProfileOutput::Sync}
+   },
+   "Where the run's time went: at the end, apps/run_case writes the profiler's "
+   "region tree (calls, inclusive and exclusive wall seconds, max and min over "
+   "the ranks) to <path>/<name>_profile.csv and its top levels to the summary. "
+   "wall: plain wall time; on a GPU, asynchronous kernels are charged to the "
+   "region that next waits for the device. sync: wait for the device at every "
+   "region boundary, so GPU time is charged where it is spent (slower: for "
+   "profiling runs). off: neither.");
 
    const DeckSection amr = r.Section(root, "amr",
                                      "Adaptive mesh refinement (refinement only).");

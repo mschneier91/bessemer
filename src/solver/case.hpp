@@ -120,6 +120,14 @@ public:
     */
    void WriteSummary(const std::string& path, const std::string& status);
 
+   /**
+    * @brief Write the profiler's region tree as CSV (Profiler::WriteCsv):
+    *        where the wall time of this process's runs went. Collective; rank
+    *        0 writes.
+    * @param path Output file (its directory is created).
+    */
+   void WriteProfile(const std::string& path) const;
+
    /// Advance one accepted step (writes output on the configured interval).
    void Step();
 

@@ -62,7 +62,25 @@ public:
     */
    void SetClock(ClockFn clock);
 
-   /// Clear all recorded regions and restore the default (MPI_Wtime) clock.
+   /// Hook signature: run before every clock reading (region entry and exit).
+   using SyncFn = std::function<void()>;
+
+   /**
+    * @brief Run @p sync before every clock reading.
+    *
+    * A GPU launches its kernels asynchronously, so plain wall time charges a
+    * kernel to whichever region next waits for the device. With a hook that
+    * waits for the device (incns::DeviceSync), each region is charged the work
+    * it launched, at the cost of a synchronization per region boundary.
+    * @param sync The hook; an empty function removes it.
+    */
+   void SetSync(SyncFn sync);
+
+   /// @return Whether a synchronization hook is installed (SetSync).
+   bool Synchronized() const { return static_cast<bool>(sync_); }
+
+   /// Clear all recorded regions, restore the default (MPI_Wtime) clock and
+   /// remove the synchronization hook.
    void Reset();
 
    /**
@@ -91,6 +109,20 @@ public:
     * @param comm MPI communicator (defaults to MPI_COMM_WORLD).
     */
    void Print(std::ostream& os, MPI_Comm comm = MPI_COMM_WORLD) const;
+
+   /**
+    * @brief Write the reduced region tree as CSV. Collective; output only on
+    *        rank 0.
+    *
+    * Two comment lines (what the numbers are, and whether the device was
+    * synchronized), a header, then one row per region in depth-first order:
+    * depth, region, path (the region and its ancestors joined by '/'), calls,
+    * incl_max, incl_min, excl_max, excl_min (wall seconds, max and min over
+    * ranks), pct_of_parent.
+    * @param os   Output stream (written on rank 0 only).
+    * @param comm MPI communicator (defaults to MPI_COMM_WORLD).
+    */
+   void WriteCsv(std::ostream& os, MPI_Comm comm = MPI_COMM_WORLD) const;
 
 private:
    Profiler();
@@ -130,6 +162,7 @@ private:
    std::unique_ptr<Node> root_; ///< Sentinel root; real regions are its subtree.
    Node* current_;              ///< Currently open region.
    ClockFn clock_;             ///< Time source.
+   SyncFn sync_;               ///< Run before each clock reading, when set.
 };
 
 /**

@@ -84,11 +84,26 @@ int main(int argc, char* argv[])
    const bool diverged = flow_case.Diverged();
    flow_case.WriteSummary(summary, diverged ? "diverged" : "ok");
 
+   // The profile goes next to the summary: <...>_summary.json ->
+   // <...>_profile.csv (any other summary name gets ".profile.csv" appended).
+   std::string profile;
+   if (params.output.profile != incns::ProfileOutput::Off)
+   {
+      const std::string tail = "_summary.json";
+      const bool named = summary.size() >= tail.size() &&
+                         summary.compare(summary.size() - tail.size(),
+                                         tail.size(), tail) == 0;
+      profile = named ? summary.substr(0, summary.size() - tail.size()) +
+                "_profile.csv" : summary + ".profile.csv";
+      flow_case.WriteProfile(profile);
+   }
+
    if (Mpi::Root())
    {
       std::cout << "run_case: t=" << flow_case.Time() << "  status="
-                << (diverged ? "diverged" : "ok") << "  summary: " << summary
-                << std::endl;
+                << (diverged ? "diverged" : "ok") << "  summary: " << summary;
+      if (!profile.empty()) { std::cout << "  profile: " << profile; }
+      std::cout << std::endl;
    }
    return diverged ? 2 : 0;
 }

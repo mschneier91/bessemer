@@ -36,4 +36,13 @@ namespace incns
  */
 void ConfigureDevice(const std::string& backend);
 
+/**
+ * @brief Wait until the GPU has finished everything launched so far.
+ *
+ * A no-op on host backends. On a GPU it blocks until the device is idle, so a
+ * wall-clock reading taken afterwards includes the kernels launched before it
+ * (the profiler's `sync` mode, Profiler::SetSync).
+ */
+void DeviceSync();
+
 } // namespace incns

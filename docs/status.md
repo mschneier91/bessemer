@@ -9,6 +9,28 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Branch `profile-output` (2026-10-12, not merged): the profiler's results are saved.**
+Human: "can we save out the profiler results so we know where the compute is being
+spent?", ahead of the 3D Taylor-Green study.
+- `apps/run_case` writes `<path>/<name>_profile.csv` next to the summary (every region:
+  nesting path, calls, inclusive and exclusive wall seconds, max and min over the ranks),
+  and the summary gets a `profile` section (top three levels). Deck key
+  `output.profile: off | wall | sync`, default `wall`. `sync` waits for the GPU at every
+  region boundary (`incns::DeviceSync`, a new nvcc TU `util/device_sync.cpp`), so GPU time
+  is charged where it is spent. `Case::WriteProfile`, `Profiler::WriteCsv`/`SetSync`.
+- Tests: `profiler_test` (the hook; the exact CSV), new `profile_output_test` W1 (a short
+  run's file: nesting, one step region per step, children fit in their parent). Bridges-2,
+  CUDA backend, np 1 and 2: pass, with `deck_test` and `run_case`; style clean. **Not
+  run:** a CPU build; the Python bindings do not expose `output.profile`.
+- **First 3D profile** (`tgv_re1600_n16` to t = 0.5, one H100, np 1; 18 steps, 112 s):
+  87 % of the run is `inner_cg`, the inner CG of the Cahouet-Chabard Schur
+  preconditioner (106 applies, 0.93 s each, for 32,768 pressure unknowns); 12 % is in
+  `case::run` outside the steps (not broken down: the OIFS substeps have no region);
+  assembly and the outer FGMRES are negligible. `wall` and `sync` agree to 0.3 % here and
+  cost the same. **Next:** regions inside the inner solve (the LOR-AMG cycle, B M^-1 B^T)
+  and around the OIFS substeps, then the same at 32^3: is 0.93 s per apply a fixed cost of
+  a small problem on a GPU, or does it scale?
+
 **Branch `mesh-census` (2026-10-12, not merged): `apps/mesh_census`**, to check the
 `amr.end_time: 60` freeze of the Re 1000 ladder (human: "how are we confident that having
 the mesh stopping expanding at t=60 is the right call?"; "go build check2 now, make sure

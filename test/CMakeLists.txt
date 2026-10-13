@@ -78,6 +78,7 @@ incns_add_mpi_test(rule_book_test rule_book_test.cpp)
 # (proves INCNS_PROFILE compiles and is a no-op) -- the "compiles both ways" gate.
 incns_add_mpi_test(profiler_test profiler_test.cpp INCNS_ENABLE_PROFILING)
 incns_add_mpi_test(profiler_off_test profiler_off_test.cpp)
+incns_add_mpi_test(profile_output_test profile_output_test.cpp)
 incns_add_mpi_test(pressure_mean_test pressure_mean_test.cpp)
 incns_add_mpi_test(stokes_operator_test stokes_operator_test.cpp)
 incns_add_mpi_test(convection_test convection_test.cpp)

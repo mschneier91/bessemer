@@ -16,6 +16,7 @@ add_library(incns STATIC
   quadrature/rule_book.cpp
   util/profiler.cpp
   util/device.cpp
+  util/device_sync.cpp
   util/json.cpp
   post/pressure_mean.cpp
   post/kinetic_head.cpp
@@ -69,7 +70,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
 # time/cfl.cpp -- the per-element directional convective CFL rate;
 # precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
-# points and the rotation-number statistics.
+# points and the rotation-number statistics; util/device_sync.cpp -- no kernel,
+# but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
 # guarded on __CUDACC__ (mfem config/config.hpp, general/forall.hpp). Compiled
@@ -88,6 +90,7 @@ if(USE_CUDA)
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
                               precond/rotational_schur.cpp
+                              util/device_sync.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()
