@@ -7,8 +7,8 @@
 # Resolution: 64^3 Q3/Q2 elements (192 velocity nodes per direction).
 # 64^3 = 262,144 elements: beyond the desktop limits (AGENTS.md rule 3) -- a
 # GPU or many-rank run; ask the human first.
-# OIFS (BDF3, collocated mass) at CFL 2; rerun at cfl_target 1 to check the
-# time error.
+# IMEX convection at CFL 0.5 (human 2026-10-12: IMEX, not OIFS, for this
+# case); rerun at cfl_target 0.25 to check the time error.
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/tgv_re1600/tgv_re1600_n64.yaml
 #   python3 benchmarks/tgv_re1600/plot.py tgv_n64/tgv_diagnostics.csv
@@ -34,8 +34,8 @@ time:
   dt: 0.005                    # the first step; CFL control after it
   t_final: 20
   step_control: cfl
-  cfl_target: 2.0
-  convection: oifs
+  cfl_target: 0.5
+  convection: imex
 
 output:
   path: tgv_n64
