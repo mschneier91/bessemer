@@ -6,8 +6,11 @@
 #
 # Resolution: 16^3 Q3/Q2 elements (48 velocity nodes per direction).
 # 4 MPI ranks on a desktop (within the default limits; long: hours).
-# IMEX convection at CFL 0.5 (human 2026-10-12: IMEX, not OIFS, for this
-# case); rerun at cfl_target 0.25 to check the time error.
+# IMEX convection (human 2026-10-12: IMEX, not OIFS, for this case) at
+# CFL 0.25 (human 2026-10-13). NOT 0.5: at this Reynolds number BDF2 with
+# explicit convection is unstable there -- the kinetic energy RISES from
+# t ~ 1.3 at 32^3 and t ~ 0.7 at 64^3, and the run carries on, noisy, without
+# aborting. At 0.25 the energy never increases (README, "Time step").
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/tgv_re1600/tgv_re1600_n16.yaml
 #   python3 benchmarks/tgv_re1600/plot.py tgv_n16/tgv_diagnostics.csv
@@ -33,7 +36,7 @@ time:
   dt: 0.005                    # the first step; CFL control after it
   t_final: 20
   step_control: cfl
-  cfl_target: 0.5
+  cfl_target: 0.25
   convection: imex
 
 output:
