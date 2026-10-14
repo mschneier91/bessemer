@@ -323,6 +323,19 @@ private:
     */
    StokesSolver& EnsureBdfSolver(SolverCache& cache, double c0);
 
+   /// @return The trapezoidal starter solver, built on first use.
+   StokesSolver& Trap();
+
+   /// @return The plain velocity mass M on the true dofs: every solver's
+   ///         Mass() is the same operator, so whichever solver exists (the
+   ///         starter is built if none does).
+   mfem::Operator& PlainMass();
+
+   /// Release the starter solver once the march no longer needs it: not
+   /// under OIFS (the advector borrows its mass) or error control (a
+   /// rejected step may go back to it).
+   void ReleaseStarter();
+
 
    /**
     * @brief Assemble the forcing functional F(t) on velocity true dofs.
@@ -438,7 +451,11 @@ private:
    mfem::VectorCoefficient& forcing_; ///< Momentum forcing (borrowed).
    TimeIntegratorOptions opts_;       ///< Options.
 
-   std::unique_ptr<StokesSolver> trap_; ///< Trapezoidal starter solver.
+   /// Trapezoidal starter solver: built by Trap() on first use, and released
+   /// before the first BDF solver is built (IMEX with a fixed or CFL step),
+   /// so the two never coexist: each holds a whole operator and its
+   /// preconditioners (3.1 GB of 23.7 at 32^3 Q3 on a GPU, 2026-10-13).
+   std::unique_ptr<StokesSolver> trap_;
    double trap_c0_ = 0.0;               ///< Mass factor trap_ is built for (1/dt).
    SolverCache bdf2_;                   ///< BDF2 solver cache.
    SolverCache bdf3_;                   ///< BDF3 solver cache.

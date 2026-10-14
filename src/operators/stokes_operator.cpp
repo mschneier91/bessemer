@@ -2,6 +2,7 @@
 
 #include "operators/convection.hpp" // DealiasedOrder
 #include "operators/grad_div_integrator.hpp"
+#include "operators/lean_vector_diffusion.hpp"
 
 #include "mesh/mesh_size_coefficient.hpp"
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
@@ -125,7 +126,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // --- pure viscous nu*K, UNCONSTRAINED: explicit RHS terms in time steppers -
    {
       INCNS_PROFILE("viscous_unconstrained");
-      auto* kui = new VectorDiffusionIntegrator(nu_);
+      auto* kui = new LeanVectorDiffusionIntegrator(nu_);
       kui->SetIntRule(&rules.Get(geom_, 2 * ku_ + dim_ - 1));
       viscous_form_.AddDomainIntegrator(kui);
       viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
@@ -220,7 +221,9 @@ GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
    // factors on deformed elements). The mass term reuses the mass rule (incl.
    // the collocated-GLL option). Fresh integrator objects -- each form owns
    // its own; the coefficients and rules are shared members.
-   auto* ki = new VectorDiffusionIntegrator(nu_);
+   // The Lean variant: MFEM's own PA diagonal reserves ~11 GB of GPU stack on
+   // its first call (operators/lean_vector_diffusion.hpp).
+   auto* ki = new LeanVectorDiffusionIntegrator(nu_);
    ki->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
    form.AddDomainIntegrator(ki);
    if (include_mass && opts_.mass_coeff > 0.0)
@@ -261,14 +264,21 @@ void StokesOperator::BuildMomentum()
                      /*include_mass=*/true,
                      /*include_grad_div=*/true);
    momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
-   momentum_form_->Assemble();
-   momentum_form_->FormSystemMatrix(ess_tdofs_, K_);
    {
+      INCNS_PROFILE("momentum::assemble");
+      momentum_form_->Assemble();
+   }
+   {
+      INCNS_PROFILE("momentum::form_system");
+      momentum_form_->FormSystemMatrix(ess_tdofs_, K_);
       Array<int> no_ess;
       momentum_form_->FormSystemMatrix(no_ess, Aunc_);
    }
-   momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-   momentum_form_->AssembleDiagonal(momentum_diag_);
+   {
+      INCNS_PROFILE("momentum::diagonal");
+      momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+      momentum_form_->AssembleDiagonal(momentum_diag_);
+   }
 
    // Non-frozen LOR source (c0*M + nu*K + grad-div, the latter with the
    // parent-element gamma) tracks the current mass factor, so the

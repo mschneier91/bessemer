@@ -45,4 +45,14 @@ void ConfigureDevice(const std::string& backend);
  */
 void DeviceSync();
 
+/**
+ * @brief Memory in use on this process's GPU, in bytes: everything allocated
+ *        there (MFEM, hypre, the CUDA context), as the driver reports it.
+ *
+ * For the profiler's gauge (Profiler::SetGauge). 0 on host backends and on
+ * HIP. On a GPU shared with other processes it counts theirs too.
+ * @return Bytes in use.
+ */
+double DeviceMemoryInUse();
+
 } // namespace incns

@@ -9,6 +9,37 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**GPU memory (2026-10-13, on `main`): 64^3 Q3/Q2 fits one 80 GB H100; the limit is 69^3.**
+Human: "find out how many dofs I can fit on a GPU", then "implement both".
+- **Measured** (Taylor-Green defaults, ~10 steps, one H100): before, 56^3 (14.2 M velocity
+  dofs) at 74.5 GB and 60^3 out of memory; after the two fixes below 64^3 at 63.9 GB,
+  **69^3 (26.6 M velocity + 2.6 M pressure dofs) at 78.4 GB, 70^3 out of memory**; about
+  3.0 kB per velocity dof.
+- **The profiler has a gauge** (`Profiler::SetGauge`; `output.profile: sync` on a GPU
+  installs `DeviceMemoryInUse`): three more CSV columns per region, what its first call
+  left allocated, the same over all calls, and the peak while it was open.
+- **Fix 1: 11 GB of GPU stack.** MFEM's `VectorDiffusionIntegrator::AssembleDiagonalPA`
+  reserves 44 kB of stack per GPU thread on its first call (work arrays sized by
+  `DofQuadLimits::MAX_*`), 11 GB on an H100 for the life of the process, independent of
+  the problem. `LeanVectorDiffusionIntegrator` overrides only that diagonal. Written up
+  for upstream in [upstream/mfem_vector_diffusion_diagonal.md](upstream/mfem_vector_diffusion_diagonal.md);
+  **not reported to MFEM yet**.
+- **Fix 2: the trapezoidal starter solver** is built on first use and released before
+  the first BDF solver is built (not under OIFS or error control), so two whole operators
+  and preconditioners never coexist; a resumed march never builds it.
+- **Tests:** fast tier CUDA np 1 63/63 (without `nse_mms_test`, `tgv_nse_test`);
+  `lean_vector_diffusion_test`, `profiler_test`, `pbj_grad_div_test` also at np 2. **Not
+  run:** the fast tier at np 2, a CPU build, OIFS or adaptive stepping after fix 2 beyond
+  the np 1 tier.
+- **Where the rest goes at 64^3 (63.9 GB)**, candidates, none acted on: 14.9 GB in
+  `case::setup` outside the time integrator, with no regions yet; vector-diffusion PA data
+  13.5 GB (27 numbers per point where 6 would do, in the momentum form and again in
+  `viscous_unconstrained`); the pressure LOR-AMG about 9 GB for 2.1 M unknowns (3 GB at
+  setup, 5.8 GB at its first apply); 4.9 GB unattributed in `time_integrator::setup`; each
+  momentum reassembly allocates 9.4 GB before the old form is freed.
+- Feature costs at 32^3 (23.7 GB before the fixes): grad-div 1.1 GB; OIFS +4.4 GB;
+  `a_pc: loramg` +21.7 GB; PBJ, the Schur grad-div term and diagnostics within 0.3 GB.
+
 **Branch `profile-output` (2026-10-12, not merged): the profiler's results are saved.**
 Human: "can we save out the profiler results so we know where the compute is being
 spent?", ahead of the 3D Taylor-Green study.

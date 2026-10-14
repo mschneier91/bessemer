@@ -32,6 +32,13 @@ struct RegionStats
    double excl_max = 0.0; ///< Exclusive time, max over ranks.
    double excl_min = 0.0; ///< Exclusive time, min over ranks.
    double pct_of_parent = 0.0; ///< Inclusive (max) as a percent of the parent's.
+   /// With a gauge (Profiler::SetGauge), in the gauge's unit, max over ranks:
+   /// what the region's FIRST call left behind (reading at exit - at entry).
+   double gauge_net_first = 0.0;
+   double gauge_net_total = 0.0; ///< The same, summed over every call.
+   /// The largest reading taken while the region was open (its own entries
+   /// and exits and those of everything nested in it).
+   double gauge_peak = 0.0;
 };
 
 /**
@@ -76,11 +83,28 @@ public:
     */
    void SetSync(SyncFn sync);
 
+   /// Gauge signature: a quantity in use right now (e.g. device memory, bytes).
+   using GaugeFn = std::function<double()>;
+
+   /**
+    * @brief Read @p gauge at every region entry and exit.
+    *
+    * Each region then records what its first call left behind (exit - entry),
+    * the same summed over all its calls, and the largest reading taken while
+    * it was open. With incns::DeviceMemoryInUse this attributes GPU memory to
+    * the regions that allocate it; WriteCsv gains three columns.
+    * @param gauge The gauge; an empty function removes it.
+    */
+   void SetGauge(GaugeFn gauge);
+
+   /// @return Whether a gauge is installed (SetGauge).
+   bool Gauged() const { return static_cast<bool>(gauge_); }
+
    /// @return Whether a synchronization hook is installed (SetSync).
    bool Synchronized() const { return static_cast<bool>(sync_); }
 
    /// Clear all recorded regions, restore the default (MPI_Wtime) clock and
-   /// remove the synchronization hook.
+   /// remove the synchronization hook and the gauge.
    void Reset();
 
    /**
@@ -118,7 +142,9 @@ public:
     * synchronized), a header, then one row per region in depth-first order:
     * depth, region, path (the region and its ancestors joined by '/'), calls,
     * incl_max, incl_min, excl_max, excl_min (wall seconds, max and min over
-    * ranks), pct_of_parent.
+    * ranks), pct_of_parent. With a gauge (SetGauge), a third comment line and
+    * three more columns: gauge_net_first_mib, gauge_net_total_mib,
+    * gauge_peak_mib (the gauge's readings / 2^20, max over ranks).
     * @param os   Output stream (written on rank 0 only).
     * @param comm MPI communicator (defaults to MPI_COMM_WORLD).
     */
@@ -135,6 +161,9 @@ private:
       std::vector<std::unique_ptr<Node>> children; ///< Child regions.
       double inclusive = 0.0;                      ///< Accumulated inclusive time.
       long long calls = 0;                         ///< Entry count.
+      double gauge_net_first = 0.0; ///< Gauge: exit - entry of the first call.
+      double gauge_net_total = 0.0; ///< Gauge: exit - entry, all calls.
+      double gauge_peak = 0.0;      ///< Gauge: largest reading while open.
 
       /**
        * @brief Find a child region by name, creating it if absent.
@@ -163,6 +192,15 @@ private:
    Node* current_;              ///< Currently open region.
    ClockFn clock_;             ///< Time source.
    SyncFn sync_;               ///< Run before each clock reading, when set.
+   GaugeFn gauge_;             ///< Read at each entry and exit, when set.
+   /// Gauge readings at the entries of the open regions (innermost last).
+   std::vector<double> gauge_entries_;
+
+   /**
+    * @brief Raise the peak of the current region and of its ancestors.
+    * @param reading A gauge reading taken now.
+    */
+   void RecordPeak(double reading);
 };
 
 /**

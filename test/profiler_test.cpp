@@ -167,3 +167,46 @@ TEST(Profiler, CsvHasOneRowPerRegionWithItsPath)
    EXPECT_EQ(lines[5], "0,second,second,1,1,1,1,1,20");
    EXPECT_NE(os2.str().find("# mode: sync"), std::string::npos);
 }
+
+// The gauge: scripted readings at each entry and exit. outer opens at 10, inner
+// at 12 and closes at 30 (left 18 behind, the peak so far), outer closes at 25
+// (left 15 behind; its peak is inner's 30). inner runs again, 25 -> 26.
+TEST(Profiler, GaugeAttributesWhatRegionsLeaveBehind)
+{
+   Profiler& p = Profiler::Instance();
+   p.Reset();
+   const double mib = 1024.0 * 1024.0;
+   std::vector<double> script = {10, 12, 30, 25, 25, 25, 26, 26};
+   std::size_t next = 0;
+   p.SetGauge([&] { return script.at(next++) * mib; });
+   EXPECT_TRUE(p.Gauged());
+   {
+      incns::ScopedRegion outer("outer");
+      { incns::ScopedRegion inner("inner"); }
+   }
+   {
+      incns::ScopedRegion outer("outer");
+      { incns::ScopedRegion inner("inner"); }
+   }
+   const std::vector<incns::RegionStats> r = p.Report();
+   ASSERT_EQ(r.size(), 2u);
+   EXPECT_EQ(r[0].name, "outer");
+   EXPECT_DOUBLE_EQ(r[0].gauge_net_first, 15 * mib);
+   EXPECT_DOUBLE_EQ(r[0].gauge_net_total, 16 * mib);
+   EXPECT_DOUBLE_EQ(r[0].gauge_peak, 30 * mib);
+   EXPECT_EQ(r[1].name, "inner");
+   EXPECT_DOUBLE_EQ(r[1].gauge_net_first, 18 * mib);
+   EXPECT_DOUBLE_EQ(r[1].gauge_net_total, 19 * mib);
+   EXPECT_DOUBLE_EQ(r[1].gauge_peak, 30 * mib);
+
+   std::ostringstream csv;
+   p.WriteCsv(csv);
+   if (mfem::Mpi::Root())
+   {
+      EXPECT_NE(csv.str().find(",gauge_net_first_mib,gauge_net_total_mib,"
+                               "gauge_peak_mib\n"), std::string::npos);
+      EXPECT_NE(csv.str().find(",15,16,30\n"), std::string::npos) << csv.str();
+   }
+   p.Reset();
+   EXPECT_FALSE(p.Gauged());
+}

@@ -156,6 +156,11 @@ void Case::EnsureSetup()
    if (params_.output.profile == ProfileOutput::Sync)
    {
       Profiler::Instance().SetSync(&DeviceSync);
+      // And, on a GPU, where its memory goes (three more CSV columns).
+      if (mfem::Device::Allows(mfem::Backend::CUDA_MASK))
+      {
+         Profiler::Instance().SetGauge(&DeviceMemoryInUse);
+      }
    }
    INCNS_PROFILE("case::setup");
 

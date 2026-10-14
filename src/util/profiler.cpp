@@ -43,12 +43,28 @@ void Profiler::SetSync(SyncFn sync)
    sync_ = std::move(sync);
 }
 
+void Profiler::SetGauge(GaugeFn gauge)
+{
+   gauge_ = std::move(gauge);
+   gauge_entries_.clear();
+}
+
 void Profiler::Reset()
 {
    root_ = std::make_unique<Node>();
    current_ = root_.get();
    clock_ = [] { return MPI_Wtime(); };
    sync_ = nullptr;
+   gauge_ = nullptr;
+   gauge_entries_.clear();
+}
+
+void Profiler::RecordPeak(double reading)
+{
+   for (Node* n = current_; n != nullptr; n = n->parent)
+   {
+      n->gauge_peak = std::max(n->gauge_peak, reading);
+   }
 }
 
 double Profiler::Enter(const char* name)
@@ -57,6 +73,12 @@ double Profiler::Enter(const char* name)
    current_->calls += 1;
    // Work launched before this region belongs to its parent.
    if (sync_) { sync_(); }
+   if (gauge_)
+   {
+      const double reading = gauge_();
+      gauge_entries_.push_back(reading);
+      RecordPeak(reading);
+   }
    return clock_();
 }
 
@@ -65,6 +87,16 @@ void Profiler::Exit(double start)
    // Work launched inside this region belongs to it.
    if (sync_) { sync_(); }
    current_->inclusive += clock_() - start;
+   // A region open when the gauge was installed has no entry reading.
+   if (gauge_ && !gauge_entries_.empty())
+   {
+      const double reading = gauge_();
+      const double net = reading - gauge_entries_.back();
+      gauge_entries_.pop_back();
+      if (current_->calls == 1) { current_->gauge_net_first = net; }
+      current_->gauge_net_total += net;
+      RecordPeak(reading);
+   }
    current_ = current_->parent;
 }
 
@@ -102,6 +134,13 @@ std::vector<RegionStats> Profiler::Report(MPI_Comm comm) const
       excl[i] = nodes[i]->inclusive - child_sum;
    }
 
+   std::vector<double> g_first(n), g_total(n), g_peak(n);
+   for (int i = 0; i < n; ++i)
+   {
+      g_first[i] = nodes[i]->gauge_net_first;
+      g_total[i] = nodes[i]->gauge_net_total;
+      g_peak[i] = nodes[i]->gauge_peak;
+   }
    std::vector<double> incl_max(incl), incl_min(incl);
    std::vector<double> excl_max(excl), excl_min(excl);
    if (n > 0)
@@ -110,6 +149,9 @@ std::vector<RegionStats> Profiler::Report(MPI_Comm comm) const
       MPI_Allreduce(MPI_IN_PLACE, incl_min.data(), n, MPI_DOUBLE, MPI_MIN, comm);
       MPI_Allreduce(MPI_IN_PLACE, excl_max.data(), n, MPI_DOUBLE, MPI_MAX, comm);
       MPI_Allreduce(MPI_IN_PLACE, excl_min.data(), n, MPI_DOUBLE, MPI_MIN, comm);
+      MPI_Allreduce(MPI_IN_PLACE, g_first.data(), n, MPI_DOUBLE, MPI_MAX, comm);
+      MPI_Allreduce(MPI_IN_PLACE, g_total.data(), n, MPI_DOUBLE, MPI_MAX, comm);
+      MPI_Allreduce(MPI_IN_PLACE, g_peak.data(), n, MPI_DOUBLE, MPI_MAX, comm);
    }
 
    double top_total = 0.0;
@@ -128,6 +170,9 @@ std::vector<RegionStats> Profiler::Report(MPI_Comm comm) const
       out[i].incl_min = incl_min[i];
       out[i].excl_max = excl_max[i];
       out[i].excl_min = excl_min[i];
+      out[i].gauge_net_first = g_first[i];
+      out[i].gauge_net_total = g_total[i];
+      out[i].gauge_peak = g_peak[i];
 
       const int p = parents[i];
       const double ref = (p >= 0) ? incl_max[p] : top_total;
@@ -181,8 +226,17 @@ void Profiler::WriteCsv(std::ostream& os, MPI_Comm comm) const
           : "wall (on a GPU, asynchronous kernels are charged to the region "
           "that next waits for the device)")
       << "\n";
+   if (gauge_)
+   {
+      os << "# gauge (device memory in use, MiB, max over ranks): net_first = "
+         "what the region's first call left allocated, net_total = the same "
+         "over all calls, peak = the most in use while it was open\n";
+   }
    os << "depth,region,path,calls,incl_max,incl_min,excl_max,excl_min,"
-      "pct_of_parent\n";
+      "pct_of_parent"
+      << (gauge_ ? ",gauge_net_first_mib,gauge_net_total_mib,gauge_peak_mib"
+          : "") << "\n";
+   const double mib = 1024.0 * 1024.0;
    std::vector<std::string> ancestors; // ancestors[d]: the open region at depth d
    os << std::setprecision(9);
    for (const RegionStats& s : stats)
@@ -194,7 +248,13 @@ void Profiler::WriteCsv(std::ostream& os, MPI_Comm comm) const
       ancestors.push_back(s.name);
       os << s.depth << "," << s.name << "," << path << "," << s.calls << ","
          << s.incl_max << "," << s.incl_min << "," << s.excl_max << ","
-         << s.excl_min << "," << s.pct_of_parent << "\n";
+         << s.excl_min << "," << s.pct_of_parent;
+      if (gauge_)
+      {
+         os << "," << s.gauge_net_first / mib << "," << s.gauge_net_total / mib
+            << "," << s.gauge_peak / mib;
+      }
+      os << "\n";
    }
 }
 

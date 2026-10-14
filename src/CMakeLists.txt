@@ -29,6 +29,7 @@ add_library(incns STATIC
   operators/directional_do_nothing.cpp
   time/oifs.cpp
   operators/grad_div_integrator.cpp
+  operators/lean_vector_diffusion.cpp
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
@@ -86,6 +87,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # The other entries open with the #error guard (CLAUDE.md).
 if(USE_CUDA)
   set_source_files_properties(operators/grad_div_integrator.cpp
+                              operators/lean_vector_diffusion.cpp
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp

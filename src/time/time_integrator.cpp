@@ -99,39 +99,9 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                          spaces_.Velocity(), spaces_.Pressure());
    }
 
-   // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
-   // halving the viscosity passed to the solver (the Schur scale follows).
-   {
-      StokesSolverOptions so;
-      so.nu = 0.5 * opts_.nu;
-      so.collocated_mass = opts_.collocated_mass;
-      so.grad_div = opts_.grad_div;
-      so.grad_div_scale = opts_.grad_div_scale;
-      so.grad_div_nu = opts_.grad_div_nu;
-      so.velocity_prec = opts_.velocity_prec;
-      so.amg_reuse = opts_.amg_reuse;
-      so.schur = opts_.schur;
-      so.cc = opts_.cc;
-      so.mass_coeff = 1.0 / dt_;
-      if (rotational_)
-      {
-         // Trapezoidal split, like the viscous term: alpha = 1/2 here, the
-         // other half of N goes to the right-hand side explicitly.
-         so.lagged_velocity = &w_star_;
-         so.rotation_alpha = 0.5;
-         so.rotation_pc = opts_.rotation_pc;
-         so.rotation_in_lor = opts_.rotation_in_lor;
-         so.rotation_schur = opts_.rotation_schur;
-         so.rotation_diagnostics = opts_.rotation_diagnostics;
-      }
-      so.rtol = opts_.rtol;
-      so.atol = opts_.atol;
-      so.max_iter = opts_.max_iter;
-      so.kdim = opts_.kdim;
-      so.print_level = opts_.print_level;
-      trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
-      trap_c0_ = 1.0 / dt_;
-   }
+   // The trapezoidal starter solver is built on first use (Trap()): a march
+   // that resumes with its history (a restart, an adapted mesh) never
+   // needs it.
 
    if (oifs_conv_)
    {
@@ -139,8 +109,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       // the same plain M; the right-hand side uses trap_'s). OifsAdvector
       // aborts if its inverse does not reproduce it.
       oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_,
-                                             opts_.oifs_cfl, trap_->Blocks().Mass(),
-                                             trap_->Blocks().MassDiagonal());
+                                             opts_.oifs_cfl, Trap().Blocks().Mass(),
+                                             Trap().Blocks().MassDiagonal());
    }
 
    if (opts_.adaptive)
@@ -315,6 +285,59 @@ bool StokesTimeIntegrator::Done() const
    return t_ >= opts_.t_final - 0.5 * opts_.dt;
 }
 
+StokesSolver& StokesTimeIntegrator::Trap()
+{
+   if (trap_) { return *trap_; }
+   INCNS_PROFILE("time_integrator::build_starter");
+   // Trapezoidal starter: [(1/dt) M + (nu/2) K] u^1 = ... -- realized by
+   // halving the viscosity passed to the solver (the Schur scale follows).
+   StokesSolverOptions so;
+   so.nu = 0.5 * opts_.nu;
+   so.collocated_mass = opts_.collocated_mass;
+   so.grad_div = opts_.grad_div;
+   so.grad_div_scale = opts_.grad_div_scale;
+   so.grad_div_nu = opts_.grad_div_nu;
+   so.velocity_prec = opts_.velocity_prec;
+   so.amg_reuse = opts_.amg_reuse;
+   so.schur = opts_.schur;
+   so.cc = opts_.cc;
+   so.mass_coeff = 1.0 / dt_;
+   if (rotational_)
+   {
+      // Trapezoidal split, like the viscous term: alpha = 1/2 here, the
+      // other half of N goes to the right-hand side explicitly.
+      so.lagged_velocity = &w_star_;
+      so.rotation_alpha = 0.5;
+      so.rotation_pc = opts_.rotation_pc;
+      so.rotation_in_lor = opts_.rotation_in_lor;
+      so.rotation_schur = opts_.rotation_schur;
+      so.rotation_diagnostics = opts_.rotation_diagnostics;
+   }
+   so.rtol = opts_.rtol;
+   so.atol = opts_.atol;
+   so.max_iter = opts_.max_iter;
+   so.kdim = opts_.kdim;
+   so.print_level = opts_.print_level;
+   trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
+   trap_c0_ = 1.0 / dt_;
+   return *trap_;
+}
+
+Operator& StokesTimeIntegrator::PlainMass()
+{
+   if (trap_) { return trap_->Blocks().Mass(); }
+   if (bdf2_.solver) { return bdf2_.solver->Blocks().Mass(); }
+   if (bdf3_.solver) { return bdf3_.solver->Blocks().Mass(); }
+   return Trap().Blocks().Mass();
+}
+
+void StokesTimeIntegrator::ReleaseStarter()
+{
+   if (!trap_ || oifs_ || opts_.adaptive) { return; }
+   if (last_solver_ == trap_.get()) { last_solver_ = nullptr; }
+   trap_.reset();
+}
+
 StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       double c0)
 {
@@ -394,7 +417,7 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
       oifs_->Advect(c, hist_, hist_times_, t_new,
                     static_cast<int>(ExtrapolationOrder()), combo);
       OifsBoundaryValues(c, t_new, combo);
-      trap_->Blocks().Mass().Mult(combo, tmp);
+      PlainMass().Mult(combo, tmp);
       b -= tmp;
       SubtractOifsDirectionalDoNothing(t_new, b);
       return;
@@ -405,8 +428,8 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
       combo.Add(c[j], hist_[j - 1]);
    }
    // Any solver's Mass() is the same plain M (mass_coeff scales only the
-   // momentum block); the trapezoidal solver always exists.
-   trap_->Blocks().Mass().Mult(combo, tmp);
+   // momentum block).
+   PlainMass().Mult(combo, tmp);
    b -= tmp;
 
    SubtractConvection(t_new, b, ext);
@@ -584,7 +607,7 @@ void StokesTimeIntegrator::StepStartup()
          u0_adv.SetSubVector(oifs_->ImposedDofs(), vals);
       }
       const Vector& u0 = oifs_ ? u0_adv : hist_[0];
-      trap_->Blocks().Mass().Mult(u0, tmp);
+      Trap().Blocks().Mass().Mult(u0, tmp);
       b.Add(1.0 / dt_, tmp);
       trap_->Blocks().ViscousUnconstrained().Mult(u0, tmp); // (nu/2) K u^0
       b -= tmp;
@@ -616,6 +639,8 @@ void StokesTimeIntegrator::StepStartup()
    else
    {
       // Second step: BDF2 from {u^1, u^0} (weights from the actual times).
+      // The starter goes first, so that it and the BDF solver never coexist.
+      ReleaseStarter();
       std::vector<double> times = {t_new, hist_times_[0], hist_times_[1]};
       const std::vector<double> c = BdfWeights(times);
       solver = &EnsureBdfSolver(bdf2_, c[0]);
@@ -653,6 +678,7 @@ void StokesTimeIntegrator::StepFixed()
    times.push_back(t_new);
    for (int j = 0; j < k; ++j) { times.push_back(hist_times_[j]); }
    const std::vector<double> c = BdfWeights(times);
+   ReleaseStarter(); // a resumed march may reach here with it built
    StokesSolver& solver =
       EnsureBdfSolver(use_bdf3 ? bdf3_ : bdf2_, c[0]);
 
