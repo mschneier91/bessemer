@@ -35,6 +35,8 @@ struct StokesSolverOptions
    /// Grad-div scaling: OrderH (gamma = c_gd*h) or OrderNu (gamma = c_gd*nu).
    GradDivScale grad_div_scale = GradDivScale::OrderH;
    double grad_div_nu = 0.0; ///< Plus grad_div_nu * nu (StokesOperatorOptions).
+   /// The viscosity gamma is computed from; <= 0: nu (StokesOperatorOptions).
+   double grad_div_nu_ref = -1.0;
    /// Velocity-block preconditioner (default Jacobi; LORAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
@@ -225,6 +227,25 @@ public:
     * @param c0 New leading BDF weight beta0/dt (>= 0).
     */
    void Refresh(double c0);
+
+   /**
+    * @brief Refresh for a new mass factor AND a new viscosity: the same
+    *        solver then serves a different operator c0*M + nu*K, e.g. the
+    *        trapezoidal starter's (1/dt, nu/2) and then the BDF steps'
+    *        (beta0/dt, nu). Nothing structural is rebuilt: the pressure
+    *        AMG hierarchy does not depend on either number.
+    * @param c0 New mass factor (>= 0).
+    * @param nu New viscosity (> 0). @pre CanChangeViscosity() if it
+    *           differs from the current one.
+    */
+   void Refresh(double c0, double nu);
+
+   /// @return Whether Refresh(c0, nu) may change the viscosity: the
+   ///         Cahouet-Chabard Schur path, no rotation term, no frozen
+   ///         velocity LOR hierarchy, and a grad-div coefficient that
+   ///         does not follow this solver's nu (none of it proportional to
+   ///         nu, or grad_div_nu_ref set).
+   bool CanChangeViscosity();
 
    /**
     * @brief Recompute the rotation term from the lagged velocity's current

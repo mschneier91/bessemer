@@ -117,10 +117,8 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
                                     Device::GetDeviceMemoryType());
    inv_dxi_ = InverseNodeSpacing(order_);
    inv_dxi_.UseDevice(true);
-   ue_.SetSize(restr_->Height());
-   ue_.UseDevice(true);
-   uq_.SetSize(ir_->GetNPoints() * dim_ * ne_);
-   uq_.UseDevice(true);
+   const auto* h1 = dynamic_cast<const H1_FECollection*>(vfes.FEColl());
+   nodal_gll_ = h1 && h1->GetBasisType() == BasisType::GaussLobatto;
    rate_.SetSize(ne_);
    rate_.UseDevice(true);
 }
@@ -131,11 +129,27 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
    double local = 0.0;
    if (ne_ > 0)
    {
-      restr_->Mult(u, ue_);
-      qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
-      qi_->Values(ue_, uq_);
-      cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq_, geom_->J, inv_dxi_,
-                                rate_);
+      // The element copies of the velocity live for this call only: kept as
+      // members they held 0.8 GB for 64^3 Q3 elements (2026-10-13).
+      Vector ue(restr_->Height());
+      ue.UseDevice(true);
+      restr_->Mult(u, ue);
+      if (nodal_gll_)
+      {
+         // (dofs, component, element), lexicographic: the layout the kernel
+         // reads, with the dofs at the GLL points.
+         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom_->J,
+                                   inv_dxi_, rate_);
+      }
+      else
+      {
+         Vector uq(ir_->GetNPoints() * dim_ * ne_);
+         uq.UseDevice(true);
+         qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
+         qi_->Values(ue, uq);
+         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom_->J,
+                                   inv_dxi_, rate_);
+      }
       local = rate_.Max(); // device-aware reduction
    }
    double global = 0.0;

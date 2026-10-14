@@ -402,6 +402,14 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "Block preconditioner shape.");
    r.Read(solver, "n_inner", p.cc.n_inner,
           "Cahouet-Chabard: fixed inner CG iterations on the pressure Poisson block.");
+   r.Read(solver, "lp_strong_threshold", p.cc.lp_strong_threshold,
+          "Pressure LOR-AMG: BoomerAMG strength threshold (< 0: 0.25 in 3D, "
+          "0.1 in 2D). Larger gives sparser coarse levels and less memory.");
+   r.Read(solver, "lp_agg_levels", p.cc.lp_agg_levels,
+          "Pressure LOR-AMG: levels of aggressive coarsening (0 = none).");
+   r.Read(solver, "lp_print_level", p.cc.lp_print_level,
+          "Pressure LOR-AMG: hypre's setup print level (1 prints the grid and "
+          "operator complexities).");
    r.Read(solver, "lp_vcycles", p.cc.lp_vcycles,
           "Cahouet-Chabard: LOR-AMG V-cycles preconditioning the inner CG.");
    r.ReadEnum(solver, "pc_quadrature", p.cc.pc_quadrature,

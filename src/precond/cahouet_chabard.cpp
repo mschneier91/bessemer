@@ -138,6 +138,7 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    // the collocated GLL rule -> exactly diagonal -> DiagDirect is REQUIRED
    // (a non-collocated basis fails loudly instead of silently degrading).
    {
+      INCNS_PROFILE("cc::setup_pressure_mass");
       const int kp = pfes.FEColl()->GetOrder();
       const Geometry::Type geom = (pfes.GetParMesh()->Dimension() == 3)
                                   ? Geometry::CUBE : Geometry::SQUARE;
@@ -164,6 +165,9 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    // when consistent). GllCollocated: the PC builds its OWN collocated-GLL
    // vector mass (diagonal -> one fused multiply per inner-CG iteration); the
    // system operator is untouched -- only the preconditioner cheapens.
+   // (profile only) the velocity mass inverse inside B M_v^-1 B^T
+   auto prof_mv =
+      std::make_unique<ScopedRegion>("cc::setup_velocity_mass_inverse");
    if (colloc)
    {
       const int ku = vfes.FEColl()->GetOrder();
@@ -190,6 +194,7 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    }
    // The factors go through named regions, so the profile shows the gradient,
    // the mass inverse and the divergence of each B M_v^-1 B^T apply.
+   prof_mv.reset();
    b_prof_ = std::make_unique<ProfiledOperator>(B, "cc::divergence",
              "cc::gradient");
    mv_inv_prof_ = std::make_unique<ProfiledOperator>(
@@ -200,9 +205,13 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    {
       bmb_proj_ = std::make_unique<ProjectedOperator>(*bmb_, *proj_);
    }
-   lp_ = std::make_unique<LpSurrogate>(pfes, outflow_attrs, singular_,
-                                       cfg_.lp_bc, cfg_.lp_dirichlet_attrs,
-                                       cfg_.lp_vcycles);
+   {
+      INCNS_PROFILE("cc::setup_lor_amg");
+      lp_ = std::make_unique<LpSurrogate>(pfes, outflow_attrs, singular_,
+                                          cfg_.lp_bc, cfg_.lp_dirichlet_attrs,
+                                          cfg_.lp_vcycles, cfg_.lp_strong_threshold,
+                                          cfg_.lp_agg_levels, cfg_.lp_print_level);
+   }
 
    // --- the inner CG: SPD operator + symmetric PC => CG, never GMRES ----------
    inner_cg_ = std::make_unique<CGSolver>(pfes.GetComm());

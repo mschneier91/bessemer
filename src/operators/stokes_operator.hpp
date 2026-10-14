@@ -42,6 +42,11 @@ struct StokesOperatorOptions
    /// gamma = [c_gd * h_K or c_gd * nu] + grad_div_nu * nu. Grad-div is on
    /// when either is positive.
    double grad_div_nu = 0.0;
+   /// The viscosity gamma's nu-proportional part is computed from; <= 0: nu.
+   /// A solver whose nu is not the fluid's (the trapezoidal starter is
+   /// built with nu / 2, the factor on ITS viscous term) passes the fluid's
+   /// here: grad-div is a stabilization, the same in every step.
+   double grad_div_nu_ref = -1.0;
    /// Build the low-order-refined (LOR) source form for the BoomerAMG velocity
    /// preconditioner (see MomentumLORForm()). Off by default -- the matrix-free
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
@@ -200,7 +205,27 @@ public:
     *        of time steppers (e.g. the trapezoidal starter's K u^0 term).
     * @return Unconstrained operator regardless of @c ess_tdofs.
     */
-   mfem::Operator& ViscousUnconstrained() { return *Kunc_.Ptr(); }
+   mfem::Operator& ViscousUnconstrained();
+
+   /// Free the unconstrained viscous operator (its PA data is as large as
+   /// the momentum block's diffusion data); the next ViscousUnconstrained()
+   /// builds it again.
+   void ReleaseViscousUnconstrained();
+
+   /**
+    * @brief Change the viscosity. The momentum block is NOT rebuilt here:
+    *        follow with SetMassCoeff() (StokesSolver::Refresh does both).
+    *
+    * Not for a frozen LOR source (built once at the old viscosity) or a
+    * grad-div coefficient with a part proportional to nu: the caller
+    * checks (StokesSolver::CanChangeViscosity).
+    * @param nu New viscosity (> 0).
+    */
+   void SetViscosity(double nu);
+
+   /// @return Whether the velocity LOR source is frozen at its reference
+   ///         mass factor and viscosity.
+   bool LorFrozen() const { return opts_.lor_momentum && opts_.lor_frozen; }
 
    /**
     * @brief The momentum block A = mass_coeff*M + nu*K (+ grad-div) on true
@@ -339,7 +364,9 @@ private:
    /// Frozen: c0_ref*M + nu*K (+ grad-div), built once. Non-frozen: c0*M + nu*K
    /// (+ grad-div), rebuilt with the momentum block.
    std::unique_ptr<mfem::ParBilinearForm> lor_form_;
-   mfem::ParBilinearForm viscous_form_;   ///< Pure viscous form (unconstrained).
+   /// Pure viscous form (unconstrained); null until ViscousUnconstrained()
+   /// builds it, and again after ReleaseViscousUnconstrained().
+   std::unique_ptr<mfem::ParBilinearForm> viscous_form_;
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.

@@ -21,6 +21,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.grad_div = o.grad_div;
    so.grad_div_scale = o.grad_div_scale;
    so.grad_div_nu = o.grad_div_nu;
+   so.grad_div_nu_ref = o.grad_div_nu_ref;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lagged_velocity = o.lagged_velocity;
    so.rotation_alpha = o.rotation_alpha;
@@ -355,6 +356,29 @@ void StokesSolver::Refresh(double c0)
                         opts_.rotation_pc != RotationVelocityPC::Symmetric;
    const bool frozen_amg = !use_pbj && lor_vel && opts_.amg_reuse;
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
+}
+
+bool StokesSolver::CanChangeViscosity()
+{
+   // gamma follows nu only through its nu-proportional part, and not at all
+   // when that part is tied to a reference viscosity.
+   const bool gamma_fixed =
+      opts_.grad_div_nu_ref > 0.0 ||
+      (opts_.grad_div_nu == 0.0 &&
+       (opts_.grad_div == 0.0 || opts_.grad_div_scale == GradDivScale::OrderH));
+   return cc_mode_ && !op_.Rotation() && !op_.LorFrozen() && gamma_fixed;
+}
+
+void StokesSolver::Refresh(double c0, double nu)
+{
+   if (nu != opts_.nu)
+   {
+      MFEM_VERIFY(CanChangeViscosity(), "stokes_solver: this solver cannot "
+                  "change its viscosity (see CanChangeViscosity)");
+      op_.SetViscosity(nu);
+      opts_.nu = nu; // the Schur preconditioner's nu, in Refresh(c0) below
+   }
+   Refresh(c0);
 }
 
 void StokesSolver::UpdateRotation()

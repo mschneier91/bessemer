@@ -76,7 +76,8 @@ public:
                const mfem::Array<int>& outflow_attrs, bool singular,
                LpBC bc_mode = LpBC::Auto,
                const mfem::Array<int>& dirichlet_attrs = mfem::Array<int>(),
-               int vcycles = 1)
+               int vcycles = 1, double strong_threshold = -1.0,
+               int agg_levels = 0, int print_level = 0)
       : mfem::Solver(pfes.GetTrueVSize()), form_(&pfes),
         ortho_(pfes.GetComm())
    {
@@ -134,7 +135,7 @@ public:
 
       // --- CG legality + singular-safety knobs, set EXPLICITLY --------------
       mfem::HypreBoomerAMG& amg = lor_->GetSolver();
-      amg.SetPrintLevel(0);
+      amg.SetPrintLevel(print_level);
       amg.iterative_mode = false;
       amg.SetMaxIter(vcycles); // n V-cycles from zero guess: still a fixed op
       HYPRE_Solver h = static_cast<HYPRE_Solver>(amg);
@@ -145,7 +146,16 @@ public:
       HYPRE_BoomerAMGSetRelaxType(h, SymmetricAmgSmoother());
       HYPRE_BoomerAMGSetNumSweeps(h, 1);
       // Strength-of-connection starting points per the spec (2D/3D).
-      HYPRE_BoomerAMGSetStrongThreshold(h, mesh.Dimension() == 3 ? 0.25 : 0.1);
+      HYPRE_BoomerAMGSetStrongThreshold(
+         h, strong_threshold >= 0.0 ? strong_threshold
+         : (mesh.Dimension() == 3 ? 0.25 : 0.1));
+      if (agg_levels > 0)
+      {
+         // Aggressive coarsening on the first levels; second-stage
+         // interpolation 5 is one hypre runs on a GPU (hypre_device.hpp).
+         HYPRE_BoomerAMGSetAggNumLevels(h, agg_levels);
+         HYPRE_BoomerAMGSetAggInterpType(h, 5);
+      }
       // On a GPU every option above must be one hypre runs there, fast.
       VerifyHypreAmgOnDevice(amg, "lp_surrogate: the pressure LOR-AMG");
 

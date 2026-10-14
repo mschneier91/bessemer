@@ -46,6 +46,7 @@ add_library(incns STATIC
   post/checkpoint.cpp
   post/body_force.cpp
   post/diagnostics.cpp
+  post/flow_sums.cpp
   post/channel_statistics.cpp
   post/force_statistics.cpp
   post/run_monitor.cpp
@@ -91,6 +92,7 @@ if(USE_CUDA)
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp
+                              post/flow_sums.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
                               precond/rotational_schur.cpp

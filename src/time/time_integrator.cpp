@@ -83,6 +83,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    }
    else if (opts_.convection && !rotational_)
    {
+      INCNS_PROFILE("time_integrator::convection_setup");
       convection_ = std::make_unique<Convection>(spaces_, rules_);
       // Directional do-nothing: the boundary part of the convective flux on
       // the outflow, explicit and extrapolated together with N.
@@ -297,6 +298,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.grad_div = opts_.grad_div;
    so.grad_div_scale = opts_.grad_div_scale;
    so.grad_div_nu = opts_.grad_div_nu;
+   so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
    so.velocity_prec = opts_.velocity_prec;
    so.amg_reuse = opts_.amg_reuse;
    so.schur = opts_.schur;
@@ -331,6 +333,24 @@ Operator& StokesTimeIntegrator::PlainMass()
    return Trap().Blocks().Mass();
 }
 
+bool StokesTimeIntegrator::AdoptSolver(SolverCache& cache, double c0)
+{
+   if (opts_.adaptive || rotational_) { return false; }
+   SolverCache* other = (&cache == &bdf2_) ? &bdf3_ : &bdf2_;
+   std::unique_ptr<StokesSolver>* from =
+      trap_ ? &trap_ : (other->solver ? &other->solver : nullptr);
+   if (!from || !(*from)->CanChangeViscosity()) { return false; }
+   INCNS_PROFILE("time_integrator::adopt_solver");
+   cache.solver = std::move(*from); // the object stays put: last_solver_ and
+   // the OIFS advector's borrowed mass remain valid
+   other->c0 = -1.0;
+   // The starter's (nu/2) K, for its right-hand side only.
+   cache.solver->Blocks().ReleaseViscousUnconstrained();
+   cache.solver->Refresh(c0, opts_.nu);
+   cache.c0 = c0;
+   return true;
+}
+
 void StokesTimeIntegrator::ReleaseStarter()
 {
    if (!trap_ || oifs_ || opts_.adaptive) { return; }
@@ -341,8 +361,12 @@ void StokesTimeIntegrator::ReleaseStarter()
 StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       double c0)
 {
+   if (!cache.solver && AdoptSolver(cache, c0)) { return *cache.solver; }
    if (!cache.solver)
    {
+      // No solver to adopt: the starter goes first, so that it and the new
+      // solver never coexist.
+      ReleaseStarter();
       INCNS_PROFILE("time_integrator::build_solver");
       StokesSolverOptions so;
       so.nu = opts_.nu;
@@ -350,6 +374,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.grad_div = opts_.grad_div;
       so.grad_div_scale = opts_.grad_div_scale;
       so.grad_div_nu = opts_.grad_div_nu;
+      so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
@@ -611,6 +636,10 @@ void StokesTimeIntegrator::StepStartup()
       b.Add(1.0 / dt_, tmp);
       trap_->Blocks().ViscousUnconstrained().Mult(u0, tmp); // (nu/2) K u^0
       b -= tmp;
+      // Needed for this one product: free it before the solve allocates its
+      // workspace (its PA data is as large as the momentum block's diffusion
+      // data, and it set the run's peak GPU memory, 2026-10-13).
+      trap_->Blocks().ReleaseViscousUnconstrained();
       // NSE: the starter builds its RHS inline (it does NOT go through
       // AssembleBdfRhs), so the convection term has to be subtracted here too
       // -- otherwise step 1 would silently solve Stokes and cost the march its
@@ -639,8 +668,6 @@ void StokesTimeIntegrator::StepStartup()
    else
    {
       // Second step: BDF2 from {u^1, u^0} (weights from the actual times).
-      // The starter goes first, so that it and the BDF solver never coexist.
-      ReleaseStarter();
       std::vector<double> times = {t_new, hist_times_[0], hist_times_[1]};
       const std::vector<double> c = BdfWeights(times);
       solver = &EnsureBdfSolver(bdf2_, c[0]);
@@ -678,7 +705,6 @@ void StokesTimeIntegrator::StepFixed()
    times.push_back(t_new);
    for (int j = 0; j < k; ++j) { times.push_back(hist_times_[j]); }
    const std::vector<double> c = BdfWeights(times);
-   ReleaseStarter(); // a resumed march may reach here with it built
    StokesSolver& solver =
       EnsureBdfSolver(use_bdf3 ? bdf3_ : bdf2_, c[0]);
 

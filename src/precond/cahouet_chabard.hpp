@@ -108,6 +108,13 @@ struct CahouetChabardConfig
    double tol_inner = 1e-3; ///< Inner CG relative tolerance (RelTol).
    LpPC lp_pc = LpPC::LORAMG; ///< Inner Poisson PC (v1: LORAMG only).
    int lp_vcycles = 1;        ///< V-cycles per L_p application.
+   /// BoomerAMG strength threshold of the L_p AMG; < 0: 0.25 in 3D, 0.1 in
+   /// 2D. Larger values give sparser coarse operators (less memory).
+   double lp_strong_threshold = -1.0;
+   /// Levels of aggressive coarsening in the L_p AMG (0 = none). Each cuts
+   /// the coarse operators' size, at some cost in convergence.
+   int lp_agg_levels = 0;
+   int lp_print_level = 0; ///< hypre's print level for the L_p AMG setup.
    LpBC lp_bc = LpBC::Auto;   ///< L_p boundary-condition policy.
    mfem::Array<int> lp_dirichlet_attrs; ///< Attrs for DirichletOnAttrs.
    // --- A-block --------------------------------------------------------------

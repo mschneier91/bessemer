@@ -9,7 +9,47 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**GPU memory (2026-10-13, on `main`): 64^3 Q3/Q2 fits one 80 GB H100; the limit is 69^3.**
+**GPU memory, second round (2026-10-13, on `main`): the single-H100 limit is 80^3 Q3/Q2
+(41.5 M velocity dofs).** Human: "tackle the first 3", "go ahead with the single solver
+change", "make that simple change to the CFL stuff too".
+- **Measured** (Taylor-Green defaults, ~11 steps, one H100): 64^3 43.5 GB (38 GB after the
+  first step), 72^3 59.0, 76^3 68.0, **80^3 78.9 GB**, 81^3 out of memory; 1.95 kB per
+  velocity dof. 64^3: 10.7 s per step, 10.4 outer iterations. Headroom: FGMRES holds two
+  system-sized vectors per outer iteration (0.37 GB each pair at 64^3, 0.73 GB at 80^3);
+  these runs peaked at 14 iterations.
+- **Diagnostics hold nothing**: `FlowDiagnostics` sums the integrands in one device pass
+  (`post/flow_sums`, nvcc) instead of three assembled forms (10 GB at 64^3, built even
+  with the CSV off: the summary asks for the energy). `All()` gives the three values.
+- **One solver for the starter and the BDF steps**: `StokesSolver::Refresh(c0, nu)` and
+  `StokesTimeIntegrator::AdoptSolver` hand the trapezoidal starter (built at nu / 2) to
+  BDF2, and BDF2's to BDF3. Not with the rotational form or error control (old path).
+  Test `SchurQuality.RefreshWithViscosityMatchesAFreshSolver`.
+- **gamma uses the fluid's viscosity in every solver** (`grad_div_nu_ref`): the starter
+  computed its nu-proportional part from nu / 2. Changes step 1 only, and only when
+  `physics.grad_div_nu` is not 0.
+- **The unconstrained viscous operator** (6.75 GB at 64^3) is built on demand and freed
+  right after the starter's right-hand side; the BDF solver never builds it.
+- **CFL estimator**: its two velocity copies live per call, and with the GLL nodal basis
+  nothing is interpolated (2.0 -> 1.2 GB at 64^3; the rest is Jacobians at the nodes).
+- **Pressure AMG knobs**, defaults unchanged: `solver.lp_strong_threshold`,
+  `solver.lp_agg_levels`, `solver.lp_print_level`. At 64^3 the threshold changes nothing;
+  one level of aggressive coarsening saves 2.1 GB with the same iterations over 11
+  steps (not tried through the turbulent phase). Human 2026-10-13: AMG options are "an
+  optimization for another day".
+- **Looked at and left**: the convection operator (half of its 4.5 GB is the Jacobians it
+  shares with the other 5-point forms, half MFEM's own data); the Schur setup (77 % AMG);
+  the momentum form's 27-per-point diffusion data (human: do not replace MFEM's core
+  operator).
+- **Tests**: fast tier CUDA np 1 63/63 before the last three small changes, then 14
+  selected np 1 tests (time stepping, CFL, Schur, checkpoint, AMR event) pass. **np 2:
+  job 49141264 (two H100s) pending at the time of this commit.** `nse_mms_test`,
+  `tgv_nse_test` and a CPU build not run.
+- **Taylor-Green 64^3 at CFL 0.25** (two H100s, cancelled at t = 10.8 to rerun on one GPU
+  with this code): energy never increases; max -dE/dt 0.01294 at t = 8.95 (reference
+  0.01286 at 8.97); viscous dissipation within 1 % of the reference to the peak; energy
+  0.5 % low at the peak, 1.5 % at t = 10.5. `runs/tgv_re1600/tgv_n64` beside the repo.
+
+**GPU memory, first round (2026-10-13): 64^3 Q3/Q2 fits one 80 GB H100; the limit is 69^3.**
 Human: "find out how many dofs I can fit on a GPU", then "implement both".
 - **Measured** (Taylor-Green defaults, ~10 steps, one H100): before, 56^3 (14.2 M velocity
   dofs) at 74.5 GB and 60^3 out of memory; after the two fixes below 64^3 at 63.9 GB,

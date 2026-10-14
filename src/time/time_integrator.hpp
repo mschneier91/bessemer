@@ -323,6 +323,22 @@ private:
     */
    StokesSolver& EnsureBdfSolver(SolverCache& cache, double c0);
 
+   /**
+    * @brief Hand an existing solver (the starter, or the other BDF order's)
+    *        to @p cache and refresh it for (c0, nu), instead of building a
+    *        second one: the two differ only in the mass factor and the
+    *        viscosity, and a second solver is a second operator, a second
+    *        pressure AMG hierarchy and its solve-time workspace.
+    *
+    * Not under error control (it keeps the BDF2 and BDF3 solvers side by
+    * side and may return to the starter) or with the rotational form (the
+    * starter's rotation term differs too).
+    * @param cache The empty cache to fill.
+    * @param c0    Leading BDF weight beta0/dt.
+    * @return Whether a solver was adopted.
+    */
+   bool AdoptSolver(SolverCache& cache, double c0);
+
    /// @return The trapezoidal starter solver, built on first use.
    StokesSolver& Trap();
 
@@ -451,10 +467,11 @@ private:
    mfem::VectorCoefficient& forcing_; ///< Momentum forcing (borrowed).
    TimeIntegratorOptions opts_;       ///< Options.
 
-   /// Trapezoidal starter solver: built by Trap() on first use, and released
-   /// before the first BDF solver is built (IMEX with a fixed or CFL step),
-   /// so the two never coexist: each holds a whole operator and its
-   /// preconditioners (3.1 GB of 23.7 at 32^3 Q3 on a GPU, 2026-10-13).
+   /// Trapezoidal starter solver: built by Trap() on first use, then handed
+   /// to the BDF steps (AdoptSolver) -- or, where that is not possible,
+   /// released before the first BDF solver is built -- so two solvers
+   /// never coexist: each holds a whole operator and its preconditioners
+   /// (3.1 GB of 23.7 at 32^3 Q3 on a GPU, 2026-10-13).
    std::unique_ptr<StokesSolver> trap_;
    double trap_c0_ = 0.0;               ///< Mass factor trap_ is built for (1/dt).
    SolverCache bdf2_;                   ///< BDF2 solver cache.

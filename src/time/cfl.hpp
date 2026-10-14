@@ -79,8 +79,9 @@ private:
    const mfem::QuadratureInterpolator* qi_ = nullptr; ///< Values at points.
    const mfem::GeometricFactors* geom_ = nullptr;     ///< Jacobians.
    mfem::Vector inv_dxi_;    ///< 1 / Delta-xi per 1D node index (device).
-   mutable mfem::Vector ue_; ///< Velocity E-vector buffer.
-   mutable mfem::Vector uq_; ///< Velocity at the nodes.
+   /// The velocity basis is the GLL nodal one, so the element dofs ARE the
+   /// values at the GLL points and nothing is interpolated.
+   bool nodal_gll_ = false;
    mutable mfem::Vector rate_; ///< Per-element rate.
 };
 

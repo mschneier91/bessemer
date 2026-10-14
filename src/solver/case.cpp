@@ -214,10 +214,13 @@ void Case::EnsureSetup()
                 << std::endl;
    }
 
-   if (initial_) { integrator_->SetInitialVelocity(*initial_); }
-   else
    {
-      integrator_->SetInitialVelocity(zero_forcing_); // zero start
+      INCNS_PROFILE("case::initial_velocity");
+      if (initial_) { integrator_->SetInitialVelocity(*initial_); }
+      else
+      {
+         integrator_->SetInitialVelocity(zero_forcing_); // zero start
+      }
    }
 
    // Restart replaces whatever initial state was just set: the restored
@@ -246,7 +249,10 @@ void Case::EnsureSetup()
       }
    }
 
-   SetupCfl();
+   {
+      INCNS_PROFILE("case::cfl_setup");
+      SetupCfl();
+   }
    ne_ = mesh_.GetGlobalNE();
    monitor_ = std::make_unique<RunMonitor>(params_, mesh_.GetComm());
    // A restart past checkpoint.at_time must not overwrite that checkpoint.
@@ -271,6 +277,7 @@ void Case::EnsureSetup()
          params_.output.path + "/" + params_.output.name + "_diagnostics.csv";
       diag_log_ = std::make_unique<DiagnosticsLog>(csv, mesh_.GetComm(),
                   !params_.restart_from.empty());
+      INCNS_PROFILE("case::diagnostics");
       MaybeLogDiagnostics(cycle_, integrator_->Time()); // the start
    }
 }
@@ -278,7 +285,11 @@ void Case::EnsureSetup()
 void Case::MaybeLogDiagnostics(int cycle, double time)
 {
    if (!diag_log_ || cycle % params_.output.interval != 0) { return; }
-   diag_log_->Write(time, KineticEnergy(), DissipationRate(), DivergenceNorm());
+   // One pass over the elements gives all three.
+   const FlowDiagnostics::Values v =
+      Diagnostics().All(integrator_->Velocity(), params_.nu);
+   diag_log_->Write(time, v.kinetic_energy, v.dissipation_rate,
+                    v.divergence_norm);
 }
 
 void Case::Step()

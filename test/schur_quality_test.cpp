@@ -332,3 +332,89 @@ TEST(SchurQuality, LorAmgViscousMeshRobust)
    EXPECT_GT(jac_finest, jacobi_ratio * amg_finest)
          << "lor_amg should decisively beat Jacobi in the viscous regime";
 }
+
+// Refresh(c0, nu): a solver built for (c1, nu1) and refreshed to (c2, nu2) is
+// the solver built for (c2, nu2) -- same solution to the solve tolerance, and
+// the same unconstrained viscous operator. This is what lets the time
+// integrator hand its trapezoidal starter solver to the BDF steps.
+TEST(SchurQuality, RefreshWithViscosityMatchesAFreshSolver)
+{
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {8, 8, 0};
+   s.lengths = {1.0, 1.0};
+   s.periodic = {false, false, false};
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+   BoundaryConditions bc(spaces.Velocity());
+   for (int a = 1; a <= 4; ++a) { bc.AddNoSlip(a); }
+
+   const double c1 = 20.0, nu1 = 0.005, c2 = 45.0, nu2 = 0.01;
+   auto options = [](double c0, double nu)
+   {
+      StokesSolverOptions o;
+      o.nu = nu;
+      o.mass_coeff = c0;
+      o.grad_div = 1.0;       // gamma = h + 3 nu_ref: a part proportional to
+      o.grad_div_nu = 3.0;    // the viscosity, tied to the fluid's (0.01)
+      o.grad_div_nu_ref = 0.01; // and not to this solver's nu
+      o.schur = incns::SchurBlockType::CahouetChabard;
+      o.cc.a_pc = incns::APC::JacobiPCG;
+      o.cc.schur_grad_div = true;
+      o.rtol = 1e-11;
+      o.max_iter = 2000;
+      o.kdim = 300;
+      return o;
+   };
+   StokesSolver reused(spaces, rules, bc, options(c1, nu1));
+   StokesSolver fresh(spaces, rules, bc, options(c2, nu2));
+   ASSERT_TRUE(reused.CanChangeViscosity());
+
+   VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)
+   {
+      f(0) = std::sin(2.0 * M_PI * x[0]) * std::cos(2.0 * M_PI * x[1]) + x[1];
+      f(1) = -std::cos(2.0 * M_PI * x[0]) * std::sin(2.0 * M_PI * x[1]);
+   });
+   ParGridFunction u_r(&spaces.Velocity()), p_r(&spaces.Pressure());
+   ParGridFunction u_f(&spaces.Velocity()), p_f(&spaces.Pressure());
+   // Use it at the first operator, then move it to the second.
+   reused.Solve(forcing, u_r, p_r);
+   reused.Blocks().ViscousUnconstrained(); // built at nu1, must not survive
+   reused.Refresh(c2, nu2);
+   reused.Solve(forcing, u_r, p_r);
+   fresh.Solve(forcing, u_f, p_f);
+   EXPECT_TRUE(reused.Converged());
+   EXPECT_TRUE(fresh.Converged());
+
+   auto norm = [](const Vector & v)
+   {
+      return std::sqrt(InnerProduct(MPI_COMM_WORLD, v, v));
+   };
+   Vector ur, uf, pr, pf;
+   u_r.GetTrueDofs(ur);
+   u_f.GetTrueDofs(uf);
+   p_r.GetTrueDofs(pr);
+   p_f.GetTrueDofs(pf);
+   const double un = norm(uf), pn = norm(pf);
+   ur -= uf;
+   pr -= pf;
+   if (Mpi::Root())
+   {
+      mfem::out << "[refresh nu] iterations reused " << reused.Iterations()
+                << ", fresh " << fresh.Iterations() << "; relative difference u "
+                << norm(ur) / un << ", p " << norm(pr) / pn << std::endl;
+   }
+   EXPECT_LT(norm(ur), 1e-8 * un);
+   EXPECT_LT(norm(pr), 1e-7 * pn);
+
+   // nu2 * K from both, on the same vector.
+   Vector x(uf.Size()), y_r(uf.Size()), y_f(uf.Size());
+   x.Randomize(11);
+   reused.Blocks().ViscousUnconstrained().Mult(x, y_r);
+   fresh.Blocks().ViscousUnconstrained().Mult(x, y_f);
+   const double yn = norm(y_f);
+   y_r -= y_f;
+   EXPECT_LT(norm(y_r), 1e-13 * yn);
+}

@@ -19,7 +19,6 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    : spaces_(spaces), rules_(rules), opts_(opts), nu_(opts.nu),
      mass_coeff_(opts.mass_coeff),
      mass_form_(&spaces.Velocity()),
-     viscous_form_(&spaces.Velocity()),
      div_form_(&spaces.Velocity(), &spaces.Pressure())
 {
    INCNS_PROFILE("stokes_operator::assemble");
@@ -69,7 +68,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       const bool by_h = (opts_.grad_div_scale == GradDivScale::OrderH);
       const double h_part = by_h ? opts_.grad_div : 0.0;
       const double nu_part =
-         (opts_.grad_div_nu + (by_h ? 0.0 : opts_.grad_div)) * opts_.nu;
+         (opts_.grad_div_nu + (by_h ? 0.0 : opts_.grad_div)) *
+         (opts_.grad_div_nu_ref > 0.0 ? opts_.grad_div_nu_ref : opts_.nu);
       if (h_part > 0.0)
       {
          gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, h_part, 1, nu_part);
@@ -123,17 +123,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_form_.AssembleDiagonal(mass_diag_);
    }
 
-   // --- pure viscous nu*K, UNCONSTRAINED: explicit RHS terms in time steppers -
-   {
-      INCNS_PROFILE("viscous_unconstrained");
-      auto* kui = new LeanVectorDiffusionIntegrator(nu_);
-      kui->SetIntRule(&rules.Get(geom_, 2 * ku_ + dim_ - 1));
-      viscous_form_.AddDomainIntegrator(kui);
-      viscous_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      viscous_form_.Assemble();
-      Array<int> no_ess;
-      viscous_form_.FormSystemMatrix(no_ess, Kunc_);
-   }
+   // The pure viscous nu*K (unconstrained) is assembled on first use
+   // (ViscousUnconstrained): only a trapezoidal starter's right-hand side
+   // needs it, and its PA data is as large as the momentum block's.
 
    // --- divergence block B = (div u, q): default exactness order
    // 2*(trial order) + 2 = 2*k_u + 2 -------------------------------------------
@@ -249,6 +241,37 @@ GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
       added = gdi;
    }
    return added;
+}
+
+Operator& StokesOperator::ViscousUnconstrained()
+{
+   if (!Kunc_.Ptr())
+   {
+      INCNS_PROFILE("viscous_unconstrained");
+      auto* kui = new LeanVectorDiffusionIntegrator(nu_);
+      kui->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
+      viscous_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      viscous_form_->AddDomainIntegrator(kui);
+      viscous_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      viscous_form_->Assemble();
+      Array<int> no_ess;
+      viscous_form_->FormSystemMatrix(no_ess, Kunc_);
+   }
+   return *Kunc_.Ptr();
+}
+
+void StokesOperator::ReleaseViscousUnconstrained()
+{
+   Kunc_.Clear();
+   viscous_form_.reset();
+}
+
+void StokesOperator::SetViscosity(double nu)
+{
+   MFEM_VERIFY(nu > 0.0, "stokes_operator: viscosity must be positive");
+   nu_.constant = nu;
+   opts_.nu = nu;
+   ReleaseViscousUnconstrained(); // it was nu_old * K
 }
 
 void StokesOperator::BuildMomentum()
