@@ -105,6 +105,13 @@ void Case::BuildIntegrator()
    opts.nu = params_.nu;
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;
+   opts.retry_on_failure =
+      params_.on_solver_failure == SolverFailure::CutStep;
+   opts.krylov_memory_cap = opts.retry_on_failure;
+   opts.retry_factor = params_.retry_factor;
+   opts.retry_hold = params_.retry_hold;
+   opts.retry_max = params_.retry_max;
+   opts.retry_dt_min = params_.retry_dt_min;
    opts.order = params_.BdfOrder();
    opts.adaptive = (params_.step_control == StepControl::Error);
    opts.controller = params_.controller;
@@ -950,6 +957,7 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
    t["t"].Set(Time());
    t["t_final"].Set(params_.t_final);
    t["steps"].Set(monitor_->Steps());
+   t["rejected_steps"].Set(integrator_->RejectedSteps());
    t["dt_min"].Set(monitor_->DtMin());
    t["dt_max"].Set(monitor_->DtMax());
    t["wall_seconds"].Set(monitor_->Wall());

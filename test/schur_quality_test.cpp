@@ -400,14 +400,16 @@ TEST(SchurQuality, RefreshWithViscosityMatchesAFreshSolver)
    const double un = norm(uf), pn = norm(pf);
    ur -= uf;
    pr -= pf;
+   // The norms are collective: every rank computes them, outside the print.
+   const double du = norm(ur), dp = norm(pr);
    if (Mpi::Root())
    {
       mfem::out << "[refresh nu] iterations reused " << reused.Iterations()
                 << ", fresh " << fresh.Iterations() << "; relative difference u "
-                << norm(ur) / un << ", p " << norm(pr) / pn << std::endl;
+                << du / un << ", p " << dp / pn << std::endl;
    }
-   EXPECT_LT(norm(ur), 1e-8 * un);
-   EXPECT_LT(norm(pr), 1e-7 * pn);
+   EXPECT_LT(du, 1e-8 * un);
+   EXPECT_LT(dp, 1e-7 * pn);
 
    // nu2 * K from both, on the same vector.
    Vector x(uf.Size()), y_r(uf.Size()), y_f(uf.Size());

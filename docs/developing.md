@@ -390,6 +390,20 @@ additive term inside `StokesTimeIntegrator`.
 
 ### 5.3 Linear solver
 
+- **A failed outer solve rejects the step by default** (`time.on_solver_failure:
+  cut_step`, human 2026-10-13; `TimeIntegratorOptions::retry_on_failure`, off at the
+  low level): back to the last accepted state, dt × 0.5, solve again; hold 5 steps;
+  at most 8 cuts per step. The FGMRES restart length is capped before each solve to
+  what fits in the free GPU memory (`StokesTimeIntegrator::KrylovDimForMemory`: 3 % of
+  the device + six velocity vectors held back, + 20 % of the memory in use before a
+  solver's first solve). `abort` is the old behaviour. Tests: `step_retry_test`
+  (failures injected with `SetSolveVeto`). Not with `step_control: error`.
+- **One solver per run where possible** (human 2026-10-13): the trapezoidal starter's
+  solver is handed to the BDF steps (`AdoptSolver`, `StokesSolver::Refresh(c0, nu)`),
+  not rebuilt; not with the rotational form or error control. γ is computed from the
+  fluid's ν in every solver (`grad_div_nu_ref`). GPU memory record and the remaining
+  opportunity (MFEM's 27-per-point vector-diffusion data; declined, human 2026-10-13):
+  [gpu_memory.md](gpu_memory.md).
 - **Outer: FGMRES on the monolithic system, always** (no MINRES, no Schur-only production
   Krylov). Block preconditioner; FGMRES is required because inner PCs are nonlinear.
 - **Schur block** (`solver.schur`): **Cahouet–Chabard is the case-level default** (human

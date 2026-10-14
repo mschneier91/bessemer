@@ -2,6 +2,7 @@
 
 #include "post/pressure_mean.hpp"
 #include "time/multistep_coeffs.hpp"
+#include "util/device.hpp"
 #include "util/profiler.hpp"
 
 #include <algorithm>
@@ -48,6 +49,11 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    MFEM_VERIFY(opts_.convection_treatment == ConvectionTreatment::Imex ||
                (opts_.convection && !rotational_), "time_integrator: OIFS "
                "needs the convective form of the Navier-Stokes equation");
+   MFEM_VERIFY(!opts_.retry_on_failure ||
+               (opts_.retry_factor > 0.0 && opts_.retry_factor < 1.0 &&
+                opts_.retry_hold >= 0 && opts_.retry_max >= 1 &&
+                opts_.retry_dt_min >= 0.0),
+               "time_integrator: bad step-retry settings");
    MFEM_VERIFY(!(opts_.adaptive && opts_.cfl_target > 0.0),
                "time_integrator: choose error-controlled (adaptive) OR "
                "CFL-controlled steps, not both");
@@ -264,7 +270,7 @@ void StokesTimeIntegrator::ChooseCflStep()
    {
       dt = dt_cfl; // shrink at once: stability
    }
-   else if (dt_cfl > dt * (1.0 + opts_.cfl_hysteresis))
+   else if (hold_left_ == 0 && dt_cfl > dt * (1.0 + opts_.cfl_hysteresis))
    {
       dt = std::min(dt_cfl, dt * opts_.cfl_growth);
    }
@@ -593,10 +599,81 @@ void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
 
    t_ = t_new;
    ++step_count_;
+   if (hold_left_ > 0) { --hold_left_; }
    if (rotational_) { UpdateStaticPressure(); }
 }
 
-void StokesTimeIntegrator::StepStartup()
+int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
+      double total_bytes,
+      long long system_size,
+      long long velocity_size,
+      bool first_solve, int kdim)
+{
+   const double word = sizeof(double);
+   double margin = 0.03 * total_bytes + 6.0 * word * velocity_size;
+   if (first_solve) { margin += 0.2 * (total_bytes - free_bytes); }
+   const double vector = word * static_cast<double>(system_size);
+   // k + 1 basis vectors and k preconditioned ones: 2k + 1 vectors.
+   const double fit =
+      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 1.0) / 2.0);
+   return static_cast<int>(std::max(1.0, std::min<double>(kdim, fit)));
+}
+
+void StokesTimeIntegrator::CapKrylovDim(StokesSolver& solver)
+{
+   if (!opts_.krylov_memory_cap) { return; }
+   double free = 0.0, total = 0.0;
+   int on_device = DeviceMemoryInfo(free, total) ? 1 : 0;
+   MPI_Comm comm = spaces_.Velocity().GetComm();
+   MPI_Allreduce(MPI_IN_PLACE, &on_device, 1, MPI_INT, MPI_MIN, comm);
+   if (!on_device) { return; } // host memory: no cap
+   int k = KrylovDimForMemory(free, total, solver.SystemSize(),
+                              spaces_.Velocity().GetTrueVSize(),
+                              !solver.HasSolved(), opts_.kdim);
+   MPI_Allreduce(MPI_IN_PLACE, &k, 1, MPI_INT, MPI_MIN, comm);
+   if (k != solver.KrylovDim()) { solver.SetKrylovDim(k); }
+   // Report a cap when it appears and when it moves by more than 10 %
+   // (free memory varies a little from step to step).
+   const bool report =
+      (k < opts_.kdim && logged_kdim_ < 0) ||
+      (logged_kdim_ > 0
+       && std::abs(k - logged_kdim_) > std::max(2, logged_kdim_ / 10));
+   if (report)
+   {
+      if (Mpi::Root())
+      {
+         mfem::out << "[incns] FGMRES restart length " << k << " (solver.kdim "
+                   << opts_.kdim << "): what fits in "
+                   << free / 1073741824.0 << " GiB free of "
+                   << total / 1073741824.0 << " GiB"
+                   << (k < 5 ? " -- the GPU is nearly full" : "") << std::endl;
+      }
+      logged_kdim_ = k;
+   }
+}
+
+bool StokesTimeIntegrator::AcceptSolve(StokesSolver& solver, double t_new)
+{
+   bool ok = solver.Converged();
+   vetoed_ = false;
+   if (ok && solve_veto_ && solve_veto_(step_count_, attempt_))
+   {
+      ok = false;
+      vetoed_ = true;
+   }
+   if (ok) { return true; }
+   MFEM_VERIFY(opts_.retry_on_failure && !opts_.adaptive,
+               "time_integrator: implicit solve did not converge at t = "
+               << t_new << " (" << solver.Iterations() << " iterations; "
+               "time.on_solver_failure: cut_step retries with a smaller step)");
+   // Back to the last accepted state: nothing was committed, and the next
+   // attempt must not start from a half-converged iterate.
+   u_.SetFromTrueDofs(hist_[0]);
+   static_cast<Vector&>(p_) = p_saved_;
+   return false;
+}
+
+bool StokesTimeIntegrator::StepStartup()
 {
    const double t_new = t_ + dt_;
    const int n_u = spaces_.Velocity().GetTrueVSize();
@@ -680,20 +757,21 @@ void StokesTimeIntegrator::StepStartup()
    }
 
    last_b_ = b; // raw (pre-elimination) RHS, for MomentumResidual
+   if (opts_.retry_on_failure) { p_saved_ = p_; }
+   CapKrylovDim(*solver);
    solver->SolveTrue(b, u_, p_);
    last_iterations_ = solver->Iterations();
-   MFEM_VERIFY(solver->Converged(),
-               "time_integrator: implicit solve did not converge at t = "
-               << t_new);
    last_solver_ = solver;
+   if (!AcceptSolve(*solver, t_new)) { return false; }
 
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
    Commit(t_new, u_true, u_, p_);
+   return true;
 }
 
-void StokesTimeIntegrator::StepFixed()
+bool StokesTimeIntegrator::StepFixed()
 {
    const double t_new = t_ + dt_;
    const int n_u = spaces_.Velocity().GetTrueVSize();
@@ -716,16 +794,17 @@ void StokesTimeIntegrator::StepFixed()
       solver.UpdateRotation();
    }
    last_b_ = b; // raw (pre-elimination) RHS, for MomentumResidual
+   if (opts_.retry_on_failure) { p_saved_ = p_; }
+   CapKrylovDim(solver);
    solver.SolveTrue(b, u_, p_);
    last_iterations_ = solver.Iterations();
-   MFEM_VERIFY(solver.Converged(),
-               "time_integrator: implicit solve did not converge at t = "
-               << t_new);
    last_solver_ = &solver;
+   if (!AcceptSolve(solver, t_new)) { return false; }
 
    Vector u_true(n_u);
    u_.GetTrueDofs(u_true);
    Commit(t_new, u_true, u_, p_);
+   return true;
 }
 
 void StokesTimeIntegrator::StepAdaptive()
@@ -759,6 +838,7 @@ void StokesTimeIntegrator::StepAdaptive()
       p2_scratch_ = p_;
       StokesSolver& s2 = EnsureBdfSolver(bdf2_, c2[0]);
       s2.UpdateRotation(); // no-op without the rotational form
+      CapKrylovDim(s2);
       s2.SolveTrue(b2, u2_scratch_, p2_scratch_);
       last_iterations_ = s2.Iterations();
       MFEM_VERIFY(s2.Converged(),
@@ -778,6 +858,7 @@ void StokesTimeIntegrator::StepAdaptive()
       p3_scratch_ = p_;
       StokesSolver& s3 = EnsureBdfSolver(bdf3_, c3[0]);
       s3.UpdateRotation();
+      CapKrylovDim(s3);
       s3.SolveTrue(b3, u3_scratch_, p3_scratch_);
       MFEM_VERIFY(s3.Converged(),
                   "time_integrator: BDF3 solve did not converge at t = "
@@ -813,18 +894,46 @@ void StokesTimeIntegrator::Step()
 
    // The first two steps have too little history for the BDF3 estimator, so
    // they run un-adapted at the initial dt (trapezoidal starter, then BDF2).
-   if (step_count_ < 2)
-   {
-      StepStartup();
-      return;
-   }
-   if (opts_.adaptive)
+   const bool startup = (step_count_ < 2);
+   if (!startup && opts_.adaptive)
    {
       StepAdaptive();
       return;
    }
-   if (opts_.cfl_target > 0.0) { ChooseCflStep(); }
-   StepFixed();
+   if (!startup && opts_.cfl_target > 0.0) { ChooseCflStep(); }
+   // Fixed steps: after a cut and its hold, grow back to the step before it.
+   if (!startup && dt_before_cut_ > 0.0 && hold_left_ == 0)
+   {
+      dt_ = std::min(dt_before_cut_, dt_ * opts_.cfl_growth);
+      if (dt_ >= dt_before_cut_) { dt_before_cut_ = 0.0; }
+   }
+   for (attempt_ = 0;; ++attempt_)
+   {
+      // Neither returns false unless retry_on_failure (AcceptSolve aborts).
+      if (startup ? StepStartup() : StepFixed()) { break; }
+      ++rejected_steps_;
+      const double cut = dt_ * opts_.retry_factor;
+      MFEM_VERIFY(attempt_ < opts_.retry_max && cut > 0.0 &&
+                  cut >= opts_.retry_dt_min, "time_integrator: the implicit "
+                  "solve at t = " << t_ << " still does not converge after "
+                  << attempt_ << " step cuts (dt = " << dt_ << "; "
+                  "time.retry_max, time.retry_dt_min)");
+      if (Mpi::Root())
+      {
+         mfem::out << "[incns] step " << step_count_ + 1 << " from t = " << t_
+                   << (vetoed_ ? ": the implicit solve was rejected (test hook) "
+                       "after " : ": the implicit solve did not converge in ")
+                   << last_iterations_ << " iterations at dt = " << dt_
+                   << "; retrying at dt = " << cut << std::endl;
+      }
+      if (opts_.cfl_target <= 0.0 && dt_before_cut_ == 0.0)
+      {
+         dt_before_cut_ = dt_;
+      }
+      dt_ = cut;
+      // This step, once accepted, and retry_hold more: no growth.
+      hold_left_ = opts_.retry_hold + 1;
+   }
 }
 
 void StokesTimeIntegrator::Run()

@@ -55,4 +55,13 @@ void DeviceSync();
  */
 double DeviceMemoryInUse();
 
+/**
+ * @brief Free and total memory of this process's GPU, in bytes, as the
+ *        driver reports them.
+ * @param free  Output: free bytes.
+ * @param total Output: total bytes.
+ * @return False (and zeros) on host backends and on HIP.
+ */
+bool DeviceMemoryInfo(double& free, double& total);
+
 } // namespace incns

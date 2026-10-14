@@ -66,8 +66,8 @@ closest valid key. **Every key, with its default and allowed values:
 | `physics` | `nu`, `grad_div_h`, `grad_div_nu`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
 | `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
-| `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol` |
-| `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `rotation_pc`, `rotation_schur`, ... |
+| `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol`, `on_solver_failure: cut_step \| abort`, `retry_factor`, `retry_hold`, `retry_max`, `retry_dt_min` |
+| `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
 | `boundary_conditions` | a list of `{select: [xmin, ymax, ...] or attributes, type: no_slip \| outflow \| velocity_dirichlet}` |
 | `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, ... |
 | `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
@@ -131,6 +131,23 @@ stability limit; pass `-dt 0.001`.)
   loses accuracy on lift amplitudes. Details: [oifs_implementation.md](oifs_implementation.md).
 - **Step control:** `cfl` (default; dt follows `cfl_target`), `fixed`, or `error` (IMEX
   only, BDF2/BDF3 error estimate).
+- **Check that the kinetic energy never rises** in a periodic or enclosed flow without
+  forcing. At Re 1600 IMEX was unstable at CFL 0.5 and the run carried on without an
+  error ([../benchmarks/tgv_re1600/README.md](../benchmarks/tgv_re1600/README.md)).
+- **When the solver fails to converge** (`time.on_solver_failure`):
+  - `cut_step` (**default**): the step is rejected and solved again at half the step
+    (`retry_factor` 0.5); the step may not grow for the retried step and 5 more
+    (`retry_hold`), then grows back (CFL control: as usual; fixed steps: 1.2× per step
+    to the original). At most `retry_max` (8) cuts per step, never below `retry_dt_min`;
+    then the run stops. Each rejection is logged, and the summary counts
+    `rejected_steps`. On a GPU the FGMRES restart length is also lowered below
+    `solver.kdim` before each solve when its Krylov vectors (two system-sized vectors per
+    outer iteration) would not fit in the free memory; the log reports it. So
+    `solver.kdim` bounds the Krylov memory, `solver.max_iter` the work per attempt, and
+    a hard step costs time instead of the run.
+  - `abort`: the run stops on a failed solve, and `solver.kdim` and `solver.max_iter` are
+    used exactly as given (the behaviour before 2026-10-13).
+  Error-controlled steps (`step_control: error`) keep their own rejection logic.
 
 ## 5. Outputs
 
@@ -186,6 +203,11 @@ stability limit; pass `-dt 0.001`.)
   its own page is listed in [environments/README.md](../environments/README.md)).
 - After interrupting a run, reap stray MPI processes with `scripts/reap.sh`.
 - GPU runs are not validated yet ([developing.md](developing.md) §7.5).
+- **GPU memory:** one 80 GB H100 holds up to 80³ Q3/Q2 elements (41.5 M velocity dofs)
+  with the Taylor–Green defaults, about 1.95 kB per velocity dof; leave headroom for
+  harder cases (each outer iteration adds two system-sized vectors). What was done to
+  get there and what is left: [gpu_memory.md](gpu_memory.md). `output.profile: sync` on a
+  GPU adds device memory per region to the profile CSV.
 
 ## 7. When something goes wrong
 

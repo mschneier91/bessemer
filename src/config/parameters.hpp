@@ -36,6 +36,14 @@ enum class Equation
 };
 
 /// How the time step is chosen (deck `time.step_control`).
+/// What a time step does when its implicit solve does not converge.
+enum class SolverFailure
+{
+   Abort,  ///< Stop the run; kdim and max_iter are used as given.
+   CutStep ///< Reject the step, shrink dt, solve again; the FGMRES restart
+   ///< length is capped to the free GPU memory (the default).
+};
+
 enum class StepControl
 {
    Fixed, ///< dt = time.dt throughout.
@@ -333,6 +341,16 @@ struct Parameters
    double cfl_target = 0.5;
    /// Cfl mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
    double dt_max = 0.0;
+   /// A failed implicit solve: abort, or cut the step and retry (deck
+   /// `time.on_solver_failure: abort|cut_step`; fixed and CFL steps). See
+   /// TimeIntegratorOptions::retry_on_failure.
+   /// CutStep is the case-level default (human 2026-10-13): it also caps the
+   /// FGMRES restart length to the free GPU memory (krylov_memory_cap).
+   SolverFailure on_solver_failure = SolverFailure::CutStep;
+   double retry_factor = 0.5; ///< dt multiplier after a failed solve.
+   int retry_hold = 5;        ///< Accepted steps without dt growth afterwards.
+   int retry_max = 8;         ///< Cuts allowed within one step.
+   double retry_dt_min = 0.0; ///< Smallest dt a cut may give. Scaled like dt.
    /// Convective form: IMEX (explicit EXT convection, the default) or OIFS
    /// (the BDF history advected by RK4 substeps, time/oifs.hpp; the BDF step
    /// may then run at a CFL number of several) -- deck `time.convection:

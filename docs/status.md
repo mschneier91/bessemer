@@ -9,6 +9,28 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**A failed solve cuts the step, by default (2026-10-13, on `main`).** Human: "if the
+outer solver fails ... cut the timestep and then let it try to increase again", "a hold of
+5 steps", "just option 1 and 2". `time.on_solver_failure: cut_step` (default) | `abort`;
+`retry_factor` 0.5, `retry_hold` 5, `retry_max` 8, `retry_dt_min` 0. With `cut_step` the
+FGMRES restart length is capped before each solve to the free GPU memory. A "max-DOF"
+mode (size the mesh to the memory) was dropped: with AMR the mesh grows during the run.
+Tests: `step_retry_test` R1 (fixed steps: two cuts, hold, growth back; error 0.002705
+against 0.002696 undisturbed), R2 (CFL), R3 (the restart-length formula). Fast tier
+CUDA np 1 64/64 (one H100) and np 2 64/64 (two H100s, one per rank), 2026-10-14; the new
+`SchurQuality.RefreshWithViscosity...` first hung at np 2 (a rank-0-only collective in
+the test's print, found with stack traces; fixed). **Not tested:**
+the cap near the memory limit (the 20 % first-solve allowance is a guess from the 64^3
+profile); a real (not injected) solver failure; `nse_mms_test`, `tgv_nse_test`, a CPU
+build. Memory record: [gpu_memory.md](gpu_memory.md).
+
+**Taylor-Green 64^3 at CFL 0.3 on one H100** (job 49142049, started after these tests;
+human: "back off the 75^3 run to 64^3 ... increase the CFL target a little bit to .3"):
+At t = 12.6 (2404 steps, 2026-10-14 09:50): energy never increased through the
+dissipation peak, so CFL 0.3 is stable here; 14.6 s per step, 14.2 outer iterations, 43.7
+GB; the restart-length cap set 119 (of 200) at the first solve.
+Output `runs/tgv_re1600/tgv_n64_1gpu`, status `~/bessemer_jobs/tgv64status.sh`.
+
 **GPU memory, second round (2026-10-13, on `main`): the single-H100 limit is 80^3 Q3/Q2
 (41.5 M velocity dofs).** Human: "tackle the first 3", "go ahead with the single solver
 change", "make that simple change to the CFL stuff too".
@@ -41,8 +63,8 @@ change", "make that simple change to the CFL stuff too".
   the momentum form's 27-per-point diffusion data (human: do not replace MFEM's core
   operator).
 - **Tests**: fast tier CUDA np 1 63/63 before the last three small changes, then 14
-  selected np 1 tests (time stepping, CFL, Schur, checkpoint, AMR event) pass. **np 2:
-  job 49141264 (two H100s) pending at the time of this commit.** `nse_mms_test`,
+  selected np 1 tests (time stepping, CFL, Schur, checkpoint, AMR event) pass. np 2 (two
+  H100s, one per rank): fast tier 64/64 with the step-retry work on top (2026-10-14). `nse_mms_test`,
   `tgv_nse_test` and a CPU build not run.
 - **Taylor-Green 64^3 at CFL 0.25** (two H100s, cancelled at t = 10.8 to rerun on one GPU
   with this code): energy never increases; max -dE/dt 0.01294 at t = 8.95 (reference

@@ -175,6 +175,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    fgmres_.SetAbsTol(opts_.atol);
    fgmres_.SetMaxIter(opts_.max_iter);
    fgmres_.SetKDim(opts_.kdim);
+   kdim_ = opts_.kdim;
    fgmres_.SetPrintLevel(opts_.print_level);
    fgmres_.iterative_mode = true; // start from the Dirichlet-seeded guess
 }
@@ -358,6 +359,13 @@ void StokesSolver::Refresh(double c0)
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
 }
 
+void StokesSolver::SetKrylovDim(int k)
+{
+   MFEM_VERIFY(k >= 1, "stokes_solver: the restart length must be >= 1");
+   fgmres_.SetKDim(k);
+   kdim_ = k;
+}
+
 bool StokesSolver::CanChangeViscosity()
 {
    // gamma follows nu only through its nu-proportional part, and not at all
@@ -506,6 +514,7 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    }
    stats_.solve_time = MPI_Wtime() - t0;
    iterations_ = fgmres_.GetNumIterations();
+   ++solves_;
    converged_ = fgmres_.GetConverged();
    stats_.outer_iterations = iterations_;
 

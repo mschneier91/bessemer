@@ -25,6 +25,24 @@ void DeviceSync()
    }
 }
 
+bool DeviceMemoryInfo(double& free, double& total)
+{
+   free = total = 0.0;
+#if defined(MFEM_USE_CUDA)
+   if (mfem::Device::Allows(mfem::Backend::CUDA_MASK))
+   {
+      size_t free_bytes = 0, total_bytes = 0;
+      if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess)
+      {
+         free = static_cast<double>(free_bytes);
+         total = static_cast<double>(total_bytes);
+         return true;
+      }
+   }
+#endif
+   return false;
+}
+
 double DeviceMemoryInUse()
 {
 #if defined(MFEM_USE_CUDA)

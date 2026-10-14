@@ -57,6 +57,26 @@ struct TimeIntegratorOptions
    double cfl_growth = 1.2;     ///< CFL mode: max dt growth factor per step.
    double cfl_hysteresis = 0.05; ///< CFL mode: relative slack before growing.
    double dt_max = 0.0;         ///< CFL mode: dt cap (0 = none).
+   /// When the implicit solve does not converge within the solver's max_iter:
+   /// abort (false, the default), or reject the step, multiply dt by
+   /// retry_factor and solve again (true). A smaller step makes the momentum
+   /// block more mass-dominated, the easy regime for the preconditioners.
+   /// With it the Krylov restart length (kdim) bounds the solver's memory
+   /// and max_iter its work, and a hard step costs time instead of the run.
+   /// Fixed and CFL-controlled steps; error control has its own rejection.
+   bool retry_on_failure = false;
+   double retry_factor = 0.5; ///< dt multiplier after a failed solve, in (0, 1).
+   /// Accepted steps after a rejected one during which dt may not grow (it
+   /// may still shrink). Then: the CFL controller's growth, or, with fixed
+   /// steps, growth by cfl_growth per step back to the step before the cut.
+   int retry_hold = 5;
+   int retry_max = 8;         ///< Cuts allowed within one step before aborting.
+   double retry_dt_min = 0.0; ///< Abort instead of cutting below this (0 = none).
+   /// Before every outer solve on a GPU, lower the FGMRES restart length
+   /// below kdim if that many Krylov vectors would not fit in the free device
+   /// memory (KrylovDimForMemory). Restarting earlier costs iterations, not
+   /// the run; with retry_on_failure a solve that then fails cuts the step.
+   bool krylov_memory_cap = false;
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    /// Solve Navier-Stokes rather than unsteady Stokes (Sprint 2.2): adds the
@@ -268,6 +288,44 @@ public:
    /// @return Completed (accepted) steps.
    int StepCount() const { return step_count_; }
 
+   /// @return How many step attempts were rejected for a failed solve
+   ///         (TimeIntegratorOptions::retry_on_failure).
+   int RejectedSteps() const { return rejected_steps_; }
+
+   /**
+    * @brief The largest FGMRES restart length whose Krylov vectors fit.
+    *
+    * FGMRES holds k + 1 basis vectors and k preconditioned ones, each the
+    * size of the block system. The free memory is first reduced by a margin
+    * for what a solve allocates besides them: 3 % of the device and six
+    * velocity-sized vectors (the preconditioners' inner Krylov vectors and
+    * scratch), and, before a solver's first solve, 20 % of the memory in use
+    * for the solve-time workspace its preconditioners allocate then (the
+    * pressure AMG's was 15 % of the total at 64^3 Q3, 2026-10-13).
+    * @param free_bytes   Free device memory.
+    * @param total_bytes  Total device memory.
+    * @param system_size  Local block-system size (vector entries).
+    * @param velocity_size Local velocity true dofs.
+    * @param first_solve  Whether the solver has not solved yet.
+    * @param kdim         The configured restart length (the upper bound).
+    * @return The restart length, between 1 and kdim.
+    */
+   static int KrylovDimForMemory(double free_bytes, double total_bytes,
+                                 long long system_size, long long velocity_size,
+                                 bool first_solve, int kdim);
+
+   /// Verdict hook: called after a converged solve with (accepted steps so
+   /// far, attempt number within the step); returning true rejects it.
+   using SolveVetoFn = std::function<bool(int, int)>;
+
+   /**
+    * @brief Treat chosen converged solves as failed (test hook): the
+    *        rejection path can then be exercised without contriving a
+    *        solve that really fails.
+    * @param veto The hook; an empty function removes it.
+    */
+   void SetSolveVeto(SolveVetoFn veto) { solve_veto_ = std::move(veto); }
+
    /// @return The current step size (varies in adaptive mode).
    double CurrentDt() const { return dt_; }
 
@@ -447,8 +505,26 @@ private:
    /// the pressure null space exists.
    void UpdateStaticPressure();
 
-   void StepStartup();  ///< Trapezoidal starter / early BDF2 steps.
-   void StepFixed();    ///< Fixed-step BDF2/BDF3 step.
+   /// Trapezoidal starter / early BDF2 steps.
+   /// @return Whether the step was accepted (see AcceptSolve).
+   bool StepStartup();
+   /// Fixed-step BDF2/BDF3 step.
+   /// @return Whether the step was accepted (see AcceptSolve).
+   bool StepFixed();
+
+   /**
+    * @brief The verdict on a solve. Converged: accepted. Not converged:
+    *        abort, or with retry_on_failure put the velocity and pressure
+    *        back to the last accepted state and report the rejection.
+    * @param solver The solver that just ran.
+    * @param t_new  The time the step aimed for (for the message).
+    * @return Whether the step is accepted.
+    */
+   bool AcceptSolve(StokesSolver& solver, double t_new);
+
+   /// Apply krylov_memory_cap to @p solver from the free memory now.
+   /// Collective (the smallest value over the ranks is used).
+   void CapKrylovDim(StokesSolver& solver);
    void StepAdaptive(); ///< Adaptive attempt loop (BDF2 + BDF3 candidates).
 
    /**
@@ -518,6 +594,15 @@ private:
    double t_ = 0.0;           ///< Current time.
    double dt_ = 0.0;          ///< Current step size (varies in adaptive mode).
    int step_count_ = 0;       ///< Completed (accepted) steps.
+   int rejected_steps_ = 0;   ///< Step attempts rejected for a failed solve.
+   int attempt_ = 0;          ///< Attempt number within the current step.
+   int hold_left_ = 0;        ///< Accepted steps left without dt growth.
+   /// Fixed steps: the step before the first cut, to grow back to (0: none).
+   double dt_before_cut_ = 0.0;
+   mfem::Vector p_saved_;     ///< Pressure before the solve (retry only).
+   SolveVetoFn solve_veto_;   ///< Test hook (SetSolveVeto).
+   bool vetoed_ = false;      ///< The last rejection came from the hook.
+   int logged_kdim_ = -1;     ///< Restart length last reported by CapKrylovDim.
    int last_iterations_ = 0;  ///< Iterations of the most recent solve.
 };
 

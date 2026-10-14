@@ -126,6 +126,11 @@ Time integration.
 | `time.cfl_target` | real | `0.5` | Target CFL number (Nek5000's definition) under step_control cfl: ~0.5 for IMEX, 2 for OIFS. |
 | `time.cfl_max` | real | `0` | CFL ceiling (0 = off): caps error-controlled dt, aborts fixed steps above it. |
 | `time.dt_max` | real | `0` | Largest step under cfl control (0 = no cap). |
+| `time.on_solver_failure` | abort \| cut_step | `cut_step` | abort: a solve that does not converge within solver.max_iter stops the run, and solver.kdim is used as given. cut_step: it rejects the step, multiplies dt by retry_factor and solves again (fixed and cfl step control), and on a GPU the FGMRES restart length is lowered below solver.kdim when its Krylov vectors would not fit in the free memory. |
+| `time.retry_factor` | real | `0.5` | cut_step: dt multiplier after a failed solve, in (0, 1). |
+| `time.retry_hold` | int | `5` | cut_step: accepted steps after a rejected one during which dt may not grow. |
+| `time.retry_max` | int | `8` | cut_step: cuts allowed within one step before the run stops. |
+| `time.retry_dt_min` | real | `0` | cut_step: stop the run instead of cutting dt below this (0 = no floor). |
 | `time.convection` | imex \| oifs | `imex` | Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS sub-stepping (CFL 2 practical; BDF3 and, with discretization.mass auto, the collocated mass by default). |
 | `time.oifs_cfl` | real | `0.5` | CFL number of each OIFS substep. |
 | `time.order` | int | `0` | BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX). |

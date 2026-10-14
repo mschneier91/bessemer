@@ -266,6 +266,23 @@ public:
    /// @return FGMRES iterations of the last Solve().
    int Iterations() const { return iterations_; }
 
+   /// @return Whether this solver has run a solve yet (its first one also
+   ///          allocates the preconditioners' solve-time workspace).
+   bool HasSolved() const { return solves_ > 0; }
+
+   /// @return The local size of the block system FGMRES works on.
+   int SystemSize() const { return block_op_.Height(); }
+
+   /// @return The FGMRES restart length in use.
+   int KrylovDim() const { return kdim_; }
+
+   /**
+    * @brief Change the FGMRES restart length (it holds two system-sized
+    *        vectors per iteration up to it).
+    * @param k New restart length (>= 1).
+    */
+   void SetKrylovDim(int k);
+
    /// @return Whether the last Solve() converged to tolerance.
    bool Converged() const { return converged_; }
 
@@ -328,6 +345,8 @@ private:
    mfem::FGMRESSolver fgmres_;                   ///< Outer Krylov solver.
 
    int iterations_ = 0;      ///< Iterations of the last solve.
+   long solves_ = 0;         ///< Solves run so far.
+   int kdim_ = 0;            ///< FGMRES restart length in use.
    bool converged_ = false;  ///< Convergence flag of the last solve.
 };
 

@@ -314,6 +314,23 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "CFL ceiling (0 = off): caps error-controlled dt, aborts fixed steps above it.");
    r.Read(time, "dt_max", p.dt_max,
           "Largest step under cfl control (0 = no cap).");
+   r.ReadEnum(time, "on_solver_failure", p.on_solver_failure,
+   {{"abort", SolverFailure::Abort}, {"cut_step", SolverFailure::CutStep}},
+   "abort: a solve that does not converge within solver.max_iter stops the "
+   "run, and solver.kdim is used as given. cut_step: it rejects the step, "
+   "multiplies dt by retry_factor and solves again (fixed and cfl step "
+   "control), and on a GPU the FGMRES restart length is lowered below "
+   "solver.kdim when its Krylov vectors would not fit in the free memory.");
+   r.Read(time, "retry_factor", p.retry_factor,
+          "cut_step: dt multiplier after a failed solve, in (0, 1).");
+   r.Read(time, "retry_hold", p.retry_hold,
+          "cut_step: accepted steps after a rejected one during which dt may "
+          "not grow.");
+   r.Read(time, "retry_max", p.retry_max,
+          "cut_step: cuts allowed within one step before the run stops.");
+   r.Read(time, "retry_dt_min", p.retry_dt_min,
+          "cut_step: stop the run instead of cutting dt below this (0 = no "
+          "floor).");
    r.ReadEnum(time, "convection", p.convection_treatment,
    {{"imex", ConvectionTreatment::Imex}, {"oifs", ConvectionTreatment::Oifs}},
    "Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS "
@@ -885,6 +902,7 @@ void Parameters::Normalize()
       dt *= U_over_L;
       t_final *= U_over_L;
       dt_max *= U_over_L;
+      retry_dt_min *= U_over_L;
       nu = 1.0 / nondim.Re;
       controller.atol /= nondim.U_ref; // the LTE norm carries velocity units
       MFEM_VERIFY(geometry == MeshGeometry::Box, "parameters: the cylinder "
