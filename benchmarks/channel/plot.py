@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turbulent channel: compare a run's profiles with Moser, Kim & Mansour.
 
-    python3 benchmarks/channel/plot.py RUN_PROFILES.csv [--re 180|395] [-o out.png]
+    python3 benchmarks/channel/plot.py RUN_PROFILES.csv [--re 180|395|550] [-o out.png]
     python3 benchmarks/channel/plot.py --selftest
 
 RUN_PROFILES.csv is the run's <path>/<name>_profiles.csv (channel_statistics):
@@ -25,7 +25,8 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import common  # noqa: E402
 
-DNS = {"180": ("mkm_chan180.csv", 178.12), "395": ("mkm_chan395.csv", 392.24)}
+DNS = {"180": ("mkm_chan180.csv", 178.12), "395": ("mkm_chan395.csv", 392.24),
+       "550": ("lm_chan550.csv", 543.496)}
 
 
 def reference(key):
@@ -38,13 +39,21 @@ def fold(cols):
     symmetric mesh pair up exactly; others stay single)."""
     y = cols["y"]
     y0, y1 = y[0], y[-1]
-    groups = {}
+    # Wall distance of every station, then stations within 1e-9 of the
+    # height of each other merged (not rounded to a fixed digit: a station
+    # and its mirror can straddle a rounding boundary).
+    entries = []
     for i, yy in enumerate(y):
         upper = (yy - y0) > (y1 - yy)
         d = (y1 - yy) if upper else (yy - y0)
-        key = round(d / (y1 - y0), 9)
-        sign = -1.0 if upper else 1.0
-        groups.setdefault(key, []).append((i, sign))
+        entries.append((d / (y1 - y0), i, -1.0 if upper else 1.0))
+    entries.sort()
+    groups = {}
+    last = None
+    for key, i, sign in entries:
+        if last is None or key - last > 1e-9:
+            last = key
+        groups.setdefault(last, []).append((i, sign))
     out = {n: [] for n in ("d", "y_plus", "U_plus", "urms_plus", "vrms_plus",
                            "wrms_plus", "uv_plus")}
     for key in sorted(groups):
@@ -91,7 +100,7 @@ def plot(name, run, ref, ref_key, out):
     fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
     yp = [v for v in run["y_plus"] if v > 0]
     ax[0].semilogx(ref["y_plus"][1:], ref["U_plus"][1:], "k-", lw=2,
-                   label="MKM Re_tau %.0f" % DNS[ref_key][1])
+                   label="DNS Re_tau %.0f" % DNS[ref_key][1])
     ax[0].semilogx(yp, [u for v, u in zip(run["y_plus"], run["U_plus"]) if v > 0],
                    "o", ms=3, label=name)
     lin = [v for v in ref["y_plus"][1:] if v < 12]
