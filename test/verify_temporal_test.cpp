@@ -82,7 +82,7 @@ struct Result
    std::string settings; ///< Resolved scheme (provenance).
 };
 
-Result Run(const YAML::Node& b, const Scheme& s, double dt)
+Result RunScheme(const YAML::Node& b, const Scheme& s, double dt)
 {
    const incns::Parameters p = incns::Parameters::LoadYAMLString(Deck(b, s, dt));
    const double nu = p.nu;
@@ -169,7 +169,7 @@ TEST(VerifyTemporal, T1_T2_T3_Order3D)
    for (const Scheme& s : kSchemes)
    {
       SCOPED_TRACE(s.name);
-      const Result ref = Run(b, s, b["dt_ref"].as<double>());
+      const Result ref = RunScheme(b, s, b["dt_ref"].as<double>());
       const double ref_norm =
          std::sqrt(InnerProduct(MPI_COMM_WORLD, ref.u_true, ref.u_true));
       rec.Error(s.name, -1, b["dt_ref"].as<double>(), "u_l2_vs_exact",
@@ -177,7 +177,7 @@ TEST(VerifyTemporal, T1_T2_T3_Order3D)
       std::vector<double> e;
       for (std::size_t l = 0; l < dts.size(); ++l)
       {
-         Result r = Run(b, s, dts[l]);
+         Result r = RunScheme(b, s, dts[l]);
          r.u_true -= ref.u_true;
          e.push_back(std::sqrt(InnerProduct(MPI_COMM_WORLD, r.u_true,
                                             r.u_true)) / ref_norm);
