@@ -9,6 +9,8 @@
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
 
+#include <vector>
+
 namespace incns
 {
 
@@ -50,6 +52,14 @@ public:
     * @return c >= 0; the step's CFL number is c * dt.
     */
    double Rate(const mfem::ParGridFunction& u) const;
+
+   /**
+    * @brief The largest Rate() of several velocities (collective), with the
+    *        Jacobians and the element vector allocated once for all of them.
+    * @param us Velocities on the space given at construction (>= 1).
+    * @return max over us of Rate(), the same value.
+    */
+   double MaxRate(const std::vector<const mfem::ParGridFunction*>& us) const;
 
    /**
     * @brief Rate() and where it peaks (collective; diagnostics): the centre

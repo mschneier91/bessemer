@@ -601,6 +601,22 @@ private:
    std::unique_ptr<KineticHeadInterpolator> kinetic_head_;
 
    std::deque<mfem::Vector> hist_; ///< Velocity true-dof history, newest first.
+   /// Per-step work vectors, kept between steps (each one a cudaMalloc and a
+   /// synchronizing cudaFree per step as locals on a GPU; 2026-10-15). Sized
+   /// on first use.
+   mfem::Vector rhs_b_;      ///< A step's momentum right-hand side.
+   mfem::Vector rhs_combo_;  ///< AssembleBdfRhs: the history combination.
+   mfem::Vector rhs_tmp_;    ///< AssembleBdfRhs: its mass product.
+   mfem::Vector conv_nj_;    ///< SubtractConvection: one level's term.
+   mfem::Vector oifs_bd_;    ///< OifsBoundaryValues: the boundary values.
+   mfem::Vector oifs_q_;     ///< OifsBoundaryValues: (u.grad)u.
+   mfem::Vector oifs_nj_;    ///< OifsBoundaryValues: one level's term.
+   mfem::Vector oifs_vals_;  ///< OifsBoundaryValues: imposed-dof values.
+   mfem::Vector u_true_;     ///< A step's solution, true dofs.
+   /// The forcing's right-hand side when the coefficient is a constant
+   /// (assembled once; forcing_value_ is the constant it was assembled for).
+   mfem::Vector forcing_const_;
+   mfem::Vector forcing_value_; ///< That constant (empty: none assembled).
    std::deque<double> hist_times_; ///< Times of the history entries.
 
    /// Solver of the last accepted step (MomentumResidual); not owned.

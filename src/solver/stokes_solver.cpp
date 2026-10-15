@@ -418,7 +418,8 @@ void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
    INCNS_PROFILE("stokes_solver::initial_guess");
    // The elimination put the Dirichlet values in x: keep them.
    const Array<int>& ess = op_.EssentialTrueDofs();
-   Vector u_dirichlet;
+   Vector& u_dirichlet = guess_dirichlet_;
+   u_dirichlet.UseDevice(true);
    if (ess.Size() > 0) { x.GetBlock(0).GetSubVector(ess, u_dirichlet); }
    bool guessed = false;
    const double c0 = opts_.mass_coeff;
@@ -592,19 +593,43 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    // so BlockOperator::Mult and the Krylov work vectors it spawns stay resident
    // on the device instead of triggering per-apply host<->device copies. Found
    // via the debug device (scripts/debug_device.sh), which faulted here.
+   // Kept between solves (locals cost an allocation and a synchronizing free
+   // per solve on a GPU).
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
-   const MemoryType mt = Device::GetMemoryType();
-   BlockVector x(const_cast<Array<int>&>(offsets), mt);
-   BlockVector b(const_cast<Array<int>&>(offsets), mt);
-   x.UseDevice(true);
-   b.UseDevice(true);
+   if (solve_x_.Size() != offsets.Last())
+   {
+      const MemoryType mt = Device::GetMemoryType();
+      solve_x_.Update(const_cast<Array<int>&>(offsets), mt);
+      solve_b_.Update(const_cast<Array<int>&>(offsets), mt);
+      solve_x_.UseDevice(true);
+      solve_b_.UseDevice(true);
+   }
+   BlockVector& x = solve_x_;
+   BlockVector& b = solve_b_;
    b = 0.0;
 
    // Dirichlet data (at the BC's current time) -> u's boundary; the incoming
    // u/p act as the Krylov warm start. The eliminated (identity) rows of the
-   // block system reproduce the boundary values.
-   bc_.ProjectDirichlet(u);
-   u.GetTrueDofs(x.GetBlock(0));
+   // block system reproduce the boundary values. Constant data (no-slip) is
+   // projected once (on the host: a device round trip of u) and then written
+   // on the essential true dofs, the only ones the projection sets.
+   const Array<int>& ess = op_.EssentialTrueDofs();
+   if (bc_.DirichletIsConstant() && dirichlet_cached_)
+   {
+      u.GetTrueDofs(x.GetBlock(0));
+      if (ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, dirichlet_vals_); }
+   }
+   else
+   {
+      bc_.ProjectDirichlet(u);
+      u.GetTrueDofs(x.GetBlock(0));
+      if (bc_.DirichletIsConstant())
+      {
+         dirichlet_vals_.UseDevice(true);
+         if (ess.Size() > 0) { x.GetBlock(0).GetSubVector(ess, dirichlet_vals_); }
+         dirichlet_cached_ = true;
+      }
+   }
    p.GetTrueDofs(x.GetBlock(1));
    // CC path iterates on the internal pressure p~ = -p_physical (the canonical
    // symmetric convention): flip the warm start in, flip the answer out.

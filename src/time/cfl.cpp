@@ -124,7 +124,13 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
 
 double ConvectiveCfl::Rate(const ParGridFunction& u) const
 {
-   MFEM_VERIFY(u.ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+   return MaxRate({&u});
+}
+
+double ConvectiveCfl::MaxRate(const std::vector<const ParGridFunction*>& us)
+const
+{
+   MFEM_VERIFY(!us.empty(), "cfl: no velocity");
    double local = 0.0;
    if (ne_ > 0)
    {
@@ -132,31 +138,37 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
       // members they held 0.8 GB for 64^3 Q3 elements (2026-10-13).
       Vector ue(restr_->Height());
       ue.UseDevice(true);
-      restr_->Mult(u, ue);
       // So do the Jacobians at the GLL nodes: cached in the mesh they held
       // 1.2 GB at 64^3 Q3 for the whole run, and the rate is evaluated
       // between solves, away from the memory peak (2026-10-14). MFEM's own
-      // computation, not its cache: the same values.
+      // computation, not its cache: the same values. Once per call for all
+      // the velocities (OIFS: one per history level).
       const GeometricFactors geom(*vfes_.GetParMesh()->GetNodes(), *ir_,
                                   GeometricFactors::JACOBIANS,
                                   Device::GetDeviceMemoryType());
-      if (nodal_gll_)
+      for (const ParGridFunction* up : us)
       {
-         // (dofs, component, element), lexicographic: the layout the kernel
-         // reads, with the dofs at the GLL points.
-         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
-                                   inv_dxi_, rate_);
+         const ParGridFunction& u = *up;
+         MFEM_VERIFY(u.ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+         restr_->Mult(u, ue);
+         if (nodal_gll_)
+         {
+            // (dofs, component, element), lexicographic: the layout the kernel
+            // reads, with the dofs at the GLL points.
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         else
+         {
+            Vector uq(ir_->GetNPoints() * dim_ * ne_);
+            uq.UseDevice(true);
+            qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
+            qi_->Values(ue, uq);
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         local = std::max(local, rate_.Max()); // device-aware reduction
       }
-      else
-      {
-         Vector uq(ir_->GetNPoints() * dim_ * ne_);
-         uq.UseDevice(true);
-         qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
-         qi_->Values(ue, uq);
-         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
-                                   inv_dxi_, rate_);
-      }
-      local = rate_.Max(); // device-aware reduction
    }
    double global = 0.0;
    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MAX, vfes_.GetComm());

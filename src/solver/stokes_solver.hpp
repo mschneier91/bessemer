@@ -14,6 +14,7 @@
 #include "precond/rotational_schur.hpp"
 #include "precond/viscous_ratio.hpp"
 #include "quadrature/rule_book.hpp"
+#include "solver/persistent_fgmres.hpp"
 #include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -314,6 +315,10 @@ public:
    /// @return The FGMRES restart length in use.
    int KrylovDim() const { return kdim_; }
 
+   /// @return Bytes of FGMRES work vectors kept from the last solve (reused
+   ///         by the next: the restart-length guard counts them as free).
+   double KeptKrylovBytes() const { return fgmres_.KeptBytes(); }
+
    /**
     * @brief Change the FGMRES restart length (it holds two system-sized
     *        vectors per iteration up to it).
@@ -381,7 +386,18 @@ private:
    /// Block preconditioner: StokesBlockPreconditioner (Mass) or BlockStokesPC
    /// (CC shapes) behind the common Solver interface.
    std::unique_ptr<mfem::Solver> prec_;
-   mfem::FGMRESSolver fgmres_;                   ///< Outer Krylov solver.
+   /// Outer Krylov solver (MFEM's FGMRES, work vectors kept between solves).
+   PersistentFGMRESSolver fgmres_;
+   /// SolveTrue's block vectors, kept between solves (allocated, and freed
+   /// with a device synchronization, at every solve as locals).
+   mfem::BlockVector solve_x_;
+   mfem::BlockVector solve_b_;              ///< Its right-hand side.
+   mfem::Vector guess_dirichlet_;           ///< PrepareGuess's u_D (scratch).
+   /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant) on
+   /// the essential true dofs, from the first solve: later solves write it
+   /// instead of projecting it on the host.
+   mfem::Vector dirichlet_vals_;
+   bool dirichlet_cached_ = false;          ///< dirichlet_vals_ is set.
 
    int iterations_ = 0;      ///< Iterations of the last solve.
    long solves_ = 0;         ///< Solves run so far.

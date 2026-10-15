@@ -379,15 +379,27 @@ void OifsAdvector::Advect(const std::vector<double>& c,
                           const std::deque<double>& times, double t_new,
                           int ext, Vector& phi)
 {
-   // The advecting velocity: the newest `ext` history levels.
+   // The advecting velocity: the newest `ext` history levels (borrowed).
    const int n = std::max(1, std::min<int>(ext, static_cast<int>(hist.size())));
-   std::deque<Vector> wind;
-   for (int l = 0; l < n; ++l) { wind.emplace_back(hist[l]); }
+   std::vector<const Vector*> wind(n);
+   for (int l = 0; l < n; ++l) { wind[l] = &hist[l]; }
    const std::vector<double> wind_times(times.begin(), times.begin() + n);
-   AdvectWith(wind, wind_times, c, hist, times, t_new, phi);
+   AdvectImpl(wind, wind_times, c, hist, times, t_new, phi);
 }
 
 void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
+                              const std::vector<double>& wind_times,
+                              const std::vector<double>& c,
+                              const std::deque<Vector>& hist,
+                              const std::deque<double>& times, double t_new,
+                              Vector& phi)
+{
+   std::vector<const Vector*> w(wind.size());
+   for (std::size_t l = 0; l < wind.size(); ++l) { w[l] = &wind[l]; }
+   AdvectImpl(w, wind_times, c, hist, times, t_new, phi);
+}
+
+void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
                               const std::vector<double>& wind_times,
                               const std::vector<double>& c,
                               const std::deque<Vector>& hist,
@@ -414,13 +426,18 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
    Array<int> none;
    for (int l = 0; l < n_ext_; ++l)
    {
-      INCNS_PROFILE("oifs::setup");
       if (!vel_[l]) { vel_[l] = std::make_unique<ParGridFunction>(&V); }
-      vel_[l]->SetFromTrueDofs(wind[l]);
-      {
-         INCNS_PROFILE("oifs::rate");
-         rate = std::max(rate, cfl_->Rate(*vel_[l]));
-      }
+      vel_[l]->SetFromTrueDofs(*wind[l]);
+   }
+   {
+      INCNS_PROFILE("oifs::rate");
+      std::vector<const ParGridFunction*> us(n_ext_);
+      for (int l = 0; l < n_ext_; ++l) { us[l] = vel_[l].get(); }
+      rate = cfl_->MaxRate(us); // one evaluation of the Jacobians
+   }
+   for (int l = 0; l < n_ext_; ++l)
+   {
+      INCNS_PROFILE("oifs::setup");
       if (combo_)
       {
          combo_->SetWind(l, *vel_[l]);
@@ -462,8 +479,9 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
       bool all_imposed = false;
       if (constant && bd_const_zero_)
       {
-         Vector we;
-         wind[0].GetSubVector(ess, we);
+         Vector& we = ess_scratch_;
+         we.UseDevice(true);
+         wind[0]->GetSubVector(ess, we);
          double m = (we.Size() > 0) ? we.Normlinf() : 0.0;
          MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
          all_imposed = (m == 0.0);

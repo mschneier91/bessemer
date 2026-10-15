@@ -133,6 +133,17 @@ public:
                    const std::deque<double>& field_times, double t_new,
                    mfem::Vector& phi);
 
+private:
+   /// AdvectWith() on borrowed winds (Advect() passes the history itself:
+   /// no copies of it per step).
+   void AdvectImpl(const std::vector<const mfem::Vector*>& wind,
+                   const std::vector<double>& wind_times,
+                   const std::vector<double>& c,
+                   const std::deque<mfem::Vector>& fields,
+                   const std::deque<double>& field_times, double t_new,
+                   mfem::Vector& phi);
+
+public:
    /// @return RK4 substeps taken by the last Advect().
    int LastSubsteps() const { return last_substeps_; }
 
@@ -270,6 +281,7 @@ private:
    mfem::Vector bd_static_;
    bool bd_static_valid_ = false;   ///< bd_static_ holds this window's data.
    bool bd_zero_ = false;           ///< ... and it is zero (no-slip walls).
+   mfem::Vector ess_scratch_;       ///< Dirichlet-dof values (scratch).
    mfem::Vector tmp_s_;             ///< Scalar scratch.
    mfem::Vector k1_; ///< RK4 stage 1.
    mfem::Vector k2_; ///< RK4 stage 2.
