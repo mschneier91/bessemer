@@ -1,12 +1,12 @@
 # CI: the CPU build and the fast tier on every push and pull request, the
-# verification tier weekly, on demand, and on pull requests labelled `verify`
+# verification tier every third day, on demand, and on pull requests labelled `verify`
 # (docs/developing.md §7.2, §7.6).
 #
 # The Spack stack (environments/ci) takes 1-3 hours to build from source, so it
 # is cached: the key is the pinned Spack release plus environments/ci/spack.yaml,
 # and a cache hit restores the whole install tree in a few minutes. Change
 # either one and the next run rebuilds the stack once. GitHub evicts a cache
-# nobody has read for 7 days; the weekly run keeps it warm. ccache carries the
+# nobody has read for 7 days; the scheduled run keeps it warm. ccache carries the
 # object files between runs, so an unchanged tree rebuilds bessemer in minutes.
 name: CI
 
@@ -22,7 +22,9 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "17 6 * * 1" # Mondays 06:17 UTC: the verify tier, and keeps the caches warm
+    # Days 1, 4, 7, ... of the month at 06:17 UTC: the verify tier, and keeps
+    # the caches warm. Free on a public repository's standard runners.
+    - cron: "17 6 */3 * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -137,7 +139,7 @@ jobs:
       - name: Verification rates
         if: always() && (github.event_name == 'schedule' || inputs.verify || contains(github.event.pull_request.labels.*.name, 'verify'))
         run: |
-          for f in build/cpu/verify/*_rates_np*.csv; do
+          for f in build/cpu/verify/*_rates.csv; do
             [ -f "$f" ] || continue
             echo "### $(basename "$f" .csv)" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
