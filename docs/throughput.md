@@ -321,3 +321,60 @@ solver:
   n_inner: 3                 # Cahouet-Chabard inner CG (default 10)
   rtol: 1.0e-8               # conservative; 1.0e-6 passed the Taylor-Green gate
 ```
+
+## Tier 4: the time step, against the DNS
+
+TGV Re 1600 to t = 20 with the fast solver settings (project k 8, rhs, `n_inner` 3,
+`rtol` 1e-6), compared with the spectral DNS (`benchmarks/tgv_re1600/plot.py`; jobs
+49220334, 49220279, earlier runs):
+
+| Run | Steps | Run wall | Peak dissipation error | Largest curve error |
+|---|---|---|---|---|
+| 32^3 IMEX CFL 0.25, default solver | 1924 | 3390 s | 15.6 % | 16.8 % |
+| 32^3 IMEX CFL 0.25, fast solver | 1924 | 326 s | 15.6 % | 16.8 % |
+| 32^3 IMEX CFL 0.25, `mass: collocated` | 1982 | 660 s | 16.1 % | 19.6 % |
+| 32^3 OIFS CFL 2, default solver | 259 | 492 s | 10.2 % | 14.3 % |
+| 32^3 OIFS CFL 2, fast solver | 259 | 168 s | 10.2 % | 14.3 % |
+| 32^3 rotational IMEX CFL 0.5, fast solver | 1165 | 371 s | 25.9 % | 30.3 % |
+| 64^3 IMEX CFL 0.3, default solver (2026-10-14) | 3284 | 45,847 s | 2.5 % | 3.2 % |
+| 64^3 IMEX CFL 0.3, fast solver | 3293 | 3,672 s | 2.5 % | 3.2 % |
+| 64^3 OIFS CFL 2, fast solver | 499 | 2,078 s | 0.96 % | 5.6 % |
+
+The fast solver settings change no answer (identical errors); they change the time. At
+32^3, OIFS at CFL 2 is closer to the DNS than IMEX and, with the fast solver, 20x faster
+than the default IMEX run; the semi-implicit rotational form at CFL 0.5 is the furthest.
+(All three "fail" the gate against the IMEX run because the gate compares two runs of the
+same scheme; against the DNS, OIFS is the better one at 32^3.) At 64^3 (job 49224583) it is a
+trade-off: OIFS at CFL 2 has the peak closer to the DNS (0.96 % against 2.5 %) but a larger
+deviation elsewhere on the curve (5.6 % against 3.2 %), in 35 min against IMEX's 61 min:
+6.6x fewer steps at 3.8x the cost each (the convection substeps). IMEX stays the accurate
+choice for this case (human 2026-10-12: IMEX, not OIFS, for it); OIFS with the fast solver
+is the fast one. No run had a kinetic-energy increase.
+
+**Saturation with the fast settings** (5 + 10 steps, from t = 0, job 49220334):
+
+| N^3 | DOF | s/step | DOF-steps/s |
+|---|---|---|---|
+| 16 | 0.36 M | 0.024 | 1.55e7 |
+| 24 | 1.23 M | 0.048 | 2.56e7 |
+| 32 | 2.92 M | 0.103 | 2.84e7 |
+| 40 | 5.70 M | 0.186 | 3.06e7 |
+| 48 | 9.84 M | 0.318 | 3.10e7 |
+| 64 | 23.3 M | 0.735 | 3.17e7 |
+| 72 | 33.2 M | 1.03 | 3.24e7 |
+
+About 12x the original saturated throughput (2.5e6); the knee stays near 1 to 3 M DOF per
+GPU (80 to 90 % of the saturated rate at 24^3 to 32^3).
+
+## The channel at Re_tau 180 (spin-up, job 49216608)
+
+24 x 18 x 24 Q3/Q2 elements, OIFS CFL 2, t = 0 to 120 in 7 h 15 min on one H100 (28,628
+steps, before the solver changes). Averaged over t = 60 to 120 (2,877 samples): **Re_tau
+178.21 against 178.12** (0.05 %: the momentum balance is converged), bulk velocity 16.56
+(the DNS's is about 15.7; the streamwise resolution, dx+ ~ 15.5, is coarse). Against Moser,
+Kim & Mansour (fetched 2026-10-15 with the human's approval; `benchmarks/channel/plot.py`):
+the mean velocity U+ within 8.6 % for y+ >= 5, and the largest absolute differences in wall
+units u_rms 0.17, v_rms 0.10, w_rms 0.10, u'v' 0.066 (6 to 9 % of their peaks): the
+coarse-mesh signature (the log-layer overshoot of the bulk velocity), with the momentum
+balance exact. Frozen restart at t = 60 for the benchmarks:
+`runs/bench/cases/chan180_t60`.
