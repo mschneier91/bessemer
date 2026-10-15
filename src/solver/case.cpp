@@ -118,6 +118,7 @@ void Case::BuildIntegrator()
    opts.collocated_mass = params_.CollocatedMass();
    opts.compact_diffusion =
       params_.vector_diffusion == VectorDiffusionStorage::Compact;
+   opts.fuse_grad_div = params_.fuse_grad_div;
    // The raw right-hand side is kept only for the force on the body.
    opts.keep_rhs = params_.forces.enabled;
    opts.grad_div = params_.grad_div_h; // the part proportional to h_K

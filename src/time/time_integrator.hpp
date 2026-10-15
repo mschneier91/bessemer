@@ -83,6 +83,8 @@ struct TimeIntegratorOptions
    bool keep_rhs = true;
    /// Compact vector-diffusion storage (StokesOperatorOptions).
    bool compact_diffusion = true;
+   /// Grad-div with the viscous term in one kernel (StokesOperatorOptions).
+   bool fuse_grad_div = true;
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    /// Solve Navier-Stokes rather than unsteady Stokes (Sprint 2.2): adds the

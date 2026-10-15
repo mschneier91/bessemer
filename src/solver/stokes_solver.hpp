@@ -40,6 +40,7 @@ struct StokesSolverOptions
    double grad_div_nu_ref = -1.0;
    /// Compact vector-diffusion storage (StokesOperatorOptions).
    bool compact_diffusion = true;
+   bool fuse_grad_div = true; ///< StokesOperatorOptions::fuse_grad_div.
    /// Velocity-block preconditioner (default Jacobi; LORAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;

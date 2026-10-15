@@ -66,6 +66,7 @@ private:
    int dofs1D_ = 0; ///< Dofs per direction, D1D (set by AssemblePA).
    int quad1D_ = 0; ///< Quadrature points per direction, Q1D (set by AssemblePA).
    const mfem::Vector* elem_coeff_ = nullptr; ///< SetElementCoefficient.
+   bool apply_fused_ = false; ///< SetApplyFused: another integrator applies it.
 
 public:
    /**
@@ -151,6 +152,30 @@ public:
     *          outlive the assemblies), or null to evaluate the coefficient.
     */
    void SetElementCoefficient(const mfem::Vector* c) { elem_coeff_ = c; }
+
+   /**
+    * @brief Leave this term's apply to an integrator that applies it with its
+    *        own in one kernel (LeanVectorDiffusionIntegrator::FuseGradDiv):
+    *        AddMultPA then adds nothing. The diagonal, the nodal blocks and
+    *        full assembly are unchanged.
+    * @param fused Whether another integrator applies the term.
+    */
+   void SetApplyFused(bool fused) { apply_fused_ = fused; }
+   /// @return Whether SetApplyFused(true) is in effect.
+   bool ApplyFused() const { return apply_fused_; }
+
+   /// @name The partial-assembly data, for a fused apply (after AssemblePA)
+   ///@{
+   /// alpha = Q w / det J per point, (Q1D^dim, ne).
+   const mfem::Vector& PAAlpha() const { return pa_data_; }
+   /// The mesh's Jacobians at the points, (Q1D^dim, dim, dim, ne).
+   const mfem::Vector& PAJacobians() const { return geom_->J; }
+   const mfem::DofToQuad* PAMaps() const { return maps_; } ///< Tensor maps.
+   int PADim() const { return dim_; }          ///< Dimension.
+   int PANumElements() const { return ne_; }   ///< Elements.
+   int PADofs1D() const { return dofs1D_; }    ///< Dofs per direction.
+   int PAQuad1D() const { return quad1D_; }    ///< Points per direction.
+   ///@}
 
    /// @return The scalar coefficient (null when the default 1 is in use).
    const mfem::Coefficient* GetCoefficient() const { return Q; }

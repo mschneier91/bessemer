@@ -358,6 +358,12 @@ void StokesOperator::BuildMomentum()
       INCNS_PROFILE("momentum::assemble");
       momentum_form_->Assemble();
    }
+   // nu K and grad-div in one kernel: the velocity gradients once per apply.
+   if (opts_.fuse_grad_div && grad_div_integ_ && diffusion)
+   {
+      static_cast<LeanVectorDiffusionIntegrator*>(diffusion)->FuseGradDiv(
+         *grad_div_integ_);
+   }
    {
       INCNS_PROFILE("momentum::form_system");
       // One P^T A P serves the unconstrained block (reactions) and, wrapped

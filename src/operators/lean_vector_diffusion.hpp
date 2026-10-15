@@ -41,6 +41,8 @@ namespace incns
  * sdim == dim == vdim, without libCEED; other cases use MFEM's path whatever
  * the setting.
  */
+class GradDivIntegrator;
+
 class LeanVectorDiffusionIntegrator : public mfem::VectorDiffusionIntegrator
 {
 public:
@@ -108,10 +110,41 @@ public:
    /// Kernel registry for the compact apply, keyed on (dim, d1d, q1d).
    MFEM_REGISTER_KERNELS(CompactApplyKernels, ApplyKernelType, (int, int, int));
 
+   /**
+    * @brief Apply @p gd's grad-div term together with this one, in one kernel:
+    *        the velocity gradients are computed once per apply and the result
+    *        written once, where two applies did both twice.
+    *
+    * Both after AssemblePA, on the same space and rule, with the compact
+    * storage. @p gd's own apply is then switched off
+    * (GradDivIntegrator::SetApplyFused); its diagonal and nodal blocks are
+    * unchanged. Call again after reassembling either.
+    * @param gd The grad-div integrator of the same form.
+    * @return Whether the term was taken (false: other sizes, rule or storage,
+    *         and @p gd applies itself).
+    */
+   bool FuseGradDiv(GradDivIntegrator& gd);
+
+   /// @return Whether a grad-div term is applied with this one (FuseGradDiv).
+   bool FusedGradDiv() const { return fused_gd_ != nullptr; }
+
+   /// The fused kernel: (ne, B, G, compact data, Jacobians, alpha, x, y,
+   /// d1d, q1d).
+   using FusedKernelType = void (*)(const int, const mfem::Array<mfem::real_t>&,
+                                    const mfem::Array<mfem::real_t>&,
+                                    const mfem::Vector&, const mfem::Vector&,
+                                    const mfem::Vector&, const mfem::Vector&,
+                                    mfem::Vector&, const int, const int);
+
+   MFEM_REGISTER_KERNELS(FusedApplyKernels, FusedKernelType, (int, int, int));
+
    /// Register a compile-time (DIM, D1D, Q1D) specialization.
    template <int DIM, int D1D, int Q1D>
    static void AddSpecialization()
-   { CompactApplyKernels::Specialization<DIM, D1D, Q1D>::Add(); }
+   {
+      CompactApplyKernels::Specialization<DIM, D1D, Q1D>::Add();
+      FusedApplyKernels::Specialization<DIM, D1D, Q1D>::Add();
+   }
 
 private:
    Storage storage_ = Storage::Compact; ///< Requested storage.
@@ -124,6 +157,8 @@ private:
    /// Compact data, (nq, dim (dim + 1) / 2, ne): 3D xx, xy, xz, yy, yz, zz;
    /// 2D xx, xy, yy. Coefficient, weight and 1/det J included.
    mfem::Vector cpa_;
+   /// The grad-div term applied with this one (FuseGradDiv; not owned).
+   const GradDivIntegrator* fused_gd_ = nullptr;
 };
 
 } // namespace incns

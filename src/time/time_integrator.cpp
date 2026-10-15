@@ -310,6 +310,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.grad_div_nu = opts_.grad_div_nu;
    so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
    so.compact_diffusion = opts_.compact_diffusion;
+   so.fuse_grad_div = opts_.fuse_grad_div;
    so.velocity_prec = opts_.velocity_prec;
    so.amg_reuse = opts_.amg_reuse;
    so.schur = opts_.schur;
@@ -390,6 +391,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.grad_div_nu = opts_.grad_div_nu;
       so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
       so.compact_diffusion = opts_.compact_diffusion;
+      so.fuse_grad_div = opts_.fuse_grad_div;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;

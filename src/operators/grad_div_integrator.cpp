@@ -538,6 +538,7 @@ void GradDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
 
 void GradDivIntegrator::AddMultPA(const Vector& x, Vector& y) const
 {
+   if (apply_fused_) { return; } // applied with the diffusion term
    ApplyPAKernels::Run(dim_, dofs1D_, quad1D_, ne_, maps_->B, maps_->G,
                        geom_->J, pa_data_, x, y, dofs1D_, quad1D_);
 }

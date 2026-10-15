@@ -64,7 +64,7 @@ closest valid key. **Every key, with its default and allowed values:
 | `initial` | `velocity`, `perturbation`, `perturbation_center` (uniform), `seed` (channel) |
 | `forcing` | `body_force`: a constant force per unit mass, e.g. a channel's mean pressure gradient |
 | `physics` | `nu`, `grad_div_h`, `grad_div_nu`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
-| `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent`, `vector_diffusion: compact \| mfem` |
+| `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent`, `vector_diffusion: compact \| mfem`, `fuse_grad_div` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol`, `on_solver_failure: cut_step \| abort`, `retry_factor`, `retry_hold`, `retry_max`, `retry_dt_min` |
 | `solver` | `rtol`, `atol`, `tolerance_reference: initial_residual \| rhs`, `initial_guess: previous \| extrapolate \| project`, `projection_k`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |

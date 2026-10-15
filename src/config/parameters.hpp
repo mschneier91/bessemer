@@ -299,6 +299,9 @@ struct Parameters
    /// Vector-diffusion storage (deck `discretization.vector_diffusion`):
    /// compact (default; 6 numbers per point in 3D) or MFEM's (27).
    VectorDiffusionStorage vector_diffusion = VectorDiffusionStorage::Compact;
+   /// Grad-div applied with the viscous term in one kernel (deck
+   /// `discretization.fuse_grad_div`).
+   bool fuse_grad_div = true;
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;

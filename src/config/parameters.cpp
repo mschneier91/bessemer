@@ -102,6 +102,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    MFEM_VERIFY(!disc.Has("collocated_mass"), "parameters: "
                "discretization.collocated_mass was replaced by "
                "discretization.mass: auto | collocated | consistent");
+   r.Read(disc, "fuse_grad_div", p.fuse_grad_div,
+          "Apply the grad-div term with the viscous term in one kernel (the "
+          "velocity gradients once per apply; compact vector_diffusion only). "
+          "false: two kernels.");
    r.ReadEnum(disc, "vector_diffusion", p.vector_diffusion,
    {
       {"compact", VectorDiffusionStorage::Compact},

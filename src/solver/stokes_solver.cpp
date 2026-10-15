@@ -23,6 +23,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.grad_div_nu = o.grad_div_nu;
    so.grad_div_nu_ref = o.grad_div_nu_ref;
    so.compact_diffusion = o.compact_diffusion;
+   so.fuse_grad_div = o.fuse_grad_div;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lagged_velocity = o.lagged_velocity;
    so.rotation_alpha = o.rotation_alpha;

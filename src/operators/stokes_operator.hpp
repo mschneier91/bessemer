@@ -53,6 +53,9 @@ struct StokesOperatorOptions
    /// 3D) instead of MFEM's one per component (27). False = MFEM's own
    /// AssemblePA and apply (LeanVectorDiffusionIntegrator::Storage).
    bool compact_diffusion = true;
+   /// Apply grad-div with the viscous term in one kernel (compact storage;
+   /// LeanVectorDiffusionIntegrator::FuseGradDiv).
+   bool fuse_grad_div = true;
    /// Build the low-order-refined (LOR) source form for the BoomerAMG velocity
    /// preconditioner (see MomentumLORForm()). Off by default -- the matrix-free
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
