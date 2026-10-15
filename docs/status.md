@@ -15,12 +15,16 @@ changing over time", rate threshold theory - 0.3 approved, grad-div "an open que
 "can you set up the CI ... are you able to handle the caching?".
 - **CI** (`.github/workflows/ci.yml`, `environments/ci/spack.yaml`; developing.md §7.6):
   style, `cpu` build, Doxygen, fast tier on every push to `main` and every PR; the verify
-  tier weekly, by dispatch, or with the PR label `verify`. Spack stack cached by the
-  Spack release + the env's hash. First cold build started 2026-10-15.
+  tier every third day (human: "it's free right?": yes, public repo), by dispatch, or
+  with the PR label `verify`. Spack stack cached by the Spack release + the env's hash:
+  the cold build took ~1 h (2026-10-15); with the stack and ccache warm a run takes
+  ~11 min (run 38807839901: build 33 s, fast tier 198/198 in 5.3 min, verify 3/3 in
+  3.7 min).
 - **Verify tier** (label `verify`, np 4; developing.md §7.2): `verify_spatial_test`,
   `verify_kovasznay_test`, `verify_temporal_test`, helpers in `test/verify_util.hpp`,
   levels and the 0.3 margin in `baselines.yaml` `verification`. Written in a sandbox
-  with no toolchain: **compiled and run only in CI**; see PR #1 for the measured rates.
+  with no toolchain: compiled and run only in CI. **All three pass in CI** (run
+  38805467828; 90 / 73 / 58 s at np 4); the rates are in the run summary and PR #1.
 - **Next (audit Phases 2-4):** provenance (commit, defaults) in `summary.json`, splitting
   `nse_mms_test` / `tgv_nse_test` (they time out on a GPU), then the solution-
   verification and validation studies on Bridges-2.
