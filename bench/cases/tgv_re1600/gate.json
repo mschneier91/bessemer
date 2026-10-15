@@ -1,0 +1,14 @@
+{
+  "case": "tgv_re1600",
+  "description": "Taylor-Green vortex, Re 1600, Q3/Q2, IMEX BDF2, fixed dt = 0.5/N from t = 0. Cheap gates per run against the stored baseline; the expensive gate is the dissipation-rate curve against benchmarks/tgv_re1600 (reference CSV) on a full run.",
+  "cheap": {
+    "divergence_max_ratio": 2.0,
+    "energy_rel_tol_bitwise": 1e-12,
+    "energy_rel_tol_solver": 1e-7,
+    "budget_closure_rel_tol": 0.05
+  },
+  "expensive": {
+    "reference": "benchmarks/tgv_re1600/reference (fetched by benchmarks/fetch_references.py)",
+    "dissipation_peak_rel_tol": 0.02
+  }
+}

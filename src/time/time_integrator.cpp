@@ -328,6 +328,9 @@ StokesSolver& StokesTimeIntegrator::Trap()
    }
    so.rtol = opts_.rtol;
    so.atol = opts_.atol;
+   so.tolerance_reference = opts_.tolerance_reference;
+   so.initial_guess = opts_.initial_guess;
+   so.projection_k = opts_.projection_k;
    so.max_iter = opts_.max_iter;
    so.kdim = opts_.kdim;
    so.print_level = opts_.print_level;
@@ -403,6 +406,9 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       }
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
+      so.tolerance_reference = opts_.tolerance_reference;
+      so.initial_guess = opts_.initial_guess;
+      so.projection_k = opts_.projection_k;
       so.max_iter = opts_.max_iter;
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;
@@ -613,7 +619,7 @@ int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
       double total_bytes,
       long long system_size,
       long long velocity_size,
-      int kdim)
+      int kdim, int extra_vectors)
 {
    const double word = sizeof(double);
    const double margin = 0.03 * total_bytes + 6.0 * word * velocity_size;
@@ -621,7 +627,8 @@ int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
    // k + 1 basis vectors and k preconditioned ones, FGMRES's residual, and
    // the solve's right-hand side and solution: 2k + 4 vectors.
    const double fit =
-      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 4.0) / 2.0);
+      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 4.0 -
+                  extra_vectors) / 2.0);
    return static_cast<int>(std::max(1.0, std::min<double>(kdim, fit)));
 }
 
@@ -642,7 +649,8 @@ void StokesTimeIntegrator::CapKrylovDim(StokesSolver& solver)
       DeviceMemoryInfo(free, total);
    }
    int k = KrylovDimForMemory(free, total, solver.SystemSize(),
-                              spaces_.Velocity().GetTrueVSize(), opts_.kdim);
+                              spaces_.Velocity().GetTrueVSize(), opts_.kdim,
+                              solver.GuessVectors());
    MPI_Allreduce(MPI_IN_PLACE, &k, 1, MPI_INT, MPI_MIN, comm);
    if (k != solver.KrylovDim()) { solver.SetKrylovDim(k); }
    // Report a cap when it appears and when it moves by more than 10 %

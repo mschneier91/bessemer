@@ -401,6 +401,102 @@ void StokesSolver::WarmUp()
    warmed_up_ = true;
 }
 
+int StokesSolver::GuessVectors() const
+{
+   switch (opts_.initial_guess)
+   {
+      case InitialGuess::Project: return 2 * opts_.projection_k;
+      case InitialGuess::Extrapolate: return 2;
+      default: return 0;
+   }
+}
+
+void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
+{
+   if (opts_.initial_guess == InitialGuess::Previous) { return; }
+   INCNS_PROFILE("stokes_solver::initial_guess");
+   // The elimination put the Dirichlet values in x: keep them.
+   const Array<int>& ess = op_.EssentialTrueDofs();
+   Vector u_dirichlet;
+   if (ess.Size() > 0) { x.GetBlock(0).GetSubVector(ess, u_dirichlet); }
+   bool guessed = false;
+   const double c0 = opts_.mass_coeff;
+   if (opts_.initial_guess == InitialGuess::Project && projection_ &&
+       projection_->Size() > 0)
+   {
+      // Images of an operator whose mass factor moved by more than 5 % (or
+      // whose viscosity changed) are recomputed: m operator applications.
+      if (projection_stale_ ||
+          (projection_c0_ > 0.0 && std::abs(c0 / projection_c0_ - 1.0) > 0.05))
+      {
+         projection_->Rebuild(block_op_);
+         projection_c0_ = c0;
+         projection_stale_ = false;
+      }
+      guessed = projection_->Guess(b, x);
+   }
+   else if (opts_.initial_guess == InitialGuess::Extrapolate)
+   {
+      // x holds x_n (the warm start). x_0 = x_n + r (x_n - x_{n-1}) with
+      // r = dt_new / dt_old, taken as c0_old / c0_new.
+      Vector x_n(x.Size(), Device::GetDeviceMemoryType());
+      x_n.UseDevice(true);
+      x_n = x;
+      if (previous_x_.Size() == x.Size())
+      {
+         const double r = (c0 > 0.0 && previous_c0_ > 0.0) ? previous_c0_ / c0
+                          : 1.0;
+         x *= 1.0 + r;
+         x.Add(-r, previous_x_);
+         guessed = true;
+      }
+      else
+      {
+         previous_x_.SetSize(x.Size(), Device::GetDeviceMemoryType());
+         previous_x_.UseDevice(true);
+      }
+      previous_x_ = x_n;
+   }
+   if (guessed && ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, u_dirichlet); }
+}
+
+void StokesSolver::SetTolerance(const Vector& b)
+{
+   if (opts_.tolerance_reference == ToleranceReference::Rhs)
+   {
+      const double b_norm =
+         std::sqrt(InnerProduct(spaces_.Velocity().GetComm(), b, b));
+      fgmres_.SetRelTol(0.0);
+      fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * b_norm));
+   }
+   else
+   {
+      fgmres_.SetRelTol(opts_.rtol);
+      fgmres_.SetAbsTol(opts_.atol);
+   }
+}
+
+void StokesSolver::RecordSolution(const Vector& x)
+{
+   const double c0 = opts_.mass_coeff;
+   if (opts_.initial_guess == InitialGuess::Project)
+   {
+      INCNS_PROFILE("stokes_solver::initial_guess");
+      if (!projection_)
+      {
+         projection_ = std::make_unique<SolutionProjection>(
+                          opts_.projection_k, spaces_.Velocity().GetComm());
+      }
+      projection_->Add(block_op_, x);
+      if (projection_->Size() <= 1) // a new basis
+      {
+         projection_c0_ = c0;
+         projection_stale_ = false;
+      }
+   }
+   previous_c0_ = c0;
+}
+
 void StokesSolver::SetKrylovDim(int k)
 {
    MFEM_VERIFY(k >= 1, "stokes_solver: the restart length must be >= 1");
@@ -427,6 +523,7 @@ void StokesSolver::Refresh(double c0, double nu)
                   "change its viscosity (see CanChangeViscosity)");
       op_.SetViscosity(nu);
       opts_.nu = nu; // the Schur preconditioner's nu, in Refresh(c0) below
+      projection_stale_ = true; // its images are of the old operator
    }
    Refresh(c0);
 }
@@ -545,6 +642,9 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
       // Converged() = false) rather than be silently projected away.
    }
 
+   PrepareGuess(b, x);
+   SetTolerance(b);
+
    // Per-solve counters (the rotation fields persist from UpdateRotation).
    stats_.vel_applications = stats_.vel_inner_iterations = 0;
    stats_.vel_cap_hits = stats_.schur_applications = 0;
@@ -560,6 +660,7 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    converged_ = fgmres_.GetConverged();
    stats_.outer_iterations = iterations_;
 
+   RecordSolution(x); // in the solver's variables, before the sign flip
    u.SetFromTrueDofs(x.GetBlock(0));
    if (cc_mode_) { x.GetBlock(1).Neg(); } // p = -p~: the ONE output sign flip
    p.SetFromTrueDofs(x.GetBlock(1));

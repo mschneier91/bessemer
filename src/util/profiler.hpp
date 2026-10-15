@@ -97,6 +97,20 @@ public:
     */
    void SetGauge(GaugeFn gauge);
 
+   /// Marker signatures: open and close a named range on an external timeline.
+   using PushFn = std::function<void(const char*)>;
+   using PopFn = std::function<void()>;
+
+   /**
+    * @brief Open a named range with @p push at every region entry and close it
+    *        with @p pop at every exit, so a timeline tool shows the profiler's
+    *        regions (incns::NvtxPush / NvtxPop: NVTX ranges for Nsight
+    *        Systems; they return at once when no tool is attached).
+    * @param push Range opener; an empty function removes the markers.
+    * @param pop  Range closer.
+    */
+   void SetMarkers(PushFn push, PopFn pop);
+
    /// @return Whether a gauge is installed (SetGauge).
    bool Gauged() const { return static_cast<bool>(gauge_); }
 
@@ -104,7 +118,7 @@ public:
    bool Synchronized() const { return static_cast<bool>(sync_); }
 
    /// Clear all recorded regions, restore the default (MPI_Wtime) clock and
-   /// remove the synchronization hook and the gauge.
+   /// remove the synchronization hook, the gauge and the markers.
    void Reset();
 
    /**
@@ -193,6 +207,8 @@ private:
    ClockFn clock_;             ///< Time source.
    SyncFn sync_;               ///< Run before each clock reading, when set.
    GaugeFn gauge_;             ///< Read at each entry and exit, when set.
+   PushFn push_;               ///< Opens a timeline range at entry, when set.
+   PopFn pop_;                 ///< Closes it at exit.
    /// Gauge readings at the entries of the open regions (innermost last).
    std::vector<double> gauge_entries_;
 

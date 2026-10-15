@@ -133,6 +133,11 @@ struct TimeIntegratorOptions
    CahouetChabardConfig cc;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
+   /// What rtol is relative to, the initial guess and the solutions it keeps
+   /// (StokesSolverOptions).
+   ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   InitialGuess initial_guess = InitialGuess::Previous; ///< See above.
+   int projection_k = 8;                                ///< See above.
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart size.
    int print_level = -1;         ///< Solver print level.
@@ -314,11 +319,14 @@ public:
     * @param system_size  Local block-system size (vector entries).
     * @param velocity_size Local velocity true dofs.
     * @param kdim         The configured restart length (the upper bound).
+    * @param extra_vectors System-sized vectors the initial guess keeps
+    *                      (StokesSolver::GuessVectors), counted as not yet
+    *                      allocated.
     * @return The restart length, between 1 and kdim.
     */
    static int KrylovDimForMemory(double free_bytes, double total_bytes,
                                  long long system_size, long long velocity_size,
-                                 int kdim);
+                                 int kdim, int extra_vectors = 0);
 
    /// Verdict hook: called after a converged solve with (accepted steps so
    /// far, attempt number within the step); returning true rejects it.

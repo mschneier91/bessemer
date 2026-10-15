@@ -56,6 +56,17 @@ void DeviceSync();
 double DeviceMemoryInUse();
 
 /**
+ * @brief Open a named NVTX range (Nsight Systems timelines), for the
+ *        profiler's markers (Profiler::SetMarkers). A no-op without CUDA, and
+ *        nearly free when no tool is attached.
+ * @param name Range label.
+ */
+void NvtxPush(const char* name);
+
+/// @brief Close the innermost NVTX range opened by NvtxPush.
+void NvtxPop();
+
+/**
  * @brief Free and total memory of this process's GPU, in bytes, as the
  *        driver reports them.
  * @param free  Output: free bytes.

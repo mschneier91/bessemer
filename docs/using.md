@@ -67,7 +67,7 @@ closest valid key. **Every key, with its default and allowed values:
 | `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent`, `vector_diffusion: compact \| mfem` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol`, `on_solver_failure: cut_step \| abort`, `retry_factor`, `retry_hold`, `retry_max`, `retry_dt_min` |
-| `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
+| `solver` | `rtol`, `atol`, `tolerance_reference: initial_residual \| rhs`, `initial_guess: previous \| extrapolate \| project`, `projection_k`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
 | `boundary_conditions` | a list of `{select: [xmin, ymax, ...] or attributes, type: no_slip \| outflow \| velocity_dirichlet}` |
 | `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, ... |
 | `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
@@ -152,6 +152,16 @@ stability limit; pass `-dt 0.001`.)
   - `abort`: the run stops on a failed solve, and `solver.kdim` and `solver.max_iter` are
     used exactly as given (the behaviour before 2026-10-13).
   Error-controlled steps (`step_control: error`) keep their own rejection logic.
+- **The outer solve's initial guess and tolerance** (`solver.initial_guess`,
+  `solver.tolerance_reference`; defaults unchanged). By default the tolerance is relative to
+  the initial residual, so the warm start (the previous step's solution) saves no
+  iterations. With `tolerance_reference: rhs` the solve stops at `rtol` times the
+  right-hand side's norm, and a better guess stops it sooner: `extrapolate` (linear in time,
+  one more system-sized vector) or `project` (least squares over the last `projection_k`
+  solutions, 2 `projection_k` system-sized vectors, e.g. 2.9 GB at 64³ for 8). On a small
+  Taylor–Green on CPU: 13.0 outer iterations per step by default, 8.9 with `rhs`, 7.4 with
+  `extrapolate`, 5.2 with `project` (k 8), the energy unchanged to 4e-11
+  ([throughput.md](throughput.md)).
 
 ## 5. Outputs
 

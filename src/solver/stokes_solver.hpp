@@ -14,6 +14,7 @@
 #include "precond/rotational_schur.hpp"
 #include "precond/viscous_ratio.hpp"
 #include "quadrature/rule_book.hpp"
+#include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -87,6 +88,17 @@ struct StokesSolverOptions
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart (Krylov subspace) size.
    int print_level = -1;         ///< mfem::IterativeSolver print level.
+   /// What rtol is relative to: the initial residual (MFEM's rel_tol, the
+   /// default) or the right-hand side, ||r|| <= rtol ||b||, under which a
+   /// better initial guess (initial_guess) saves iterations.
+   ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   /// The outer solve's initial guess in SolveTrue: the incoming u, p (the
+   /// previous solution: the warm start), their extrapolation in time from
+   /// the last two solutions (one more system vector), or the least-squares
+   /// projection onto the last projection_k solutions (2 projection_k
+   /// system vectors, SolutionProjection).
+   InitialGuess initial_guess = InitialGuess::Previous;
+   int projection_k = 8; ///< Solutions kept by InitialGuess::Project.
 };
 
 /**
@@ -290,6 +302,11 @@ public:
     */
    void WarmUp();
 
+   /// @return System-sized vectors the initial guess keeps (initial_guess:
+   ///         2 projection_k for Project, 2 for Extrapolate, 0 otherwise),
+   ///         for the restart-length guard.
+   int GuessVectors() const;
+
    /// @return The local size of the block system FGMRES works on.
    int SystemSize() const { return block_op_.Height(); }
 
@@ -370,6 +387,24 @@ private:
    int kdim_ = 0;            ///< FGMRES restart length in use.
    bool converged_ = false;  ///< Convergence flag of the last solve.
    bool warmed_up_ = false;  ///< WarmUp() has run.
+
+   /// Replace the warm start in @p x by the initial guess (initial_guess),
+   /// keeping its Dirichlet values; @p b is the eliminated right-hand side.
+   void PrepareGuess(const mfem::Vector& b, mfem::BlockVector& x);
+   /// Set FGMRES's tolerances for right-hand side @p b
+   /// (tolerance_reference).
+   void SetTolerance(const mfem::Vector& b);
+   /// Record the solution @p x for later guesses.
+   void RecordSolution(const mfem::Vector& x);
+
+   /// InitialGuess::Project: the earlier solutions (made at the first
+   /// solve).
+   std::unique_ptr<SolutionProjection> projection_;
+   double projection_c0_ = 0.0; ///< Mass factor the images were made with.
+   bool projection_stale_ = false; ///< The viscosity changed since.
+   /// InitialGuess::Extrapolate: the solution before the previous one.
+   mfem::Vector previous_x_;
+   double previous_c0_ = 0.0; ///< Mass factor of the previous solve.
 };
 
 } // namespace incns

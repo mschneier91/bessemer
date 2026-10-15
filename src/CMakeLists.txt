@@ -33,6 +33,7 @@ add_library(incns STATIC
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
+  solver/solution_projection.cpp
   solver/stokes_solver.cpp
   time/multistep_coeffs.cpp
   time/time_integrator.cpp

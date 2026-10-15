@@ -16,6 +16,7 @@
 #include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/rotational_schur.hpp"
+#include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
 
@@ -393,6 +394,11 @@ struct Parameters
    // --- Krylov ----------------------------------------------------------------
    double krylov_rtol = 1e-10; ///< FGMRES relative tolerance.
    double krylov_atol = 0.0;   ///< FGMRES absolute tolerance.
+   /// What krylov_rtol is relative to (deck `solver.tolerance_reference`).
+   ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   /// The outer solve's initial guess (deck `solver.initial_guess`).
+   InitialGuess initial_guess = InitialGuess::Previous;
+   int projection_k = 8; ///< Solutions kept (deck `solver.projection_k`).
    int max_iter = 2000;        ///< FGMRES iteration cap.
    int kdim = 200;             ///< FGMRES restart size.
    int print_level = -1;       ///< Solver print level.

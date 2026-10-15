@@ -43,6 +43,12 @@ void Profiler::SetSync(SyncFn sync)
    sync_ = std::move(sync);
 }
 
+void Profiler::SetMarkers(PushFn push, PopFn pop)
+{
+   push_ = std::move(push);
+   pop_ = push_ ? std::move(pop) : PopFn();
+}
+
 void Profiler::SetGauge(GaugeFn gauge)
 {
    gauge_ = std::move(gauge);
@@ -57,6 +63,8 @@ void Profiler::Reset()
    sync_ = nullptr;
    gauge_ = nullptr;
    gauge_entries_.clear();
+   push_ = nullptr;
+   pop_ = nullptr;
 }
 
 void Profiler::RecordPeak(double reading)
@@ -73,6 +81,7 @@ double Profiler::Enter(const char* name)
    current_->calls += 1;
    // Work launched before this region belongs to its parent.
    if (sync_) { sync_(); }
+   if (push_) { push_(name); }
    if (gauge_)
    {
       const double reading = gauge_();
@@ -86,6 +95,7 @@ void Profiler::Exit(double start)
 {
    // Work launched inside this region belongs to it.
    if (sync_) { sync_(); }
+   if (pop_) { pop_(); }
    current_->inclusive += clock_() - start;
    // A region open when the gauge was installed has no entry reading.
    if (gauge_ && !gauge_entries_.empty())

@@ -121,6 +121,31 @@ TEST(Profiler, SyncHookRunsAtEveryBoundary)
    p.Reset();
 }
 
+// The markers (NVTX ranges on a GPU) open at every entry with the region's
+// name and close at every exit, nested as the regions are.
+TEST(Profiler, MarkersFollowTheRegions)
+{
+   Profiler& p = Profiler::Instance();
+   p.Reset();
+   std::vector<std::string> log;
+   p.SetMarkers([&](const char* name) { log.push_back(std::string("+") + name); },
+   [&] { log.push_back("-"); });
+   {
+      INCNS_PROFILE("outer");
+      {
+         INCNS_PROFILE("inner");
+      }
+   }
+   const std::vector<std::string> expect{"+outer", "+inner", "-", "-"};
+   EXPECT_EQ(log, expect);
+   p.Reset(); // removes them
+   {
+      INCNS_PROFILE("after_reset");
+   }
+   EXPECT_EQ(log.size(), expect.size());
+   p.Reset();
+}
+
 TEST(Profiler, CsvHasOneRowPerRegionWithItsPath)
 {
    Profiler& p = Profiler::Instance();

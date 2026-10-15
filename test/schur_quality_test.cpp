@@ -489,3 +489,91 @@ TEST(SchurQuality, WarmUpLeavesTheSolveUnchanged)
    EXPECT_LT(du, 1e-9 * un);
    EXPECT_LT(dp, 1e-8 * pn);
 }
+
+// solver.initial_guess with tolerance_reference rhs. The right-hand sides
+// s f, s = 1, 2, 3, have the solutions s x_1: linear extrapolation from the
+// last two solutions is exact for the next one, and so is the projection onto
+// the earlier ones, so those solves stop at once (at most one iteration) and
+// still give s x_1.
+TEST(SchurQuality, InitialGuessesFromEarlierSolutions)
+{
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {8, 8, 0};
+   s.lengths = {1.0, 1.0};
+   s.periodic = {false, false, false};
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+   BoundaryConditions bc(spaces.Velocity());
+   for (int a = 1; a <= 4; ++a) { bc.AddNoSlip(a); }
+
+   VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)
+   {
+      f(0) = std::sin(2.0 * M_PI * x[0]) * std::cos(2.0 * M_PI * x[1]) + x[1];
+      f(1) = -std::cos(2.0 * M_PI * x[0]) * std::sin(2.0 * M_PI * x[1]);
+   });
+   ParLinearForm f_form(&spaces.Velocity());
+   f_form.AddDomainIntegrator(new VectorDomainLFIntegrator(forcing));
+   f_form.Assemble();
+   Vector f_true(spaces.Velocity().GetTrueVSize());
+   f_form.ParallelAssemble(f_true);
+
+   auto norm = [](const Vector & v)
+   {
+      return std::sqrt(InnerProduct(MPI_COMM_WORLD, v, v));
+   };
+   for (const auto guess :
+        {
+           incns::InitialGuess::Extrapolate,
+           incns::InitialGuess::Project
+        })
+   {
+      SCOPED_TRACE(guess == incns::InitialGuess::Project ? "project"
+                   : "extrapolate");
+      StokesSolverOptions o;
+      o.nu = 0.005;
+      o.mass_coeff = 20.0;
+      o.grad_div = 1.0;
+      o.schur = incns::SchurBlockType::CahouetChabard;
+      o.cc.a_pc = incns::APC::JacobiPCG;
+      o.cc.schur_grad_div = true;
+      o.rtol = 1e-10;
+      o.max_iter = 2000;
+      o.kdim = 300;
+      o.tolerance_reference = incns::ToleranceReference::Rhs;
+      o.initial_guess = guess;
+      o.projection_k = 4;
+      StokesSolver solver(spaces, rules, bc, o);
+      ParGridFunction u(&spaces.Velocity()), p(&spaces.Pressure());
+      u = 0.0;
+      p = 0.0;
+      int its[3] = {0, 0, 0};
+      Vector u1;
+      for (int k = 1; k <= 3; ++k)
+      {
+         Vector b(f_true);
+         b *= static_cast<double>(k);
+         solver.SolveTrue(b, u, p); // warm start: the previous solution
+         EXPECT_TRUE(solver.Converged());
+         its[k - 1] = solver.Iterations();
+         if (k == 1) { u.GetTrueDofs(u1); }
+      }
+      Vector u3;
+      u.GetTrueDofs(u3);
+      u3.Add(-3.0, u1);
+      const double diff = norm(u3) / (3.0 * norm(u1));
+      if (Mpi::Root())
+      {
+         mfem::out << "[initial guess] "
+                   << (guess == incns::InitialGuess::Project ? "project" : "extrapolate")
+                   << ": iterations " << its[0] << ", " << its[1] << ", " << its[2]
+                   << "; |u_3 - 3 u_1| / |3 u_1| " << diff << std::endl;
+      }
+      EXPECT_GT(its[0], 1);
+      EXPECT_LE(its[1], 1);
+      EXPECT_LE(its[2], 1);
+      EXPECT_LT(diff, 1e-8);
+   }
+}

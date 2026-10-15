@@ -363,6 +363,29 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(solver, "atol", p.krylov_atol, "FGMRES absolute tolerance.");
    r.Read(solver, "max_iter", p.max_iter, "FGMRES iteration cap.");
    r.Read(solver, "kdim", p.kdim, "FGMRES restart size.");
+   r.ReadEnum(solver, "tolerance_reference", p.tolerance_reference,
+   {
+      {"initial_residual", ToleranceReference::InitialResidual},
+      {"rhs", ToleranceReference::Rhs}
+   },
+   "What solver.rtol is relative to. initial_residual: ||r|| <= rtol ||r_0|| "
+   "(MFEM's; a better initial guess then saves no iterations). rhs: ||r|| <= "
+   "rtol ||b||, so that solver.initial_guess pays off.");
+   r.ReadEnum(solver, "initial_guess", p.initial_guess,
+   {
+      {"previous", InitialGuess::Previous},
+      {"extrapolate", InitialGuess::Extrapolate},
+      {"project", InitialGuess::Project}
+   },
+   "The outer solve's initial guess. previous: the last step's solution. "
+   "extrapolate: its linear extrapolation in time (one more system vector). "
+   "project: the least-squares projection onto the last solver.projection_k "
+   "solutions (2 projection_k system vectors). Pair with "
+   "tolerance_reference: rhs.");
+   r.Read(solver, "projection_k", p.projection_k,
+          "initial_guess project: the most solutions kept (>= 1).");
+   MFEM_VERIFY(p.projection_k >= 1, "parameters: solver.projection_k must be "
+               ">= 1");
    r.Read(solver, "print_level", p.print_level, "Solver verbosity (-1 = quiet).");
    r.Declare(solver, "schur", "enum", "cc", "cc | mass | laplacian_legacy",
              "Pressure Schur block: Cahouet-Chabard, scaled pressure mass, or the "
