@@ -734,7 +734,7 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   spatial study also runs with grad-div off (an open question, human 2026-10-15).
   Pass: the least-squares rate over all levels >= theory - 0.3 (`baselines.yaml`
   `verification`, with the levels). Errors and rates go to
-  `build/<preset>/verify/*.csv`. Weekly and on demand in CI (§7.6).
+  `build/<preset>/verify/*.csv`. Every third day and on demand in CI (§7.6).
 - **Debug device** (`scripts/debug_device.sh`), **ASan/UBSan** (`scripts/asan.sh`),
   **Python** (`cpu-python` build, `ctest -R py_`).
 - **Expensive** (human-launched only): 3D TGV Re 1600, channel DNS, DFG 2D-2, anything
@@ -788,13 +788,13 @@ setups before it (status.md): write reproducibility checks with `incns_test::Rep
 
 ### 7.6 Continuous integration (GitHub Actions, `.github/workflows/ci.yml`)
 One CPU job in an `ubuntu:24.04` container: style check, `cpu` build (warnings are
-errors), Doxygen, the fast tier; the verify tier on Mondays, by manual dispatch
-(input `verify`) and on pull requests labelled `verify`, with the rates in the run
-summary and the CSVs as an artifact. The machine is `environments/ci` (the portable
-stack without the Python packages, the container's gcc 13.3 as the external
-compiler, `target=x86_64_v3`). Its Spack install tree is cached under a key of the
-Spack release and the hash of `environments/ci/spack.yaml`: a change to either
-rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes, and
-ccache carries the object files between runs. GitHub evicts caches unused for 7
-days; the weekly run keeps them warm. Each run uploads the resolved `spack.lock`.
-No GPU tests run in CI (§7.4).
+errors), Doxygen, the fast tier; the verify tier every third day (days 1, 4, 7, ... of
+the month), by manual dispatch (input `verify`) and on pull requests labelled `verify`,
+with the rates in the run summary and the CSVs as an artifact. The machine is
+`environments/ci` (the portable stack without the Python packages, the container's gcc
+13.3 as the external compiler, `target=x86_64_v3`). Its Spack install tree is cached
+under a key of the Spack release and the hash of `environments/ci/spack.yaml`: a change
+to either rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes,
+and ccache carries the object files between runs. GitHub evicts caches unused for 7
+days; the scheduled run keeps them warm. Each run uploads the resolved `spack.lock`. No
+GPU tests run in CI (§7.4).
