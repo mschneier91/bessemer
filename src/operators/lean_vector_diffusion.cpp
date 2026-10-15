@@ -161,6 +161,12 @@ void CompactApply3D(const int NE, const Array<real_t>& b,
       kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
       kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
 
+      // The component loops are unrolled: r0 and r1 hold VDIM x DIM x Q1D
+      // values per thread and stay in registers only when every index is a
+      // compile-time constant (with a runtime component index they went to
+      // the stack: 720-792 bytes of local memory per thread at Q1D = 5, most
+      // of the kernel's DRAM traffic; Nsight Compute, 2026-10-15).
+      MFEM_UNROLL(VDIM)
       for (int i = 0; i < VDIM; i++)
       {
          kernels::internal::LoadDofs3d(e, D1D, i, XE, r0);
@@ -399,6 +405,8 @@ void FusedApply3D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
       kernels::internal::vd_regs3d_t<1, 1, MQ1> T;
       kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
       kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+      // Unrolled component loops: see CompactApply3D.
+      MFEM_UNROLL(VDIM)
       for (int c = 0; c < VDIM; ++c)
       {
          kernels::internal::LoadDofs3d(e, D1D, c, XE, r0);
@@ -413,6 +421,7 @@ void FusedApply3D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
                real_t A[3][3];
                Adjugate3D(J, qx, qy, qz, e, A);
                real_t s = 0.0;
+               MFEM_UNROLL(VDIM)
                for (int c = 0; c < VDIM; ++c)
                {
                   real_t acc = 0.0;
@@ -426,6 +435,7 @@ void FusedApply3D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
             }
          }
       }
+      MFEM_UNROLL(VDIM)
       for (int c = 0; c < VDIM; ++c)
       {
          for (int qz = 0; qz < Q1D; ++qz)
