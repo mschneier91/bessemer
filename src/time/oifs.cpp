@@ -176,11 +176,13 @@ void OifsAdvector::CacheBoundaryNodes()
    bnode_normals_.clear();
    bnode_be_.clear();
    bnode_k_.clear();
+   bnode_nodal_ = true;
    Array<int> vdofs;
    Vector nor(dim_), x(dim_), c(dim_);
    for (int be = 0; be < mesh.GetNBE(); ++be)
    {
       const FiniteElement* fe = V.GetBE(be);
+      if (!dynamic_cast<const NodalFiniteElement*>(fe)) { bnode_nodal_ = false; }
       const IntegrationRule& nodes = fe->GetNodes();
       const int nd = fe->GetDof();
       V.GetBdrElementVDofs(be, vdofs);
@@ -216,29 +218,65 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
    ParGridFunction& flag = *flag_;
    flag = 0.0; // device-aware; take the host pointer only afterwards
    double* fl = flag.HostReadWrite();
-   w.HostRead();
+   const double* wh = w.HostRead();
    ParMesh& mesh = *V.GetParMesh();
-   Vector wv(dim_), nor(dim_);
-   ElementTransformation* T = nullptr;
    const int n_nodes = static_cast<int>(bnode_be_.size());
+   // The wind at every boundary node: a nodal element's value at its node is
+   // that node's dofs (exactly zero on a no-slip wall); otherwise evaluated
+   // through the element.
+   bnode_w_.resize(static_cast<std::size_t>(n_nodes) * dim_);
+   double w_max = 0.0;
+   {
+      Vector wv(dim_);
+      ElementTransformation* T = nullptr;
+      for (int i = 0; i < n_nodes; ++i)
+      {
+         const int* v = &bnode_vdofs_[i * dim_];
+         double* wi = &bnode_w_[i * dim_];
+         if (bnode_nodal_)
+         {
+            for (int d = 0; d < dim_; ++d)
+            {
+               wi[d] = (v[d] >= 0) ? wh[v[d]] : -wh[-1 - v[d]];
+            }
+         }
+         else
+         {
+            const int be = bnode_be_[i];
+            if (T == nullptr || be != bnode_be_[i - 1])
+            {
+               T = mesh.GetBdrElementTransformation(be);
+            }
+            const IntegrationPoint& ip =
+               V.GetBE(be)->GetNodes().IntPoint(bnode_k_[i]);
+            T->SetIntPoint(&ip);
+            w.GetVectorValue(*T, ip, wv);
+            for (int d = 0; d < dim_; ++d) { wi[d] = wv(d); }
+         }
+         double ww = 0.0;
+         for (int d = 0; d < dim_; ++d) { ww += wi[d] * wi[d]; }
+         w_max = std::max(w_max, std::sqrt(ww));
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &w_max, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+   // Free (outflow) only where the outward normal velocity is more than
+   // roundoff of the boundary's largest wind; everything else, a no-slip wall
+   // included, is imposed. (Until 2026-10-15 the test was relative to the
+   // node's own |w|, with w evaluated through the element: on a wall that w
+   // is roundoff, and its sign decided whether the node was imposed.)
    for (int i = 0; i < n_nodes; ++i)
    {
       const int* v = &bnode_vdofs_[i * dim_];
-      for (int d = 0; d < dim_; ++d) { nor(d) = bnode_normals_[i * dim_ + d]; }
-      const int be = bnode_be_[i];
-      if (i == 0 || be != bnode_be_[i - 1])
+      const double* wi = &bnode_w_[i * dim_];
+      const double* nor = &bnode_normals_[i * dim_];
+      double wn = 0.0, nn = 0.0;
+      for (int d = 0; d < dim_; ++d)
       {
-         T = mesh.GetBdrElementTransformation(be);
+         wn += wi[d] * nor[d];
+         nn += nor[d] * nor[d];
       }
-      // The wind as the element evaluates it, as before the cache: the
-      // node's dof values would be cheaper, but on a zero-data wall the two
-      // can differ in roundoff, whose sign decides the test below.
-      const IntegrationPoint& ip = V.GetBE(be)->GetNodes().IntPoint(bnode_k_[i]);
-      T->SetIntPoint(&ip);
-      w.GetVectorValue(*T, ip, wv);
-      if (wv * nor <= 1e-10 * wv.Norml2() * nor.Norml2())
+      if (wn <= 1e-10 * w_max * std::sqrt(nn))
       {
-         // Inflow or tangential (walls: w = 0): impose here.
          for (int d = 0; d < dim_; ++d)
          {
             fl[v[d] >= 0 ? v[d] : -1 - v[d]] = 1.0;
@@ -380,12 +418,58 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
 
    {
       INCNS_PROFILE("oifs::classify");
-      ClassifyBoundary(*vel_[0]); // the newest wind decides in/outflow
+      const Array<int>& ess = bc_.EssentialTrueDofs();
+      const bool constant = bc_.DirichletIsConstant(); // same on every rank
+      if (constant && bd_const_seq_ != V.GetSequence())
+      {
+         // Constant data (no-slip walls): projected once per space.
+         *bd_ = 0.0;
+         bc_.ProjectDirichlet(*bd_);
+         bd_->GetTrueDofs(bd_const_true_);
+         Vector e;
+         bd_const_true_.GetSubVector(ess, e);
+         double m = (e.Size() > 0) ? e.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+         bd_const_zero_ = (m == 0.0);
+         bd_const_seq_ = V.GetSequence();
+      }
+      // Zero data and a wind that is zero on every Dirichlet dof (the history
+      // satisfies the data): ClassifyBoundary would impose them all, so skip
+      // its host loop.
+      bool all_imposed = false;
+      if (constant && bd_const_zero_)
+      {
+         Vector we;
+         wind[0].GetSubVector(ess, we);
+         double m = (we.Size() > 0) ? we.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+         all_imposed = (m == 0.0);
+      }
+      if (all_imposed)
+      {
+         imposed_.SetSize(ess.Size());
+         const int* e = ess.HostRead();
+         int* d = imposed_.HostWrite();
+         for (int i = 0; i < ess.Size(); ++i) { d[i] = e[i]; }
+         imposed_.GetMemory().UseDevice(true);
+      }
+      else
+      {
+         ClassifyBoundary(*vel_[0]); // the newest wind decides in/outflow
+      }
       // Data that does not change over the window (no-slip walls, a
       // constant inflow): the substeps reuse it instead of projecting it at
       // every stage.
-      bd_static_valid_ = StaticDirichlet(imposed_, times[k - 1], t_new,
-                                         bd_static_);
+      if (constant)
+      {
+         bd_const_true_.GetSubVector(imposed_, bd_static_);
+         bd_static_valid_ = true;
+      }
+      else
+      {
+         bd_static_valid_ = StaticDirichlet(imposed_, times[k - 1], t_new,
+                                            bd_static_);
+      }
       bd_zero_ = false;
       if (bd_static_valid_)
       {

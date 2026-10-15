@@ -201,7 +201,9 @@ private:
    /**
     * @brief imposed_ := the Dirichlet true dofs where the wind enters or is
     *        tangential (outward normal from the adjacent element;
-    *        collective).
+    *        collective). Deterministic: a node is free (outflow) only when
+    *        its outward normal velocity exceeds 1e-10 of the largest wind on
+    *        the boundary, so a no-slip wall (zero wind) is imposed everywhere.
     * @param w The wind (the newest velocity).
     */
    void ClassifyBoundary(const mfem::ParGridFunction& w);
@@ -250,6 +252,13 @@ private:
    std::vector<int> bnode_be_;         ///< Boundary element of each node.
    std::vector<int> bnode_k_;          ///< Node index within it.
    long bnode_seq_ = -1;      ///< Velocity-space sequence of the cache.
+   bool bnode_nodal_ = false; ///< Nodal boundary elements: w(node) = dofs.
+   std::vector<double> bnode_w_; ///< The wind at the nodes (scratch).
+   /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant), true
+   /// dofs, projected once per velocity-space sequence (bd_const_seq_).
+   mfem::Vector bd_const_true_;
+   long bd_const_seq_ = -1;   ///< Velocity-space sequence of bd_const_true_.
+   bool bd_const_zero_ = false; ///< ... and zero on every Dirichlet dof.
    mfem::Vector bd_true_;           ///< Its true dofs.
    mfem::Vector bd_vals_;           ///< Values on the Dirichlet dofs.
    /// The Dirichlet data on imposed_, when it does not change over the
