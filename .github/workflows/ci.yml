@@ -1,0 +1,137 @@
+# CI: the CPU build and the fast tier on every push and pull request, the
+# verification tier weekly and on demand (docs/developing.md §7.2, §7.6).
+#
+# The Spack stack (environments/ci) takes 1-3 hours to build from source, so it
+# is cached: the key is the pinned Spack release plus environments/ci/spack.yaml,
+# and a cache hit restores the whole install tree in a few minutes. Change
+# either one and the next run rebuilds the stack once. GitHub evicts a cache
+# nobody has read for 7 days; the weekly run keeps it warm. ccache carries the
+# object files between runs, so an unchanged tree rebuilds bessemer in minutes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      verify:
+        description: "Also run the verification tier (label verify)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC: the verify tier, and keeps the caches warm
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SPACK_REF: v1.2.2
+
+jobs:
+  cpu:
+    runs-on: ubuntu-24.04
+    # The container fixes the compiler environments/ci/spack.yaml declares
+    # (gcc/g++/gfortran 13.3 at /usr), whatever the runner image ships.
+    container: ubuntu:24.04
+    timeout-minutes: 360
+    env:
+      INCNS_MACHINE: ci
+      SPACK_ROOT: /opt/spack
+      SPACK_DISABLE_LOCAL_CONFIG: "1"
+      CCACHE_DIR: /opt/ccache
+      CCACHE_MAXSIZE: 2G
+      INCNS_JOBS: "4"
+      # Open MPI in a container: root, and up to 4 ranks on 4 cores.
+      OMPI_ALLOW_RUN_AS_ROOT: "1"
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+      PRTE_MCA_hwloc_default_binding_policy: none
+    steps:
+      - name: System packages
+        run: |
+          apt-get update -q
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            build-essential gfortran git python3 curl ca-certificates file patch \
+            unzip bzip2 xz-utils zstd ccache doxygen graphviz
+
+      - uses: actions/checkout@v4
+
+      - name: Mark the checkout safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Spack
+        run: git clone -q -c feature.manyFiles=true --depth=1 --branch "$SPACK_REF" https://github.com/spack/spack.git "$SPACK_ROOT"
+
+      - name: Restore the Spack stack
+        id: stack
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/spack/opt
+            /github/home/.spack
+            environments/ci/spack.lock
+          key: stack-${{ env.SPACK_REF }}-${{ hashFiles('environments/ci/spack.yaml') }}
+
+      - name: Build the Spack stack (cache miss only; 1-3 hours)
+        if: steps.stack.outputs.cache-hit != 'true'
+        run: |
+          . "$SPACK_ROOT/share/spack/setup-env.sh"
+          spack -e environments/ci concretize --force
+          spack -e environments/ci install -j 4 --fail-fast
+
+      - name: Save the Spack stack
+        if: steps.stack.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /opt/spack/opt
+            /github/home/.spack
+            environments/ci/spack.lock
+          key: ${{ steps.stack.outputs.cache-primary-key }}
+
+      - name: Refresh the environment view
+        run: |
+          . "$SPACK_ROOT/share/spack/setup-env.sh"
+          spack -e environments/ci install -j 4
+
+      - name: Keep the resolved spack.lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: spack-lock-ci
+          path: environments/ci/spack.lock
+          if-no-files-found: warn
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: /opt/ccache
+          key: ccache-${{ env.SPACK_REF }}-${{ hashFiles('environments/ci/spack.yaml') }}-${{ github.sha }}
+          restore-keys: ccache-${{ env.SPACK_REF }}-${{ hashFiles('environments/ci/spack.yaml') }}-
+
+      - name: Style
+        run: scripts/style.sh check
+
+      - name: Build (cpu preset, warnings are errors)
+        run: |
+          scripts/build.sh cpu
+          ccache --show-stats || true
+
+      - name: Docs (Doxygen, warning-free)
+        run: scripts/docs.sh
+
+      - name: Fast tier
+        run: scripts/test.sh cpu -L fast --timeout 1800
+
+      - name: Verification tier
+        if: github.event_name == 'schedule' || inputs.verify
+        run: scripts/test.sh cpu -L verify --timeout 3600
+
+      - name: Test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs
+          path: build/cpu/Testing/Temporary
+          if-no-files-found: ignore
