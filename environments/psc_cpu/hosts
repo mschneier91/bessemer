@@ -1,0 +1,8 @@
+# Hostname patterns (shell globs, one per line) of the machines that use this
+# environment; read by scripts/machine.sh and matched against the full
+# hostname (`hostname -f`). Keep the domain in.
+#
+# Bridges-2 RM (Regular Memory, CPU) nodes: r001-r504, full names like
+# r282.ib.bridges2.psc.edu. The login nodes (br0xx) and the GPU nodes stay with
+# psc_gpu (environments/psc_gpu/hosts).
+r[0-9][0-9][0-9]*.bridges2.psc.edu

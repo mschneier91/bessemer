@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH -J bessemer-psc_cpu
-#SBATCH -p GPU-shared
-#SBATCH --gres=gpu:h100-80:1
-#SBATCH -t 2:00:00
+#SBATCH -p RM-shared
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=32
+#SBATCH -t 4:00:00
 #SBATCH -o spack-install-%j.out
 
 # environments/psc_cpu/install.sbatch -- install this environment from its
@@ -16,8 +17,8 @@
 # the local mirror, since compute nodes have no internet. Rerunning is safe:
 # Spack resumes at the first package that is not installed.
 #
-# One H100 slice (12 cores): only its CPU cores are used; this
-# environment has no CUDA at all.
+# 32 cores of an RM node (RM-shared, the Regular Memory allocation): this
+# environment has no CUDA and runs on the RM nodes.
 # You are charged for the time used, not for the two-hour limit.
 
 # The submitting shell may already have the login node build of gcc loaded
@@ -28,8 +29,8 @@ module unload gcc cuda 2>/dev/null
 export HOSTNAME=$(hostname)
 module load gcc/13.3.1-p20240614
 case "$(command -v gcc)" in
-  */b2gpu/*) ;;
-  *) echo "FATAL: gcc is $(command -v gcc), not the b2gpu build"; exit 1 ;;
+  */b2rm/*) ;;
+  *) echo "FATAL: gcc is $(command -v gcc), not the b2rm build"; exit 1 ;;
 esac
 
 . "${SPACK_ROOT:-$PROJECT/spack}/share/spack/setup-env.sh" || exit 1
@@ -42,6 +43,11 @@ spack env activate . || exit 1
 echo "== node $(hostname), $(nproc) cores, gcc $(command -v gcc)"
 module list 2>&1
 
+# Spack loads the compiler's module itself (the external's `modules:` entry)
+# and counts a load that changes nothing as a failure ("Module ... could not
+# be loaded"): unload it now that the check above has passed. HOSTNAME is this
+# node's, so Spack's load picks the same build (2026-10-14, first RM install).
+module unload gcc
 # --dirty: perl's direct gcc calls need the module's LD_LIBRARY_PATH (Gotcha #4).
 # --use-buildcache never: no probing of public binary caches from an offline node.
 spack install -j "$(nproc)" --dirty --use-buildcache never || { echo "FATAL: spack install failed"; exit 1; }
@@ -54,7 +60,9 @@ check() { "$@" || failed="$failed [$*]"; }
 echo "== Step 3: verify the stack"
 spack env activate . || exit 1
 check command -v mpicxx
-check sh -c "! ompi_info | grep -qi cuda"
+# Built without CUDA: the parsable flag, not a grep for "cuda" (a CUDA-free
+# Open MPI 5 still prints --without-cuda and a cuda MPI extension).
+check sh -c "ompi_info --parsable --all | grep -q 'opal_built_with_cuda_support:value:false'"
 check ucx_info -v
 
 echo "== Step 4: numba from the wheel mirror (numpy stays the Spack one)"

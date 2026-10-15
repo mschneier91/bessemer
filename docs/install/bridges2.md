@@ -302,19 +302,19 @@ resolved". To bring the install up to date:
 
 `environments/psc_cpu` is the same stack with no CUDA in it: MFEM, hypre,
 libCEED, Open MPI, UCX and hwloc are all `~cuda`. It is for CPU reference runs
-and the `cpu` build preset; `psc_gpu` stays the environment for the `cuda`
-preset.
+and the `cpu` build preset on the **RM (Regular Memory) partitions**, which
+charge a Regular Memory allocation; `psc_gpu` stays the environment for the
+`cuda` preset on the GPU nodes.
 
 - **Same procedure, other directory.** Every step on this page applies with
   `environments/psc_cpu` in place of `environments/psc_gpu`, including its own
-  `install.sbatch`. Load only the `gcc` module (no `cuda/12.6.1`); Step 3's CUDA
-  checks don't apply. The two
-  environments share one Spack and one source mirror, and most packages are the
-  same builds, so the second install is short.
-- **Selecting it.** Hostnames map Bridges-2 to `psc_gpu`
-  (`environments/psc_gpu/hosts`). For the CPU environment set
-  `INCNS_MACHINE=psc_cpu` in the shell or job, or make it this checkout's
-  default with `echo psc_cpu > environments/.machine`.
+  `install.sbatch` (which runs on `RM-shared`, 32 cores). Load only the `gcc`
+  module (no `cuda/12.6.1`); Step 3's CUDA checks don't apply. The two
+  environments share one Spack and one source mirror, but not builds: the
+  compilers differ (below), so every package is built again for `psc_cpu`.
+- **Selecting it.** Hostnames choose: RM nodes (`r001`-`r504`) map to `psc_cpu`
+  (`environments/psc_cpu/hosts`), the login and GPU nodes to `psc_gpu`. To
+  force one, set `INCNS_MACHINE=psc_cpu` (or `psc_gpu`) in the shell or job.
 - **Building bessemer with it** (Step 5): on a compute node, with
   `INCNS_MACHINE=psc_cpu` set, `./scripts/build.sh cpu` and
   `./scripts/test.sh cpu -L fast`.
@@ -322,14 +322,26 @@ preset.
   environment: build `cpu` (and `cpu-python`) with `psc_cpu` and `cuda` with
   `psc_gpu`. Building the same preset with both in one checkout mixes two MFEMs
   in one build tree.
-- **Nodes.** It uses the `b2gpu` compiler build, because GPU nodes are where an
-  allocation with only GPU service units builds and runs. The code is plain
-  x86_64_v3 with no GPU dependency. For the RM (CPU) partitions, which need a
-  Regular Memory allocation, pin the `b2rm` compiler build instead and resolve
-  again.
-- **Status (2026-10-10):** resolved and mirrored, not installed.
-- **Every `~cuda` in its `spack.yaml` is needed**: with `reuse: true` Spack
-  would otherwise pick up `psc_gpu`'s CUDA builds from the shared store.
+- **Nodes and compiler.** It pins the `b2rm` compiler build (Gotcha #1), the
+  one the RM nodes' gcc module loads: `env.sh` rejects any other compiler as a
+  toolchain leak, so a `b2gpu`-built `psc_cpu` cannot be used on an RM node.
+  `install.sbatch` checks for `b2rm`. Its checks: `grep -c b2gpu spack.lock`
+  must be 0 (and `b2rm` nonzero). The code is plain x86_64_v3.
+- **Unload `gcc` before any `spack` command** (`module unload gcc`, as
+  `install.sbatch` does): Spack loads the compiler's module itself and fails
+  with "Module could not be loaded" when it is already loaded.
+- **`reuse: false`**, unlike `psc_gpu`: with reuse Spack picked up build tools
+  `psc_gpu` had built with the `b2gpu` compiler from the shared store. Every
+  `~cuda` in its `spack.yaml` is needed for the same reason.
+- **numpy is pinned below 2.5** (`py-numpy@:2.4`): without reuse Spack takes the
+  newest numpy, and the numba wheel (0.66) needs numpy < 2.5.
+- **Open MPI has no CUDA**: `install.sbatch` checks
+  `opal_built_with_cuda_support:value:false` in `ompi_info --parsable --all`. (A
+  grep for "cuda" fails on a CUDA-free Open MPI 5, which prints `--without-cuda`
+  and a "cuda" MPI extension.)
+- **Status:** re-pinned from `b2gpu` to `b2rm` on 2026-10-14 and installed
+  (job 49215305; 98 packages, all checks passed). CPU build and fast tier on
+  `RM-shared`, 32 cores: np 1 and np 2 66/66.
 
 ---
 

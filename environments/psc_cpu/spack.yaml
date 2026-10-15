@@ -1,8 +1,10 @@
 # environments/psc_cpu/spack.yaml -- PSC Bridges-2, CPU only: the psc_gpu stack
 # with no CUDA anywhere (MFEM, hypre, libCEED, Open MPI, UCX, hwloc). For CPU
-# reference runs and the cpu preset on Bridges-2. It uses the same compiler
-# build as psc_gpu (b2gpu), because the GPU nodes are where it is built and
-# run; the code is plain x86_64_v3. Procedure: docs/install/bridges2.md.
+# reference runs and the cpu preset on the RM (Regular Memory) partitions. It
+# uses the RM nodes' compiler build (b2rm), not the one psc_gpu uses (b2gpu):
+# PSC builds gcc per node class, and the b2gpu build is rejected on RM nodes
+# (re-pinned 2026-10-14, when the project had RM time). The code is plain
+# x86_64_v3. Procedure: docs/install/bridges2.md.
 #
 # Every ~cuda below is deliberate. With `reuse: true` Spack prefers what is
 # already installed, and psc_gpu's CUDA builds share this Spack: without the
@@ -40,7 +42,9 @@ spack:
     # multi-hour LLVM source build. Keep py-numpy inside numba's supported window.
     - python@3.12
     - py-pybind11
-    - py-numpy
+    # Below 2.5: the numba wheel (0.66) needs numpy < 2.5, and without reuse
+    # Spack takes the newest (2.5.1, 2026-10-14).
+    - py-numpy@:2.4
     #- py-numba
     # pip installs the numba wheel (docs/install/bridges2.md, Step 4); the
     # environment's Python has none otherwise.
@@ -66,17 +70,17 @@ spack:
     gcc:
       externals:
       - spec: gcc@13.3.1 languages:='c,c++,fortran'
-        prefix: /opt/packages/gcc/v13.3.1-p20240614/b2gpu
+        prefix: /opt/packages/gcc/v13.3.1-p20240614/b2rm
         modules:
         - gcc/13.3.1-p20240614
         extra_attributes:
           compilers:
-            c: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gcc
-            cxx: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/g++
-            fortran: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/bin/gfortran
+            c: /opt/packages/gcc/v13.3.1-p20240614/b2rm/bin/gcc
+            cxx: /opt/packages/gcc/v13.3.1-p20240614/b2rm/bin/g++
+            fortran: /opt/packages/gcc/v13.3.1-p20240614/b2rm/bin/gfortran
           environment:
             prepend_path:
-              LD_LIBRARY_PATH: /opt/packages/gcc/v13.3.1-p20240614/b2gpu/lib64
+              LD_LIBRARY_PATH: /opt/packages/gcc/v13.3.1-p20240614/b2rm/lib64
       buildable: false
     slurm:
       buildable: false
@@ -86,6 +90,11 @@ spack:
 
   concretizer:
     unify: when_possible
-    reuse: true
+    # No reuse: the shared Spack store holds psc_gpu's builds, made with the
+    # b2gpu compiler (build tools such as gmake and the gcc runtime). Reused
+    # here they would run on RM nodes (2026-10-14: the first resolve against
+    # b2rm picked them up). Every package is built with b2rm instead; the
+    # lock must not mention b2gpu.
+    reuse: false
 
   view: true
