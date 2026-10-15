@@ -1,0 +1,118 @@
+// incns::AddKernelSpecializations (operators/kernel_specializations): MFEM's
+// vector mass and vector divergence (and transpose) partial-assembly applies
+// at the solver's sizes give the same results, to roundoff, after the
+// compile-time-sized kernels are registered as before (MFEM's generic
+// kernels): the same arithmetic, but with fixed loop bounds a compiler may
+// vectorize or contract it differently (1.7e-17 absolute on the CPU build,
+// 3D, 2026-10-15). The differences are printed. 2D and 3D, velocity orders 2 and 3, a deformed mesh. The generic
+// results are taken first, before anything registers: this test has its own
+// executable for that reason.
+
+#include <gtest/gtest.h>
+
+#include "operators/kernel_specializations.hpp"
+#include "mfem.hpp"
+
+#include <cmath>
+#include <memory>
+#include <vector>
+
+using namespace mfem;
+
+namespace
+{
+
+void Deform(const Vector& x, Vector& y)
+{
+   y = x;
+   y(0) += 0.08 * std::sin(2.3 * x(1));
+   y(1) += 0.06 * x(0) * x(0);
+   if (x.Size() == 3) { y(2) += 0.05 * x(0) * x(1); }
+}
+
+// M u, B u and B^T q for random u, q (fixed seeds), velocity order k.
+std::vector<Vector> Apply(int dim, int k)
+{
+   Mesh serial = (dim == 2)
+                 ? Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true)
+                 : Mesh::MakeCartesian3D(3, 2, 2, Element::HEXAHEDRON);
+   serial.Transform(Deform);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   H1_FECollection fu(k, dim), fp(k - 1, dim);
+   ParFiniteElementSpace V(&mesh, &fu, dim), P(&mesh, &fp);
+   const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+
+   ParBilinearForm m(&V);
+   auto* mi = new VectorMassIntegrator;
+   mi->SetIntRule(&IntRules.Get(geom, 2 * k));      // k + 1 points
+   m.AddDomainIntegrator(mi);
+   m.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   m.Assemble();
+   ParMixedBilinearForm b(&V, &P);
+   auto* bi = new VectorDivergenceIntegrator;
+   bi->SetIntRule(&IntRules.Get(geom, 2 * k + 2));  // k + 2 points
+   b.AddDomainIntegrator(bi);
+   b.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   b.Assemble();
+
+   int rank = 0;
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   Vector u(V.GetVSize()), q(P.GetVSize());
+   u.Randomize(3 + rank);
+   q.Randomize(7 + rank);
+   u.UseDevice(true);
+   q.UseDevice(true);
+   Vector mu(V.GetVSize()), bu(P.GetVSize()), btq(V.GetVSize());
+   mu.UseDevice(true);
+   bu.UseDevice(true);
+   btq.UseDevice(true);
+   m.Mult(u, mu);
+   b.Mult(u, bu);
+   b.MultTranspose(q, btq);
+   mu.HostRead();
+   bu.HostRead();
+   btq.HostRead();
+   return {mu, bu, btq};
+}
+
+} // namespace
+
+TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
+{
+   const int dims[] = {2, 3}, orders[] = {2, 3};
+   std::vector<std::vector<Vector>> generic;
+   for (int dim : dims)
+   {
+      for (int k : orders) { generic.push_back(Apply(dim, k)); }
+   }
+   incns::AddKernelSpecializations();
+   incns::AddKernelSpecializations(); // idempotent
+   int c = 0;
+   for (int dim : dims)
+   {
+      for (int k : orders)
+      {
+         const std::vector<Vector> special = Apply(dim, k);
+         const char* names[] = {"mass", "divergence", "divergence transpose"};
+         for (int i = 0; i < 3; ++i)
+         {
+            SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << k
+                         << " " << names[i]);
+            Vector d(special[i]);
+            d -= generic[c][i];
+            double diff = d.Normlinf(), size = generic[c][i].Normlinf();
+            MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+            MPI_Allreduce(MPI_IN_PLACE, &size, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+            if (Mpi::Root())
+            {
+               mfem::out << "[kernel specializations] dim " << dim << " order " << k
+                         << " " << names[i] << ": max difference " << diff
+                         << ", relative " << diff / size << std::endl;
+            }
+            EXPECT_GT(size, 0.0);
+            EXPECT_LE(diff, 1e-14 * size);
+         }
+         ++c;
+      }
+   }
+}

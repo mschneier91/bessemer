@@ -2,6 +2,7 @@
 
 #include "operators/convection.hpp" // DealiasedOrder
 #include "operators/grad_div_integrator.hpp"
+#include "operators/kernel_specializations.hpp"
 #include "operators/lean_vector_diffusion.hpp"
 
 #include "mesh/mesh_size_coefficient.hpp"
@@ -54,6 +55,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
      div_form_(&spaces.Velocity(), &spaces.Pressure())
 {
    INCNS_PROFILE("stokes_operator::assemble");
+   AddKernelSpecializations(); // MFEM's kernels at our sizes, before any apply
 
    MFEM_VERIFY(opts_.nu > 0.0, "stokes_operator: viscosity must be positive");
    MFEM_VERIFY(opts_.mass_coeff >= 0.0,
