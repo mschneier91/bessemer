@@ -71,6 +71,24 @@ public:
       return scale_ * h_(parent) + offset_;
    }
 
+   /**
+    * @brief The value on every element of the mesh (one number each), as
+    *        Eval returns it there.
+    * @param v Output, resized to the local element count (host write).
+    * @pre children_per_element == 1.
+    */
+   void ElementValues(mfem::Vector& v) const
+   {
+      MFEM_VERIFY(children_ == 1, "mesh_size_coefficient: ElementValues needs "
+                  "children_per_element == 1");
+      v.SetSize(mesh_.GetNE());
+      double* h = v.HostWrite();
+      for (int e = 0; e < mesh_.GetNE(); ++e)
+      {
+         h[e] = scale_ * mesh_.GetElementSize(e) + offset_;
+      }
+   }
+
 private:
    mfem::ParMesh& mesh_; ///< Mesh (borrowed).
    double scale_;        ///< Multiplier c_gd.

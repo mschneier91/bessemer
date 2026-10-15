@@ -1,6 +1,9 @@
 #include "operators/lean_vector_diffusion.hpp"
 
-#include <mfem/general/forall.hpp>
+#include "mfem/fem/kernels.hpp"
+#include "mfem/general/forall.hpp"
+
+#include <memory>
 
 // The kernels below must be compiled by nvcc in a CUDA build, or they run on
 // the host while the data is on the device. See src/CMakeLists.txt's nvcc
@@ -19,16 +22,189 @@ using namespace mfem;
 namespace leandiff
 {
 
-// pa_data as VectorDiffusionIntegrator::AssemblePA writes it for sdim == dim
-// and a scalar coefficient: (quadrature point, dim * dim entries, component,
-// element). 2D: entries 0, 1, 3 are D_xx, D_xy, D_yy. 3D: entries 0..5 are
-// D_xx, D_xy, D_xz, D_yy, D_yz, D_zz. Component 0 is read (they are equal).
-void Diagonal2D(int ne, int D1D, int Q1D, const Array<real_t>& b,
+using kernels::internal::SetMaxOf;
+
+// ---------------------------------------------------------------------------
+// Compact setup: the symmetric geometric matrix per point, times the
+// coefficient. The expressions are those of VectorDiffusionIntegrator::
+// AssemblePA (dim == sdim), so the stored values are MFEM's.
+// ---------------------------------------------------------------------------
+void Setup(int dim, int ne, int nq, const Array<real_t>& w, const Vector& jac,
+           const real_t* coeff, real_t coeff_const, Vector& d)
+{
+   const auto W = Reshape(w.Read(), nq);
+   const int ns = (dim == 3) ? 6 : 3;
+   auto D = Reshape(d.Write(), nq, ns, ne);
+   if (dim == 2)
+   {
+      const auto J = Reshape(jac.Read(), nq, 2, 2, ne);
+      mfem::forall(ne * nq, [ = ] MFEM_HOST_DEVICE(int idx)
+      {
+         const int q = idx % nq, e = idx / nq;
+         const real_t c = coeff ? coeff[q + nq * e] : coeff_const;
+         const real_t J11 = J(q, 0, 0, e), J21 = J(q, 1, 0, e);
+         const real_t J12 = J(q, 0, 1, e), J22 = J(q, 1, 1, e);
+         const real_t w_detJ = W(q) / ((J11 * J22) - (J21 * J12));
+         D(q, 0, e) = (w_detJ * (J12 * J12 + J22 * J22)) * c;
+         D(q, 1, e) = (-w_detJ * (J12 * J11 + J22 * J21)) * c;
+         D(q, 2, e) = (w_detJ * (J11 * J11 + J21 * J21)) * c;
+      });
+   }
+   else
+   {
+      const auto J = Reshape(jac.Read(), nq, 3, 3, ne);
+      mfem::forall(ne * nq, [ = ] MFEM_HOST_DEVICE(int idx)
+      {
+         const int q = idx % nq, e = idx / nq;
+         const real_t c = coeff ? coeff[q + nq * e] : coeff_const;
+         const real_t J11 = J(q, 0, 0, e), J21 = J(q, 1, 0, e), J31 = J(q, 2, 0, e);
+         const real_t J12 = J(q, 0, 1, e), J22 = J(q, 1, 1, e), J32 = J(q, 2, 1, e);
+         const real_t J13 = J(q, 0, 2, e), J23 = J(q, 1, 2, e), J33 = J(q, 2, 2, e);
+         const real_t detJ = J11 * (J22 * J33 - J32 * J23) -
+                             J21 * (J12 * J33 - J32 * J13) +
+                             J31 * (J12 * J23 - J22 * J13);
+         const real_t c_detJ = W(q) / detJ;
+         const real_t A11 = (J22 * J33) - (J23 * J32);
+         const real_t A12 = (J32 * J13) - (J12 * J33);
+         const real_t A13 = (J12 * J23) - (J22 * J13);
+         const real_t A21 = (J31 * J23) - (J21 * J33);
+         const real_t A22 = (J11 * J33) - (J13 * J31);
+         const real_t A23 = (J21 * J13) - (J11 * J23);
+         const real_t A31 = (J21 * J32) - (J31 * J22);
+         const real_t A32 = (J31 * J12) - (J11 * J32);
+         const real_t A33 = (J11 * J22) - (J12 * J21);
+         D(q, 0, e) = (c_detJ * (A11 * A11 + A12 * A12 + A13 * A13)) * c;
+         D(q, 1, e) = (c_detJ * (A11 * A21 + A12 * A22 + A13 * A23)) * c;
+         D(q, 2, e) = (c_detJ * (A11 * A31 + A12 * A32 + A13 * A33)) * c;
+         D(q, 3, e) = (c_detJ * (A21 * A21 + A22 * A22 + A23 * A23)) * c;
+         D(q, 4, e) = (c_detJ * (A21 * A31 + A22 * A32 + A23 * A33)) * c;
+         D(q, 5, e) = (c_detJ * (A31 * A31 + A32 * A32 + A33 * A33)) * c;
+      });
+   }
+}
+
+// ---------------------------------------------------------------------------
+// Compact apply: MFEM's SmemPAVectorDiffusionApply2D/3D (fem/integ/
+// bilininteg_vecdiffusion_pa.hpp, scalar-coefficient branch), each component
+// reading the one shared symmetric matrix.
+// ---------------------------------------------------------------------------
+template <int T_D1D = 0, int T_Q1D = 0>
+void CompactApply2D(const int NE, const Array<real_t>& b,
+                    const Array<real_t>& g,
+                    const Vector& d, const Vector& x, Vector& y,
+                    const int d1d = 0, const int q1d = 0)
+{
+   static constexpr int DIM = 2, VDIM = 2;
+   const int D1D = T_D1D ? T_D1D : d1d;
+   const int Q1D = T_Q1D ? T_Q1D : q1d;
+   const auto B = b.Read(), G = g.Read();
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, 3, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, VDIM, NE);
+
+   mfem::forall_2D<T_Q1D* T_Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MD1 = T_D1D > 0 ? SetMaxOf(T_D1D) : DofQuadLimits::MAX_T1D;
+      constexpr int MQ1 = T_Q1D > 0 ? SetMaxOf(T_Q1D) : DofQuadLimits::MAX_T1D;
+
+      MFEM_SHARED real_t sB[MD1][MQ1], sG[MD1][MQ1], smem[MQ1][MQ1];
+      kernels::internal::vd_regs2d_t<VDIM, DIM, MQ1> r0, r1;
+      kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
+      kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+
+      for (int i = 0; i < VDIM; i++)
+      {
+         kernels::internal::LoadDofs2d(e, D1D, i, XE, r0);
+         kernels::internal::Grad2d(D1D, Q1D, smem, sB, sG, r0, r1, i);
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+            {
+               const real_t gradX = r1[i][0][qy][qx];
+               const real_t gradY = r1[i][1][qy][qx];
+               const real_t O11 = DE(qx, qy, 0, e), O12 = DE(qx, qy, 1, e);
+               const real_t O22 = DE(qx, qy, 2, e);
+               r0[i][0][qy][qx] = (O11 * gradX) + (O12 * gradY);
+               r0[i][1][qy][qx] = (O12 * gradX) + (O22 * gradY);
+            }
+         }
+         MFEM_SYNC_THREAD;
+         kernels::internal::GradTranspose2d(D1D, Q1D, smem, sB, sG, r0, r1, i);
+         kernels::internal::WriteDofs2d(e, D1D, i, i, r1, YE);
+      }
+   });
+}
+
+template <int T_D1D = 0, int T_Q1D = 0>
+void CompactApply3D(const int NE, const Array<real_t>& b,
+                    const Array<real_t>& g,
+                    const Vector& d, const Vector& x, Vector& y,
+                    const int d1d = 0, const int q1d = 0)
+{
+   static constexpr int DIM = 3, VDIM = 3;
+   const int D1D = T_D1D ? T_D1D : d1d;
+   const int Q1D = T_Q1D ? T_Q1D : q1d;
+   const auto B = b.Read(), G = g.Read();
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+
+   mfem::forall_2D<T_Q1D* T_Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MD1 = T_D1D > 0 ? SetMaxOf(T_D1D) : DofQuadLimits::MAX_T1D;
+      constexpr int MQ1 = T_Q1D > 0 ? SetMaxOf(T_Q1D) : DofQuadLimits::MAX_T1D;
+
+      MFEM_SHARED real_t sB[MD1][MQ1], sG[MD1][MQ1], smem[MQ1][MQ1];
+      kernels::internal::vd_regs3d_t<VDIM, DIM, MQ1> r0, r1;
+      kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
+      kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+
+      for (int i = 0; i < VDIM; i++)
+      {
+         kernels::internal::LoadDofs3d(e, D1D, i, XE, r0);
+         kernels::internal::Grad3d(D1D, Q1D, smem, sB, sG, r0, r1, i);
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  const real_t gradX = r1[i][0][qz][qy][qx];
+                  const real_t gradY = r1[i][1][qz][qy][qx];
+                  const real_t gradZ = r1[i][2][qz][qy][qx];
+                  const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
+                               O13 = DE(qx, qy, qz, 2, e);
+                  const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
+                  const real_t O33 = DE(qx, qy, qz, 5, e);
+                  r0[i][0][qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ);
+                  r0[i][1][qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ);
+                  r0[i][2][qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ);
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         kernels::internal::GradTranspose3d(D1D, Q1D, smem, sB, sG, r0, r1, i);
+         kernels::internal::WriteDofs3d(e, D1D, i, i, r1, YE);
+      }
+   });
+}
+
+// ---------------------------------------------------------------------------
+// The diagonal, both layouts: diag(a, c) = sum_q ghat_a^T D_q ghat_a, ghat_a
+// the reference gradient of dof a's basis function rebuilt from the 1D tables;
+// the same for every component (a scalar coefficient). No local arrays.
+// MFEM layout: (Q1D^dim, dim*dim, vdim, ne), component 0 read; 3D entries
+// 0..5 = xx, xy, xz, yy, yz, zz, 2D entries 0, 1, 3 = xx, xy, yy. Compact:
+// (Q1D^dim, ns, ne) as documented in the header.
+// ---------------------------------------------------------------------------
+void Diagonal2D(int ne, int D1D, int Q1D, bool compact, const Array<real_t>& b,
                 const Array<real_t>& g, const Vector& pa_data, Vector& diag)
 {
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
-   const auto D = Reshape(pa_data.Read(), Q1D, Q1D, 4, 2, ne);
+   const int stride = compact ? 3 : 8; // entries per point per element
+   const int iyy = compact ? 2 : 3;
+   const auto D = Reshape(pa_data.Read(), Q1D, Q1D, stride, ne);
    auto Y = Reshape(diag.ReadWrite(), D1D, D1D, 2, ne);
    mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
    {
@@ -41,9 +217,9 @@ void Diagonal2D(int ne, int D1D, int Q1D, const Array<real_t>& b,
                {
                   const real_t g0 = G(qx, dx) * B(qy, dy);
                   const real_t g1 = B(qx, dx) * G(qy, dy);
-                  acc += D(qx, qy, 0, 0, e) * g0 * g0 +
-                         2.0 * D(qx, qy, 1, 0, e) * g0 * g1 +
-                         D(qx, qy, 3, 0, e) * g1 * g1;
+                  acc += D(qx, qy, 0, e) * g0 * g0 +
+                         2.0 * D(qx, qy, 1, e) * g0 * g1 +
+                         D(qx, qy, iyy, e) * g1 * g1;
                }
             Y(dx, dy, 0, e) += acc;
             Y(dx, dy, 1, e) += acc;
@@ -51,12 +227,13 @@ void Diagonal2D(int ne, int D1D, int Q1D, const Array<real_t>& b,
    });
 }
 
-void Diagonal3D(int ne, int D1D, int Q1D, const Array<real_t>& b,
+void Diagonal3D(int ne, int D1D, int Q1D, bool compact, const Array<real_t>& b,
                 const Array<real_t>& g, const Vector& pa_data, Vector& diag)
 {
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
-   const auto D = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 9, 3, ne);
+   const int stride = compact ? 6 : 27; // entries per point per element
+   const auto D = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, stride, ne);
    auto Y = Reshape(diag.ReadWrite(), D1D, D1D, D1D, 3, ne);
    mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
    {
@@ -72,12 +249,12 @@ void Diagonal3D(int ne, int D1D, int Q1D, const Array<real_t>& b,
                         const real_t g0 = G(qx, dx) * B(qy, dy) * B(qz, dz);
                         const real_t g1 = B(qx, dx) * G(qy, dy) * B(qz, dz);
                         const real_t g2 = B(qx, dx) * B(qy, dy) * G(qz, dz);
-                        acc += D(qx, qy, qz, 0, 0, e) * g0 * g0 +
-                               D(qx, qy, qz, 3, 0, e) * g1 * g1 +
-                               D(qx, qy, qz, 5, 0, e) * g2 * g2 +
-                               2.0 * (D(qx, qy, qz, 1, 0, e) * g0 * g1 +
-                                      D(qx, qy, qz, 2, 0, e) * g0 * g2 +
-                                      D(qx, qy, qz, 4, 0, e) * g1 * g2);
+                        acc += D(qx, qy, qz, 0, e) * g0 * g0 +
+                               D(qx, qy, qz, 3, e) * g1 * g1 +
+                               D(qx, qy, qz, 5, e) * g2 * g2 +
+                               2.0 * (D(qx, qy, qz, 1, e) * g0 * g1 +
+                                      D(qx, qy, qz, 2, e) * g0 * g2 +
+                                      D(qx, qy, qz, 4, e) * g1 * g2);
                      }
                Y(dx, dy, dz, 0, e) += acc;
                Y(dx, dy, dz, 1, e) += acc;
@@ -88,11 +265,139 @@ void Diagonal3D(int ne, int D1D, int Q1D, const Array<real_t>& b,
 
 } // namespace leandiff
 
+/// \cond DO_NOT_DOCUMENT
+template <int DIM, int D1D, int Q1D>
+LeanVectorDiffusionIntegrator::ApplyKernelType
+LeanVectorDiffusionIntegrator::CompactApplyKernels::Kernel()
+{
+   if constexpr(DIM == 2) { return leandiff::CompactApply2D<D1D, Q1D>; }
+   else if constexpr(DIM == 3) { return leandiff::CompactApply3D<D1D, Q1D>; }
+   MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
+}
+
+LeanVectorDiffusionIntegrator::ApplyKernelType
+LeanVectorDiffusionIntegrator::CompactApplyKernels::Fallback(int dim, int, int)
+{
+   if (dim == 2) { return leandiff::CompactApply2D; }
+   else if (dim == 3) { return leandiff::CompactApply3D; }
+   MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
+}
+
+// The (DIM, D1D, Q1D) specializations GradDivIntegrator registers (through Q6
+// velocity; GL rules give Q1D ~ D1D + 1, collocated GLL Q1D == D1D): the
+// untemplated fallback sizes its registers at MAX_T1D.
+namespace
+{
+struct LeanVectorDiffusionRegistrar
+{
+   LeanVectorDiffusionRegistrar()
+   {
+      using I = LeanVectorDiffusionIntegrator;
+      I::AddSpecialization<2, 3, 3>(); I::AddSpecialization<2, 3, 4>();
+      I::AddSpecialization<2, 4, 4>(); I::AddSpecialization<2, 4, 5>();
+      I::AddSpecialization<2, 5, 5>(); I::AddSpecialization<2, 5, 6>();
+      I::AddSpecialization<2, 6, 6>(); I::AddSpecialization<2, 6, 7>();
+      I::AddSpecialization<2, 7, 7>(); I::AddSpecialization<2, 7, 8>();
+      I::AddSpecialization<3, 3, 3>(); I::AddSpecialization<3, 3, 4>();
+      I::AddSpecialization<3, 4, 4>(); I::AddSpecialization<3, 4, 5>();
+      I::AddSpecialization<3, 5, 5>(); I::AddSpecialization<3, 5, 6>();
+      I::AddSpecialization<3, 6, 6>(); I::AddSpecialization<3, 6, 7>();
+      I::AddSpecialization<3, 7, 7>(); I::AddSpecialization<3, 7, 8>();
+   }
+};
+const LeanVectorDiffusionRegistrar lean_vector_diffusion_registrar;
+} // namespace
+/// \endcond
+
+void LeanVectorDiffusionIntegrator::AssemblePA(const FiniteElementSpace& fes)
+{
+   Mesh* mesh = fes.GetMesh();
+   const FiniteElement& el = *fes.GetTypicalFE();
+   const int dim = mesh->Dimension();
+   const bool tensor = dynamic_cast<const TensorBasisElement*>(&el) != nullptr;
+   const bool eligible =
+      storage_ == Storage::Compact && !DeviceCanUseCeed() && !VQ && !MQ &&
+      (dim == 2 || dim == 3) && mesh->SpaceDimension() == dim &&
+      fes.GetVDim() == dim && tensor && !fes.IsVariableOrder() &&
+      mesh->GetNumGeometries(dim) <= 1;
+   if (!eligible)
+   {
+      compact_ = false;
+      cpa_.Destroy();
+      VectorDiffusionIntegrator::AssemblePA(fes);
+      return;
+   }
+   compact_ = true;
+   pa_data.Destroy(); // in case an earlier assembly used MFEM's storage
+
+   const IntegrationRule* ir =
+      IntRule ? IntRule : &DiffusionIntegrator::GetRule(el, el);
+   const MemoryType mt = (pa_mt == MemoryType::DEFAULT)
+                         ? Device::GetDeviceMemoryType() : pa_mt;
+   cdim_ = dim;
+   cne_ = fes.GetNE();
+   const GeometricFactors* geom =
+      mesh->GetGeometricFactors(*ir, GeometricFactors::JACOBIANS, mt);
+   cmaps_ = &el.GetDofToQuad(*ir, DofToQuad::TENSOR);
+   cd1d_ = cmaps_->ndof;
+   cq1d_ = cmaps_->nqpt;
+   const int nq = ir->GetNPoints();
+
+   // A constant coefficient (the viscosity, here) needs no per-point array.
+   const auto* qc = dynamic_cast<const ConstantCoefficient*>(Q);
+   std::unique_ptr<CoefficientVector> coeff;
+   const real_t* cp = nullptr;
+   real_t cconst = qc ? qc->constant : 1.0;
+   if (Q && !qc)
+   {
+      QuadratureSpace qs(*mesh, *ir);
+      coeff = std::make_unique<CoefficientVector>(qs, CoefficientStorage::FULL);
+      coeff->Project(*Q);
+      MFEM_VERIFY(coeff->GetVDim() == 1, "LeanVectorDiffusionIntegrator: "
+                  "scalar coefficient required");
+      cp = coeff->Read();
+   }
+   const int ns = (dim == 3) ? 6 : 3;
+   cpa_.SetSize(nq * ns * cne_, mt);
+   cpa_.UseDevice(true);
+   if (cne_ > 0)
+   {
+      leandiff::Setup(dim, cne_, nq, ir->GetWeights(), geom->J, cp, cconst, cpa_);
+   }
+}
+
+void LeanVectorDiffusionIntegrator::AddMultPA(const Vector& x, Vector& y) const
+{
+   if (!compact_)
+   {
+      VectorDiffusionIntegrator::AddMultPA(x, y);
+      return;
+   }
+   if (cne_ == 0) { return; }
+   CompactApplyKernels::Run(cdim_, cd1d_, cq1d_, cne_, cmaps_->B, cmaps_->G,
+                            cpa_, x, y, cd1d_, cq1d_);
+}
+
 void LeanVectorDiffusionIntegrator::AssembleDiagonalPA(Vector& diag)
 {
-   // The layouts above hold for a scalar coefficient with sdim == dim == vdim
-   // and MFEM's own PA data; anything else is MFEM's business.
-   // (vdim is private to the base class: read it off the size of pa_data.)
+   if (compact_)
+   {
+      if (cne_ == 0) { return; }
+      if (cdim_ == 2)
+      {
+         leandiff::Diagonal2D(cne_, cd1d_, cq1d_, true, cmaps_->B, cmaps_->G,
+                              cpa_, diag);
+      }
+      else
+      {
+         leandiff::Diagonal3D(cne_, cd1d_, cq1d_, true, cmaps_->B, cmaps_->G,
+                              cpa_, diag);
+      }
+      return;
+   }
+   // MFEM's storage: its layout holds for a scalar coefficient with
+   // sdim == dim == vdim (vdim is private to the base class: read it off the
+   // size of pa_data); anything else is MFEM's business.
    long long nq = quad1D;
    for (int d = 1; d < dim; ++d) { nq *= quad1D; }
    const bool ours = !DeviceCanUseCeed() && !VQ && !MQ && coeff_vdim == 1 &&
@@ -105,11 +410,13 @@ void LeanVectorDiffusionIntegrator::AssembleDiagonalPA(Vector& diag)
    }
    if (dim == 2)
    {
-      leandiff::Diagonal2D(ne, dofs1D, quad1D, maps->B, maps->G, pa_data, diag);
+      leandiff::Diagonal2D(ne, dofs1D, quad1D, false, maps->B, maps->G, pa_data,
+                           diag);
    }
    else
    {
-      leandiff::Diagonal3D(ne, dofs1D, quad1D, maps->B, maps->G, pa_data, diag);
+      leandiff::Diagonal3D(ne, dofs1D, quad1D, false, maps->B, maps->G, pa_data,
+                           diag);
    }
 }
 

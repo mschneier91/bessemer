@@ -208,6 +208,86 @@ void InvertBlocks(int dim, int n, bool by_vdim, const Vector& d,
    });
 }
 
+// The symmetric case (no rotation term): B_a = diag(d_a) + G_a, inverted with
+// the same adjugate expressions as InvertBlocks (s = 0), storing the upper
+// triangle only. The values equal InvertBlocks' bit for bit (the adjugate of a
+// symmetric matrix computed this way is exactly symmetric).
+void InvertBlocksSym(int dim, int n, bool by_vdim, const Vector& d,
+                     const Vector& g, Vector& inv)
+{
+   const auto D = d.Read(), Gs = g.Read();
+   const int ns = (dim == 3) ? 6 : 3;
+   auto I = Reshape(inv.Write(), ns, n);
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int a)
+   {
+      if (dim == 3)
+      {
+         const real_t d0 = D[Idx(0, a, n, 3, by_vdim)];
+         const real_t d1 = D[Idx(1, a, n, 3, by_vdim)];
+         const real_t d2 = D[Idx(2, a, n, 3, by_vdim)];
+         const real_t g0 = Gs[Idx(0, a, n, 3, by_vdim)];
+         const real_t g1 = Gs[Idx(1, a, n, 3, by_vdim)];
+         const real_t g2 = Gs[Idx(2, a, n, 3, by_vdim)];
+         // B = [[d0, g2, g1], [g2, d1, g0], [g1, g0, d2]].
+         const real_t b00 = d0, b01 = g2, b02 = g1;
+         const real_t b11 = d1, b12 = g0, b22 = d2;
+         const real_t a00 = b11 * b22 - b12 * b12;
+         const real_t a01 = b02 * b12 - b01 * b22;
+         const real_t a02 = b01 * b12 - b02 * b11;
+         const real_t a11 = b00 * b22 - b02 * b02;
+         const real_t a12 = b02 * b01 - b00 * b12;
+         const real_t a22 = b00 * b11 - b01 * b01;
+         const real_t r = 1.0 / (b00 * a00 + b01 * a01 + b02 * a02);
+         I(0, a) = r * a00; I(1, a) = r * a01; I(2, a) = r * a02;
+         I(3, a) = r * a11; I(4, a) = r * a12; I(5, a) = r * a22;
+      }
+      else
+      {
+         const real_t d0 = D[Idx(0, a, n, 2, by_vdim)];
+         const real_t d1 = D[Idx(1, a, n, 2, by_vdim)];
+         const real_t g0 = Gs[Idx(0, a, n, 2, by_vdim)];
+         const real_t r = 1.0 / (d0 * d1 - g0 * g0);
+         I(0, a) = r * d1; I(1, a) = r * (-g0); I(2, a) = r * d0;
+      }
+   });
+}
+
+// z_a = B_a^{-1} r_a with the symmetric layout (InvertBlocksSym).
+void ApplyBlocksSym(int dim, int n, bool by_vdim, const Vector& inv,
+                    const Vector& r, Vector& z)
+{
+   const int ns = (dim == 3) ? 6 : 3;
+   const auto I = Reshape(inv.Read(), ns, n);
+   const auto R = r.Read();
+   auto Z = z.Write();
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int a)
+   {
+      if (dim == 3)
+      {
+         const real_t r0 = R[Idx(0, a, n, 3, by_vdim)];
+         const real_t r1 = R[Idx(1, a, n, 3, by_vdim)];
+         const real_t r2 = R[Idx(2, a, n, 3, by_vdim)];
+         real_t z0 = 0.0, z1 = 0.0, z2 = 0.0;
+         z0 += I(0, a) * r0; z0 += I(1, a) * r1; z0 += I(2, a) * r2;
+         z1 += I(1, a) * r0; z1 += I(3, a) * r1; z1 += I(4, a) * r2;
+         z2 += I(2, a) * r0; z2 += I(4, a) * r1; z2 += I(5, a) * r2;
+         Z[Idx(0, a, n, 3, by_vdim)] = z0;
+         Z[Idx(1, a, n, 3, by_vdim)] = z1;
+         Z[Idx(2, a, n, 3, by_vdim)] = z2;
+      }
+      else
+      {
+         const real_t r0 = R[Idx(0, a, n, 2, by_vdim)];
+         const real_t r1 = R[Idx(1, a, n, 2, by_vdim)];
+         real_t z0 = 0.0, z1 = 0.0;
+         z0 += I(0, a) * r0; z0 += I(1, a) * r1;
+         z1 += I(1, a) * r0; z1 += I(2, a) * r1;
+         Z[Idx(0, a, n, 2, by_vdim)] = z0;
+         Z[Idx(1, a, n, 2, by_vdim)] = z1;
+      }
+   });
+}
+
 // z_a = B_a^{-1} r_a for every node, reading and writing the true-dof layout
 // directly (byNODES or byVDIM): one kernel, no gather/scatter pass. For
 // byNODES each component access is contiguous across nodes (coalesced).
@@ -244,13 +324,11 @@ PointBlockJacobi::PointBlockJacobi(FiniteElementSpace& fes,
    d_.SetSize(dim_ * n_);
    d_.UseDevice(true);
    d_ = 1.0;
-   s_.SetSize(dim_ * n_);
-   s_.UseDevice(true);
-   s_ = 0.0;
+   // s_ is sized by the rotation constructor: the symmetric blocks never
+   // read it.
    g_.SetSize(dim_ * n_);
    g_.UseDevice(true);
    g_ = 0.0;
-   inv_.SetSize(dim_ * dim_ * n_);
    inv_.UseDevice(true);
    RebuildBlocks();
 }
@@ -262,6 +340,9 @@ PointBlockJacobi::PointBlockJacobi(FiniteElementSpace& fes,
 {
    MFEM_VERIFY(rot.GetAssembledMesh() == fes.GetMesh(), "PointBlockJacobi: "
                "rot must be AssemblePA()'d on the velocity space's mesh");
+   s_.SetSize(dim_ * n_);
+   s_.UseDevice(true);
+   s_ = 0.0;
    skew_form_ = MakeForm();
    skew_form_->AddDomainIntegrator(new NodalSkewProxy(rot));
    skew_form_->Assemble();
@@ -284,6 +365,8 @@ std::unique_ptr<BilinearForm> PointBlockJacobi::MakeForm() const
 
 void PointBlockJacobi::SetGradDiv(const GradDivIntegrator& gd)
 {
+   MFEM_VERIFY(!released_, "PointBlockJacobi::SetGradDiv: build data "
+               "released");
    // A form for this one assembly: the proxy only borrows gd, and the momentum
    // form that owns gd is rebuilt whenever Delta-t changes.
    std::unique_ptr<BilinearForm> form = MakeForm();
@@ -296,6 +379,8 @@ void PointBlockJacobi::SetGradDiv(const GradDivIntegrator& gd)
 
 void PointBlockJacobi::SetDiagonal(const Vector& d)
 {
+   MFEM_VERIFY(!released_, "PointBlockJacobi::SetDiagonal: build data "
+               "released");
    MFEM_VERIFY(d.Size() == d_.Size(), "PointBlockJacobi::SetDiagonal: "
                "expected a true-dof vector of size " << d_.Size());
    d_ = d;
@@ -315,13 +400,28 @@ void PointBlockJacobi::UpdateSkew()
 void PointBlockJacobi::RebuildBlocks()
 {
    // Closed-form inverses, in place: once per step (UpdateSkew) and per
-   // Delta-t change (SetDiagonal), no allocation after construction.
-   pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, g_, inv_);
+   // Delta-t change (SetDiagonal). Without a rotation term the blocks are
+   // symmetric and only their upper triangles are stored.
+   sym_ = !skew_form_;
+   inv_.SetSize((sym_ ? dim_ * (dim_ + 1) / 2 : dim_ * dim_) * n_);
+   if (sym_) { pbj::InvertBlocksSym(dim_, n_, by_vdim_, d_, g_, inv_); }
+   else { pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, g_, inv_); }
+}
+
+void PointBlockJacobi::ReleaseBuildData()
+{
+   MFEM_VERIFY(!skew_form_, "PointBlockJacobi::ReleaseBuildData: not with a "
+               "rotation term (its blocks are rebuilt every step)");
+   d_.Destroy();
+   s_.Destroy();
+   g_.Destroy();
+   released_ = true;
 }
 
 void PointBlockJacobi::Mult(const Vector& r, Vector& z) const
 {
-   pbj::ApplyBlocks(dim_, n_, by_vdim_, inv_, r, z);
+   if (sym_) { pbj::ApplyBlocksSym(dim_, n_, by_vdim_, inv_, r, z); }
+   else { pbj::ApplyBlocks(dim_, n_, by_vdim_, inv_, r, z); }
 }
 
 } // namespace incns

@@ -420,3 +420,72 @@ TEST(SchurQuality, RefreshWithViscosityMatchesAFreshSolver)
    y_r -= y_f;
    EXPECT_LT(norm(y_r), 1e-13 * yn);
 }
+
+// StokesSolver::WarmUp (one application of the operator and the
+// preconditioner, so that their first-use workspace exists before the free
+// memory is read) leaves nothing a solve reads: a solve after it repeats the
+// solve before it.
+TEST(SchurQuality, WarmUpLeavesTheSolveUnchanged)
+{
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {8, 8, 0};
+   s.lengths = {1.0, 1.0};
+   s.periodic = {false, false, false};
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+   BoundaryConditions bc(spaces.Velocity());
+   for (int a = 1; a <= 4; ++a) { bc.AddNoSlip(a); }
+
+   StokesSolverOptions o;
+   o.nu = 0.005;
+   o.mass_coeff = 20.0;
+   o.grad_div = 1.0;
+   o.schur = incns::SchurBlockType::CahouetChabard;
+   o.cc.a_pc = incns::APC::JacobiPCG;
+   o.cc.schur_grad_div = true;
+   o.rtol = 1e-11;
+   o.max_iter = 2000;
+   o.kdim = 300;
+   StokesSolver solver(spaces, rules, bc, o);
+
+   VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)
+   {
+      f(0) = std::sin(2.0 * M_PI * x[0]) * std::cos(2.0 * M_PI * x[1]) + x[1];
+      f(1) = -std::cos(2.0 * M_PI * x[0]) * std::sin(2.0 * M_PI * x[1]);
+   });
+   ParGridFunction u1(&spaces.Velocity()), p1(&spaces.Pressure());
+   ParGridFunction u2(&spaces.Velocity()), p2(&spaces.Pressure());
+   solver.Solve(forcing, u1, p1); // cold start: Solve zeroes u and p
+   const int it1 = solver.Iterations();
+   solver.WarmUp();
+   solver.Solve(forcing, u2, p2);
+   const int it2 = solver.Iterations();
+   EXPECT_TRUE(solver.Converged());
+
+   auto norm = [](const Vector & v)
+   {
+      return std::sqrt(InnerProduct(MPI_COMM_WORLD, v, v));
+   };
+   Vector v1, v2, q1, q2;
+   u1.GetTrueDofs(v1);
+   u2.GetTrueDofs(v2);
+   p1.GetTrueDofs(q1);
+   p2.GetTrueDofs(q2);
+   const double un = norm(v1), pn = norm(q1);
+   v2 -= v1;
+   q2 -= q1;
+   const double du = norm(v2), dp = norm(q2);
+   if (Mpi::Root())
+   {
+      mfem::out << "[warm up] iterations before " << it1 << ", after " << it2
+                << "; relative difference u " << du / un << ", p " << dp / pn
+                << std::endl;
+   }
+   // Equal on the CPU; GPU sparse kernels may sum in another order.
+   EXPECT_LE(std::abs(it2 - it1), 1);
+   EXPECT_LT(du, 1e-9 * un);
+   EXPECT_LT(dp, 1e-8 * pn);
+}

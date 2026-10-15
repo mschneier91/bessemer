@@ -116,6 +116,10 @@ void Case::BuildIntegrator()
    opts.adaptive = (params_.step_control == StepControl::Error);
    opts.controller = params_.controller;
    opts.collocated_mass = params_.CollocatedMass();
+   opts.compact_diffusion =
+      params_.vector_diffusion == VectorDiffusionStorage::Compact;
+   // The raw right-hand side is kept only for the force on the body.
+   opts.keep_rhs = params_.forces.enabled;
    opts.grad_div = params_.grad_div_h; // the part proportional to h_K
    opts.grad_div_scale = GradDivScale::OrderH;
    opts.grad_div_nu = params_.grad_div_nu;

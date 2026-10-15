@@ -3,6 +3,8 @@
 #include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
+#include <memory>
+
 namespace incns
 {
 
@@ -66,18 +68,94 @@ using kernels::internal::SetMaxOf;
 // Quadrature data for PA and component EA; defined after the kernels.
 void SetupQuadratureData(Mesh& mesh, const IntegrationRule& ir,
                          const GeometricFactors& geom, Coefficient* Q,
-                         MemoryType mt, Vector& qdata);
+                         MemoryType mt, Vector& qdata,
+                         const Vector* elem_coeff = nullptr);
+
+// The PA kernels read A[k][i] = adj(J) (row k = reference direction, column
+// i = physical component) and alpha through these views, slot k + i*dim and
+// slot dim*dim, as they once read a stored (nq, dim*dim + 1, ne) array. The
+// adjugate is recomputed from the mesh's cached Jacobians with the
+// expressions SetupQuadratureData uses, so the values are the stored ones.
+struct View2D
+{
+   DeviceTensor<5, const real_t> J; ///< (Q1D, Q1D, 2, 2, ne): dx_i / dxi_j.
+   DeviceTensor<3, const real_t> A; ///< (Q1D, Q1D, ne): alpha.
+   MFEM_HOST_DEVICE real_t operator()(int qx, int qy, int s, int e) const
+   {
+      switch (s)
+      {
+         case 0: return J(qx, qy, 1, 1, e);  // A[0][0] =  J22
+         case 1: return -J(qx, qy, 1, 0, e); // A[1][0] = -J21
+         case 2: return -J(qx, qy, 0, 1, e); // A[0][1] = -J12
+         case 3: return J(qx, qy, 0, 0, e);  // A[1][1] =  J11
+         default: return A(qx, qy, e);       // alpha
+      }
+   }
+};
+
+struct View3D
+{
+   DeviceTensor<6, const real_t> J; ///< (Q1D, Q1D, Q1D, 3, 3, ne).
+   DeviceTensor<4, const real_t> A; ///< (Q1D, Q1D, Q1D, ne): alpha.
+   MFEM_HOST_DEVICE real_t operator()(int qx, int qy, int qz, int s, int e) const
+   {
+#define INCNS_GD_J(a, b) J(qx, qy, qz, a, b, e)
+      switch (s)
+      {
+         // A11 = J22 J33 - J23 J32, A21 = J31 J23 - J21 J33, ...
+         case 0: return (INCNS_GD_J(1, 1) * INCNS_GD_J(2, 2)) - (INCNS_GD_J(1,
+                           2) * INCNS_GD_J(2, 1));
+         case 1: return (INCNS_GD_J(2, 0) * INCNS_GD_J(1, 2)) - (INCNS_GD_J(1,
+                           0) * INCNS_GD_J(2, 2));
+         case 2: return (INCNS_GD_J(1, 0) * INCNS_GD_J(2, 1)) - (INCNS_GD_J(2,
+                           0) * INCNS_GD_J(1, 1));
+         case 3: return (INCNS_GD_J(2, 1) * INCNS_GD_J(0, 2)) - (INCNS_GD_J(0,
+                           1) * INCNS_GD_J(2, 2));
+         case 4: return (INCNS_GD_J(0, 0) * INCNS_GD_J(2, 2)) - (INCNS_GD_J(0,
+                           2) * INCNS_GD_J(2, 0));
+         case 5: return (INCNS_GD_J(2, 0) * INCNS_GD_J(0, 1)) - (INCNS_GD_J(0,
+                           0) * INCNS_GD_J(2, 1));
+         case 6: return (INCNS_GD_J(0, 1) * INCNS_GD_J(1, 2)) - (INCNS_GD_J(1,
+                           1) * INCNS_GD_J(0, 2));
+         case 7: return (INCNS_GD_J(1, 0) * INCNS_GD_J(0, 2)) - (INCNS_GD_J(0,
+                           0) * INCNS_GD_J(1, 2));
+         case 8: return (INCNS_GD_J(0, 0) * INCNS_GD_J(1, 1)) - (INCNS_GD_J(0,
+                           1) * INCNS_GD_J(1, 0));
+         default: return A(qx, qy, qz, e); // alpha
+      }
+#undef INCNS_GD_J
+   }
+};
+
+inline View2D MakeView2D(const Vector& jac, const Vector& alpha, int Q1D,
+                         int ne)
+{
+   return View2D{Reshape(jac.Read(), Q1D, Q1D, 2, 2, ne),
+                 Reshape(alpha.Read(), Q1D, Q1D, ne)};
+}
+
+inline View3D MakeView3D(const Vector& jac, const Vector& alpha, int Q1D,
+                         int ne)
+{
+   return View3D{Reshape(jac.Read(), Q1D, Q1D, Q1D, 3, 3, ne),
+                 Reshape(alpha.Read(), Q1D, Q1D, Q1D, ne)};
+}
+
+// alpha = Q w / det J per point (the PA data); defined after the kernels.
+void SetupAlpha(Mesh& mesh, const IntegrationRule& ir,
+                const GeometricFactors& geom, Coefficient* Q, MemoryType mt,
+                Vector& alpha, const Vector* elem_coeff);
 
 template <int T_D1D = 0, int T_Q1D = 0>
 void SmemApply2D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
-                 const Vector& d, const Vector& x, Vector& y,
+                 const Vector& j, const Vector& d, const Vector& x, Vector& y,
                  const int d1d = 0, const int q1d = 0)
 {
    static constexpr int DIM = 2, VDIM = 2;
    const int D1D = T_D1D ? T_D1D : d1d;
    const int Q1D = T_Q1D ? T_Q1D : q1d;
    const auto B = b.Read(), G = g.Read();
-   const auto DE = Reshape(d.Read(), Q1D, Q1D, DIM * DIM + 1, NE);
+   const View2D DE = MakeView2D(j, d, Q1D, NE);
    const auto XE = Reshape(x.Read(), D1D, D1D, VDIM, NE);
    auto YE = Reshape(y.ReadWrite(), D1D, D1D, VDIM, NE);
 
@@ -140,14 +218,14 @@ void SmemApply2D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
 
 template <int T_D1D = 0, int T_Q1D = 0>
 void SmemApply3D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
-                 const Vector& d, const Vector& x, Vector& y,
+                 const Vector& j, const Vector& d, const Vector& x, Vector& y,
                  const int d1d = 0, const int q1d = 0)
 {
    static constexpr int DIM = 3, VDIM = 3;
    const int D1D = T_D1D ? T_D1D : d1d;
    const int Q1D = T_Q1D ? T_Q1D : q1d;
    const auto B = b.Read(), G = g.Read();
-   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, DIM * DIM + 1, NE);
+   const View3D DE = MakeView3D(j, d, Q1D, NE);
    const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
    auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
 
@@ -292,25 +370,37 @@ const GradDivRegistrar grad_div_registrar;
 void graddiv::SetupQuadratureData(Mesh& mesh, const IntegrationRule& ir,
                                   const GeometricFactors& geom,
                                   Coefficient* Q, MemoryType mt,
-                                  Vector& qdata)
+                                  Vector& qdata, const Vector* elem_coeff)
 {
    const int dim = mesh.Dimension();
    const int ne = mesh.GetNE();
-
-   QuadratureSpace qs(mesh, ir);
-   CoefficientVector coeff(qs, CoefficientStorage::FULL);
-   if (Q) { coeff.Project(*Q); }
-   else { coeff.SetConstant(1.0); }
-   MFEM_VERIFY(coeff.GetVDim() == 1,
-               "GradDivIntegrator: scalar coefficient required");
-
    const int nq = ir.GetNPoints();
+
+   // The coefficient at the points (C) or per element (EC).
+   std::unique_ptr<CoefficientVector> coeff;
+   const real_t* EC = nullptr;
+   const real_t* CP = nullptr;
+   if (elem_coeff)
+   {
+      MFEM_VERIFY(elem_coeff->Size() == ne, "GradDivIntegrator: one element "
+                  "coefficient value per element required");
+      EC = elem_coeff->Read();
+   }
+   else
+   {
+      QuadratureSpace qs(mesh, ir);
+      coeff = std::make_unique<CoefficientVector>(qs, CoefficientStorage::FULL);
+      if (Q) { coeff->Project(*Q); }
+      else { coeff->SetConstant(1.0); }
+      MFEM_VERIFY(coeff->GetVDim() == 1,
+                  "GradDivIntegrator: scalar coefficient required");
+      CP = coeff->Read();
+   }
    const int pa_size = dim * dim + 1; // adj(J) entries + alpha
    qdata.SetSize(nq * pa_size * ne, mt);
    qdata.UseDevice(true);
 
    const auto W = Reshape(ir.GetWeights().Read(), nq);
-   const auto C = Reshape(coeff.Read(), nq, ne);
    const auto J = Reshape(geom.J.Read(), nq, dim, dim, ne);
    auto D = Reshape(qdata.Write(), nq, pa_size, ne);
 
@@ -327,7 +417,7 @@ void graddiv::SetupQuadratureData(Mesh& mesh, const IntegrationRule& ir,
          D(q, 1, e) = -J21; // A[1][0]
          D(q, 2, e) = -J12; // A[0][1]
          D(q, 3, e) = J11;  // A[1][1]
-         D(q, 4, e) = C(q, e) * W(q) / detJ; // alpha
+         D(q, 4, e) = (EC ? EC[e] : CP[q + nq * e]) * W(q) / detJ; // alpha
       }
       else
       {
@@ -353,13 +443,72 @@ void graddiv::SetupQuadratureData(Mesh& mesh, const IntegrationRule& ir,
          D(q, 0, e) = A11; D(q, 1, e) = A21; D(q, 2, e) = A31; // column i = 0
          D(q, 3, e) = A12; D(q, 4, e) = A22; D(q, 5, e) = A32; // column i = 1
          D(q, 6, e) = A13; D(q, 7, e) = A23; D(q, 8, e) = A33; // column i = 2
-         D(q, 9, e) = C(q, e) * W(q) / detJ; // alpha
+         D(q, 9, e) = (EC ? EC[e] : CP[q + nq * e]) * W(q) / detJ; // alpha
       }
    });
 }
 
+void graddiv::SetupAlpha(Mesh& mesh, const IntegrationRule& ir,
+                         const GeometricFactors& geom, Coefficient* Q,
+                         MemoryType mt, Vector& alpha,
+                         const Vector* elem_coeff)
+{
+   const int dim = mesh.Dimension();
+   const int ne = mesh.GetNE();
+   const int nq = ir.GetNPoints();
+
+   // The coefficient at the points (CP) or per element (EC), as in
+   // SetupQuadratureData.
+   std::unique_ptr<CoefficientVector> coeff;
+   const real_t* EC = nullptr;
+   const real_t* CP = nullptr;
+   if (elem_coeff)
+   {
+      MFEM_VERIFY(elem_coeff->Size() == ne, "GradDivIntegrator: one element "
+                  "coefficient value per element required");
+      EC = elem_coeff->Read();
+   }
+   else
+   {
+      QuadratureSpace qs(mesh, ir);
+      coeff = std::make_unique<CoefficientVector>(qs, CoefficientStorage::FULL);
+      if (Q) { coeff->Project(*Q); }
+      else { coeff->SetConstant(1.0); }
+      MFEM_VERIFY(coeff->GetVDim() == 1,
+                  "GradDivIntegrator: scalar coefficient required");
+      CP = coeff->Read();
+   }
+
+   alpha.SetSize(nq * ne, mt);
+   alpha.UseDevice(true);
+   if (ne == 0) { return; }
+   const auto W = Reshape(ir.GetWeights().Read(), nq);
+   const auto J = Reshape(geom.J.Read(), nq, dim, dim, ne);
+   auto A = Reshape(alpha.Write(), nq, ne);
+   mfem::forall(ne * nq, [ = ] MFEM_HOST_DEVICE(int idx)
+   {
+      const int e = idx / nq, q = idx % nq;
+      real_t detJ;
+      if (dim == 2)
+      {
+         detJ = J(q, 0, 0, e) * J(q, 1, 1, e) - J(q, 0, 1, e) * J(q, 1, 0, e);
+      }
+      else
+      {
+         const real_t J11 = J(q, 0, 0, e), J12 = J(q, 0, 1, e), J13 = J(q, 0, 2, e);
+         const real_t J21 = J(q, 1, 0, e), J22 = J(q, 1, 1, e), J23 = J(q, 1, 2, e);
+         const real_t J31 = J(q, 2, 0, e), J32 = J(q, 2, 1, e), J33 = J(q, 2, 2, e);
+         detJ = J11 * (J22 * J33 - J32 * J23) -
+                J21 * (J12 * J33 - J32 * J13) +
+                J31 * (J12 * J23 - J22 * J13);
+      }
+      A(q, e) = (EC ? EC[e] : CP[q + nq * e]) * W(q) / detJ;
+   });
+}
+
 // ---------------------------------------------------------------------------
-// PA setup: adjugate + alpha per quadrature point.
+// PA setup: alpha per quadrature point (the adjugate is recomputed from the
+// mesh's Jacobians by the kernels' views).
 // ---------------------------------------------------------------------------
 void GradDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
 {
@@ -384,13 +533,13 @@ void GradDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
    dofs1D_ = maps_->ndof;
    quad1D_ = maps_->nqpt;
 
-   graddiv::SetupQuadratureData(*mesh, *ir, *geom_, Q, mt, pa_data_);
+   graddiv::SetupAlpha(*mesh, *ir, *geom_, Q, mt, pa_data_, elem_coeff_);
 }
 
 void GradDivIntegrator::AddMultPA(const Vector& x, Vector& y) const
 {
    ApplyPAKernels::Run(dim_, dofs1D_, quad1D_, ne_, maps_->B, maps_->G,
-                       pa_data_, x, y, dofs1D_, quad1D_);
+                       geom_->J, pa_data_, x, y, dofs1D_, quad1D_);
 }
 
 // ---------------------------------------------------------------------------
@@ -411,14 +560,15 @@ namespace graddiv
 // O(p^6) per element in 3D, one thread per element -- the reference the
 // sum-factorized kernel is tested against, and its fallback.
 void DiagonalDirect(int dim, int ne, int D1D, int Q1D, const Array<real_t>& b,
-                    const Array<real_t>& g, const Vector& pa_data, Vector& diag)
+                    const Array<real_t>& g, const Vector& jac,
+                    const Vector& pa_data, Vector& diag)
 {
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
 
    if (dim == 2)
    {
-      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, 5, ne);
+      const View2D DE = MakeView2D(jac, pa_data, Q1D, ne);
       auto Y = Reshape(diag.ReadWrite(), D1D, D1D, 2, ne);
       mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
       {
@@ -443,7 +593,7 @@ void DiagonalDirect(int dim, int ne, int D1D, int Q1D, const Array<real_t>& b,
    }
    else
    {
-      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 10, ne);
+      const View3D DE = MakeView3D(jac, pa_data, Q1D, ne);
       auto Y = Reshape(diag.ReadWrite(), D1D, D1D, D1D, 3, ne);
       mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
       {
@@ -479,14 +629,15 @@ void DiagonalDirect(int dim, int ne, int D1D, int Q1D, const Array<real_t>& b,
 // pair.
 void NodalOffDiagonalDirect(int dim, int ne, int D1D, int Q1D,
                             const Array<real_t>& b, const Array<real_t>& g,
-                            const Vector& pa_data, Vector& out)
+                            const Vector& jac, const Vector& pa_data,
+                            Vector& out)
 {
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
 
    if (dim == 2)
    {
-      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, 5, ne);
+      const View2D DE = MakeView2D(jac, pa_data, Q1D, ne);
       auto Y = Reshape(out.ReadWrite(), D1D, D1D, 2, ne);
       mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
       {
@@ -509,7 +660,7 @@ void NodalOffDiagonalDirect(int dim, int ne, int D1D, int Q1D,
    }
    else
    {
-      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 10, ne);
+      const View3D DE = MakeView3D(jac, pa_data, Q1D, ne);
       auto Y = Reshape(out.ReadWrite(), D1D, D1D, D1D, 3, ne);
       mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
       {
@@ -549,13 +700,14 @@ void NodalOffDiagonalDirect(int dim, int ne, int D1D, int Q1D,
 
 void DiagonalSumFactorized(int dim, int ne, int D1D, int Q1D,
                            const Array<real_t>& b, const Array<real_t>& g,
-                           const Vector& pa_data, Vector& diag)
+                           const Vector& jac, const Vector& pa_data,
+                           Vector& diag)
 {
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
    if (dim == 2)
    {
-      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, 5, ne);
+      const View2D DE = MakeView2D(jac, pa_data, Q1D, ne);
       auto Y = Reshape(diag.ReadWrite(), D1D, D1D, 2, ne);
       mfem::forall_2D(ne, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
       {
@@ -612,7 +764,7 @@ void DiagonalSumFactorized(int dim, int ne, int D1D, int Q1D,
    }
    else
    {
-      const auto DE = Reshape(pa_data.Read(), Q1D, Q1D, Q1D, 10, ne);
+      const View3D DE = MakeView3D(jac, pa_data, Q1D, ne);
       auto Y = Reshape(diag.ReadWrite(), D1D, D1D, D1D, 3, ne);
       mfem::forall_2D(ne, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
       {
@@ -705,7 +857,7 @@ void GradDivIntegrator::AssembleDiagonalPA(Vector& diag)
    if (dofs1D_ <= lim.MAX_D1D && quad1D_ <= lim.MAX_Q1D)
    {
       graddiv::DiagonalSumFactorized(dim_, ne_, dofs1D_, quad1D_, maps_->B,
-                                     maps_->G, pa_data_, diag);
+                                     maps_->G, geom_->J, pa_data_, diag);
    }
    else { AssembleDiagonalPADirect(diag); }
 }
@@ -715,13 +867,13 @@ void GradDivIntegrator::AddNodalOffDiagonalPA(Vector& g_e) const
    MFEM_VERIFY(maps_, "GradDivIntegrator::AddNodalOffDiagonalPA: AssemblePA "
                "first");
    graddiv::NodalOffDiagonalDirect(dim_, ne_, dofs1D_, quad1D_, maps_->B,
-                                   maps_->G, pa_data_, g_e);
+                                   maps_->G, geom_->J, pa_data_, g_e);
 }
 
 void GradDivIntegrator::AssembleDiagonalPADirect(Vector& diag) const
 {
    graddiv::DiagonalDirect(dim_, ne_, dofs1D_, quad1D_, maps_->B, maps_->G,
-                           pa_data_, diag);
+                           geom_->J, pa_data_, diag);
 }
 
 // ---------------------------------------------------------------------------

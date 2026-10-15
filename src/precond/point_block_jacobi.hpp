@@ -169,13 +169,27 @@ public:
     */
    void Mult(const mfem::Vector& r, mfem::Vector& z) const override;
 
+   /**
+    * @brief Free the inputs the blocks were built from (the diagonal and
+    *        the nodal off-diagonals), keeping only the inverted blocks.
+    *
+    * For a preconditioner built once and never updated: two true-dof
+    * velocity vectors. (StokesSolver keeps them: it updates its
+    * preconditioner with SetDiagonal at every Delta-t change, which is far
+    * cheaper than rebuilding the grad-div off-diagonals.) Not with a
+    * rotation term, whose blocks are rebuilt every step. Afterwards
+    * SetDiagonal, SetGradDiv and UpdateSkew abort and the Get* accessors
+    * return empty vectors.
+    */
+   void ReleaseBuildData();
+
    /// No-op by design: the blocks come from SetDiagonal()/UpdateSkew().
    void SetOperator(const mfem::Operator&) override { }
 
    /// @return The diagonal after the essential-dof rule (true dofs).
    const mfem::Vector& GetDiagonal() const { return d_; }
    /// @return The skew vector after the essential-dof rule (true dofs; 2D
-   ///         uses component 0 only).
+   ///         uses component 0 only); empty without a rotation term.
    const mfem::Vector& GetSkew() const { return s_; }
    /// @return The symmetric off-diagonals after the essential-dof rule (true
    ///         dofs; 3D component k couples the two components other than k,
@@ -196,13 +210,18 @@ private:
    const mfem::Array<int>& ess_; ///< Essential true dofs (not owned).
    mfem::Vector
    d_;              ///< Operator diagonal (dim*n), essential rule applied.
-   mfem::Vector s_;              ///< Nodal skew (dim*n), essential rule applied.
+   /// Nodal skew (dim*n), essential rule applied; empty without rotation.
+   mfem::Vector s_;
    /// Nodal symmetric off-diagonals (dim*n), essential rule applied.
    mfem::Vector g_;
    /// PA form, proxy integrator; null without a rotation term.
    std::unique_ptr<mfem::BilinearForm> skew_form_;
-   /// Inverse nodal blocks, (dim, dim, n) column-major: inv(i, j, a).
+   /// Inverse nodal blocks. With a rotation term (nonsymmetric): (dim, dim,
+   /// n) column-major, inv(i, j, a). Without (symmetric): the upper triangle
+   /// only, (dim (dim + 1) / 2, n): 3D 00, 01, 02, 11, 12, 22; 2D 00, 01, 11.
    mfem::Vector inv_;
+   bool sym_ = true;       ///< inv_ holds the symmetric layout.
+   bool released_ = false; ///< ReleaseBuildData was called.
 };
 
 } // namespace incns

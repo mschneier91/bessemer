@@ -246,7 +246,19 @@ public:
 
    /// @return The fixed pressure-mass inverse M_p^-1 of the mass term (for
    ///         the rotational Schur preconditioner's tensor mode).
-   mfem::Solver& PressureMassInverse() const { return *mp_inv_; }
+   mfem::Solver& PressureMassInverse() const
+   {
+      MFEM_VERIFY(mp_inv_, "cc: the plain pressure mass was released");
+      return *mp_inv_;
+   }
+
+   /**
+    * @brief Free the plain pressure mass and its inverse: after SetGradDiv
+    *        the mass term uses the weighted one, and only the rotation-aware
+    *        Schur PC (PressureMassInverse) reads the plain one.
+    * @pre SetGradDiv was called.
+    */
+   void ReleasePlainMass();
 
    /// @return The inner Poisson preconditioner (LOR-AMG V-cycle on the
    ///         UNSCALED L_p; for the rotational Schur preconditioner).
@@ -262,7 +274,7 @@ private:
    std::unique_ptr<mfem::ParBilinearForm> mv_form_pc_;
    mfem::OperatorPtr Mv_pc_;            ///< Its true-dof operator.
    mfem::Vector mv_diag_pc_;            ///< Its (exact) diagonal.
-   mfem::ParBilinearForm mp_form_;      ///< Pressure mass form (owned).
+   std::unique_ptr<mfem::ParBilinearForm> mp_form_; ///< Pressure mass form.
    mfem::OperatorPtr Mp_;               ///< Pressure mass on true dofs.
    mfem::Vector mp_diag_;               ///< Its assembled diagonal.
    std::unique_ptr<MassInverse> mp_inv_; ///< M_p^-1 (fixed op).

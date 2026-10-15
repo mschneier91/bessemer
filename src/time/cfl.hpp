@@ -30,8 +30,9 @@ namespace incns
  * Replaced (2026-10-07, human decision: "whatever is most accurate") a
  * uniform @f$ k_u^2 \max_q \sum_d |(J^{-1}u)_d| @f$ at Gauss-Legendre points,
  * which is ~2.5x this value at element edges (Q3: 9 vs 3.62 per unit |u|/h)
- * and ~3.3x in element interiors. Global over ranks. Built per mesh (it
- * caches the mesh's Jacobians); rebuild after refinement.
+ * and ~3.3x in element interiors. Global over ranks. Built per mesh; rebuild
+ * after refinement. The Jacobians at the nodes are computed at every call and
+ * not kept (1.2 GB at 64^3 Q3).
  */
 class ConvectiveCfl
 {
@@ -77,7 +78,6 @@ private:
    const mfem::IntegrationRule* ir_ = nullptr; ///< GLL rule (the nodes).
    const mfem::Operator* restr_ = nullptr;   ///< Lexicographic restriction.
    const mfem::QuadratureInterpolator* qi_ = nullptr; ///< Values at points.
-   const mfem::GeometricFactors* geom_ = nullptr;     ///< Jacobians.
    mfem::Vector inv_dxi_;    ///< 1 / Delta-xi per 1D node index (device).
    /// The velocity basis is the GLL nodal one, so the element dofs ARE the
    /// values at the GLL points and nothing is interpolated.

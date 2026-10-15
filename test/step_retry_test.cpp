@@ -150,22 +150,18 @@ TEST(StepRetry, R3_KrylovDimForMemory)
    const double GiB = 1073741824.0;
    // 80 GiB device, 40 GiB free, 1e7 system entries (80 MB a vector), 9e6
    // velocity dofs. Margin 0.03 * 80 GiB + 6 * 72 MB; (free - margin) / 80 MB
-   // = 453.5 vectors, so (453.5 - 1) / 2 = 226 pairs.
+   // = 499.3 vectors, of which 4 are not Krylov pairs: (499.3 - 4) / 2 = 247.
    const double free = 40 * GiB, total = 80 * GiB;
    const double margin = 0.03 * total + 6.0 * 8.0 * 9e6;
-   const int expect = static_cast<int>(std::floor(((free - margin) / 8e7 - 1.0) /
+   const int expect = static_cast<int>(std::floor(((free - margin) / 8e7 - 4.0) /
                                        2.0));
+   EXPECT_EQ(expect, 247);
    EXPECT_EQ(StokesTimeIntegrator::KrylovDimForMemory(free, total, 10000000,
-             9000000, false, 1000),
+             9000000, 1000),
              expect);
    EXPECT_EQ(StokesTimeIntegrator::KrylovDimForMemory(free, total, 10000000,
-             9000000, false, 200), 200);
-   // Before the first solve 20 % of the 40 GiB in use is held back too.
-   const double margin1 = margin + 0.2 * (total - free);
-   EXPECT_EQ(StokesTimeIntegrator::KrylovDimForMemory(free, total, 10000000,
-             9000000, true, 1000),
-             static_cast<int>(std::floor(((free - margin1) / 8e7 - 1.0) / 2.0)));
+             9000000, 200), 200);
    // Nearly full: never below 1.
    EXPECT_EQ(StokesTimeIntegrator::KrylovDimForMemory(1.0 * GiB, total, 10000000,
-             9000000, false, 200), 1);
+             9000000, 200), 1);
 }

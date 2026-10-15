@@ -77,6 +77,12 @@ struct TimeIntegratorOptions
    /// memory (KrylovDimForMemory). Restarting earlier costs iterations, not
    /// the run; with retry_on_failure a solve that then fails cuts the step.
    bool krylov_memory_cap = false;
+   /// Keep each step's raw right-hand side for MomentumResidual (the force
+   /// on Dirichlet boundaries): one true-dof velocity vector. Case turns it
+   /// off when forces are not computed.
+   bool keep_rhs = true;
+   /// Compact vector-diffusion storage (StokesOperatorOptions).
+   bool compact_diffusion = true;
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    /// Solve Navier-Stokes rather than unsteady Stokes (Sprint 2.2): adds the
@@ -295,24 +301,24 @@ public:
    /**
     * @brief The largest FGMRES restart length whose Krylov vectors fit.
     *
-    * FGMRES holds k + 1 basis vectors and k preconditioned ones, each the
-    * size of the block system. The free memory is first reduced by a margin
-    * for what a solve allocates besides them: 3 % of the device and six
+    * FGMRES holds k + 1 basis vectors, k preconditioned ones and a residual,
+    * and the solve a right-hand side and a solution: 2k + 4 vectors the size
+    * of the block system. The free memory is first reduced by a margin for
+    * what a solve allocates besides them: 3 % of the device and six
     * velocity-sized vectors (the preconditioners' inner Krylov vectors and
-    * scratch), and, before a solver's first solve, 20 % of the memory in use
-    * for the solve-time workspace its preconditioners allocate then (the
-    * pressure AMG's was 15 % of the total at 64^3 Q3, 2026-10-13).
+    * scratch, and the work vectors of operators rebuilt at a Delta-t
+    * change). The preconditioners' first-application workspace is not in
+    * it: the caller reads the free memory after StokesSolver::WarmUp().
     * @param free_bytes   Free device memory.
     * @param total_bytes  Total device memory.
     * @param system_size  Local block-system size (vector entries).
     * @param velocity_size Local velocity true dofs.
-    * @param first_solve  Whether the solver has not solved yet.
     * @param kdim         The configured restart length (the upper bound).
     * @return The restart length, between 1 and kdim.
     */
    static int KrylovDimForMemory(double free_bytes, double total_bytes,
                                  long long system_size, long long velocity_size,
-                                 bool first_solve, int kdim);
+                                 int kdim);
 
    /// Verdict hook: called after a converged solve with (accepted steps so
    /// far, attempt number within the step); returning true rejects it.
@@ -338,7 +344,8 @@ public:
     *        Krylov tolerance); at Dirichlet dofs it is minus the reaction
     *        force -- what post/body_force turns into lift and drag.
     * @param r Output (resized).
-    * @pre At least one step since construction or the last ImportState().
+    * @pre At least one step since construction or the last ImportState(),
+    *      and TimeIntegratorOptions::keep_rhs.
     */
    void MomentumResidual(mfem::Vector& r) const;
 

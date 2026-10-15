@@ -64,7 +64,7 @@ closest valid key. **Every key, with its default and allowed values:
 | `initial` | `velocity`, `perturbation`, `perturbation_center` (uniform), `seed` (channel) |
 | `forcing` | `body_force`: a constant force per unit mass, e.g. a channel's mean pressure gradient |
 | `physics` | `nu`, `grad_div_h`, `grad_div_nu`, `convective_form: convective \| rotational`, `outflow: directional \| classical` |
-| `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent` |
+| `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent`, `vector_diffusion: compact \| mfem` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol`, `on_solver_failure: cut_step \| abort`, `retry_factor`, `retry_hold`, `retry_max`, `retry_dt_min` |
 | `solver` | `rtol`, `atol`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
@@ -142,9 +142,13 @@ stability limit; pass `-dt 0.001`.)
     then the run stops. Each rejection is logged, and the summary counts
     `rejected_steps`. On a GPU the FGMRES restart length is also lowered below
     `solver.kdim` before each solve when its Krylov vectors (two system-sized vectors per
-    outer iteration) would not fit in the free memory; the log reports it. So
+    outer iteration) would not fit in the free memory; the log reports it. The free
+    memory is read after the solver's preconditioners have been applied once, since
+    their first application allocates their workspace (9 GB at 64³ Q3). So
     `solver.kdim` bounds the Krylov memory, `solver.max_iter` the work per attempt, and
-    a hard step costs time instead of the run.
+    a hard step costs time instead of the run. Near the memory limit the restart length
+    can fall to a few vectors: Taylor–Green at 87³ Q3/Q2 ran on one H100 at restart
+    length 1, about 20 % slower per step than proportional to 64³.
   - `abort`: the run stops on a failed solve, and `solver.kdim` and `solver.max_iter` are
     used exactly as given (the behaviour before 2026-10-13).
   Error-controlled steps (`step_control: error`) keep their own rejection logic.

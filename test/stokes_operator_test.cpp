@@ -130,7 +130,75 @@ void CheckCollocatedDiagonality(int dim)
                1e-12 * dim);
 }
 
+// Max |A_jj - d_j| over all global true dofs j, A_jj probed with unit vectors
+// (global reduction, identical on every rank).
+double ProbeDiagonalError(Operator& A, const Vector& d,
+                          ParFiniteElementSpace& vfes)
+{
+   const HYPRE_BigInt n_global = vfes.GlobalTrueVSize();
+   const HYPRE_BigInt offset = vfes.GetMyTDofOffset();
+   const int n_local = vfes.GetTrueVSize();
+   Vector e(n_local), y(n_local);
+   e.UseDevice(true);
+   y.UseDevice(true);
+   double err = 0.0;
+   for (HYPRE_BigInt j = 0; j < n_global; ++j)
+   {
+      e = 0.0;
+      const bool mine = (j >= offset && j < offset + n_local);
+      if (mine) { e.HostReadWrite()[static_cast<int>(j - offset)] = 1.0; }
+      A.Mult(e, y);
+      if (mine)
+      {
+         const int jl = static_cast<int>(j - offset);
+         err = std::max(err, std::abs(y.HostRead()[jl] - d.HostRead()[jl]));
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   return err;
+}
+
+// MomentumDiagonal() -- c0 times the mass diagonal plus the kept diagonal of
+// nu K + grad-div -- is the diagonal of the momentum operator, after mass
+// factor and viscosity changes.
+void CheckMomentumDiagonal(int dim)
+{
+   Mesh serial = MakeBoxMesh(UnitBox(dim, 2));
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   const int ku = (dim == 3) ? 2 : 3; // keep the 3D probe cheap
+   MixedSpaces spaces(mesh, ku, ku - 1);
+   RuleBook rules;
+   StokesOperatorOptions opts;
+   opts.nu = 0.05;
+   opts.mass_coeff = 3.0;
+   opts.grad_div = 2.0; // gamma = 2 h_K
+   StokesOperator op(spaces, rules, opts);
+   ASSERT_NE(op.GradDivTerm(), nullptr);
+
+   const auto check = [&](const char* what)
+   {
+      SCOPED_TRACE(what);
+      const double scale = op.MomentumDiagonal().Normlinf();
+      ASSERT_GT(scale, 0.0);
+      EXPECT_LE(ProbeDiagonalError(op.MomentumUnconstrained(),
+                                   op.MomentumDiagonal(), spaces.Velocity()),
+                1e-13 * scale);
+   };
+   check("built");
+   op.SetMassCoeff(7.0);
+   check("new mass factor");
+   op.SetViscosity(0.3);
+   op.SetMassCoeff(7.0);
+   check("new viscosity");
+   op.SetMassCoeff(0.0);
+   check("steady");
+}
+
 } // namespace
+
+TEST(StokesOperator, MomentumDiagonalAfterRefreshes2D) { CheckMomentumDiagonal(2); }
+
+TEST(StokesOperator, MomentumDiagonalAfterRefreshes3D) { CheckMomentumDiagonal(3); }
 
 TEST(StokesOperator, CollocatedMassDiagonal2D) { CheckCollocatedDiagonality(2); }
 

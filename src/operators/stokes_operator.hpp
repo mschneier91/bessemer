@@ -6,6 +6,7 @@
 #pragma once
 
 #include "operators/grad_div_integrator.hpp"
+#include "operators/lean_vector_diffusion.hpp"
 #include "operators/grad_div_scale.hpp"
 #include "operators/rotational_convection.hpp"
 #include "quadrature/rule_book.hpp"
@@ -47,6 +48,11 @@ struct StokesOperatorOptions
    /// built with nu / 2, the factor on ITS viscous term) passes the fluid's
    /// here: grad-div is a stabilization, the same in every step.
    double grad_div_nu_ref = -1.0;
+   /// Vector diffusion with compact partial-assembly storage: one symmetric
+   /// matrix per quadrature point shared by the components (6 numbers in
+   /// 3D) instead of MFEM's one per component (27). False = MFEM's own
+   /// AssemblePA and apply (LeanVectorDiffusionIntegrator::Storage).
+   bool compact_diffusion = true;
    /// Build the low-order-refined (LOR) source form for the BoomerAMG velocity
    /// preconditioner (see MomentumLORForm()). Off by default -- the matrix-free
    /// Jacobi path needs it not; the solver sets it when AMG is chosen. The
@@ -258,6 +264,11 @@ public:
 
    /**
     * @brief Assembled diagonal of the (unconstrained) momentum block.
+    *
+    * Formed as mass_coeff * MassDiagonal() + the diagonal of nu*K (+
+    * grad-div), the latter assembled once (again after SetViscosity): only
+    * the mass factor changes with Delta-t. Equal to the momentum form's own
+    * AssembleDiagonal to roundoff.
     * @return Velocity true-dof vector, used for the Jacobi velocity block of
     *         the preconditioner (essential dofs are handled by the smoother).
     */
@@ -311,16 +322,22 @@ private:
     * @param gamma            Grad-div coefficient to use instead of gamma_
     *                         (the LOR source passes gamma_lor_); null =
     *                         gamma_.
+    * @param diffusion        If not null, receives the diffusion integrator
+    *                         added to @p form (owned by the form).
     * @return The grad-div integrator added to @p form (owned by the form), or
     *         null when none was.
     */
    GradDivIntegrator* AddMomentumIntegrators(mfem::ParBilinearForm& form,
          bool include_mass,
          bool include_grad_div,
-         mfem::Coefficient* gamma = nullptr);
+         mfem::Coefficient* gamma = nullptr,
+         mfem::BilinearFormIntegrator** diffusion = nullptr);
    /// (Re)build the momentum block A = c0*M + nu*K (+ grad-div), its diagonal,
    /// and the non-frozen LOR source, from the current mass_coeff_.
    void BuildMomentum();
+   /// Assemble rest_diag_ from the current momentum form's diffusion and
+   /// grad-div integrators (no assembly of their data: a proxy form).
+   void AssembleRestDiagonal(mfem::BilinearFormIntegrator& diffusion);
 
    MixedSpaces& spaces_;             ///< Mixed spaces (borrowed).
    const RuleBook& rules_;           ///< Quadrature source (borrowed).
@@ -330,13 +347,12 @@ private:
    /// Grad-div coefficient gamma(x) = c_gd * h_K (+ grad_div_nu * nu) (owned;
    /// null when disabled).
    std::unique_ptr<mfem::Coefficient> gamma_;
-   /// gamma at the momentum form's quadrature points, evaluated once: the
-   /// momentum form is reassembled at every Delta-t change and gamma does not
-   /// depend on Delta-t (null when gamma is a constant or grad-div is off).
-   std::unique_ptr<mfem::QuadratureSpace> gamma_qs_;
-   std::unique_ptr<mfem::QuadratureFunction> gamma_qf_; ///< See gamma_qs_.
-   /// gamma_qf_ as a coefficient: what the momentum form's grad-div uses.
-   std::unique_ptr<mfem::QuadratureFunctionCoefficient> gamma_quad_;
+   /// gamma per element, evaluated once (one number per element, device):
+   /// the momentum form is reassembled at every Delta-t change and gamma,
+   /// constant on each element, does not depend on Delta-t. Empty when gamma
+   /// is a constant or grad-div is off. (It replaced a copy at every
+   /// quadrature point: 125 times larger at Q3.)
+   mfem::Vector gamma_elem_;
    /// The grad-div integrator of the current momentum form (owned by that
    /// form; null when grad-div is off). Replaced by every BuildMomentum().
    GradDivIntegrator* grad_div_integ_ = nullptr;
@@ -357,6 +373,20 @@ private:
    mfem::Array<int> ess_p_tdofs_;
 
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
+   /// The diffusion storage (opts_.compact_diffusion).
+   LeanVectorDiffusionIntegrator::Storage DiffusionStorage() const;
+   /**
+    * @brief P^T A P on true dofs, as MFEM's FormSystemMatrix builds it but
+    *        without the ConstrainedOperator wrapper (and its two work
+    *        vectors): the caller wraps it when it needs constraints.
+    * @param Pin  Prolongation of the input space (null: identity).
+    * @param A    The L-vector operator (a form, or its extension).
+    * @param Pout Prolongation of the output space (null: identity).
+    * @param out  Receives the operator (owned unless it is @p A itself).
+    */
+   static void TrueDofOperator(const mfem::Operator* Pin, mfem::Operator& A,
+                               const mfem::Operator* Pout,
+                               mfem::OperatorPtr& out);
    /// Momentum block form (mass + diffusion [+ grad-div]); rebuilt by
    /// BuildMomentum on each mass-factor change, hence held by pointer.
    std::unique_ptr<mfem::ParBilinearForm> momentum_form_;
@@ -370,9 +400,13 @@ private:
    mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.
-   mfem::OperatorPtr K_; ///< True-dof momentum operator.
+   /// True-dof momentum operator: a ConstrainedOperator over Aunc_ (the
+   /// two share one P^T A P and its work vectors).
+   mfem::OperatorPtr K_;
    mfem::OperatorPtr Kunc_; ///< True-dof unconstrained viscous operator.
-   mfem::OperatorPtr B_; ///< True-dof divergence operator.
+   /// True-dof divergence operator: a RectangularConstrainedOperator over
+   /// Bunc_ (one shared P^T B P).
+   mfem::OperatorPtr B_;
    mfem::OperatorPtr Aunc_; ///< Momentum block, unconstrained (reactions).
    mfem::OperatorPtr Bunc_; ///< Divergence block, unconstrained.
    /// Rotation-term PA form (lagged velocity only); Delta-t independent, so
@@ -394,6 +428,13 @@ private:
    std::unique_ptr<mfem::ParGridFunction> w_lor_;
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
    mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).
+   /// Diagonal of the Delta-t independent rest of the momentum block, nu*K
+   /// (+ grad-div), true dofs: momentum_diag_ = mass_coeff * mass_diag_ +
+   /// rest_diag_. Its direct-sum kernels cost ~0.4 s at 64^3 Q3 on an H100,
+   /// paid at every Delta-t change before it was kept.
+   mfem::Vector rest_diag_;
+   bool rest_diag_valid_ =
+      false; ///< False until assembled and after SetViscosity.
 };
 
 } // namespace incns

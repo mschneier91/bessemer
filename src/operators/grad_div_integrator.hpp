@@ -52,7 +52,11 @@ private:
    mfem::Vector divshape_;    ///< Full-assembly scratch: basis divergences.
 #endif
    // --- PA extension state ---
-   /// Quadrature data, (nq, dim*dim + 1, ne): adj(J) columns then alpha.
+   /// Quadrature data, (nq, ne): alpha = Q w / det J per point. The
+   /// adjugate adj(J) the kernels need is recomputed from the mesh's own
+   /// cached Jacobians (geom_), which the other forms on this rule share:
+   /// storing it here too cost 9 more numbers per point (2.3 GB for 64^3
+   /// Q3 elements, 2026-10-14).
    mfem::Vector pa_data_;
    const mfem::DofToQuad* maps_ =
       nullptr;        ///< Tensor basis maps (not owned).
@@ -61,6 +65,7 @@ private:
    int ne_ = 0;     ///< Number of elements (set by AssemblePA).
    int dofs1D_ = 0; ///< Dofs per direction, D1D (set by AssemblePA).
    int quad1D_ = 0; ///< Quadrature points per direction, Q1D (set by AssemblePA).
+   const mfem::Vector* elem_coeff_ = nullptr; ///< SetElementCoefficient.
 
 public:
    /**
@@ -137,14 +142,25 @@ public:
     */
    void AddNodalOffDiagonalPA(mfem::Vector& g_e) const;
 
+   /**
+    * @brief Use one value per element instead of evaluating the coefficient
+    *        at the quadrature points in AssemblePA (the coefficient object
+    *        still serves full assembly). For a coefficient that is constant
+    *        on each element: no per-point array is built.
+    * @param c Values per local element (borrowed; device-readable; must
+    *          outlive the assemblies), or null to evaluate the coefficient.
+    */
+   void SetElementCoefficient(const mfem::Vector* c) { elem_coeff_ = c; }
+
    /// @return The scalar coefficient (null when the default 1 is in use).
    const mfem::Coefficient* GetCoefficient() const { return Q; }
 
-   /// Kernel signature: ne, B, G, pa_data, x, y, d1d, q1d.
+   /// Kernel signature: ne, B, G, Jacobians, alpha, x, y, d1d, q1d.
    using ApplyKernelType = void (*)(const int, const mfem::Array<mfem::real_t>&,
                                     const mfem::Array<mfem::real_t>&,
                                     const mfem::Vector&, const mfem::Vector&,
-                                    mfem::Vector&, const int, const int);
+                                    const mfem::Vector&, mfem::Vector&,
+                                    const int, const int);
 
    /// Kernel registry keyed on (dim, d1d, q1d).
    MFEM_REGISTER_KERNELS(ApplyPAKernels, ApplyKernelType, (int, int, int));

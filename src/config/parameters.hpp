@@ -152,6 +152,14 @@ struct OutputParameters
    ProfileOutput profile = ProfileOutput::Wall;
 };
 
+/// How vector diffusion stores its partial-assembly data (deck
+/// `discretization.vector_diffusion`; LeanVectorDiffusionIntegrator).
+enum class VectorDiffusionStorage
+{
+   Compact, ///< One symmetric matrix per point shared by the components.
+   Mfem     ///< MFEM's own storage and apply (one per component).
+};
+
 /// The velocity mass matrix (deck `discretization.mass`). OIFS's substeps
 /// always invert the same mass as the BDF step (time/oifs.hpp).
 enum class VelocityMass
@@ -287,6 +295,9 @@ struct Parameters
    /// Velocity mass matrix (deck `discretization.mass`); Auto resolves by the
    /// convection treatment: read it through CollocatedMass().
    VelocityMass mass = VelocityMass::Auto;
+   /// Vector-diffusion storage (deck `discretization.vector_diffusion`):
+   /// compact (default; 6 numbers per point in 3D) or MFEM's (27).
+   VectorDiffusionStorage vector_diffusion = VectorDiffusionStorage::Compact;
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;

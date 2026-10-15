@@ -102,6 +102,15 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    MFEM_VERIFY(!disc.Has("collocated_mass"), "parameters: "
                "discretization.collocated_mass was replaced by "
                "discretization.mass: auto | collocated | consistent");
+   r.ReadEnum(disc, "vector_diffusion", p.vector_diffusion,
+   {
+      {"compact", VectorDiffusionStorage::Compact},
+      {"mfem", VectorDiffusionStorage::Mfem}
+   },
+   "Storage of the viscous term's partial-assembly data. compact: one "
+   "symmetric matrix per quadrature point shared by the velocity components "
+   "(6 numbers in 3D). mfem: MFEM's VectorDiffusionIntegrator, one per "
+   "component (27); the same operator to roundoff.");
    r.ReadEnum(disc, "mass", p.mass,
    {
       {"auto", VelocityMass::Auto}, {"collocated", VelocityMass::Collocated},

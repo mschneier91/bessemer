@@ -113,8 +113,7 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
    restr_ = vfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
    qi_ = vfes.GetQuadratureInterpolator(*ir_);
    qi_->SetOutputLayout(QVectorLayout::byNODES);
-   geom_ = mesh.GetGeometricFactors(*ir_, GeometricFactors::JACOBIANS,
-                                    Device::GetDeviceMemoryType());
+   mesh.EnsureNodes(); // Rate() computes the Jacobians from them
    inv_dxi_ = InverseNodeSpacing(order_);
    inv_dxi_.UseDevice(true);
    const auto* h1 = dynamic_cast<const H1_FECollection*>(vfes.FEColl());
@@ -134,11 +133,18 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
       Vector ue(restr_->Height());
       ue.UseDevice(true);
       restr_->Mult(u, ue);
+      // So do the Jacobians at the GLL nodes: cached in the mesh they held
+      // 1.2 GB at 64^3 Q3 for the whole run, and the rate is evaluated
+      // between solves, away from the memory peak (2026-10-14). MFEM's own
+      // computation, not its cache: the same values.
+      const GeometricFactors geom(*vfes_.GetParMesh()->GetNodes(), *ir_,
+                                  GeometricFactors::JACOBIANS,
+                                  Device::GetDeviceMemoryType());
       if (nodal_gll_)
       {
          // (dofs, component, element), lexicographic: the layout the kernel
          // reads, with the dofs at the GLL points.
-         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom_->J,
+         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
                                    inv_dxi_, rate_);
       }
       else
@@ -147,7 +153,7 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
          uq.UseDevice(true);
          qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
          qi_->Values(ue, uq);
-         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom_->J,
+         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
                                    inv_dxi_, rate_);
       }
       local = rate_.Max(); // device-aware reduction

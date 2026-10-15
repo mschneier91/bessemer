@@ -1,10 +1,14 @@
-// LeanVectorDiffusionIntegrator: the partial-assembly diagonal without
-// per-thread stack (operators/lean_vector_diffusion).
-//  L1 Its diagonal is MFEM's VectorDiffusionIntegrator diagonal: 2D and 3D,
-//     orders 2 and 3, a deformed mesh and a variable coefficient, byNODES and
-//     byVDIM, to roundoff (5e-15) on the true dofs.
-//  L2 The operator itself is untouched: Mult is MFEM's, bit for bit.
-// Self-contained: MFEM and the integrator.
+// LeanVectorDiffusionIntegrator (operators/lean_vector_diffusion): compact
+// partial-assembly storage and a stack-free diagonal, against MFEM's
+// VectorDiffusionIntegrator. 2D and 3D, orders 2 and 3, a deformed mesh,
+// byNODES and byVDIM, a variable and a constant coefficient.
+//  L1 Storage::Mfem: the apply is MFEM's, bit for bit; the diagonal equals
+//     MFEM's to roundoff.
+//  L2 Storage::Compact: the apply and the diagonal equal MFEM's to roundoff,
+//     and the stored data is dim (dim + 1) / 2 numbers per point against
+//     MFEM's dim^3 (6 against 27 in 3D).
+// The measured differences are printed. Self-contained: MFEM and the
+// integrator.
 
 #include <gtest/gtest.h>
 
@@ -16,6 +20,7 @@
 
 using namespace mfem;
 using incns::LeanVectorDiffusionIntegrator;
+using Storage = LeanVectorDiffusionIntegrator::Storage;
 
 namespace
 {
@@ -38,7 +43,15 @@ double Norm(const Vector& v)
    return std::sqrt(InnerProduct(MPI_COMM_WORLD, v, v));
 }
 
-void Check(int dim, int order, Ordering::Type ordering)
+double MaxAbs(const Vector& v)
+{
+   double m = v.Normlinf();
+   MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   return m;
+}
+
+void Check(int dim, int order, Ordering::Type ordering, Storage storage,
+           bool constant_coeff)
 {
    Mesh serial = (dim == 2)
                  ? Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true)
@@ -47,12 +60,15 @@ void Check(int dim, int order, Ordering::Type ordering)
    ParMesh mesh(MPI_COMM_WORLD, serial);
    H1_FECollection fec(order, dim);
    ParFiniteElementSpace fes(&mesh, &fec, dim, ordering);
-   FunctionCoefficient nu(NuFn);
+   FunctionCoefficient nu_var(NuFn);
+   ConstantCoefficient nu_const(0.37);
+   Coefficient& nu = constant_coeff ? static_cast<Coefficient&>(nu_const)
+                     : static_cast<Coefficient&>(nu_var);
    const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
    const IntegrationRule& ir = IntRules.Get(geom, 2 * order + dim - 1);
 
    ParBilinearForm lean(&fes), ref(&fes);
-   auto* li = new LeanVectorDiffusionIntegrator(nu);
+   auto* li = new LeanVectorDiffusionIntegrator(nu, storage);
    li->SetIntRule(&ir);
    lean.AddDomainIntegrator(li);
    auto* ri = new VectorDiffusionIntegrator(nu);
@@ -63,28 +79,21 @@ void Check(int dim, int order, Ordering::Type ordering)
    lean.Assemble();
    ref.Assemble();
 
+   EXPECT_EQ(li->Compact(), storage == Storage::Compact);
+   if (storage == Storage::Compact)
+   {
+      const long long nq = ir.GetNPoints(), ne = mesh.GetNE();
+      EXPECT_EQ(li->PADataSize(), nq * (dim * (dim + 1) / 2) * ne);
+   }
+
    const int n = fes.GetTrueVSize();
    Vector d_lean(n), d_ref(n);
    lean.AssembleDiagonal(d_lean);
    ref.AssembleDiagonal(d_ref);
-   EXPECT_GT(Norm(d_ref), 0.0);
-   // The same sum in another order (direct against sum-factorized): equal
-   // to roundoff, not bit for bit. The largest entrywise difference is
-   // printed so the bound below can be judged against what is measured.
+   const double d_scale = MaxAbs(d_ref);
+   EXPECT_GT(d_scale, 0.0);
    d_lean -= d_ref;
-   const double d_rel = Norm(d_lean) / Norm(d_ref);
-   double d_max = d_lean.Normlinf(), r_max = d_ref.Normlinf();
-   MPI_Allreduce(MPI_IN_PLACE, &d_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-   MPI_Allreduce(MPI_IN_PLACE, &r_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-   if (Mpi::Root())
-   {
-      mfem::out << "[lean diffusion] dim " << dim << " order " << order
-                << ": diagonal difference, relative l2 " << d_rel
-                << ", largest entry / largest diagonal entry "
-                << d_max / r_max << std::endl;
-   }
-   EXPECT_LT(d_rel, 5e-15); // measured 1.5e-16 to 3.7e-16 (H100, 2026-10-13)
-   EXPECT_LT(d_max, 5e-15 * r_max); // measured 3.2e-16 to 8.2e-16
+   const double d_diff = MaxAbs(d_lean) / d_scale;
 
    Array<int> no_ess;
    OperatorPtr A_lean, A_ref;
@@ -96,25 +105,54 @@ void Check(int dim, int order, Ordering::Type ordering)
    x.Randomize(3 + rank);
    A_lean->Mult(x, y_lean);
    A_ref->Mult(x, y_ref);
-   // The apply is MFEM's own kernel on MFEM's own data in both: bit for bit.
+   const double y_scale = Norm(y_ref);
    y_lean -= y_ref;
-   EXPECT_EQ(Norm(y_lean), 0.0);
+   const double y_diff = Norm(y_lean) / y_scale;
+
+   if (Mpi::Root())
+   {
+      mfem::out << "[lean diffusion] " << (storage == Storage::Compact ?
+                                           "compact" : "mfem   ")
+                << " dim " << dim << " order " << order
+                << (ordering == Ordering::byVDIM ? " byVDIM " : " byNODES")
+                << (constant_coeff ? " const" : " var  ")
+                << ": diagonal max diff / max entry " << d_diff
+                << ", apply relative l2 diff " << y_diff << std::endl;
+   }
+   // The diagonal: the same sum in another order (direct against
+   // sum-factorized), measured 3e-16 to 8e-16 (H100, 2026-10-13).
+   EXPECT_LT(d_diff, 5e-15);
+   if (storage == Storage::Mfem)
+   {
+      EXPECT_EQ(y_diff, 0.0); // MFEM's kernel on MFEM's data
+   }
+   else
+   {
+      // MFEM's kernel arithmetic on MFEM's values, stored once: equal up to
+      // the compiler's contraction choices.
+      EXPECT_LT(y_diff, 1e-14);
+   }
 }
 
 } // namespace
 
-TEST(LeanVectorDiffusion, L1L2_DiagonalAndApplyAreMfems)
+TEST(LeanVectorDiffusion, L1_MfemStorageIsMfems)
 {
    for (const int dim : {2, 3})
-   {
       for (const int order : {2, 3})
-      {
          for (const Ordering::Type ordering : {Ordering::byNODES, Ordering::byVDIM})
          {
-            SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << order
-                         << (ordering == Ordering::byVDIM ? " byVDIM" : " byNODES"));
-            Check(dim, order, ordering);
+            Check(dim, order, ordering, Storage::Mfem, false);
          }
-      }
-   }
+}
+
+TEST(LeanVectorDiffusion, L2_CompactStorageEqualsMfem)
+{
+   for (const int dim : {2, 3})
+      for (const int order : {2, 3})
+         for (const Ordering::Type ordering : {Ordering::byNODES, Ordering::byVDIM})
+            for (const bool constant : {false, true})
+            {
+               Check(dim, order, ordering, Storage::Compact, constant);
+            }
 }

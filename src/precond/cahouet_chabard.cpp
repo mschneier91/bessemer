@@ -105,7 +105,8 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    ParFiniteElementSpace& pfes,
    const RuleBook& rules, const Operator& B, const Operator& Mv,
    const Vector& mv_diag, const Array<int>& outflow_attrs, bool singular_auto)
-   : Solver(pfes.GetTrueVSize()), cfg_(cfg), mp_form_(&pfes)
+   : Solver(pfes.GetTrueVSize()), cfg_(cfg),
+     mp_form_(std::make_unique<ParBilinearForm>(&pfes))
 {
    INCNS_PROFILE("cc_schur::setup");
    iterative_mode = false;
@@ -147,13 +148,13 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
                  : &rules.Get(geom, 2 * kp);
       auto* mi = new MassIntegrator;
       mi->SetIntRule(mp_rule_);
-      mp_form_.AddDomainIntegrator(mi);
-      mp_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      mp_form_.Assemble();
+      mp_form_->AddDomainIntegrator(mi);
+      mp_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      mp_form_->Assemble();
       Array<int> empty;
-      mp_form_.FormSystemMatrix(empty, Mp_);
+      mp_form_->FormSystemMatrix(empty, Mp_);
       mp_diag_.SetSize(pfes.GetTrueVSize());
-      mp_form_.AssembleDiagonal(mp_diag_);
+      mp_form_->AssembleDiagonal(mp_diag_);
       mp_inv_ = std::make_unique<MassInverse>(
                    *Mp_.Ptr(), mp_diag_, pfes.GetComm(),
                    colloc ? MassInvType::DiagDirect : cfg_.mp_inv,
@@ -276,6 +277,15 @@ public:
 };
 
 } // namespace
+
+void CahouetChabardSchurPC::ReleasePlainMass()
+{
+   MFEM_VERIFY(mpw_inv_, "cc: ReleasePlainMass before SetGradDiv");
+   mp_inv_.reset(); // it borrows Mp_ and mp_diag_
+   Mp_.Clear();
+   mp_form_.reset();
+   mp_diag_.Destroy();
+}
 
 void CahouetChabardSchurPC::SetGradDiv(Coefficient& gamma)
 {

@@ -8,6 +8,11 @@
 //     sampled blocks do couple the components, or the test would be vacuous.
 //  P2 As the preconditioner of CG on sigma M + gamma (div u, div v) with a
 //     large gamma, PBJ needs no more iterations than scalar Jacobi.
+//  P3 ReleaseBuildData frees the diagonal and the off-diagonals and leaves
+//     Mult bit-identical; the accessors are then empty.
+//  P4 A new diagonal on a kept preconditioner (StokesSolver's update at a
+//     Delta-t change) gives the blocks of a fresh build with that diagonal:
+//     Mult bit-identical.
 // Self-contained: MFEM, the grad-div integrator and the preconditioner.
 
 #include <gtest/gtest.h>
@@ -241,5 +246,60 @@ TEST(PbjGradDiv, P2_NoMoreCgIterationsThanJacobi)
                    << it_jacobi << ", point-block Jacobi " << it_pbj << std::endl;
       }
       EXPECT_LE(it_pbj, it_jacobi);
+   }
+}
+
+TEST(PbjGradDiv, P3_ReleaseBuildDataKeepsMult)
+{
+   for (const int dim : {2, 3})
+   {
+      SCOPED_TRACE(dim);
+      Problem p(dim, Ordering::byVDIM, true, 2.0, 0.0);
+      PointBlockJacobi pbj(p.fes, p.ess);
+      pbj.SetDiagonal(p.diag);
+      pbj.SetGradDiv(*p.gd);
+      const int n = p.fes.GetTrueVSize();
+      Vector x(n), z_before(n), z_after(n);
+      int rank = 0;
+      MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+      x.Randomize(5 + rank);
+      pbj.Mult(x, z_before);
+      pbj.ReleaseBuildData();
+      EXPECT_EQ(pbj.GetDiagonal().Size(), 0);
+      EXPECT_EQ(pbj.GetSymmetric().Size(), 0);
+      pbj.Mult(x, z_after);
+      z_after -= z_before;
+      double diff = z_after.Normlinf();
+      MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      EXPECT_EQ(diff, 0.0);
+   }
+}
+
+TEST(PbjGradDiv, P4_NewDiagonalMatchesAFreshBuild)
+{
+   for (const int dim : {2, 3})
+   {
+      SCOPED_TRACE(dim);
+      // Two mass factors, as before and after a Delta-t change.
+      Problem before(dim, Ordering::byNODES, true, 2.0, 0.0);
+      Problem after(dim, Ordering::byNODES, true, 5.0, 0.0);
+      PointBlockJacobi kept(before.fes, before.ess);
+      kept.SetDiagonal(before.diag);
+      kept.SetGradDiv(*before.gd);
+      kept.SetDiagonal(after.diag);
+      PointBlockJacobi fresh(after.fes, after.ess);
+      fresh.SetDiagonal(after.diag);
+      fresh.SetGradDiv(*after.gd);
+      const int n = after.fes.GetTrueVSize();
+      Vector x(n), z_kept(n), z_fresh(n);
+      int rank = 0;
+      MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+      x.Randomize(9 + rank);
+      kept.Mult(x, z_kept);
+      fresh.Mult(x, z_fresh);
+      z_kept -= z_fresh;
+      double diff = z_kept.Normlinf();
+      MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      EXPECT_EQ(diff, 0.0);
    }
 }

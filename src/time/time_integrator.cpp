@@ -98,7 +98,9 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
          convection_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
       }
    }
-   w_star_ = 0.0;
+   // The lagged velocity exists for the rotational form only.
+   if (rotational_) { w_star_ = 0.0; }
+   else { static_cast<Vector&>(w_star_).Destroy(); } // frees the data only
    p_static_ = 0.0;
    if (rotational_)
    {
@@ -222,6 +224,8 @@ void StokesTimeIntegrator::MomentumResidual(Vector& r) const
    tmp.UseDevice(true);
    u_.GetTrueDofs(u_true);
    p_.GetTrueDofs(p_true); // physical p on both Schur paths (P if rotational)
+   MFEM_VERIFY(opts_.keep_rhs, "time_integrator: MomentumResidual() needs "
+               "keep_rhs (the raw right-hand side is not kept)");
    StokesOperator& op = last_solver_->Blocks();
    r.SetSize(n_u);
    r.UseDevice(true);
@@ -305,6 +309,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.grad_div_scale = opts_.grad_div_scale;
    so.grad_div_nu = opts_.grad_div_nu;
    so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
+   so.compact_diffusion = opts_.compact_diffusion;
    so.velocity_prec = opts_.velocity_prec;
    so.amg_reuse = opts_.amg_reuse;
    so.schur = opts_.schur;
@@ -381,6 +386,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.grad_div_scale = opts_.grad_div_scale;
       so.grad_div_nu = opts_.grad_div_nu;
       so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
+      so.compact_diffusion = opts_.compact_diffusion;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
@@ -607,15 +613,15 @@ int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
       double total_bytes,
       long long system_size,
       long long velocity_size,
-      bool first_solve, int kdim)
+      int kdim)
 {
    const double word = sizeof(double);
-   double margin = 0.03 * total_bytes + 6.0 * word * velocity_size;
-   if (first_solve) { margin += 0.2 * (total_bytes - free_bytes); }
+   const double margin = 0.03 * total_bytes + 6.0 * word * velocity_size;
    const double vector = word * static_cast<double>(system_size);
-   // k + 1 basis vectors and k preconditioned ones: 2k + 1 vectors.
+   // k + 1 basis vectors and k preconditioned ones, FGMRES's residual, and
+   // the solve's right-hand side and solution: 2k + 4 vectors.
    const double fit =
-      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 1.0) / 2.0);
+      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 4.0) / 2.0);
    return static_cast<int>(std::max(1.0, std::min<double>(kdim, fit)));
 }
 
@@ -627,9 +633,16 @@ void StokesTimeIntegrator::CapKrylovDim(StokesSolver& solver)
    MPI_Comm comm = spaces_.Velocity().GetComm();
    MPI_Allreduce(MPI_IN_PLACE, &on_device, 1, MPI_INT, MPI_MIN, comm);
    if (!on_device) { return; } // host memory: no cap
+   // A solver's first application allocates its preconditioners' solve
+   // workspace (9.3 GB at 64^3 Q3, the pressure AMG's most of it): make it
+   // before reading the free memory, not during the solve.
+   if (!solver.HasSolved())
+   {
+      solver.WarmUp();
+      DeviceMemoryInfo(free, total);
+   }
    int k = KrylovDimForMemory(free, total, solver.SystemSize(),
-                              spaces_.Velocity().GetTrueVSize(),
-                              !solver.HasSolved(), opts_.kdim);
+                              spaces_.Velocity().GetTrueVSize(), opts_.kdim);
    MPI_Allreduce(MPI_IN_PLACE, &k, 1, MPI_INT, MPI_MIN, comm);
    if (k != solver.KrylovDim()) { solver.SetKrylovDim(k); }
    // Report a cap when it appears and when it moves by more than 10 %
@@ -756,7 +769,7 @@ bool StokesTimeIntegrator::StepStartup()
       }
    }
 
-   last_b_ = b; // raw (pre-elimination) RHS, for MomentumResidual
+   if (opts_.keep_rhs) { last_b_ = b; } // raw RHS, for MomentumResidual
    if (opts_.retry_on_failure) { p_saved_ = p_; }
    CapKrylovDim(*solver);
    solver->SolveTrue(b, u_, p_);
@@ -793,7 +806,7 @@ bool StokesTimeIntegrator::StepFixed()
       UpdateLaggedVelocity(t_new);
       solver.UpdateRotation();
    }
-   last_b_ = b; // raw (pre-elimination) RHS, for MomentumResidual
+   if (opts_.keep_rhs) { last_b_ = b; } // raw RHS, for MomentumResidual
    if (opts_.retry_on_failure) { p_saved_ = p_; }
    CapKrylovDim(solver);
    solver.SolveTrue(b, u_, p_);
@@ -878,7 +891,7 @@ void StokesTimeIntegrator::StepAdaptive()
       if (accepted)
       {
          last_solver_ = &s2; // the BDF2 step is the one that advances
-         last_b_ = b2;
+         if (opts_.keep_rhs) { last_b_ = b2; }
          Commit(t_new, u2_true, u2_scratch_, p2_scratch_);
          return;
       }

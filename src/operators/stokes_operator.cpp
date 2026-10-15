@@ -8,10 +8,42 @@
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
 #include "util/profiler.hpp"
 
+#include <vector>
+
 namespace incns
 {
 
 using namespace mfem;
+
+namespace
+{
+
+/**
+ * @brief An integrator whose PA diagonal is the sum of other integrators'
+ *        (partially assembled in another form): AssembleDiagonal of a form
+ *        holding it reduces their diagonals to true dofs with MFEM's own
+ *        reduction, without assembling their data again (the device of
+ *        PointBlockJacobi's proxies).
+ */
+class DiagonalSumProxy : public BilinearFormIntegrator
+{
+   std::vector<BilinearFormIntegrator*> parts_; ///< Not owned.
+
+public:
+   /// @param parts Assembled integrators; must outlive the assembly.
+   explicit DiagonalSumProxy(std::vector<BilinearFormIntegrator*> parts)
+      : parts_(std::move(parts)) { }
+   using BilinearFormIntegrator::AssemblePA;
+   /// Nothing to set up: the data lives in the integrators.
+   void AssemblePA(const FiniteElementSpace&) override { }
+   /// @param diag_e E-vector (accumulated into).
+   void AssembleDiagonalPA(Vector& diag_e) override
+   {
+      for (BilinearFormIntegrator* p : parts_) { p->AssembleDiagonalPA(diag_e); }
+   }
+};
+
+} // namespace
 
 StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                                const StokesOperatorOptions& opts,
@@ -72,15 +104,13 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
          (opts_.grad_div_nu_ref > 0.0 ? opts_.grad_div_nu_ref : opts_.nu);
       if (h_part > 0.0)
       {
-         gamma_ = std::make_unique<MeshSizeCoefficient>(mesh, h_part, 1, nu_part);
-         // Its values at the momentum form's quadrature points, once (the
-         // rule is the one AddMomentumIntegrators gives the grad-div term).
-         gamma_qs_ = std::make_unique<QuadratureSpace>(
-                        mesh, rules_.Get(geom_, 2 * ku_ + dim_ - 1));
-         gamma_qf_ = std::make_unique<QuadratureFunction>(*gamma_qs_);
-         gamma_->Project(*gamma_qf_);
-         gamma_quad_ =
-            std::make_unique<QuadratureFunctionCoefficient>(*gamma_qf_);
+         auto size_coeff =
+            std::make_unique<MeshSizeCoefficient>(mesh, h_part, 1, nu_part);
+         // Its value on each element, once: what the momentum form's
+         // grad-div reads at every (re)assembly.
+         size_coeff->ElementValues(gamma_elem_);
+         gamma_elem_.UseDevice(true);
+         gamma_ = std::move(size_coeff);
       }
       else
       {
@@ -117,8 +147,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       mass_form_.AddDomainIntegrator(mi);
       mass_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       mass_form_.Assemble();
-      Array<int> empty;
-      mass_form_.FormSystemMatrix(empty, M_);
+      // Unconstrained: no ConstrainedOperator wrapper (two vectors saved).
+      TrueDofOperator(mass_form_.GetProlongation(), mass_form_,
+                      mass_form_.GetProlongation(), M_);
       mass_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
       mass_form_.AssembleDiagonal(mass_diag_);
    }
@@ -136,9 +167,13 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       div_form_.AddDomainIntegrator(di);
       div_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
       div_form_.Assemble();
-      div_form_.FormRectangularSystemMatrix(ess_tdofs_, ess_p_tdofs_, B_);
-      Array<int> no_u, no_p;
-      div_form_.FormRectangularSystemMatrix(no_u, no_p, Bunc_);
+      // One P_p^T B P_u for both: unconstrained as it is (reactions), and
+      // wrapped with the constraints -- what FormRectangularSystemMatrix
+      // builds, without a second RAP and its work vectors.
+      TrueDofOperator(div_form_.GetProlongation(), div_form_,
+                      div_form_.GetOutputProlongation(), Bunc_);
+      B_.Reset(new RectangularConstrainedOperator(Bunc_.Ptr(), ess_tdofs_,
+               ess_p_tdofs_, false), true);
    }
 
    // --- FROZEN LOR source, built ONCE at the reference mass factor c0_ref*M +
@@ -206,7 +241,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
 
 GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
    ParBilinearForm& form, bool include_mass, bool include_grad_div,
-   Coefficient* gamma)
+   Coefficient* gamma, BilinearFormIntegrator** diffusion)
 {
    GradDivIntegrator* added = nullptr;
    // Diffusion at the default exactness order 2k + dim - 1 (covers the metric
@@ -215,9 +250,10 @@ GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
    // its own; the coefficients and rules are shared members.
    // The Lean variant: MFEM's own PA diagonal reserves ~11 GB of GPU stack on
    // its first call (operators/lean_vector_diffusion.hpp).
-   auto* ki = new LeanVectorDiffusionIntegrator(nu_);
+   auto* ki = new LeanVectorDiffusionIntegrator(nu_, DiffusionStorage());
    ki->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
    form.AddDomainIntegrator(ki);
+   if (diffusion) { *diffusion = ki; }
    if (include_mass && opts_.mass_coeff > 0.0)
    {
       auto* mmi = new VectorMassIntegrator(mass_coeff_);
@@ -231,11 +267,13 @@ GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
       // elmat-identical (pinned by grad_div_integrator_test) but with fused O(p^4)
       // tensor PA kernels instead of elasticity's dense non-tensor path.
       // Stiffness-type integrand -> the 2k + dim - 1 default rule. The
-      // high-order forms take gamma from its cached quadrature values.
-      Coefficient& g = gamma ? *gamma
-                       : gamma_quad_ ? static_cast<Coefficient&>(*gamma_quad_)
-                       : *gamma_;
-      auto* gdi = new GradDivIntegrator(g);
+      // high-order forms take gamma from its cached per-element values
+      // (the coefficient object still serves full and LOR assembly).
+      auto* gdi = new GradDivIntegrator(gamma ? *gamma : *gamma_);
+      if (!gamma && gamma_elem_.Size() > 0)
+      {
+         gdi->SetElementCoefficient(&gamma_elem_);
+      }
       gdi->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
       form.AddDomainIntegrator(gdi);
       added = gdi;
@@ -248,16 +286,41 @@ Operator& StokesOperator::ViscousUnconstrained()
    if (!Kunc_.Ptr())
    {
       INCNS_PROFILE("viscous_unconstrained");
-      auto* kui = new LeanVectorDiffusionIntegrator(nu_);
+      auto* kui = new LeanVectorDiffusionIntegrator(nu_, DiffusionStorage());
       kui->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
       viscous_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
       viscous_form_->AddDomainIntegrator(kui);
       viscous_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
       viscous_form_->Assemble();
-      Array<int> no_ess;
-      viscous_form_->FormSystemMatrix(no_ess, Kunc_);
+      TrueDofOperator(viscous_form_->GetProlongation(), *viscous_form_,
+                      viscous_form_->GetProlongation(), Kunc_);
    }
    return *Kunc_.Ptr();
+}
+
+LeanVectorDiffusionIntegrator::Storage StokesOperator::DiffusionStorage() const
+{
+   return opts_.compact_diffusion ? LeanVectorDiffusionIntegrator::Storage::Compact
+          : LeanVectorDiffusionIntegrator::Storage::Mfem;
+}
+
+void StokesOperator::TrueDofOperator(const Operator* Pin, Operator& A,
+                                     const Operator* Pout, OperatorPtr& out)
+{
+   if (Pin && Pout)
+   {
+      // Pout^T A Pin; MFEM's SetupRAP builds the same (RAPOperator when
+      // the two are one object, the triple product otherwise).
+      out.Reset(new RAPOperator(*Pout, A, *Pin), true);
+   }
+   else if (!Pin && !Pout)
+   {
+      out.Reset(&A, false);
+   }
+   else
+   {
+      MFEM_ABORT("stokes_operator: one-sided prolongation is not supported");
+   }
 }
 
 void StokesOperator::ReleaseViscousUnconstrained()
@@ -272,6 +335,7 @@ void StokesOperator::SetViscosity(double nu)
    nu_.constant = nu;
    opts_.nu = nu;
    ReleaseViscousUnconstrained(); // it was nu_old * K
+   rest_diag_valid_ = false;      // and so was this: nu_old K + grad-div
 }
 
 void StokesOperator::BuildMomentum()
@@ -283,9 +347,10 @@ void StokesOperator::BuildMomentum()
    // are cached), so it is cheap -- much cheaper than a full solver rebuild --
    // and it hands us the new diagonal for free.
    momentum_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+   BilinearFormIntegrator* diffusion = nullptr;
    grad_div_integ_ = AddMomentumIntegrators(*momentum_form_,
                      /*include_mass=*/true,
-                     /*include_grad_div=*/true);
+                     /*include_grad_div=*/true, nullptr, &diffusion);
    momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
    {
       INCNS_PROFILE("momentum::assemble");
@@ -293,14 +358,25 @@ void StokesOperator::BuildMomentum()
    }
    {
       INCNS_PROFILE("momentum::form_system");
-      momentum_form_->FormSystemMatrix(ess_tdofs_, K_);
-      Array<int> no_ess;
-      momentum_form_->FormSystemMatrix(no_ess, Aunc_);
+      // One P^T A P serves the unconstrained block (reactions) and, wrapped
+      // with the Dirichlet constraints (DIAG_ONE, as FormSystemMatrix does),
+      // the one the solver applies: one RAP and its work vectors, not two.
+      // The old K_ wraps the old Aunc_: release it first.
+      K_.Clear();
+      TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
+                      momentum_form_->GetProlongation(), Aunc_);
+      K_.Reset(new ConstrainedOperator(Aunc_.Ptr(), ess_tdofs_, false), true);
    }
    {
       INCNS_PROFILE("momentum::diagonal");
+      // Only c0 changes with Delta-t: c0 M's diagonal is mass_diag_ scaled
+      // (same rule), and that of nu K (+ grad-div) is assembled once. The
+      // mass integrator is in the form only when c0 > 0.
+      if (!rest_diag_valid_) { AssembleRestDiagonal(*diffusion); }
       momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-      momentum_form_->AssembleDiagonal(momentum_diag_);
+      momentum_diag_.UseDevice(true);
+      const double c0 = (opts_.mass_coeff > 0.0) ? opts_.mass_coeff : 0.0;
+      add(rest_diag_, c0, mass_diag_, momentum_diag_);
    }
 
    // Non-frozen LOR source (c0*M + nu*K + grad-div, the latter with the
@@ -327,6 +403,21 @@ void StokesOperator::BuildMomentum()
       full_momentum_ = std::make_unique<SumOperator>(K_.Ptr(), 1.0, Nc_.get(),
                        1.0, false, false);
    }
+}
+
+void StokesOperator::AssembleRestDiagonal(BilinearFormIntegrator& diffusion)
+{
+   INCNS_PROFILE("momentum::rest_diagonal");
+   std::vector<BilinearFormIntegrator*> parts{&diffusion};
+   if (grad_div_integ_) { parts.push_back(grad_div_integ_); }
+   ParBilinearForm proxy(&spaces_.Velocity());
+   proxy.AddDomainIntegrator(new DiagonalSumProxy(std::move(parts)));
+   proxy.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   proxy.Assemble();
+   rest_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+   rest_diag_.UseDevice(true);
+   proxy.AssembleDiagonal(rest_diag_);
+   rest_diag_valid_ = true;
 }
 
 void StokesOperator::SetMassCoeff(double c0)

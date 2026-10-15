@@ -12,6 +12,9 @@
 //     decaying NSE TGV, both forms, BDF2/EXT3: every step after the startup
 //     pair has c(u^n) dt <= cfl_target, dt never grows by more than the growth
 //     factor, it does grow as the flow decays, and the run lands on t_final.
+//  C4 The Jacobians the rate reads, computed at every call instead of cached
+//     in the mesh, equal MFEM's cached ones bit for bit on a curved mesh:
+//     dropping the cache changes no rate and no step size.
 
 #include <gtest/gtest.h>
 
@@ -94,6 +97,48 @@ TEST(Cfl, C1_ConstantVelocityOnAffineMeshIsExact)
    EXPECT_NEAR(inv(2), 1.0 / (0.5 * (1.0 - z1)), 1e-12);
    EXPECT_NEAR(inv(3), 1.0 / z1, 1e-12);
    EXPECT_NEAR(inv(0), 3.6180339887, 1e-9); // = Nek's 2 * 1/0.5528 on [-1,1]
+}
+
+TEST(Cfl, C4_PerCallJacobiansEqualTheCachedOnes)
+{
+   for (const int dim : {2, 3})
+   {
+      SCOPED_TRACE(dim);
+      Mesh serial = (dim == 2)
+                    ? Mesh::MakeCartesian2D(3, 3, Element::QUADRILATERAL, true)
+                    : Mesh::MakeCartesian3D(2, 2, 2, Element::HEXAHEDRON);
+      serial.SetCurvature(3);
+      serial.Transform([](const Vector & x, Vector & y)
+      {
+         y = x;
+         y(0) += 0.08 * std::sin(2.3 * x(1));
+         y(1) += 0.06 * x(0) * x(0);
+         if (x.Size() == 3) { y(2) += 0.05 * x(0) * x(1); }
+      });
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      incns::RuleBook rules;
+      const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+      const IntegrationRule& ir =
+         rules.Get(geom, 2 * 3 - 1, incns::Rule1D::GaussLobatto);
+      const MemoryType mt = Device::GetDeviceMemoryType();
+      const GeometricFactors fresh(*mesh.GetNodes(), ir,
+                                   GeometricFactors::JACOBIANS, mt);
+      const GeometricFactors* cached =
+         mesh.GetGeometricFactors(ir, GeometricFactors::JACOBIANS, mt);
+      ASSERT_EQ(fresh.J.Size(), cached->J.Size());
+      const double* a = fresh.J.HostRead();
+      const double* b = cached->J.HostRead();
+      double diff = 0.0, size = 0.0;
+      for (int i = 0; i < fresh.J.Size(); ++i)
+      {
+         diff = std::max(diff, std::abs(a[i] - b[i]));
+         size = std::max(size, std::abs(b[i]));
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &size, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      EXPECT_GT(size, 0.0);
+      EXPECT_EQ(diff, 0.0);
+   }
 }
 
 namespace

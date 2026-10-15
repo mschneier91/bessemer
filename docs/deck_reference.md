@@ -46,6 +46,7 @@ Finite element orders and mass.
 |---|---|---|---|
 | `discretization.order_u` | int | `3` | Velocity polynomial order k_u. |
 | `discretization.order_p` | int | `2` | Pressure polynomial order k_p (k_u - 1). |
+| `discretization.vector_diffusion` | compact \| mfem | `compact` | Storage of the viscous term's partial-assembly data. compact: one symmetric matrix per quadrature point shared by the velocity components (6 numbers in 3D). mfem: MFEM's VectorDiffusionIntegrator, one per component (27); the same operator to roundoff. |
 | `discretization.mass` | auto \| collocated \| consistent | `auto` | Velocity mass matrix. auto: collocated under OIFS, consistent under IMEX. collocated: GLL quadrature, diagonal on conforming meshes (OIFS's substeps then invert it pointwise). consistent: exact quadrature (under OIFS, a mass solve per substep stage). OIFS's substeps always invert this same mass. |
 
 ## `mesh`

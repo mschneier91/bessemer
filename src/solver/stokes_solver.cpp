@@ -22,6 +22,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.grad_div_scale = o.grad_div_scale;
    so.grad_div_nu = o.grad_div_nu;
    so.grad_div_nu_ref = o.grad_div_nu_ref;
+   so.compact_diffusion = o.compact_diffusion;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lagged_velocity = o.lagged_velocity;
    so.rotation_alpha = o.rotation_alpha;
@@ -71,7 +72,6 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
      cc_mode_(opts.schur == SchurBlockType::CahouetChabard),
      op_(spaces, rules, MakeOpOptions(opts), &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
-     schur_(spaces.Pressure(), rules, opts.nu),
      ortho_schur_(spaces.Velocity().GetComm()),
      fgmres_(spaces.Velocity().GetComm())
 {
@@ -104,11 +104,16 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    // (mfem::OrthoSolver): iterates never accumulate the constant mode. The
    // Sprint-1 Schur block is Delta-t independent, so it too is built once.
    // (Mass path only; the CC PC owns its own nullspace treatment.)
-   pressure_block_ = &schur_;
-   if (nullspace_)
+   if (!cc_mode_)
    {
-      ortho_schur_.SetSolver(schur_);
-      pressure_block_ = &ortho_schur_;
+      schur_ = std::make_unique<PressureMassSchur>(spaces.Pressure(), rules,
+               opts.nu);
+      pressure_block_ = schur_.get();
+      if (nullspace_)
+      {
+         ortho_schur_.SetSolver(*schur_);
+         pressure_block_ = &ortho_schur_;
+      }
    }
 
    if (cc_mode_)
@@ -126,6 +131,9 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
       if (opts_.cc.schur_grad_div && op_.GradDivCoefficient())
       {
          cc_pc_->SetGradDiv(*op_.GradDivCoefficient());
+         // The plain pressure mass is then unused, unless the rotation-aware
+         // Schur PC (below) needs it.
+         if (!op_.Rotation()) { cc_pc_->ReleasePlainMass(); }
       }
    }
 
@@ -193,6 +201,7 @@ void StokesSolver::BuildVelocityPreconditioner()
    // With the rotation term, rotation_pc may replace all of that with
    // point-block Jacobi (it sees N's nodal blocks; Jacobi/LOR-AMG cannot):
    // applied once, or as the PC of a loose inner GMRES on the full block.
+   INCNS_PROFILE("stokes_solver::velocity_pc");
    lor_rot_ = nullptr; // set again below if this build carries N in LOR
    const bool use_pbj = op_.Rotation() &&
                         opts_.rotation_pc != RotationVelocityPC::Symmetric;
@@ -255,7 +264,6 @@ void StokesSolver::BuildVelocityPreconditioner()
       // rotation term) to a loose tolerance. A tolerance-based inner solve is
       // nonlinear -- legal because the outer solver is FGMRES. SetOperator
       // before SetPreconditioner: MFEM forwards SetOperator to the PC.
-      vel_prec_.reset(); // it borrows vel_inner_pc_
       // Its preconditioner: scalar Jacobi, or point-block Jacobi with the
       // grad-div term's coupling of the components at each node in the blocks
       // (the default when there is a grad-div term). The blocks are symmetric
@@ -263,28 +271,44 @@ void StokesSolver::BuildVelocityPreconditioner()
       const bool pbj_pc =
          opts_.cc.a_pcg_pc == APcgPC::PointBlockJacobi ||
          (opts_.cc.a_pcg_pc == APcgPC::Auto && op_.GradDivTerm());
-      if (pbj_pc)
+      auto* kept_pbj = dynamic_cast<PointBlockJacobi*>(vel_inner_pc_.get());
+      auto* kept_cg = dynamic_cast<CGSolver*>(vel_prec_.get());
+      if (pbj_pc && kept_pbj && kept_cg)
       {
-         auto pbj = std::make_unique<PointBlockJacobi>(
-                       spaces_.Velocity(), op_.EssentialTrueDofs());
-         pbj->SetDiagonal(op_.MomentumDiagonal());
-         if (op_.GradDivTerm()) { pbj->SetGradDiv(*op_.GradDivTerm()); }
-         vel_inner_pc_ = std::move(pbj);
+         // A refresh (Delta-t or nu): only the diagonal moved. The grad-div
+         // off-diagonals depend on neither and cost ~0.8 s to rebuild at
+         // 64^3 Q3 on an H100 (2026-10-14), so the blocks are updated in
+         // place and the CG re-pointed at the rebuilt momentum operator.
+         kept_pbj->SetDiagonal(op_.MomentumDiagonal());
+         kept_cg->SetOperator(op_.Momentum());
       }
       else
       {
-         vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
-                            op_.MomentumDiagonal(), op_.EssentialTrueDofs());
+         vel_prec_.reset(); // it borrows vel_inner_pc_
+         vel_inner_pc_.reset(); // before its replacement is built, not after
+         if (pbj_pc)
+         {
+            auto pbj = std::make_unique<PointBlockJacobi>(
+                          spaces_.Velocity(), op_.EssentialTrueDofs());
+            pbj->SetDiagonal(op_.MomentumDiagonal());
+            if (op_.GradDivTerm()) { pbj->SetGradDiv(*op_.GradDivTerm()); }
+            vel_inner_pc_ = std::move(pbj);
+         }
+         else
+         {
+            vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
+                               op_.MomentumDiagonal(), op_.EssentialTrueDofs());
+         }
+         auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
+         cg->SetOperator(op_.Momentum());
+         cg->SetPreconditioner(*vel_inner_pc_);
+         cg->SetRelTol(opts_.cc.a_pcg_rtol);
+         cg->SetAbsTol(0.0);
+         cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
+         cg->SetPrintLevel(-1);
+         cg->iterative_mode = false;
+         vel_prec_ = std::move(cg);
       }
-      auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
-      cg->SetOperator(op_.Momentum());
-      cg->SetPreconditioner(*vel_inner_pc_);
-      cg->SetRelTol(opts_.cc.a_pcg_rtol);
-      cg->SetAbsTol(0.0);
-      cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
-      cg->SetPrintLevel(-1);
-      cg->iterative_mode = false;
-      vel_prec_ = std::move(cg);
    }
    else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiChebyshev)
    {
@@ -357,6 +381,24 @@ void StokesSolver::Refresh(double c0)
                         opts_.rotation_pc != RotationVelocityPC::Symmetric;
    const bool frozen_amg = !use_pbj && lor_vel && opts_.amg_reuse;
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
+}
+
+void StokesSolver::WarmUp()
+{
+   if (warmed_up_) { return; }
+   INCNS_PROFILE("stokes_solver::warm_up");
+   const Array<int>& offsets = spaces_.BlockTrueOffsets();
+   const MemoryType mt = Device::GetMemoryType();
+   BlockVector r(const_cast<Array<int>&>(offsets), mt);
+   BlockVector z(const_cast<Array<int>&>(offsets), mt);
+   r.UseDevice(true);
+   z.UseDevice(true);
+   // Random, not constant: with a pressure null space a constant pressure
+   // is projected away and the pressure AMG would never run.
+   r.Randomize(1 + Mpi::WorldRank());
+   block_op_.Mult(r, z);
+   prec_->Mult(r, z);
+   warmed_up_ = true;
 }
 
 void StokesSolver::SetKrylovDim(int k)

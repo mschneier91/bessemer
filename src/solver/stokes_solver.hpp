@@ -37,6 +37,8 @@ struct StokesSolverOptions
    double grad_div_nu = 0.0; ///< Plus grad_div_nu * nu (StokesOperatorOptions).
    /// The viscosity gamma is computed from; <= 0: nu (StokesOperatorOptions).
    double grad_div_nu_ref = -1.0;
+   /// Compact vector-diffusion storage (StokesOperatorOptions).
+   bool compact_diffusion = true;
    /// Velocity-block preconditioner (default Jacobi; LORAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
@@ -267,8 +269,26 @@ public:
    int Iterations() const { return iterations_; }
 
    /// @return Whether this solver has run a solve yet (its first one also
-   ///          allocates the preconditioners' solve-time workspace).
+   ///          allocates the preconditioners' solve-time workspace, unless
+   ///          WarmUp() did).
    bool HasSolved() const { return solves_ > 0; }
+
+   /**
+    * @brief Apply the block operator and the preconditioner once, to a
+    *        random vector, so that what they allocate on their first
+    *        application is allocated now.
+    *
+    * That is the pressure AMG's solve workspace (5.8 GB at 64^3 Q3), the
+    * inner Krylov vectors and the constrained operators' work vectors: 9.3 GB
+    * at 64^3, which the first solve kept. The time integrator calls this
+    * before a solver's first solve on a GPU, so that the free memory it
+    * sizes the FGMRES restart length from is what the solve will find. (The
+    * allowance it replaces, 20 % of the memory in use, was 4 GB at 64^3, and
+    * 86^3 ran out of memory under it, 2026-10-14.) Leaves nothing the solve
+    * reads: every inner solver starts from zero. Once per solver; later calls
+    * return at once.
+    */
+   void WarmUp();
 
    /// @return The local size of the block system FGMRES works on.
    int SystemSize() const { return block_op_.Height(); }
@@ -304,7 +324,8 @@ private:
    StokesOperator op_;          ///< Constrained blocks.
    std::unique_ptr<mfem::TransposeOperator> BT_; ///< -B^T wrapper (block 0,1).
    mfem::BlockOperator block_op_;                ///< The saddle-point operator.
-   PressureMassSchur schur_;                     ///< Pressure Schur block.
+   /// Pressure Schur block of the mass path (null on the CC path).
+   std::unique_ptr<PressureMassSchur> schur_;
    /// Wraps schur_ as P*S^{-1}*P (P = zero-sum projection) when the constant
    /// pressure null space exists -- orthogonalization, never pinning.
    mfem::OrthoSolver ortho_schur_;
@@ -348,6 +369,7 @@ private:
    long solves_ = 0;         ///< Solves run so far.
    int kdim_ = 0;            ///< FGMRES restart length in use.
    bool converged_ = false;  ///< Convergence flag of the last solve.
+   bool warmed_up_ = false;  ///< WarmUp() has run.
 };
 
 } // namespace incns

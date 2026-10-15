@@ -4,10 +4,49 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-12)
+## Where development left off (2026-10-14)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**GPU memory, third round (2026-10-14): the single-H100 limit is 87^3 Q3/Q2
+(53.3 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all
+of these but keep a path for the rotational form ... do the vector diffusion thing too
+... except keep a path to the built in mfem way", then "do 1", "Yes, do that for sure",
+"yes", "go ahead and make that CFL change". Changes 11-16 in
+[gpu_memory.md](gpu_memory.md):
+- **Compact vector-diffusion storage**, the default (`discretization.vector_diffusion:
+  compact | mfem`): 6 numbers per point instead of MFEM's 27, apply bit-identical to
+  MFEM's in all 16 tested cases. 64^3: 42.8 -> 37.6 GB, 2 % faster.
+- **Nine small items** (shared P^T A P wrappers, symmetric point-block inverses, `keep_rhs`,
+  w* only for the rotational form, the plain pressure mass freed, gamma per element, ...):
+  0.7 GB at the Taylor-Green peak; more with walls and forces.
+- **Grad-div stores alpha only** (adj(J) recomputed from MFEM's cached Jacobians): 64^3
+  37.6 -> 35.3 GB, the velocity-block apply 5 % slower.
+- **Delta-t-independent refresh work kept** (momentum diagonal split as c0 M_diag + a kept
+  nu K + grad-div diagonal; point-block Jacobi and its CG updated in place): refresh
+  1.22 -> 0.009 s per step, 64^3 step 11.11 -> 9.84 s, for 0.5 GB.
+- **Restart-length guard measures the first solve** (`StokesSolver::WarmUp`, once per
+  solver, 1.7 s at 64^3): the 20 % allowance missed the 9.2 GB workspace and 86^3 ran out
+  of memory; now 86^3 and 87^3 run, at restart lengths 3-6 and 1 (87^3: 29.9 s per step,
+  ~20 % slower than proportional).
+- **CFL Jacobians per call** (MFEM's routine, not its cache; bit-identical): 1.2 GB
+  expected at 64^3; committed before its GPU measurement and limit search (job 49216290).
+- **Tests:** new `StokesOperator.MomentumDiagonalAfterRefreshes2D/3D`,
+  `PbjGradDiv.P4_NewDiagonalMatchesAFreshBuild`, `SchurQuality.WarmUpLeavesTheSolveUnchanged`,
+  `Cfl.C4_PerCallJacobiansEqualTheCachedOnes`, R3 rewritten. Before the CFL change:
+  fast tier CUDA np 1 64/64 (one H100), CPU np 1 and np 2 66/66. With it: CPU np 1 66/66.
+  **Committed before** (human: "commit merge and push now ... we will deal with it later
+  if something fails"): CUDA np 1 and np 2 (two H100s) and CPU np 2 with the CFL change,
+  jobs 49216290, 49216291, 49216292.
+
+**CPU environment works on RM nodes (2026-10-14).** `environments/psc_cpu` re-pinned to
+the b2rm gcc (`hosts` selects it on `r*` nodes, `preset cpu`), `reuse: false`, numpy
+pinned below 2.5 for numba; Open MPI built without CUDA (the install check reads its
+`opal_built_with_cuda_support` flag). CPU build plus fast tier on 32 RM-shared cores:
+np 1 and np 2 66/66. The point-block Jacobi abort seen with the CUDA build on the host
+device did not recur (CUDA build, host device, 2026-10-14) and never appears in the CPU
+build.
 
 **A failed solve cuts the step, by default (2026-10-13, on `main`).** Human: "if the
 outer solver fails ... cut the timestep and then let it try to increase again", "a hold of
@@ -19,10 +58,10 @@ Tests: `step_retry_test` R1 (fixed steps: two cuts, hold, growth back; error 0.0
 against 0.002696 undisturbed), R2 (CFL), R3 (the restart-length formula). Fast tier
 CUDA np 1 64/64 (one H100) and np 2 64/64 (two H100s, one per rank), 2026-10-14; the new
 `SchurQuality.RefreshWithViscosity...` first hung at np 2 (a rank-0-only collective in
-the test's print, found with stack traces; fixed). **Not tested:**
-the cap near the memory limit (the 20 % first-solve allowance is a guess from the 64^3
-profile); a real (not injected) solver failure; `nse_mms_test`, `tgv_nse_test`, a CPU
-build. Memory record: [gpu_memory.md](gpu_memory.md).
+the test's print, found with stack traces; fixed). The cap near the memory limit was
+first tested 2026-10-14 and failed (86^3 out of memory), fixed by the warm-up above.
+**Not tested:** a real (not injected) solver failure; `nse_mms_test`, `tgv_nse_test`.
+Memory record: [gpu_memory.md](gpu_memory.md).
 
 **Taylor-Green 64^3 at CFL 0.3 on one H100** (job 49142049, 2026-10-14;
 human: "back off the 75^3 run to 64^3 ... increase the CFL target a little bit to .3"):
@@ -64,7 +103,7 @@ change", "make that simple change to the CFL stuff too".
 - **Looked at and left**: the convection operator (half of its 4.5 GB is the Jacobians it
   shares with the other 5-point forms, half MFEM's own data); the Schur setup (77 % AMG);
   the momentum form's 27-per-point diffusion data (human: do not replace MFEM's core
-  operator).
+  operator; reversed 2026-10-14 with MFEM's path kept, above).
 - **Tests**: fast tier CUDA np 1 63/63 before the last three small changes, then 14
   selected np 1 tests (time stepping, CFL, Schur, checkpoint, AMR event) pass. np 2 (two
   H100s, one per rank): fast tier 64/64 with the step-retry work on top (2026-10-14). `nse_mms_test`,
