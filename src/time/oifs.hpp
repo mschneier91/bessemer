@@ -178,12 +178,35 @@ private:
     */
    void SetDirichlet(double s, double weight, mfem::Vector& phi);
    /**
+    * @brief The Dirichlet data u_D(s) on @p dofs (true dofs; a projection on
+    *        the host, so a device round trip of the velocity on a GPU).
+    * @param s    Time of the data.
+    * @param dofs True dofs to read.
+    * @param vals Output: the values, in the order of @p dofs.
+    */
+   void DirichletValues(double s, const mfem::Array<int>& dofs,
+                        mfem::Vector& vals);
+   /**
+    * @brief Whether the Dirichlet data on @p dofs is the same at three times
+    *        spanning [s0, s1] (exactly; collective).
+    * @param dofs True dofs to compare.
+    * @param s0   Window start.
+    * @param s1   Window end.
+    * @param vals Output: the data at s0.
+    * @return True when it is: the substeps can then reuse @p vals instead of
+    *         projecting at every stage (no-slip walls, constant inflow).
+    */
+   bool StaticDirichlet(const mfem::Array<int>& dofs, double s0, double s1,
+                        mfem::Vector& vals);
+   /**
     * @brief imposed_ := the Dirichlet true dofs where the wind enters or is
     *        tangential (outward normal from the adjacent element;
     *        collective).
     * @param w The wind (the newest velocity).
     */
    void ClassifyBoundary(const mfem::ParGridFunction& w);
+   /// Caches the boundary nodes of ClassifyBoundary (bnode_*).
+   void CacheBoundaryNodes();
 
    MixedSpaces& spaces_;        ///< Mixed spaces (borrowed).
    const RuleBook& rules_;      ///< Quadrature source (borrowed).
@@ -218,8 +241,22 @@ private:
    std::unique_ptr<mfem::ParGridFunction> bd_; ///< Dirichlet projection scratch.
    std::unique_ptr<mfem::ParGridFunction> flag_; ///< Inflow flags (scratch).
    mfem::Array<int> imposed_;       ///< Dirichlet tdofs imposed in the substeps.
+   /// The nodes of the boundary elements, for ClassifyBoundary: per node its
+   /// dim_ local vdofs (component-major), outward normal, boundary element
+   /// and node index. Cached per velocity-space sequence (the geometry does
+   /// not change between steps).
+   std::vector<int> bnode_vdofs_;
+   std::vector<double> bnode_normals_; ///< Outward normals (unnormalised).
+   std::vector<int> bnode_be_;         ///< Boundary element of each node.
+   std::vector<int> bnode_k_;          ///< Node index within it.
+   long bnode_seq_ = -1;      ///< Velocity-space sequence of the cache.
    mfem::Vector bd_true_;           ///< Its true dofs.
    mfem::Vector bd_vals_;           ///< Values on the Dirichlet dofs.
+   /// The Dirichlet data on imposed_, when it does not change over the
+   /// current Advect() window (bd_static_valid_): reused at every stage.
+   mfem::Vector bd_static_;
+   bool bd_static_valid_ = false;   ///< bd_static_ holds this window's data.
+   bool bd_zero_ = false;           ///< ... and it is zero (no-slip walls).
    mfem::Vector tmp_s_;             ///< Scalar scratch.
    mfem::Vector k1_; ///< RK4 stage 1.
    mfem::Vector k2_; ///< RK4 stage 2.
