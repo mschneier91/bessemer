@@ -14,8 +14,10 @@ up to 80 GPU SU, push only the branch, "as far as possible", projection "absolut
 as an option", single precision / libCEED / Tier 5 / new cases deferred. Record and
 decision log: [throughput.md](throughput.md). Kept: the benchmark harness (`bench/`), NVTX
 ranges, MFEM kernel specializations (+24 %), the fused viscous + grad-div kernel (+7 %),
-and the opt-in `solver.initial_guess` / `solver.tolerance_reference` (TGV 32^3 3.9x
-with all of it; expensive gate passes). Defaults unchanged pending the human.
+and the opt-in `solver.initial_guess` / `solver.tolerance_reference`; Tier 3 found
+`solver.n_inner` 3 (+54 %) and, with the projection, `rtol` 1e-6. With all of it: TGV
+32^3 14.2x, 64^3 14.6x per step, and the 64^3 run to t = 20 in **1 h 01 min instead of 12 h
+44 min** with the same dissipation curve (2.4e-4). Defaults unchanged pending the human.
 
 **GPU memory, third round (2026-10-14): the single-H100 limit is 88^3 Q3/Q2
 (55.2 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all

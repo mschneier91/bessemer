@@ -22,8 +22,18 @@ t = 19, 12 steps):
 Every row below the second passes the expensive Taylor-Green gate (dissipation curve to
 t = 20 within 1.1e-4 of the default run's peak). The solver settings are opt-in deck keys;
 the defaults are unchanged. On the turbulent channel (OIFS, walls) the same settings give
-1.77x. A 64^3 production run to t = 20 with them (job 49220279) checks the result at the
-size that took 12 h 45 min on 2026-10-14.
+1.77x.
+
+**Production check, TGV 64^3 to t = 20** (one H100, CFL 0.3, job 49220279), against the
+run of 2026-10-14 (`runs/tgv_re1600/tgv_n64_1gpu`):
+
+| | Wall time | Outer its/step | s/step | Peak dissipation |
+|---|---|---|---|---|
+| 2026-10-14, main | 12 h 44 min (45,847 s) | 13.7 | 13.9 | 3.10846 at t = 8.892 |
+| now, `n_inner` 3, `rtol` 1e-6, project k 8, rhs | **1 h 01 min** (3,672 s) | 1.8 | 1.07 | 3.10843 at t = 8.892 |
+
+12.5x; the dissipation curve within 2.4e-4 of its peak, the energy at t = 20 within 1.7e-4
+(`runs/tgv_re1600/tgv_n64_fast`).
 
 ## Adaptations of the plan (2026-10-14)
 
