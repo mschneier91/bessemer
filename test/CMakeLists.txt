@@ -12,7 +12,7 @@
 #            can be checked in seconds instead of ~25 min. See INCNS_DEV_NP.
 #   slow  -- the full CC robustness grid, np=4, on demand only.
 #   verify -- convergence-rate studies (test/verify_*_test.cpp), np=4, on
-#            demand and weekly in CI.
+#            demand and every third day in CI.
 
 find_program(MPIEXEC_EXECUTABLE NAMES mpirun REQUIRED)
 find_package(GTest REQUIRED)
@@ -167,7 +167,7 @@ set_tests_properties(cc_sweep_slow_np4 PROPERTIES
 # Verification tier: convergence rates through Case on minimal decks, so they
 # verify whatever the case-level defaults are (test/verify_util.hpp). Label
 # `verify`, np = 4 only (rates do not depend on np; the fast tier covers the
-# partitions), on demand (`scripts/test.sh cpu -L verify`) and weekly in CI.
+# partitions), on demand (`scripts/test.sh cpu -L verify`) and every third day in CI.
 # Each study writes its errors and fitted rates to build/<preset>/verify/.
 function(incns_add_verify_test name src)
   add_executable(${name} ${src})
