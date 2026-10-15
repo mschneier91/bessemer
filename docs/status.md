@@ -9,8 +9,8 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**GPU memory, third round (2026-10-14): the single-H100 limit is 87^3 Q3/Q2
-(53.3 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all
+**GPU memory, third round (2026-10-14): the single-H100 limit is 88^3 Q3/Q2
+(55.2 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all
 of these but keep a path for the rotational form ... do the vector diffusion thing too
 ... except keep a path to the built in mfem way", then "do 1", "Yes, do that for sure",
 "yes", "go ahead and make that CFL change". Changes 11-16 in
@@ -30,15 +30,15 @@ of these but keep a path for the rotational form ... do the vector diffusion thi
   solver, 1.7 s at 64^3): the 20 % allowance missed the 9.2 GB workspace and 86^3 ran out
   of memory; now 86^3 and 87^3 run, at restart lengths 3-6 and 1 (87^3: 29.9 s per step,
   ~20 % slower than proportional).
-- **CFL Jacobians per call** (MFEM's routine, not its cache; bit-identical): 1.2 GB
-  expected at 64^3; committed before its GPU measurement and limit search (job 49216290).
+- **CFL Jacobians per call** (MFEM's routine, not its cache; bit-identical): 64^3
+  35.8 -> 34.7 GB; 88^3 runs (restart length 1, 32.4 s per step), 89^3 does not.
 - **Tests:** new `StokesOperator.MomentumDiagonalAfterRefreshes2D/3D`,
   `PbjGradDiv.P4_NewDiagonalMatchesAFreshBuild`, `SchurQuality.WarmUpLeavesTheSolveUnchanged`,
   `Cfl.C4_PerCallJacobiansEqualTheCachedOnes`, R3 rewritten. Before the CFL change:
   fast tier CUDA np 1 64/64 (one H100), CPU np 1 and np 2 66/66. With it: CPU np 1 66/66.
-  **Committed before** (human: "commit merge and push now ... we will deal with it later
-  if something fails"): CUDA np 1 and np 2 (two H100s) and CPU np 2 with the CFL change,
-  jobs 49216290, 49216291, 49216292.
+  With the CFL change (after the commit, at the human's request): CUDA np 1 64/64, host
+  device 10/10, CPU np 1 and np 2 66/66 (jobs 49216290, 49216292); CUDA np 2 (two H100s,
+  job 49216291) still queued at the time of writing.
 
 **CPU environment works on RM nodes (2026-10-14).** `environments/psc_cpu` re-pinned to
 the b2rm gcc (`hosts` selects it on `r*` nodes, `preset cpu`), `reuse: false`, numpy
