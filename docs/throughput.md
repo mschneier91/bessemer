@@ -6,23 +6,30 @@ follows the maintainer's throughput plan (tiers 0 to 5), adapted to bessemer (be
 Headline metric: **DOF-steps per second per GPU** (velocity plus pressure true dofs times
 steps, per second of step wall time) on one H100 80 GB, Bridges-2, CUDA backend.
 
-## Where it stands (2026-10-15, 04:30)
+## Where it stands (2026-10-15, 17:00)
 
-Taylor-Green from t = 0 on one H100 (32^3: 20 + 50 steps, 3 repeats; 64^3: replayed from
-t = 19, 12 steps):
+One H100. Taylor-Green 32^3 Q3/Q2 from t = 0 (IMEX; 20 + 50 or 10 + 30 steps, 3 repeats)
+and the turbulent channel at Re_tau 180 replayed from t = 60 (OIFS CFL 2, 3 + 30 steps),
+each row adding to the previous one:
 
-| | TGV 32^3 s/step | Outer its | Speed-up | TGV 64^3 s/step | Speed-up |
-|---|---|---|---|---|---|
-| Before (main, 0aabb9b) | 1.44 | 11.6 | | 16.75 | |
-| Code changes only, defaults unchanged (1a, fused kernel) | 1.08 | 11.6 | 1.33x | | |
-| + project k 8, rhs tolerance | 0.369 | 3.7 | 3.9x | 6.31 | 2.7x |
-| + `n_inner` 3 | 0.248 | 3.9 | 5.8x | 3.16 | 5.3x |
-| + `rtol` 1e-6 | **0.101** | 1.3 | **14.2x** | **1.15** (`n_inner` 1) | **14.6x** |
+| | TGV 32^3 s/step | Speed-up | Channel s/step | Speed-up |
+|---|---|---|---|---|
+| Before (main 0aabb9b; the channel's spin-up binary a6870f8), defaults | 1.44 | | 0.961 | |
+| Code changes only, defaults unchanged (1a specializations, fused kernel) | 1.08 | 1.33x | 0.873 | 1.10x |
+| + the solver settings (project k 8, rhs tolerance, `n_inner` 3, `rtol` 1e-6) | 0.101 | 14.2x | 0.503 | 1.91x |
+| + OIFS: Dirichlet data reused across the RK stages (1d) | | | 0.189 | 5.1x |
+| + unrolled viscous and divergence kernels (1a) | 0.058 | 24.8x | 0.157 | 6.1x |
+| + OIFS: deterministic classification, one convection kernel per stage (1d) | | | 0.082 | 11.7x |
+| + fused kernel with a thread per point, host overhead | **0.043** | **33.8x** | 0.058 | 16.5x |
+| + `time.oifs_cfl: 1.5` (opt-in substep CFL) | | | **0.050** | **19.2x** |
 
-Every row below the second passes the expensive Taylor-Green gate (dissipation curve to
-t = 20 within 1.1e-4 of the default run's peak). The solver settings are opt-in deck keys;
-the defaults are unchanged. On the turbulent channel (OIFS, walls) the same settings give
-1.77x.
+The solver settings and `time.oifs_cfl` are opt-in deck keys (the defaults are unchanged,
+pending the human); everything else is code. Gates: the expensive Taylor-Green gate passes
+after every kernel change (the dissipation curve to t = 20 within 5.9e-5 of the default
+run's peak with all of it; that run takes 127 s against 3,390 s); the channel statistics
+gate passes for the solver settings (t = 60 to 120) and every OIFS change was checked from
+t = 60 to 75 against MKM (Re_tau 177.4 to 178.7, U+ within 7.7 to 9.0 %, the sampling
+noise of 15 units). Details in the sections below.
 
 **Production check, TGV 64^3 to t = 20** (one H100, CFL 0.3, job 49220279), against the
 run of 2026-10-14 (`runs/tgv_re1600/tgv_n64_1gpu`):
@@ -235,6 +242,19 @@ skips its own apply. Results agree with the two separate applies to 2.5e-16 (tes
 | 10 | `rtol` 1e-8 / 1e-6 with 2 + 4 | yes, opt-in (TGV gate passes) | +60 % / +205 % (replay) | 49217952, 49219918 |
 | 11 | `pc_quadrature: gll_collocated` | no | -7 to -10 % (more outer its) | 49218488 |
 | 12 | velocity block / block shape variants | no (defaults best) | -1 to -68 % | 49219918 |
+| 13 | OIFS Dirichlet data reused across the RK stages (1d) | yes | channel +166 % | 49233522 |
+| 14 | Unrolled viscous kernels (1a) | yes | TGV +41 % | 49236242 |
+| 15 | Unrolled divergence kernels in MFEM's tables (1a) | yes | TGV +21 %, channel +21 % | 49242191 |
+| 16 | Diagnostics' flow sums, a thread per point (1e) | yes | 4.0 -> 0.56 ms per call | 49244351 |
+| 17 | Deterministic OIFS classification | yes (human) | channel +36 % | 49244351 |
+| 18 | OIFS convection forms re-assembled in place | no | changed MMS results, crashes | CPU |
+| 19 | One OIFS convection kernel per RK stage | yes | channel +38 % | 49253619 |
+| 20 | `time.oifs_cfl` 1.5 | yes, opt-in | channel +28 % (then), no measurable accuracy change | 49251387 |
+| 21 | Fused kernel: recompute / stash variants | no | 255 registers or a stack (ptxas) | - |
+| 22 | Fused kernel with a thread per point | yes | TGV +11 % | 49255498 |
+| 23 | Host overhead (persistent FGMRES, work vectors, caches) | yes | channel +45 %, TGV +34 % (with 22) | 49256543 |
+| 24 | Rotational form | deferred (human) | energy loss on the channel | 49242722, 49245661 |
+| 25 | Fused restriction scatter | no (human: no nondeterminism) | needs atomics | - |
 | - | 1b single precision, libCEED, Tier 5 | deferred (human) | | |
 
 ## Tier 3, continued: fewer inner iterations; PC-only GLL masses rejected
@@ -378,3 +398,267 @@ units u_rms 0.17, v_rms 0.10, w_rms 0.10, u'v' 0.066 (6 to 9 % of their peaks): 
 coarse-mesh signature (the log-layer overshoot of the bulk velocity), with the momentum
 balance exact. Frozen restart at t = 60 for the benchmarks:
 `runs/bench/cases/chan180_t60`.
+
+## The channel at Re_tau 180: before and after (jobs 49225563, 49219918, 49225579)
+
+Replayed from the frozen t = 60 checkpoint (OIFS CFL 2, 3 + 30 steps, one H100), each row
+adding to the previous one:
+
+| | s/step | Outer its/step | DOF-steps/s | Speed-up |
+|---|---|---|---|---|
+| Spin-up binary (a6870f8, before the throughput work) | 0.961 | 14.0 | 9.79e5 | |
+| Code changes only, defaults (1a, fused kernel) | 0.873 | 14.0 | 1.08e6 | 1.10x |
+| + project k 8, rhs tolerance | 0.768 | 10.8 | 1.23e6 | 1.25x |
+| + `n_inner` 3 | 0.658 | 12.4 | 1.43e6 | 1.46x |
+| + `rtol` 1e-6 | 0.503 | 4.0 | 1.87e6 | 1.91x |
+| + OIFS Dirichlet data reused in the substeps (1d, below) | 0.189 | 4.0 | 4.98e6 | 5.08x |
+| + unrolled viscous and divergence kernels (1a, below) | 0.157 | 4.0 | 6.01e6 | 6.14x |
+| + deterministic OIFS classification (1d) | 0.116 | 4.0 | 8.12e6 | 8.29x |
+| + one OIFS convection kernel per stage (1d) | 0.082 | 4.0 | 1.14e7 | 11.7x |
+| + per-point fused kernel, host overhead | 0.058 | 4.0 | 1.61e7 | 16.5x |
+| + `time.oifs_cfl: 1.5` | **0.050** | 4.0 | 1.88e7 | **19.2x** |
+
+The solver settings gave 1.9x; the rest came from OIFS's substeps, the kernels and the host
+overhead (jobs 49233522, 49242191, 49244351, 49253619, 49256543). The outer iteration count
+(4 per step against TGV's 1.3) is unchanged by all of it: the next item.
+
+**Statistics gate (Tier 2 close, job 49225579).** The channel restarted at t = 60 with the
+fast settings (project k 8, rhs, `n_inner` 3, `rtol` 1e-6) to t = 120, against the
+spin-up's own averages over the same window and against Moser, Kim & Mansour:
+
+| t = 60 to 120 | Re_tau | max U+ error (y+ >= 5) | u_rms | v_rms | w_rms | u'v' | its/step | s/step |
+|---|---|---|---|---|---|---|---|---|
+| spin-up (defaults) | 178.21 | 8.64 % | 0.170 | 0.098 | 0.098 | 0.066 | 13.8 | 0.914 |
+| fast settings | 178.16 | 8.54 % | 0.162 | 0.100 | 0.110 | 0.065 | 4.0 | 0.469 |
+
+(DNS Re_tau 178.12; the rms columns are the largest absolute differences from the DNS in
+wall units.) Same statistics to within the sampling noise of a 60-unit window, in 1 h 54
+min instead of about 3 h 39 min. **Gate passes.**
+
+## Re-census with the fast settings (job 49225616)
+
+**Taylor-Green 32^3** (0.101 s/step, 1.3 outer iterations): the GPU is the bottleneck
+(kernel time about the step time). By kernel: the fused viscous + grad-div apply 49 %,
+divergence transpose 10 %, divergence 10 %, the diagnostics' flow sums 5 % (`output.interval:
+1` in the benchmark deck), vector mass 5 %, element restriction 4 %, the convection apply 2
+%, hypre SpMV 2 %. 1,500 launches per step, hidden behind the kernels.
+
+**Channel** (0.57 s/step): `oifs::advect` (the history advected by the RK4 substeps) is
+**80 %** of the step, and the GPU is busy only about 20 % of it: 6,700 launches, 830
+`cudaMemcpy` (137 us each) and about 100 `cudaMalloc` / `cudaFree` per step. The solve is
+the remaining 20 %. Hence the next item.
+
+## 1a, continued: the roofline, and registers on the stack (jobs 49233585, 49236242)
+
+Nsight Compute on the production kernels inside the solver (TGV 32^3 Q3/Q2 with the fast
+settings; the OIFS convection from the channel replay), per apply:
+
+| Kernel | Time | DRAM | Local-memory traffic | DRAM, % of peak | FP64, % of peak | FLOP/byte |
+|---|---|---|---|---|---|---|
+| fused viscous + grad-div (ours) | 3.00 ms | 5.7 GB | 6.3 GB | 57 % | 2.2 % | 0.39 |
+| MFEM vector divergence (4, 3, 5) | 1.15 ms | 2.1 GB | 2.3 GB | 56 % | 2.2 % | 0.39 |
+| MFEM vector divergence transpose | 1.10 ms | 1.9 GB | 2.2 GB | 52 % | 2.3 % | 0.43 |
+| MFEM vector mass (4, 4) | 0.17 ms | 0.15 GB | none | 27 % | 5.5 % | 2.0 |
+| MFEM convection (4, 5), OIFS substeps | 0.05 ms | 0.05 GB | none | 26 % | 5.9 % | 2.3 |
+
+(Peaks: 3.35 TB/s, 33.5 TFLOP/s FP64 without tensor cores. Local-memory traffic counted at
+L1.) The mass and convection kernels are where a sum-factorized kernel should be: bound by
+shared memory / L1 (60 % and 83 % of its throughput). The other three moved about ten times
+the data their operators need, nearly all of it local memory.
+
+**Cause** (`ptxas -v`): no register spills, but 720 to 792 bytes of **stack** per thread.
+The 3D kernels built on MFEM's register tiles (`kernels::internal::vd_regs3d_t`, 3 x 3 x Q1D
+values per thread) index them with a component loop that is not unrolled (MFEM's
+`LoadDofs3d`, `Grad3d`, `GradTranspose3d` and `WriteDofs3d` loop over the components without
+`MFEM_UNROLL`), so the compiler cannot keep them in registers. MFEM's own divergence kernels
+have the same pattern.
+
+**Fix, our kernels** (`lean_vector_diffusion.cpp`): `MFEM_UNROLL(VDIM)` on the component
+loops of the 3D compact and fused kernels. No stack for velocity orders 2 to 4 (the fused
+kernel at 248 registers, the compact one at 96). Fused kernel **3.00 -> 1.09 ms** (DRAM 5.7
+-> 0.67 GB, no local traffic; 12 % occupancy, L1/shared 61 %); **TGV 32^3 fast 0.1017 ->
+0.0721 s per step, +41 %**, same iterations (job 49236242). The fused-against-separate test
+agrees to 2.5e-16.
+
+**Fix, the divergence** (`kernel_specializations.cpp`): our copies of MFEM's 3D divergence
+and transpose kernels with the component loops unrolled (the same arithmetic per
+component), installed in MFEM's own dispatch tables under MFEM's keys (dim, trial d1d,
+test d1d, q1d) for velocity orders 2 to 4, so `VectorDivergenceIntegrator` calls them. MFEM
+exposes the table read-only (`GetDispatchTable`); the entry is written through a
+`const_cast` of that (non-const) static. No stack, 126 to 168 registers.
+
+Transpose **1.10 -> 0.47 ms**, divergence **1.12 -> 0.32 ms** per apply; **TGV 32^3 fast
+0.0700 -> 0.0580 s per step (+21 %)**, the channel replay 0.189 -> 0.157 s (+21 %)
+(job 49242191). Against MFEM's generic kernels (`kernel_specializations_test`, now orders
+2 to 4): 2D bitwise, 3D within 5e-16 on the CPU.
+
+**Both kernel changes**, TGV 32^3 fast: **0.1017 -> 0.0580 s per step (+75 %)**, same
+iterations. **Expensive gate** (32^3 CFL 0.25 to t = 20, fast settings, job 49242191):
+passes, the dissipation curve within 4.4e-5 of the default run's peak (2.5e-5 of the
+earlier fast run's), the final energy within 8.6e-5; **186 s** for the run (the default
+run of 2026-10-14: 3,390 s).
+
+After them (Nsight Systems): the fused kernel 29 % of the kernel time (0.94 ms per apply,
+now bound by L1/shared memory at 12 % occupancy: its 248 registers), the diagnostics'
+flow sums 9 % (1e, below), vector mass 9 %, divergence transpose 7 %, divergence 5 %,
+element restrictions 8 %. Still GPU-bound: kernel time about the step time.
+
+## 1d: OIFS's substeps (2026-10-15)
+
+The channel's OIFS step was 80 % `oifs::advect` with the GPU idle most of the time
+(re-census above). Four changes, each measured on the channel replay (fast settings, one
+H100) and each passing the OIFS tests:
+
+| Change | Channel s/step | Speed-up | Job |
+|---|---|---|---|
+| (fast settings, unrolled kernels) | 0.503 | | |
+| Dirichlet data reused across the RK stages when it does not change | 0.189 | +166 % | 49233522 |
+| (the unrolled viscous and divergence kernels, 1a) | 0.157 | +21 % | 49242191 |
+| Deterministic inflow/outflow classification (human decision, below) | 0.116 | +36 % | 49244351 |
+| One convection kernel per RK stage, the winds combined at the points | 0.082 | +38 % | 49253619 |
+| `time.oifs_cfl: 1.5` (opt-in; default 0.5) | see below | +28 % at 0.114 | 49251387 |
+
+**Dirichlet data.** At every RK stage (about 85 per channel step) the Dirichlet data was
+projected on the host into a whole velocity grid function and gathered: a device round
+trip of the velocity each time. Now it is evaluated at three times of the step's window
+(collective, exact comparison) and reused when it does not change (no-slip walls, a
+constant inflow); constant coefficients (`BoundaryConditions::DirichletIsConstant`) are
+projected once per space. Outputs unchanged.
+
+**The classification** (where the substeps impose the Dirichlet data: inflow and
+tangential nodes) evaluated the wind at every boundary node through its element on the
+host, every step, and tested `w.n <= 1e-10 |w| |n|`. On a no-slip wall that evaluated
+`w` is roundoff, so its sign decided whether a wall node was imposed. **Human (2026-10-15):
+make it deterministic.** The wind is read from the node's dofs and a node is free only
+where its outward normal velocity exceeds 1e-10 of the largest wind on the boundary; zero
+data with a zero wind on every Dirichlet dof skips the loop. The OIFS MMS tests give the
+same numbers as before (the old evaluation imposed every wall node there too).
+
+**One convection kernel per stage** (`time/oifs_convection`, `OifsConvection`). The
+substeps applied MFEM's ConvectionIntegrator once per component and wind: nine applies
+per RK4 stage, about 600 per channel step. The form is linear in the wind, so each wind's
+quadrature data (W adj(J) u, as MFEM's `PAConvectionSetup3D`) is stored once per step and
+one kernel per stage combines the winds with the stage's weights at each point and
+applies the result to all three components (MFEM's `SmemPAConvectionApply3D` structure;
+no stack, 46-56 registers). Against MFEM's per-component applies: 2-4e-16
+(`oifs_convection_test`, orders 2 to 4). 3D at orders 2 to 4; 2D keeps MFEM's forms.
+Channel from t = 60 to 75: Re_tau 178.41, U+ within 8.2 % of MKM (before: 177.41, 9.0 %).
+
+**Substep CFL** (`time.oifs_cfl`, the CFL number of each RK4 substep; default 0.5):
+
+| Substep CFL | Channel replay s/step | Channel Re_tau / max U+ error | TGV 32^3 peak dissipation error vs DNS | TGV run |
+|---|---|---|---|---|
+| 0.5 | 0.114 | 177.4 / 9.0 % | 10.24 % | 81 s |
+| 1.0 | 0.097 (+17 %) | 178.5 / 7.8 % | 10.20 % | 71 s |
+| 1.5 | 0.089 (+28 %) | 178.7 / 7.7 % | 10.21 % | 69 s |
+
+The substeps' own error is far below OIFS's splitting error: 1.5 costs nothing measurable
+(channel statistics within the sampling noise of a 15-unit window; TGV OIFS CFL 2 against
+the DNS unchanged to 0.04 %). Measured before the combined kernel, which shrinks the
+substeps' share; a default change is the human's decision.
+
+**Tried and reverted:** re-assembling the convection forms in place (instead of new forms
+at every step) changed the OIFS MMS results (`NseMms.OifsTemporalOrder2D` 9.1e-8 -> 1.1e-6
+against the exact solution) and segfaulted nondeterministically; cause not found. The
+combined kernel replaced those forms in 3D anyway.
+
+## 1e: the diagnostics' flow sums
+
+`flowsums::Sums3D` (kinetic energy, dissipation, divergence for `output.diagnostics`) ran
+one thread per element over a direct Q^3 x D^3 sum: 4.0 ms per call at TGV 32^3 Q3, 9 % of
+the kernel time with diagnostics every step (the TGV decks' setting). `Sums3DPoints` gives
+every quadrature point a thread (the same per-point arithmetic, the element's sums in the
+same order): **4.03 -> 0.56 ms** (job 49244351). Outside the step timer (the TGV benchmark's
+s/step does not move; the run time does).
+
+## 1a, continued: the fused kernel's occupancy
+
+After the unrolling (above) the fused viscous + grad-div kernel kept every component's
+gradient for a column of Q1D points per thread: 248 registers, 12 % occupancy, and the
+compiler would not reuse slots when the gradients were recomputed or stashed (variants
+measured with ptxas: 255 registers, or a stack). `FusedApply3DPoints` gives each
+quadrature point a thread (Q1D^3 per element, the gradients in shared memory, MFEM's
+convection-kernel structure): **56 registers, 55 % occupancy, 1.09 -> 0.65 ms per apply**,
+now limited by shared-memory throughput (94 % of L1/shared). TGV 32^3 fast **0.0579 ->
+0.0521 s/step (+11 %)** (job 49255498). The fused-against-separate test agrees to 1.7e-16.
+Registered for the compile-time sizes with Q1D <= 7 (static shared memory <= 48 KB);
+(7, 8) and the runtime-size fallback keep the column kernel.
+
+## MFEM kernel audit (fixes held until MFEM 4.10, human 2026-10-15)
+
+`cuobjdump --dump-resource-usage` on libmfem and run_case, crossed with the census
+(`~/bessemer_jobs/audit.sh`, `audit.py`): 1,169 of 3,591 kernels have a stack frame, nearly
+all generic fallbacks or integrators the solver does not use. Of the kernels that run:
+MFEM's nonlinear convection apply (IMEX, `SmemPAConvectionNLApply3D<4,5>`) has 960 bytes
+of stack: **4.5 % of TGV's kernel time** (1.2 % on the channel); the forcing's linear-form
+assembly 32 bytes (1 %); the LOR assembly for the pressure AMG up to 4,800 bytes (setup,
+<= 0.4 %). Everything else that runs is clean. hypre's sparse products (cuSPARSE, about 6
+% of TGV) are outside this audit. After the upgrade: re-run the audit; the candidate is the
+IMEX convection kernel.
+
+## Tier 4 on the channel: the time step (human 2026-10-15: the channel Re_tau 180 instead of the 2D square cylinder)
+
+Each probe restarted from the frozen t = 60 checkpoint (its first dt scaled to the target)
+and ran to t = 75 with the fast solver settings, statistics over 60..75 (job 49242722; a
+first attempt, 49237210, ran its first probe on the CPU: the device setting was missing
+from the probe command):
+
+| Treatment | CFL | Result | Re_tau | max U+ error | wall per time unit |
+|---|---|---|---|---|---|
+| OIFS | 2 | stable, statistics match | 178.0 | 8.2 % | 39 s |
+| OIFS | 4 | stable, statistics drift (u_bulk 15.2 vs 16.5, u_rms off by 1.1) | 179.4 | 17.5 % | 24 s |
+| OIFS | 8 | blew up at t = 61 (NaN: the abort is the multistep coefficients' ordering check) | | | |
+| IMEX | 0.5 | stable; v_rms, w_rms off by 0.8 (noise near the limit) | 183.8 | 1.8 % | 94 s |
+| IMEX | 1 | the step collapsed 10x (growing velocity); 50-minute probe limit | | | |
+| rotational | 0.5 | energy loss: KE 5690 -> 830 in 15 units | 116 | 23 % | |
+
+**OIFS at CFL 2 is the throughput choice** with matched statistics: 2.4x cheaper per unit of
+simulated time than IMEX's best stable setting; larger steps degrade the statistics before
+they go unstable. **The rotational form fails on the channel** with the default solver
+settings too (t = 60 to 63: KE 1958 against 1899 with the fast settings; the divergence norm
+jumps 5x on the first step), so it is not a solver-tolerance effect. **Human: abandoned for
+now, a separate thread** (first step then: a fresh-start rotational channel run, to separate
+the scheme from the restart). An abort message for NaN velocities (now: the multistep
+ordering check) is a small open item.
+
+## Plan items not done, and why
+
+| Item | Status | Reason |
+|---|---|---|
+| 1b single precision (AMG, Krylov vectors) | deferred | human (2026-10-14) |
+| 1a libCEED | deferred | human (2026-10-14); a dFEM probe follows the MFEM 4.10 upgrade instead |
+| 1c Krylov launch audit | absorbed | TGV is GPU-bound (launches hidden); the channel's host overhead was treated directly (below) |
+| AMG settings (V-cycles, coarsening, strength) | deferred | human ("an optimization for another day") |
+| Tier 5 multi-GPU | deferred | human: more than two GPUs needed |
+| periodic hill | deferred | human |
+| square cylinder Tier 4 | replaced | human: the channel instead (no GPUs for 2D; RM hours kept for Re 10k) |
+| rotational form | deferred | fails on the channel (above); a separate thread |
+
+## Host overhead (human 2026-10-15: "strictly free, do that for sure")
+
+An attribution of the channel step's CUDA runtime calls to the innermost profiler region
+(Nsight Systems export, `~/bessemer_jobs/ho_attr.py`) found about 23 ms of an 86 ms step in
+`cudaMalloc` / `cudaFree` (each free synchronizes the device) and host round trips:
+
+| Where | Per step before | Fix |
+|---|---|---|
+| OIFS: the winds copied from the history | 5 mallocs, 3 frees, 10.7 ms | borrowed pointers |
+| FGMRES (MFEM allocates its Krylov vectors in every Mult) | 10 / 10, 2.4 ms | `PersistentFGMRESSolver`: MFEM's Mult line for line, the vectors kept (bitwise the same iterates) |
+| CFL rate, once per wind | 9 / 9, 1.9 ms | `ConvectiveCfl::MaxRate`: one Jacobian evaluation |
+| OIFS boundary values, the step's RHS, solution, commit | ~10 / 10 + 8 copies | kept work vectors; the history level that drops out lends its memory (`Vector::Swap`; MFEM's Vector has no move) |
+| the forcing (a new linear form every step) | 5 / 4 | a constant coefficient assembled once |
+| the solve's block vectors; the Dirichlet projection per solve | 9 / 9 + 9 copies | kept; constant (no-slip) data cached on the essential dofs |
+
+Results unchanged (OIFS MMS numbers identical; fast tier CPU np 1 and 2, GPU np 1). With
+the per-point fused kernel (job 49256543): **channel 0.0726 -> 0.0501 s/step (+45 %,
+substep CFL 1.5), TGV 32^3 0.0571 -> 0.0426 (+34 %)** -- TGV is GPU-bound, but the frees'
+synchronizations had kept the host from running ahead. Expensive TGV gate passes (5.9e-5);
+the channel from t = 60 to 75 at substep CFL 1.5: Re_tau 178.18, U+ within 7.7 %. Left: about
+26 frees per step outside any region, a few in the solve and the initial guess (being
+traced), and hypre's AMG V-cycles (about 2,000 launches and 400 small copies per channel
+step; AMG settings deferred by the human).
+
+**Reproducibility (human 2026-10-15):** results must stay bitwise reproducible run to run in
+bessemer's own code -- no atomics or nondeterministic sums (so no fused restriction
+scatter); results moving at roundoff against an older binary are fine; library-level GPU
+nondeterminism (hypre, cuSPARSE) is accepted.
