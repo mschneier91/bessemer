@@ -148,6 +148,14 @@ def phases_from_profile(path):
     return {}
 
 
+def output_name(case):
+    """The output.name of a case's deck template (its CSV and JSON prefix)."""
+    import re
+    m = re.search(r"^  name: (\S+)$", open(os.path.join(CASES, case, "deck.yaml.in")).read(),
+                  flags=re.M)
+    return m.group(1) if m else "tgv"
+
+
 def one_run(args, case, n, rep, outdir):
     steps = args.warmup + args.measure
     rundir = os.path.join(outdir, "%s_n%d_r%d" % (case, n, rep))
@@ -165,10 +173,11 @@ def one_run(args, case, n, rep, outdir):
                              timeout=args.timeout)
     wall = time.time() - t0
     rec = {"size": n, "repeat": rep, "exit": rc, "wall_s": wall, "dir": rundir}
+    name = output_name(case)
     try:
-        hist = read_csv(os.path.join(rundir, "tgv_history.csv"))
-        summ = json.load(open(os.path.join(rundir, "tgv_summary.json")))
-        diag = read_csv(os.path.join(rundir, "tgv_diagnostics.csv"))
+        hist = read_csv(os.path.join(rundir, name + "_history.csv"))
+        summ = json.load(open(os.path.join(rundir, name + "_summary.json")))
+        diag = read_csv(os.path.join(rundir, name + "_diagnostics.csv"))
     except Exception as e:
         rec["error"] = "outputs missing: %s" % e
         return rec
@@ -198,7 +207,7 @@ def one_run(args, case, n, rep, outdir):
         "energy_final": energy[-1] if energy else None,
         "divergence_max": max(div) if div else None,
         "budget_closure_mean": statistics.mean(clos) if clos else None,
-        "phases": phases_from_profile(os.path.join(rundir, "tgv_profile.csv")),
+        "phases": phases_from_profile(os.path.join(rundir, name + "_profile.csv")),
         "setup_s": float(flatten(summ.get("profile", {}).get("regions", {})).get(
             "case::setup.seconds", 0.0)),
     })

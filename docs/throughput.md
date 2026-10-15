@@ -6,19 +6,24 @@ follows the maintainer's throughput plan (tiers 0 to 5), adapted to bessemer (be
 Headline metric: **DOF-steps per second per GPU** (velocity plus pressure true dofs times
 steps, per second of step wall time) on one H100 80 GB, Bridges-2, CUDA backend.
 
-## Where it stands (2026-10-15, 03:00)
+## Where it stands (2026-10-15, 04:30)
 
-Taylor-Green 32^3 from t = 0 on one H100 (20 + 50 steps, 3 repeats):
+Taylor-Green from t = 0 on one H100 (32^3: 20 + 50 steps, 3 repeats; 64^3: replayed from
+t = 19, 12 steps):
 
-| | s/step | Outer its/step | DOF-steps/s | |
-|---|---|---|---|---|
-| Before (main, 0aabb9b) | 1.44 | 11.6 | 2.03e6 | |
-| Code changes only, defaults unchanged (1a, fused kernel) | 1.08 | 11.6 | 2.70e6 | 1.33x |
-| + `initial_guess: project` (k 8), `tolerance_reference: rhs` | 0.369 | 3.7 | 7.90e6 | **3.9x** |
+| | TGV 32^3 s/step | Outer its | Speed-up | TGV 64^3 s/step | Speed-up |
+|---|---|---|---|---|---|
+| Before (main, 0aabb9b) | 1.44 | 11.6 | | 16.75 | |
+| Code changes only, defaults unchanged (1a, fused kernel) | 1.08 | 11.6 | 1.33x | | |
+| + project k 8, rhs tolerance | 0.369 | 3.7 | 3.9x | 6.31 | 2.7x |
+| + `n_inner` 3 | 0.248 | 3.9 | 5.8x | 3.16 | 5.3x |
+| + `rtol` 1e-6 | **0.101** | 1.3 | **14.2x** | **1.15** (`n_inner` 1) | **14.6x** |
 
-The deck options are opt-in; the expensive gate passes for them (below). Still running at
-the time of writing: the Cahouet-Chabard inner iterations and PC quadrature, the looser
-outer tolerances' gates and the 64^3 headline (job 49218488).
+Every row below the second passes the expensive Taylor-Green gate (dissipation curve to
+t = 20 within 1.1e-4 of the default run's peak). The solver settings are opt-in deck keys;
+the defaults are unchanged. On the turbulent channel (OIFS, walls) the same settings give
+1.77x. A 64^3 production run to t = 20 with them (job 49220279) checks the result at the
+size that took 12 h 45 min on 2026-10-14.
 
 ## Adaptations of the plan (2026-10-14)
 
@@ -215,7 +220,94 @@ skips its own apply. Results agree with the two separate applies to 2.5e-16 (tes
 | 5 | MFEM kernel specializations (1a) | yes, always | +24 %, bit-identical on the GPU | 49217262 |
 | 6 | Fused viscous + grad-div kernel | yes, default (`fuse_grad_div`) | +7.4 % | 49218056 |
 | 7 | `a_pcg_rtol` 0.03 / 0.1 | no | -6 % / -19 % | 49217952 |
-| 8 | `n_inner` 10 -> 3 (option) | pending gate | +47 % (replay t = 9) | 49217262 |
+| 8 | `n_inner` 10 -> 3 / 1 (option) | yes, opt-in (gate passes) | +54 % / +73 % (replay t = 9) | 49218488 |
 | 9 | `mass: collocated` (discretization) | not a default | +44 %, changes the answer by 2e-4 | 49217262 |
-| 10 | `rtol` 1e-8 / 1e-6 with 2 + 4 | pending gate | +60 % / +205 % (replay) | 49217952 |
+| 10 | `rtol` 1e-8 / 1e-6 with 2 + 4 | yes, opt-in (TGV gate passes) | +60 % / +205 % (replay) | 49217952, 49219918 |
+| 11 | `pc_quadrature: gll_collocated` | no | -7 to -10 % (more outer its) | 49218488 |
+| 12 | velocity block / block shape variants | no (defaults best) | -1 to -68 % | 49219918 |
 | - | 1b single precision, libCEED, Tier 5 | deferred (human) | | |
+
+## Tier 3, continued: fewer inner iterations; PC-only GLL masses rejected
+
+Replayed from t = 9 with the projection (k 8, rhs) and the fused kernel (job 49218488):
+
+| Variant | Outer its/step | DOF-steps/s | vs `n_inner` 10 | dE/E |
+|---|---|---|---|---|
+| `n_inner` 10 | 9.13 | 3.02e6 | | |
+| `n_inner` 3 | 9.33 | 4.65e6 | +54 % | 2e-12 |
+| `n_inner` 2 | 9.63 | 4.96e6 | +64 % | 5e-12 |
+| `n_inner` 1 | 10.27 | 5.21e6 | +73 % | 1e-13 |
+| `pc_quadrature: gll_collocated`, `n_inner` 3 | 15.67 | 2.76e6 | -9 % | 2e-12 |
+| `pc_quadrature: gll_collocated`, `n_inner` 5 | 13.63 | 2.79e6 | -7 % | 3e-12 |
+
+The PC-only GLL masses (`solver.pc_quadrature`, already a deck key) make M_v^-1 a diagonal
+multiply but a worse preconditioner for the consistent-mass system: more outer iterations
+than they save. Rejected.
+
+**Expensive gates** (TGV 32^3, CFL 0.25, to t = 20, against the default run; job 49218488):
+
+| Configuration | Dissipation curve difference / peak | E(20) difference | Its/step | Run wall |
+|---|---|---|---|---|
+| default (reference run) | | | 13.7 | 3390 s |
+| project k 8 + rhs | 2.1e-9 PASS | 3.1e-9 | 6.0 | 1304 s |
+| + `n_inner` 3 | 2.2e-9 PASS | 3.5e-9 | 6.4 | 784 s |
+| + `n_inner` 3 + PC GLL masses | 9.3e-10 PASS | 1.4e-10 | 9.1 | 1002 s |
+| ... + `rtol` 1e-8 | 6.5e-7 PASS | 4.1e-7 | 5.1 | 615 s |
+| ... + `rtol` 1e-6 | 6.8e-5 PASS | 7.8e-5 | 2.2 | 317 s |
+| `mass: collocated` + project + rhs + `n_inner` 3 | 4.3e-2 FAIL | 1.3e-1 | 6.3 | 660 s |
+
+The collocated (lumped GLL) velocity mass changes this under-resolved flow by 4 % in the
+dissipation and 13 % in the energy at t = 20: a discretization choice, not a solver
+setting, and not adopted.
+
+**Headline** (all kept code, project k 8, rhs, `n_inner` 3):
+TGV 32^3 from t = 0: **1.44 -> 0.248 s per step, 5.8x** (2.03e6 -> 1.18e7 DOF-steps/s);
+TGV 64^3 replayed from t = 19: **16.75 -> 3.16 s per step, 5.3x** (1.39e6 -> 7.40e6).
+
+## Tier 3a: the velocity block and the block shape (kept as they are)
+
+Replayed from t = 9 on top of project k 8, rhs, `n_inner` 3 (job 49219918):
+
+| Variant | Outer its/step | vs reference |
+|---|---|---|
+| reference (`a_pc: jacobi_pcg`, point-block Jacobi, `a_pcg_rtol` 0.01, `block_shape: upper`) | 9.33 | |
+| `a_pc: jacobi_chebyshev` | 29.9 | -46 % |
+| `a_pc: loramg` (with or without `amg_reuse`) | 60.3 | -68 % |
+| `a_pcg_pc: jacobi` | 9.33 | -1 % (noise) |
+| `a_pcg_rtol` 0.003 | 8.77 | -10 % |
+| `block_shape: lower` | 11.7 | -25 % |
+| `block_shape: diag` | 22.3 | -66 % |
+| `projection_k` 16 | 9.33 | 0 % |
+
+## The fastest gated configuration (2b, with Tier 3)
+
+`tolerance_reference: rhs`, `initial_guess: project`, `projection_k` 8, `rtol` 1e-6 and
+`n_inner` 1 to 3 (job 49219918):
+
+| Case | Default | Fast | Speed-up |
+|---|---|---|---|
+| TGV 32^3 from t = 0, `n_inner` 3 | 1.44 s/step, 11.6 its | 0.101 s/step, 1.28 its | **14.2x** |
+| TGV 32^3 from t = 0, `n_inner` 1 | | 0.113 s/step, 1.80 its | 12.8x |
+| TGV 64^3 replayed from t = 19, `n_inner` 1 | 16.75 s/step, 15 its | 1.15 s/step, 2.0 its | **14.6x** |
+| Gate TGV 32^3 to t = 20, `n_inner` 1 | 3390 s | 287 s; dissipation 1.1e-4, E(20) 1.4e-4: PASS | 11.8x |
+| Gate TGV 32^3 to t = 20, `n_inner` 3 | 3390 s | 326 s; dissipation 5.0e-5, E(20) 1.1e-4: PASS | 10.4x |
+| Channel Re_tau 180 replayed from t = 60 (OIFS, walls) | 0.89 s/step, 14 its | 0.50 s/step, 4.0 its | 1.77x |
+
+Channel, step by step: project + rhs +16 %, + `n_inner` 3 +36 %, + `rtol` 1e-6 +77 %. The
+channel gains less: an OIFS step (CFL 2) changes the solution more than an IMEX step,
+and its convection substeps are work the solver changes do not touch.
+
+`rtol` 1e-6 is relative to the right-hand side; on Taylor-Green its effect (1e-4 in the
+energy at t = 20) is far below the discretization's, but it has been gated on Taylor-Green
+only. Before it becomes a default it should pass the channel statistics gate too.
+
+### Recommended deck settings (opt-in; the defaults are unchanged)
+
+```yaml
+solver:
+  tolerance_reference: rhs   # rtol relative to the right-hand side
+  initial_guess: project     # least squares over earlier solutions
+  projection_k: 8            # 2 x 8 system-sized vectors (2.9 GB at 64^3)
+  n_inner: 3                 # Cahouet-Chabard inner CG (default 10)
+  rtol: 1.0e-8               # conservative; 1.0e-6 passed the Taylor-Green gate
+```
