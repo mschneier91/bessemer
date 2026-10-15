@@ -280,11 +280,11 @@ void Sums3DPoints(int ne, const Array<real_t>& b, const Array<real_t>& g,
 }
 
 // The three columns of out(3, ne), summed on the device.
-void Reduce(int ne, const Vector& out, double sums[3])
+void Reduce(int ne, const Vector& out, double sums[3], Vector& col)
 {
    for (int k = 0; k < 3; ++k)
    {
-      Vector col(ne);
+      if (col.Size() != ne) { col.Destroy(); col.SetSize(ne); }
       col.UseDevice(true);
       const auto Y = Reshape(out.Read(), 3, ne);
       auto C = col.Write();
@@ -297,6 +297,13 @@ void Reduce(int ne, const Vector& out, double sums[3])
 
 void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
                    double sums[3])
+{
+   FlowSumsWork work;
+   LocalFlowSums(u, ir, sums, work);
+}
+
+void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
+                   double sums[3], FlowSumsWork& work)
 {
    sums[0] = sums[1] = sums[2] = 0.0;
    ParFiniteElementSpace& fes = *u.ParFESpace();
@@ -318,7 +325,8 @@ void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
    Vector xe(restrict_op->Height());
    xe.UseDevice(true);
    restrict_op->Mult(u, xe);
-   Vector out(3 * ne);
+   Vector& out = work.out;
+   if (out.Size() != 3 * ne) { out.Destroy(); out.SetSize(3 * ne); }
    out.UseDevice(true);
    if (dim == 2)
    {
@@ -346,7 +354,7 @@ void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
          flowsums::Sums3D(ne, d1, q1, maps.B, maps.G, w, geom->J, xe, out);
       }
    }
-   flowsums::Reduce(ne, out, sums);
+   flowsums::Reduce(ne, out, sums, work.col);
 }
 
 } // namespace incns

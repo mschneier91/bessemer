@@ -6,6 +6,7 @@
 #pragma once
 
 #include "quadrature/rule_book.hpp"
+#include "post/flow_sums.hpp"
 #include "mfem.hpp"
 
 #include <fstream>
@@ -125,6 +126,7 @@ private:
    mfem::ParFiniteElementSpace& vfes_; ///< Velocity space (borrowed).
    long sequence_;                     ///< Its sequence number at construction.
    const mfem::IntegrationRule* ir_;   ///< The elevated rule (RuleBook's).
+   mutable FlowSumsWork work_;         ///< Kept per-element work vectors.
 };
 
 /**

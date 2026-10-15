@@ -7,6 +7,7 @@
 
 #include "mfem.hpp"
 
+#include <memory>
 #include <vector>
 
 namespace incns
@@ -88,12 +89,24 @@ public:
 private:
    /// Orthonormalize w (and carry x along) against the basis, twice
    /// (classical Gram-Schmidt reorthogonalized); append unless w vanishes.
+   /// Appended vectors are swapped into the basis (x and w come back empty).
    void Append(mfem::Vector& x, mfem::Vector& w);
+
+   /// A device work vector of size @p n into @p v: a spare one if there is
+   /// one of that size, else a new one.
+   void Take(int n, mfem::Vector& v);
+   /// Keep @p v (unless empty) as a spare.
+   void Give(mfem::Vector& v);
 
    int k_;                       ///< Basis capacity.
    MPI_Comm comm_;               ///< Communicator.
    std::vector<mfem::Vector> x_; ///< Solutions (transformed with w_).
    std::vector<mfem::Vector> w_; ///< Their images, orthonormal.
+   /// Vectors of a reset basis and unused work vectors, reused instead of
+   /// freed and allocated again (each free synchronizes a GPU). mfem::Vector
+   /// has no move: x_ and w_ are reserved for k_ so they never reallocate
+   /// (which would copy every vector), and vectors enter them by Swap.
+   std::vector<std::unique_ptr<mfem::Vector>> spare_;
 };
 
 } // namespace incns

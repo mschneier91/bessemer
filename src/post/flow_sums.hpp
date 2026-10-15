@@ -27,4 +27,18 @@ namespace incns
 void LocalFlowSums(const mfem::ParGridFunction& u,
                    const mfem::IntegrationRule& ir, double sums[3]);
 
+/// Per-element work vectors of LocalFlowSums, kept by a caller that sums
+/// often (FlowDiagnostics): the element sums and a column (4 NE numbers; the
+/// element copy of the velocity is not kept, see ConvectiveCfl).
+struct FlowSumsWork
+{
+   mfem::Vector out; ///< (3, NE) element sums.
+   mfem::Vector col; ///< One column of out.
+};
+
+/// As above, with the per-element vectors in @p work.
+void LocalFlowSums(const mfem::ParGridFunction& u,
+                   const mfem::IntegrationRule& ir, double sums[3],
+                   FlowSumsWork& work);
+
 } // namespace incns

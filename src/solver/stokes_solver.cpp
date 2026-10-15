@@ -69,7 +69,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc,
                            const StokesSolverOptions& opts)
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
-     nullspace_(bc.PressureNullspaceExists()),
+     nullspace_(bc.PressureNullspaceExists()), pressure_mean_(rules),
      cc_mode_(opts.schur == SchurBlockType::CahouetChabard),
      op_(spaces, rules, MakeOpOptions(opts), &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
@@ -695,7 +695,7 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    // pressure level is otherwise undetermined.
    if (nullspace_)
    {
-      SubtractMean(p, rules_);
+      pressure_mean_.Subtract(p);
    }
 }
 

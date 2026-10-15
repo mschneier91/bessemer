@@ -8,6 +8,7 @@
 #include "operators/block_preconditioner.hpp"
 #include "operators/pressure_schur.hpp"
 #include "operators/stokes_operator.hpp"
+#include "post/pressure_mean.hpp"
 #include "precond/block_stokes_pc.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/point_block_jacobi.hpp"
@@ -342,6 +343,7 @@ private:
    BoundaryConditions& bc_;     ///< Boundary conditions (borrowed).
    StokesSolverOptions opts_;   ///< Options.
    bool nullspace_;             ///< Constant pressure mode present?
+   PressureMean pressure_mean_; ///< Output normalization (its functional kept).
    bool cc_mode_;               ///< CahouetChabard Schur path active?
 
    StokesOperator op_;          ///< Constrained blocks.
