@@ -29,6 +29,14 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
 
    SetupMass(mass_diag);
    cfl_ = std::make_unique<ConvectiveCfl>(V, rules_);
+   if (dim_ == 3)
+   {
+      const IntegrationRule& ir = rules_.Get(Geometry::CUBE, 3 * spaces_.OrderU());
+      if (OifsConvection::Supported(V, ir))
+      {
+         combo_ = std::make_unique<OifsConvection>(V, ir);
+      }
+   }
    bd_ = std::make_unique<ParGridFunction>(&V);
    bd_true_.SetSize(V.GetTrueVSize());
    bd_vals_.UseDevice(true);
@@ -46,22 +54,32 @@ void OifsAdvector::Rhs(double s, const Vector& phi, Vector& dphi)
 {
    INCNS_PROFILE("oifs::rhs");
    const std::vector<double> w = LagrangeWeights(s, times_ext_);
-   dphi = 0.0;
-   for (int c = 0; c < dim_; ++c)
+   if (combo_)
    {
-      Vector phi_c, dphi_c;
-      phi_c.MakeRef(const_cast<Vector&>(phi), c * n_s_, n_s_);
-      dphi_c.MakeRef(dphi, c * n_s_, n_s_);
-      // MFEM's alias protocol (device memory): the aliases start from their
-      // bases' valid location, and the base learns of the alias's writes.
-      phi_c.SyncMemory(phi);
-      dphi_c.SyncMemory(dphi);
-      for (int l = 0; l < n_ext_; ++l)
+      // dphi = -sum_l w_l C(u_l) phi, every component, one kernel.
+      std::vector<double> mw(w.size());
+      for (std::size_t l = 0; l < w.size(); ++l) { mw[l] = -w[l]; }
+      combo_->Mult(mw, phi, dphi);
+   }
+   else
+   {
+      dphi = 0.0;
+      for (int c = 0; c < dim_; ++c)
       {
-         conv_op_[l]->Mult(phi_c, tmp_s_);
-         dphi_c.Add(-w[l], tmp_s_);
+         Vector phi_c, dphi_c;
+         phi_c.MakeRef(const_cast<Vector&>(phi), c * n_s_, n_s_);
+         dphi_c.MakeRef(dphi, c * n_s_, n_s_);
+         // MFEM's alias protocol (device memory): the aliases start from their
+         // bases' valid location, and the base learns of the alias's writes.
+         phi_c.SyncMemory(phi);
+         dphi_c.SyncMemory(dphi);
+         for (int l = 0; l < n_ext_; ++l)
+         {
+            conv_op_[l]->Mult(phi_c, tmp_s_);
+            dphi_c.Add(-w[l], tmp_s_);
+         }
+         dphi_c.SyncAliasMemory(dphi);
       }
-      dphi_c.SyncAliasMemory(dphi);
    }
    // The FULL inverse, imposed rows included, then the imposed rates
    // dropped (SetDirichlet sets those values). The BDF step's right-hand
@@ -402,6 +420,11 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
       {
          INCNS_PROFILE("oifs::rate");
          rate = std::max(rate, cfl_->Rate(*vel_[l]));
+      }
+      if (combo_)
+      {
+         combo_->SetWind(l, *vel_[l]);
+         continue;
       }
       // New forms at every step: re-assembling them in place instead (same
       // coefficient, new wind) changed the OIFS MMS results and crashed

@@ -28,6 +28,7 @@ add_library(incns STATIC
   operators/convection.cpp
   operators/directional_do_nothing.cpp
   time/oifs.cpp
+  time/oifs_convection.cpp
   operators/grad_div_integrator.cpp
   operators/kernel_specializations.cpp
   operators/lean_vector_diffusion.cpp
@@ -98,6 +99,7 @@ if(USE_CUDA)
                               post/flow_sums.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
+                              time/oifs_convection.cpp
                               precond/rotational_schur.cpp
                               util/device_sync.cpp
                               PROPERTIES LANGUAGE CUDA)

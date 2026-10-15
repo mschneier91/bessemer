@@ -12,6 +12,7 @@
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "time/cfl.hpp"
+#include "time/oifs_convection.hpp"
 #include "mfem.hpp"
 
 #include <deque>
@@ -238,6 +239,9 @@ private:
    /// Convection forms C_l (one per history velocity).
    std::vector<std::unique_ptr<mfem::ParBilinearForm>> conv_;
    std::vector<mfem::OperatorPtr> conv_op_; ///< Their true-dof operators.
+   /// 3D at the solver's sizes: all winds and components in one kernel per
+   /// RK stage (OifsConvection), in place of conv_ / conv_op_.
+   std::unique_ptr<OifsConvection> combo_;
    std::vector<double> times_ext_;  ///< Times of the advecting velocities.
    int n_ext_ = 0;                  ///< Advecting velocities in use.
    std::unique_ptr<mfem::ParGridFunction> bd_; ///< Dirichlet projection scratch.
