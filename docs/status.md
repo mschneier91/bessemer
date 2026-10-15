@@ -24,12 +24,15 @@ the cap near the memory limit (the 20 % first-solve allowance is a guess from th
 profile); a real (not injected) solver failure; `nse_mms_test`, `tgv_nse_test`, a CPU
 build. Memory record: [gpu_memory.md](gpu_memory.md).
 
-**Taylor-Green 64^3 at CFL 0.3 on one H100** (job 49142049, started after these tests;
+**Taylor-Green 64^3 at CFL 0.3 on one H100** (job 49142049, 2026-10-14;
 human: "back off the 75^3 run to 64^3 ... increase the CFL target a little bit to .3"):
-At t = 12.6 (2404 steps, 2026-10-14 09:50): energy never increased through the
-dissipation peak, so CFL 0.3 is stable here; 14.6 s per step, 14.2 outer iterations, 43.7
-GB; the restart-length cap set 119 (of 200) at the first solve.
-Output `runs/tgv_re1600/tgv_n64_1gpu`, status `~/bessemer_jobs/tgv64status.sh`.
+**Finished**: t = 20 in 12 h 45 min (3284 steps, 13.9 s per step, ~25 SU); energy never
+increased, so CFL 0.3 is stable here and matches CFL 0.25 in E to 0.02 points. Max
+−dE/dt 0.01294 at t = 8.95 (reference 0.01286 at 8.97); E within 0.6 % to the peak, 5 %
+low at t = 20 (under-resolved decay). Table in
+[../benchmarks/tgv_re1600/README.md](../benchmarks/tgv_re1600/README.md). The
+restart-length cap stayed at 119 (of 200), far above the ~15 iterations used. Output
+`runs/tgv_re1600/tgv_n64_1gpu` beside the repo on Bridges-2.
 
 **GPU memory, second round (2026-10-13, on `main`): the single-H100 limit is 80^3 Q3/Q2
 (41.5 M velocity dofs).** Human: "tackle the first 3", "go ahead with the single solver

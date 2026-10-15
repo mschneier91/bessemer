@@ -65,8 +65,34 @@ t = 8.7 and a plateau to t = 10, against 0.01286 at t = 8.97. Under-resolved, as
 at 96 nodes against a 512³ reference. `plot.py` was not run (no matplotlib on the login
 node); the table is from the diagnostics CSV directly.
 
-**64³** needs two 80 GB GPUs (62 GB each at np 2; out of memory on one). Not yet run at
-CFL 0.25: about 7 s per step on two H100s, an estimated 9 hours to t = 20.
+**64³ Q3/Q2 (192 nodes per direction), IMEX BDF2 at CFL 0.3, γ = 2h** (2026-10-14;
+Bridges-2, **one H100**, np 1, CUDA backend, after the GPU memory work of 2026-10-13,
+[../../docs/gpu_memory.md](../../docs/gpu_memory.md); deck `tgv_re1600_n64.yaml` with
+`cfl_target: 0.3`). t = 20 in 12 h 45 min, 3284 steps, 13.9 s per step on average (10–11 s
+early, 17 s late, as the outer iterations rise from ~10 to 15); 43.7 GB of the GPU's 80;
+**the energy never increases**. −dE/dt by a difference over ±0.25; errors are of E:
+
+| t | E | E ref | E err | E err 32³ | −dE/dt | ν⟨\|∇u\|²⟩ | ε ref |
+|---|---|---|---|---|---|---|---|
+| 4 | 0.12151 | 0.12151 | 0.00 % | −0.02 % | 0.00210 | 0.00207 | 0.00207 |
+| 8 | 0.09802 | 0.09829 | −0.28 % | −2.24 % | 0.01054 | 0.01030 | 0.01037 |
+| 9 | 0.08591 | 0.08638 | −0.55 % | −2.82 % | 0.01283 | 0.01251 | 0.01285 |
+| 10 | 0.07367 | 0.07446 | −1.06 % | −3.43 % | 0.01187 | 0.01163 | 0.01127 |
+| 12 | 0.05317 | 0.05444 | −2.3 % | −7.9 % | 0.00814 | 0.00802 | 0.00836 |
+| 16 | 0.03118 | 0.03251 | −4.1 % | −9.5 % | 0.00365 | 0.00362 | 0.00362 |
+| 19.5 | 0.02142 | 0.02252 | −4.9 % | −7.8 % | 0.00190 | 0.00189 | 0.00204 |
+
+**The dissipation peak is captured**: max −dE/dt 0.01294 at t = 8.95 against 0.01286 at
+8.97 (+0.6 %); the resolved part ν⟨|∇u|²⟩ peaks at 0.01253 at t = 8.89 (97 % of the
+reference maximum), so the mesh adds about 3 % at the peak (32³: about 12 %). E is within
+0.6 % to the peak and drifts low after it, by 5 % at t = 20 (max |E − E_ref| = 0.0013):
+the decay of the small scales is under-resolved at 192 nodes against 512³.
+
+**CFL 0.3 gives the same answer as 0.25**: a 64³ run at CFL 0.25 on two H100s
+(2026-10-13, cancelled at t = 10.8) agrees with this one in E to 0.02 percentage points
+throughout, and was itself stable. Memory: 64³ needed two GPUs (62 GB each) before the
+memory work; one H100 now holds up to 80³ (240 nodes per direction), roughly 30 h to t = 20
+at this run's pace.
 
 A 32³ run at CFL 0.5 (2026-10-13, 39 min) reached max −dE/dt 0.01292 at t = 10.1; it went
 through the instability above and is not a result.
