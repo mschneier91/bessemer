@@ -4,10 +4,26 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-14)
+## Where development left off (2026-10-15)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Branch `verification` (2026-10-15, PR #1, not merged): CI and the verification tier
+(Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be
+changing over time", rate threshold theory - 0.3 approved, grad-div "an open question",
+"can you set up the CI ... are you able to handle the caching?".
+- **CI** (`.github/workflows/ci.yml`, `environments/ci/spack.yaml`; developing.md §7.6):
+  style, `cpu` build, Doxygen, fast tier on every push to `main` and every PR; the verify
+  tier weekly, by dispatch, or with the PR label `verify`. Spack stack cached by the
+  Spack release + the env's hash. First cold build started 2026-10-15.
+- **Verify tier** (label `verify`, np 4; developing.md §7.2): `verify_spatial_test`,
+  `verify_kovasznay_test`, `verify_temporal_test`, helpers in `test/verify_util.hpp`,
+  levels and the 0.3 margin in `baselines.yaml` `verification`. Written in a sandbox
+  with no toolchain: **compiled and run only in CI**; see PR #1 for the measured rates.
+- **Next (audit Phases 2-4):** provenance (commit, defaults) in `summary.json`, splitting
+  `nse_mms_test` / `tgv_nse_test` (they time out on a GPU), then the solution-
+  verification and validation studies on Bridges-2.
 
 **GPU memory, third round (2026-10-14): the single-H100 limit is 87^3 Q3/Q2
 (53.3 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all

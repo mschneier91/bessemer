@@ -1,5 +1,6 @@
 # CI: the CPU build and the fast tier on every push and pull request, the
-# verification tier weekly and on demand (docs/developing.md §7.2, §7.6).
+# verification tier weekly, on demand, and on pull requests labelled `verify`
+# (docs/developing.md §7.2, §7.6).
 #
 # The Spack stack (environments/ci) takes 1-3 hours to build from source, so it
 # is cached: the key is the pinned Spack release plus environments/ci/spack.yaml,
@@ -13,6 +14,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       verify:
@@ -114,6 +116,7 @@ jobs:
         run: scripts/style.sh check
 
       - name: Build (cpu preset, warnings are errors)
+        id: build
         run: |
           scripts/build.sh cpu
           ccache --show-stats || true
@@ -125,8 +128,30 @@ jobs:
         run: scripts/test.sh cpu -L fast --timeout 1800
 
       - name: Verification tier
-        if: github.event_name == 'schedule' || inputs.verify
+        # Runs when the build did, even if a fast test failed.
+        if: >-
+          !cancelled() && steps.build.outcome == 'success' &&
+          (github.event_name == 'schedule' || inputs.verify || contains(github.event.pull_request.labels.*.name, 'verify'))
         run: scripts/test.sh cpu -L verify --timeout 3600
+
+      - name: Verification rates
+        if: always() && (github.event_name == 'schedule' || inputs.verify || contains(github.event.pull_request.labels.*.name, 'verify'))
+        run: |
+          for f in build/cpu/verify/*_rates_np*.csv; do
+            [ -f "$f" ] || continue
+            echo "### $(basename "$f" .csv)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tee -a "$GITHUB_STEP_SUMMARY" < "$f"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Keep the convergence data
+        if: always() && (github.event_name == 'schedule' || inputs.verify || contains(github.event.pull_request.labels.*.name, 'verify'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-convergence
+          path: build/cpu/verify
+          if-no-files-found: warn
 
       - name: Test logs on failure
         if: failure()
