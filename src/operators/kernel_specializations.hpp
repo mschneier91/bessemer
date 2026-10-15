@@ -20,7 +20,10 @@ namespace incns
  * Taylor-Green 32^3 Q3/Q2 step (Nsight Systems, 2026-10-15). The specialized
  * kernels are the same code with compile-time sizes; the results agree to
  * roundoff (a compiler may order the arithmetic differently with fixed
- * bounds; kernel_specializations_test). Process-wide and idempotent;
+ * bounds; kernel_specializations_test). In 3D the divergence and its
+ * transpose are our copies of MFEM's kernels with the component loops
+ * unrolled (no stack arrays; see kernel_specializations.cpp), installed in
+ * MFEM's dispatch tables under the same keys. Process-wide and idempotent;
  * StokesOperator calls it before it assembles anything.
  */
 void AddKernelSpecializations();

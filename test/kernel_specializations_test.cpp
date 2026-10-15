@@ -4,7 +4,9 @@
 // compile-time-sized kernels are registered as before (MFEM's generic
 // kernels): the same arithmetic, but with fixed loop bounds a compiler may
 // vectorize or contract it differently (1.7e-17 absolute on the CPU build,
-// 3D, 2026-10-15). The differences are printed. 2D and 3D, velocity orders 2 and 3, a deformed mesh. The generic
+// 3D, 2026-10-15). In 3D the divergence kernels are bessemer's own (unrolled
+// copies of MFEM's). The differences are printed. 2D and 3D, velocity orders
+// 2 to 4, a deformed mesh. The generic
 // results are taken first, before anything registers: this test has its own
 // executable for that reason.
 
@@ -79,7 +81,7 @@ std::vector<Vector> Apply(int dim, int k)
 
 TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
 {
-   const int dims[] = {2, 3}, orders[] = {2, 3};
+   const int dims[] = {2, 3}, orders[] = {2, 3, 4};
    std::vector<std::vector<Vector>> generic;
    for (int dim : dims)
    {
