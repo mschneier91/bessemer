@@ -50,13 +50,13 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(physics, "grad_div_h", p.grad_div_h,
           "Grad-div stabilization gamma (div u, div v) on the velocity block, "
           "gamma = grad_div_h * h_K + grad_div_nu * nu: the part proportional "
-          "to the element size h_K. Both 0 = off.");
+          "to the element size h_K. < 0: 6 / k_u, i.e. gamma = 6 h_K / k_u "
+          "(2 h_K at k_u = 3), scaling with the resolution. Both 0 = off.");
    r.Read(physics, "grad_div_nu", p.grad_div_nu,
           "Grad-div: the part of gamma proportional to the viscosity (see "
           "grad_div_h).");
-   MFEM_VERIFY(p.grad_div_h >= 0.0 && p.grad_div_nu >= 0.0,
-               "parameters: physics.grad_div_h and physics.grad_div_nu must be "
-               ">= 0");
+   MFEM_VERIFY(p.grad_div_nu >= 0.0,
+               "parameters: physics.grad_div_nu must be >= 0");
    r.ReadEnum(physics, "convective_form", p.convective_form,
    {
       {"convective", ConvectiveForm::Convective},
@@ -98,7 +98,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    const DeckSection disc = r.Section(root, "discretization",
                                       "Finite element orders and mass.");
    r.Read(disc, "order_u", p.order_u, "Velocity polynomial order k_u.");
-   r.Read(disc, "order_p", p.order_p, "Pressure polynomial order k_p (k_u - 1).");
+   r.Read(disc, "order_p", p.order_p,
+          "Pressure polynomial order k_p (Taylor-Hood: k_u - 1, also what a "
+          "deck that sets only order_u gets).");
+   if (disc.Has("order_u") && !disc.Has("order_p")) { p.order_p = p.order_u - 1; }
    MFEM_VERIFY(!disc.Has("collocated_mass"), "parameters: "
                "discretization.collocated_mass was replaced by "
                "discretization.mass: auto | collocated | consistent");

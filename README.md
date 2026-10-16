@@ -47,7 +47,7 @@ and per-step history.
 - **Monolithic:** velocity and pressure are solved together as one saddle-point system per
   step, with no projection or splitting error. FGMRES with a Cahouet–Chabard block
   preconditioner.
-- **High order on quads and hexes:** Taylor–Hood Q3/Q2 by default (orders are runtime
+- **High order on quads and hexes:** Taylor–Hood Q6/Q5 by default (orders are runtime
   options), partial assembly throughout.
 - **Time stepping:** BDF2 with explicit convection (IMEX), or OIFS sub-stepped convection
   with BDF3 for steps at CFL 2. CFL-controlled, fixed or error-controlled steps.

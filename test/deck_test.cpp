@@ -65,16 +65,17 @@ TEST(Deck, LoadYamlFields)
    EXPECT_EQ(p.initial_velocity, "taylor_green_2d");
    EXPECT_TRUE(p.output.enabled);
    EXPECT_EQ(p.output.interval, 5);
-   // Unstated fields: library defaults (Q3/Q2, BDF auto = 2 with IMEX, CFL
-   // step control --
-   // which a Stokes case runs at the fixed dt -- no grad-div).
-   EXPECT_EQ(p.order_u, 3);
-   EXPECT_EQ(p.order_p, 2);
+   // Unstated fields: library defaults (Q6/Q5, BDF auto = 2 with IMEX, CFL
+   // step control -- which a Stokes case runs at the fixed dt -- and grad-div
+   // gamma = 6 h_K / k_u).
+   EXPECT_EQ(p.order_u, 6);
+   EXPECT_EQ(p.order_p, 5);
    EXPECT_EQ(p.time_order, 0);
    EXPECT_EQ(p.BdfOrder(), 2);
    EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
    EXPECT_FALSE(p.CflSteps()); // the deck is Stokes
-   EXPECT_DOUBLE_EQ(p.grad_div_h, 2.0); // the defaults: gamma = 2 h
+   EXPECT_LT(p.grad_div_h, 0.0);       // the default: 6 / k_u
+   EXPECT_DOUBLE_EQ(p.GradDivH(), 1.0); // gamma = h_K at k_u = 6
    EXPECT_DOUBLE_EQ(p.grad_div_nu, 0.0);
 }
 

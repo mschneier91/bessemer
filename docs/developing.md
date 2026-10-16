@@ -204,7 +204,8 @@ additive term inside `StokesTimeIntegrator`.
 ### 5.1 Discretization
 
 - **Quads/hexes only**, continuous H1 `Q_k` spaces; reject simplices at load time.
-- **Orders are runtime options**; default Taylor–Hood **Q3/Q2**. Equal orders need a
+- **Orders are runtime options**; default Taylor–Hood **Q6/Q5** (human 2026-10-16, the
+  polynomial-order study in throughput.md; Q3/Q2 until then). Equal orders need a
   pressure stabilization that does not exist — warn if `k_u == k_p` (grad-div is not one).
 - **BCs:** velocity Dirichlet (eliminated), outflow/do-nothing (natural), periodic
   (`MakePeriodic`). **Outflow with the IMEX convective form = Braack & Mucha's directional
@@ -234,8 +235,11 @@ additive term inside `StokesTimeIntegrator`.
   collocates at 2k−1 — rejected; use it for structure only).
 - **Grad-div** γ(∇·u, ∇·v) on the velocity block, **on by default for every run** (human
   2026-10-12: "grad-div is meant to be the default for every run"): **γ = c_h·h_K + c_ν·ν**,
-  deck keys `physics.grad_div_h` (default 2: "maybe 2h to start") and `physics.grad_div_nu`
-  (default 0); order h, order ν or both, and both 0 is off. The low-level
+  deck keys `physics.grad_div_h` and `physics.grad_div_nu` (default 0); order h, order ν
+  or both, and both 0 is off. `grad_div_h` defaulted to 2 ("maybe 2h to start"); since
+  2026-10-16 (human) its default is 6/k_u, γ = 6 h_K/k_u, which is 2h at Q3 and scales
+  with the resolution h_K/k_u: with 2h at every order the velocity PCG's iterations grew
+  17 → 38 from Q3 to Q7 at equal DOFs, 17 → 25 with 6h/k_u (throughput.md). The low-level
   `StokesOperatorOptions` keep `grad_div` + `grad_div_scale` (OrderH 2026-07-11, OrderNu
   2026-07-17) and default to OFF, so the solver tests' baselines are untouched;
   `grad_div_nu` adds the ν part. Integrator:

@@ -277,8 +277,12 @@ struct Parameters
    double nu = 1.0;
    /// Grad-div coefficient gamma = grad_div_h * h_K + grad_div_nu * nu on the
    /// velocity block (deck `physics.grad_div_h`, `physics.grad_div_nu`). On
-   /// by default with gamma = 2 h_K (human 2026-10-12); both 0 = off.
-   double grad_div_h = 2.0;
+   /// by default (human 2026-10-12); both 0 = off. grad_div_h < 0, the
+   /// default, is 6 / k_u: gamma = 6 h_K / k_u scales with the resolution
+   /// h_K / k_u and is 2 h_K at k_u = 3 (human 2026-10-16; with 2 h_K at every
+   /// order the velocity PCG's iterations grew 17 -> 38 from Q3 to Q7 at equal
+   /// DOFs, docs/throughput.md). Read it through GradDivH().
+   double grad_div_h = -1.0;
    double grad_div_nu = 0.0; ///< See grad_div_h.
    /// Nonlinear-term treatment for NavierStokes (deck
    /// `physics.convective_form: convective|rotational`); see ConvectiveForm.
@@ -291,9 +295,12 @@ struct Parameters
    /// Input scaling: mode + reference scales (see nondimensionalization.hpp).
    Nondimensionalization nondim;
 
-   // --- discretization (default Q3/Q2 Taylor-Hood) ---------------------------
-   int order_u = 3;              ///< Velocity polynomial order k_u.
-   int order_p = 2;              ///< Pressure polynomial order k_p.
+   // --- discretization (default Q6/Q5 Taylor-Hood: the polynomial-order study,
+   // docs/throughput.md; human 2026-10-16) ----------------------------------
+   int order_u = 6;              ///< Velocity polynomial order k_u.
+   /// Pressure polynomial order k_p. A deck that sets only order_u gets
+   /// k_u - 1.
+   int order_p = 5;
    /// Velocity mass matrix (deck `discretization.mass`); Auto resolves by the
    /// convection treatment: read it through CollocatedMass().
    VelocityMass mass = VelocityMass::Auto;
@@ -528,6 +535,13 @@ struct Parameters
       return mass == VelocityMass::Collocated ||
              (mass == VelocityMass::Auto &&
               convection_treatment == ConvectionTreatment::Oifs);
+   }
+
+   /// @return The h_K part of the grad-div coefficient in effect:
+   ///         grad_div_h, or 6 / k_u when it is < 0 (the default).
+   double GradDivH() const
+   {
+      return grad_div_h >= 0.0 ? grad_div_h : 6.0 / order_u;
    }
 
    /// @return True when the step is CFL-controlled: StepControl::Cfl on a

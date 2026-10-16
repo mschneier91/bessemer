@@ -22,7 +22,7 @@ Physical parameters.
 |---|---|---|---|
 | `physics.nu` | real | `1` | Kinematic viscosity (dimensionless: 1/Re). |
 | `physics.Re` | real | `unset` | Reynolds number; sets nu = 1/Re (dimensionless mode; not with nu). |
-| `physics.grad_div_h` | real | `2` | Grad-div stabilization gamma (div u, div v) on the velocity block, gamma = grad_div_h * h_K + grad_div_nu * nu: the part proportional to the element size h_K. Both 0 = off. |
+| `physics.grad_div_h` | real | `-1` | Grad-div stabilization gamma (div u, div v) on the velocity block, gamma = grad_div_h * h_K + grad_div_nu * nu: the part proportional to the element size h_K. < 0: 6 / k_u, i.e. gamma = 6 h_K / k_u (2 h_K at k_u = 3), scaling with the resolution. Both 0 = off. |
 | `physics.grad_div_nu` | real | `0` | Grad-div: the part of gamma proportional to the viscosity (see grad_div_h). |
 | `physics.convective_form` | convective \| rotational | `convective` | Nonlinear term: explicit (u.grad)u, or the semi-implicit rotational form (the pressure becomes the Bernoulli head). |
 | `physics.outflow` | directional \| classical | `directional` | Condition on outflow boundaries: Braack-Mucha directional do-nothing (stable under backflow) or classical do-nothing. |
@@ -44,8 +44,8 @@ Finite element orders and mass.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `discretization.order_u` | int | `3` | Velocity polynomial order k_u. |
-| `discretization.order_p` | int | `2` | Pressure polynomial order k_p (k_u - 1). |
+| `discretization.order_u` | int | `6` | Velocity polynomial order k_u. |
+| `discretization.order_p` | int | `5` | Pressure polynomial order k_p (Taylor-Hood: k_u - 1, also what a deck that sets only order_u gets). |
 | `discretization.fuse_grad_div` | bool | `true` | Apply the grad-div term with the viscous term in one kernel (the velocity gradients once per apply; compact vector_diffusion only). false: two kernels. |
 | `discretization.vector_diffusion` | compact \| mfem | `compact` | Storage of the viscous term's partial-assembly data. compact: one symmetric matrix per quadrature point shared by the velocity components (6 numbers in 3D). mfem: MFEM's VectorDiffusionIntegrator, one per component (27); the same operator to roundoff. |
 | `discretization.mass` | auto \| collocated \| consistent | `auto` | Velocity mass matrix. auto: collocated under OIFS, consistent under IMEX. collocated: GLL quadrature, diagonal on conforming meshes (OIFS's substeps then invert it pointwise). consistent: exact quadrature (under OIFS, a mass solve per substep stage). OIFS's substeps always invert this same mass. |

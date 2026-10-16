@@ -2,7 +2,7 @@
 # The TGV velocity solves unforced Stokes exactly (pressure -> 0), so this is
 # the standard smoke case for the deck-driven pipeline: run with
 #   run_case cases/tgv2d_stokes.yaml
-# Omitted fields keep their library defaults (Q3/Q2, BDF2, etc.).
+# Omitted fields keep their library defaults (Q6/Q5, BDF2, etc.).
 
 physics:
   nu: 1.0

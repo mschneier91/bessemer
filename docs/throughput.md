@@ -1021,3 +1021,93 @@ nse_mms and tgv_nse, which time out on GPUs at any rank count). Taylor-Green 64^
 (23.3M DOFs) from t = 0, 5 + 20 steps, the decks' configuration: 0.219 s per step on one
 H100, 0.157 s on two (1.40x, 70 % parallel efficiency), 1.20 against 1.25 iterations per
 step.
+
+## The default polynomial order: OIFS, the time step, grad-div and memory (human 2026-10-16)
+
+Goal (human): the default p that reaches a target accuracy (largest error 10 / 5 / 2 %) with
+the least run time and memory. Taylor-Green Re 1600 to t = 20 on one H100, OIFS (substeps at
+CFL 1.5 on the GLL spacing; BDF3), Q_p / Q_{p-1}, about 96 to 192 nodes per direction. Error:
+the largest |eps - eps_DNS| over t <= 20 as a percentage of the DNS peak (plot.py), and its
+time average. Jobs 49290475/6 (CFL 2, 96^3 to 192^3), 49302516 (grad-div on / off),
+49309226/7 (outer CFL 1, 2, 4, 160^3, memory), 49314402 (grad-div scaling), 49316573
+(CFL 0.5, 160^3 at CFL 1); binaries main 9fa50a8 and 97fb45e.
+
+**Grad-div on (gamma = 2 h_K), outer CFL 2** (wall: solve time to t = 20; memory: nvidia-smi peak):
+
+| p | N | DOFs | steps | wall | peak memory | largest error | mean error |
+|---|---|---|---|---|---|---|---|
+| 3 | 96 / 126 / 159 / 192 | 2.9 / 6.6 / 13.3 / 23.3M | 260 / 336 / 445 / 500 | 22 / 59 / 149 / 294 s | 6.7 / 11.9 / 23.2 / 39.0 GiB | 14.1 / 11.8 / 5.4 / 5.6 % | 2.9 / 1.7 / 0.9 / 1.1 % |
+| 4 | 96 / 128 / 160 / 192 | 3.0 / 7.2 / 14.0 / 24.2M | 303 / 391 / 483 / 586 | 30 / 86 / 203 / 404 s | 6.7 / 14.8 / 26.3 / 40.1 GiB | 11.2 / 5.7 / 9.0 / 5.6 % | 2.8 / 1.8 / 1.4 / 1.1 % |
+| 5 | 95 / 130 / 160 / 190 | 3.0 / 7.7 / 14.4 / 24.1M | 366 / 441 / 553 / 667 | 37 / 110 / 243 / 522 s | 6.5 / 14.6 / 24.9 / 37.7 GiB | 6.8 / 7.6 / 5.3 / 5.0 % | 1.9 / 1.5 / 1.3 / 1.1 % |
+| 6 | 96 / 126 / 162 / 192 | 3.2 / 7.2 / 15.2 / 25.3M | 369 / 525 / 688 / 761 | 56 / 152 / 392 / 721 s | 6.7 / 13.7 / 25.8 / 38.8 GiB | 6.6 / 2.7 / 3.1 / 2.7 % | 1.4 / 0.7 / 0.6 / 0.6 % |
+| 7 | 98 / 126 / 161 / 189 | 3.4 / 7.3 / 15.1 / 24.5M | 419 / 529 / 751 / 893 | 72 / 176 / 461 / 849 s | 7.0 / 13.4 / — / 37.1 GiB | 10.2 / 3.1 / 5.1 / 3.0 % | 1.5 / 0.9 / 0.7 / 0.7 % |
+
+- **OIFS against IMEX at the same N: 3.3 to 3.7x faster** (the IMEX study above runs at CFL
+  0.25; OIFS takes 6 to 8x fewer implicit solves at about twice the cost per step).
+- **The outer step.** With OIFS it is limited by accuracy, not stability; NekRS runs its
+  characteristics at CFL 2-4 measured at the GLL nodes, as here. Largest error at 128^3 by
+  outer CFL 0.5 / 1 / 2 / 4: Q3 15.1 / 14.4 / 11.8 / 20.8 %, Q4 7.8 / 7.4 / 5.7 / 20.3 %,
+  Q5 8.4 / 8.3 / 7.6 / 17.7 %, Q6 4.4 / 4.1 / 2.7 / 14.3 %, Q7 5.0 / 4.7 / 3.1 / 15.4 %.
+  CFL 4 is out at every p (the dissipation rise near t = 6.3 is mistimed). CFL 1 is within
+  0.3-0.7 points of CFL 0.5. CFL 2 carries a 1.5-2.7 point time error that partly cancels
+  the spatial error, so its numbers above flatter every order; the time-averaged error barely
+  moves with CFL. At a fixed N the GLL CFL rule takes 1.85x more steps at Q7 than at Q3 (the
+  smallest GLL gap is 0.45 of the average spacing at Q7, 0.83 at Q3); at matched outer dt the
+  time errors were similar, so the outer step is accuracy-limited at every order.
+- **The largest error is noisy past the dissipation peak** (under-resolved turbulence): Q4 is
+  worse at 160^3 (8.4 % at CFL 1) than at 128^3 (7.4 %). Differences under 1-2 points are noise.
+- **Cheapest run per target, time error removed (CFL 1):** 10 %: Q4 at 128^3 (7.4 %, 115 s,
+  14.8 GiB); Q3 needs ~160^3. 5 %: **Q6 at 126^3 (4.1 %, 212 s, 13.7 GiB)**, Q7 at 126^3
+  (4.7 %, 234 s), Q5 at 160^3 (3.7 %, 326 s, 25 GiB); Q3 and Q4 do not reach it by 192^3.
+  2 %: none yet (Q6 and Q7 sit at 2.7-3.8 % up to 192^3).
+
+**The velocity block** (job 49302516, ~128^3, CFL 2; jacobi_pcg, iterations per outer
+iteration from the new history columns, 97fb45e):
+
+| p | grad-div | outer its/step | velocity CG its | s/step | largest error | max ‖div u‖ |
+|---|---|---|---|---|---|---|
+| 3 | 2 h_K / off | 2.3 / 5.5 | 16.8 / 2.0 | 0.18 / 0.17 | 11.8 / 9.1 % | 1.1 / 21.7 |
+| 5 | 2 h_K / off | 2.1 / 4.9 | 28.5 / 2.0 | 0.25 / 0.17 | 7.6 / 7.3 % | 0.54 / 17.9 |
+| 7 | 2 h_K / off | 2.0 / 4.7 | 38.4 / 2.0 | 0.33 / 0.17 | 3.1 / 5.7 % | 0.34 / 17.0 |
+
+- **All of the per-step growth with p is grad-div under point-block Jacobi.** Without it the
+  velocity CG takes 2 iterations and a step costs 0.17 s at every order (equal DOFs). With
+  gamma = 2 h_K the coefficient grows with the element size, 2.3x from Q3 to Q7 at equal
+  DOFs, and so does the block's stiffness against the mass term (gamma dt / dx_min^2: ~10
+  at Q3, ~53 at Q7); Q7 starts hitting the 50-iteration cap.
+- **Grad-div earns its keep:** without it the outer iterations go 2 -> 5, ‖div u‖ is 20-50x
+  larger and Q6 / Q7's error grows (at CFL 1: 4.1 -> 7.6 %, 4.7 -> 7.4 %). Q3 is better
+  without it (14.4 -> 10.8 %).
+- **gamma = c h_K / k_u** (job 49314402; c = 2 k_u is the old 2 h_K): the velocity CG's
+  iterations follow c, nearly independent of p: c = 6 gives 16.8 / 19.7 / 21.5 / 22.2 / 24.5
+  at Q3-Q7 (against 16.8 to 38.4 with 2 h_K). Q6: c = 2 / 6 / 12 run in 101 / 124 / 152 s
+  with 4.0 / 3.3 / 2.7 % (CFL 2) and ‖div u‖ 1.26 / 0.65 / 0.41. Q7: c = 1 / 2 / 6 / 14 in
+  91 / 104 / 135 / 172 s. (Q5 at c = 1 ran during a filesystem stall; its time is void.)
+
+**Memory per DOF is flat in p at a fixed N** (~1,800-2,200 B/DOF), so high order saves
+memory only by needing fewer DOFs. Breakdown at ~128^3 from the profiler's gauge (profile:
+sync), B/DOF, Q3 / Q5 / Q7: pressure LOR-AMG 418 / 705 / 752; vectors (state, right-hand
+sides, scratch, solver work) 328 / 412 / 392; operator data and geometric caches 422 / 271 /
+229; OIFS 246 / 204 / 186; projection basis and FGMRES growth after step 1 174 / 171 / 150;
+the CUDA context 141 / 120 / 128; FGMRES 66 / 65 / 81; the trapezoidal starter's nu K
+67 / 38 / 28. The pressure space is Q_{p-1}, so at equal velocity resolution Q7 has 2.1x the
+pressure unknowns of Q3, which eats the operators' savings with p (2.55 -> 1.39 GB).
+- **The pressure LOR-AMG** (jobs 49318797, 49321252; branch memory-audit): hypre 2.33 is built
+  with its device memory pool (Spack's recipe adds `--enable-device-memory-pool` to any CUDA
+  build), whose defaults round every allocation up to a power of 8 and cache every freed
+  block. `HYPRE_SetGPUMemoryPoolSize(2, 1, 20, 64 MiB)` (pool only blocks up to 1 MiB) cut the
+  hierarchy from 3,284 to 594 MiB and the Q7 peak 13,089 -> 10,371 MiB (-21 %; Q3 -680 MiB),
+  setup +5 ms, steps unchanged. MFEM's LORSolver kept its LOR mesh, space and batched-assembly
+  scratch for its lifetime: freeing them after assembly saves 460 MiB at Q3 and Q7 (6d90d0c).
+  BoomerAMG's strength threshold 0.5 / 0.6 made the hierarchy larger, aggressive coarsening
+  did not shrink it. Left: the assembled LOR matrix holds 1.4 GB at Q7 for ~0.4 GB of data.
+- **After both fixes Q7 is at 1,488 B/DOF** (1,946 before), ~1,370 at scale: ~60M DOFs per
+  80 GB H100. Toward 100M (850 B/DOF): Uzawa (`claude/schur-cg-solver-9sf1r5`, not yet
+  built) ~-150, the LOR matrix copies ~-130, OIFS's second Jacobian copy -58 at Q7, freeing
+  the starter's nu K -28, sharing scratch vectors ~-100 to -150 (not yet measured).
+
+**Decision (human 2026-10-16): Q6/Q5 by default and gamma = 6 h_K / k_u** (`grad_div_h`
+default < 0 = 6 / k_u: 2 h_K at Q3, so Q3 runs are unchanged). Q6 is the cheapest order to
+5 % (212 s at CFL 1, 152 s at CFL 2) with about half the memory of the lower orders that come
+close, and the scaled grad-div cuts its time by about a fifth. These numbers assume OIFS at
+CFL 2; the convection default is still IMEX at CFL 0.5.
