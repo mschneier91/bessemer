@@ -577,3 +577,90 @@ TEST(SchurQuality, InitialGuessesFromEarlierSolutions)
       EXPECT_LT(diff, 1e-8);
    }
 }
+
+// solver.tolerance_reference step: the norm it scales rtol by, ||b - A x_prev||,
+// is the same whether A x_prev comes from the projection's image (with the
+// mass-factor correction after a step-size change, Refresh) or from applying
+// the operator to the warm start, so both solvers take the same iterations;
+// and it follows the step: a right-hand side that moves 1 % gives a scale
+// far below ||b||.
+TEST(SchurQuality, StepToleranceReference)
+{
+   BoxSpec s;
+   s.dim = 2;
+   s.num_elems = {8, 8, 0};
+   s.lengths = {1.0, 1.0};
+   s.periodic = {false, false, false};
+   Mesh serial = MakeBoxMesh(s);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, 3, 2);
+   RuleBook rules;
+   BoundaryConditions bc(spaces.Velocity());
+   for (int a = 1; a <= 4; ++a) { bc.AddNoSlip(a); }
+
+   VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & f)
+   {
+      f(0) = std::sin(2.0 * M_PI * x[0]) * std::cos(2.0 * M_PI * x[1]) + x[1];
+      f(1) = -std::cos(2.0 * M_PI * x[0]) * std::sin(2.0 * M_PI * x[1]);
+   });
+   ParLinearForm f_form(&spaces.Velocity());
+   f_form.AddDomainIntegrator(new VectorDomainLFIntegrator(forcing));
+   f_form.Assemble();
+   Vector f_true(spaces.Velocity().GetTrueVSize());
+   f_form.ParallelAssemble(f_true);
+
+   StokesSolverOptions o;
+   o.nu = 0.005;
+   o.mass_coeff = 20.0;
+   o.grad_div = 1.0;
+   o.schur = incns::SchurBlockType::CahouetChabard;
+   o.cc.a_pc = incns::APC::JacobiPCG;
+   o.cc.schur_grad_div = true;
+   o.rtol = 1e-6;
+   o.max_iter = 2000;
+   o.kdim = 300;
+   o.tolerance_reference = incns::ToleranceReference::Step;
+   o.initial_guess = incns::InitialGuess::Project;
+   o.projection_k = 4;
+   StokesSolver reuse(spaces, rules, bc, o);
+   o.step_reference_reuse = false;
+   StokesSolver direct(spaces, rules, bc, o);
+   ParGridFunction u1(&spaces.Velocity()), p1(&spaces.Pressure());
+   ParGridFunction u2(&spaces.Velocity()), p2(&spaces.Pressure());
+   u1 = 0.0;
+   p1 = 0.0;
+   u2 = 0.0;
+   p2 = 0.0;
+   const double b_norm = std::sqrt(InnerProduct(MPI_COMM_WORLD, f_true, f_true));
+   for (int k = 1; k <= 5; ++k)
+   {
+      SCOPED_TRACE(testing::Message() << "solve " << k);
+      if (k == 4) // a step-size change
+      {
+         reuse.Refresh(25.0);
+         direct.Refresh(25.0);
+      }
+      Vector b(f_true);
+      b *= 1.0 + 0.01 * k;
+      reuse.SolveTrue(b, u1, p1);
+      direct.SolveTrue(b, u2, p2);
+      EXPECT_TRUE(reuse.Converged());
+      EXPECT_TRUE(direct.Converged());
+      const double sr = reuse.LastToleranceScale();
+      const double sd = direct.LastToleranceScale();
+      if (Mpi::Root())
+      {
+         mfem::out << "[step reference] solve " << k << ": scale " << sr << " (reused) "
+                   << sd << " (applied), ||f|| " << b_norm << "; iterations "
+                   << reuse.Iterations() << ", " << direct.Iterations() << std::endl;
+      }
+      // The applied reference sees the warm start, whose pressure the output
+      // shifted by its mass-weighted mean; the reused one the raw solution.
+      // The difference, B^T of a constant, is zero in exact arithmetic and
+      // ~1e-8 of the scale on a GPU (2026-10-15). A wrong mass correction
+      // would differ at O(1) (solve 4).
+      EXPECT_NEAR(sr, sd, 1e-6 * sd);
+      EXPECT_LE(std::abs(reuse.Iterations() - direct.Iterations()), 1);
+      if (k >= 2 && k != 4) { EXPECT_LT(sd, 0.1 * b_norm); }
+   }
+}

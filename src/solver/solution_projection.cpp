@@ -92,7 +92,7 @@ void SolutionProjection::Append(Vector& x, Vector& w)
    w_.back().Swap(w);
 }
 
-void SolutionProjection::Add(const Operator& A, const Vector& x)
+void SolutionProjection::Add(const Operator& A, const Vector& x, Vector* ax)
 {
    if (Size() >= k_) { Reset(); } // full: restart from the newest
    Vector xn, wn;
@@ -100,6 +100,12 @@ void SolutionProjection::Add(const Operator& A, const Vector& x)
    Take(A.Height(), wn);
    xn = x;
    A.Mult(xn, wn);
+   if (ax)
+   {
+      ax->SetSize(wn.Size());
+      ax->UseDevice(true);
+      *ax = wn;
+   }
    Append(xn, wn);
    Give(xn); // not appended: kept for the next one
    Give(wn);

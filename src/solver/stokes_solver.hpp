@@ -93,9 +93,14 @@ struct StokesSolverOptions
    int kdim = 200;               ///< FGMRES restart (Krylov subspace) size.
    int print_level = -1;         ///< mfem::IterativeSolver print level.
    /// What rtol is relative to: the initial residual (MFEM's rel_tol, the
-   /// default) or the right-hand side, ||r|| <= rtol ||b||, under which a
-   /// better initial guess (initial_guess) saves iterations.
+   /// default), the right-hand side (||r|| <= rtol ||b||, under which a
+   /// better initial guess saves iterations), or the step (||r|| <= rtol
+   /// ||b - A x_prev||: the same, scaled by what the step changes).
    ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   /// ToleranceReference::Step with InitialGuess::Project: take A x_prev from
+   /// the projection (no extra operator application). False applies the
+   /// operator instead (the reference the test compares with).
+   bool step_reference_reuse = true;
    /// The outer solve's initial guess in SolveTrue: the incoming u, p (the
    /// previous solution: the warm start), their extrapolation in time from
    /// the last two solutions (one more system vector), or the least-squares
@@ -307,12 +312,17 @@ public:
    void WarmUp();
 
    /// @return System-sized vectors the initial guess keeps (initial_guess:
-   ///         2 projection_k for Project, 2 for Extrapolate, 0 otherwise),
-   ///         for the restart-length guard.
+   ///         2 projection_k for Project, 2 for Extrapolate, 0 otherwise;
+   ///         4 more for ToleranceReference::Step), for the restart-length
+   ///         guard.
    int GuessVectors() const;
 
    /// @return The local size of the block system FGMRES works on.
    int SystemSize() const { return block_op_.Height(); }
+
+   /// @return The norm the last solve's rtol was relative to: ||b|| (Rhs),
+   ///         ||b - A x_prev|| (Step), 0 (InitialResidual: FGMRES's own).
+   double LastToleranceScale() const { return tol_scale_; }
 
    /// @return The FGMRES restart length in use.
    int KrylovDim() const { return kdim_; }
@@ -412,8 +422,11 @@ private:
    /// keeping its Dirichlet values; @p b is the eliminated right-hand side.
    void PrepareGuess(const mfem::Vector& b, mfem::BlockVector& x);
    /// Set FGMRES's tolerances for right-hand side @p b
-   /// (tolerance_reference).
-   void SetTolerance(const mfem::Vector& b);
+   /// (tolerance_reference); @p x is the warm start (the previous solution
+   /// with this step's Dirichlet values), before PrepareGuess.
+   void SetTolerance(const mfem::Vector& b, const mfem::Vector& x);
+   /// ||b - A x_prev|| for ToleranceReference::Step (see SetTolerance).
+   double StepResidualNorm(const mfem::Vector& b, const mfem::Vector& x);
    /// Record the solution @p x for later guesses.
    void RecordSolution(const mfem::Vector& x);
 
@@ -425,6 +438,15 @@ private:
    /// InitialGuess::Extrapolate: the solution before the previous one.
    mfem::Vector previous_x_;
    double previous_c0_ = 0.0; ///< Mass factor of the previous solve.
+
+   double tol_scale_ = 0.0; ///< LastToleranceScale().
+   /// ToleranceReference::Step: A x of the last solution (the projection's
+   /// image of it, kept), the mass factor and viscosity it was made with,
+   /// and work vectors.
+   mfem::Vector step_ax_;
+   bool step_ax_valid_ = false;
+   double step_c0_ = 0.0, step_nu_ = 0.0;
+   mfem::Vector step_r_, step_xu_, step_mx_;
 };
 
 } // namespace incns

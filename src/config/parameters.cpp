@@ -370,11 +370,15 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.ReadEnum(solver, "tolerance_reference", p.tolerance_reference,
    {
       {"initial_residual", ToleranceReference::InitialResidual},
-      {"rhs", ToleranceReference::Rhs}
+      {"rhs", ToleranceReference::Rhs},
+      {"step", ToleranceReference::Step}
    },
    "What solver.rtol is relative to. initial_residual: ||r|| <= rtol ||r_0|| "
    "(MFEM's; a better initial guess then saves no iterations). rhs: ||r|| <= "
-   "rtol ||b||, so that solver.initial_guess pays off.");
+   "rtol ||b||, so that solver.initial_guess pays off (loose at a small dt: "
+   "||b|| holds c0 M u_n). step: ||r|| <= rtol ||b - A x_prev||, the previous "
+   "solution's residual -- rtol of what the step changes, at any dt, with "
+   "initial_guess project at no extra operator application.");
    r.ReadEnum(solver, "initial_guess", p.initial_guess,
    {
       {"previous", InitialGuess::Previous},

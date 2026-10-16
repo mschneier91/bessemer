@@ -150,7 +150,7 @@ Linear solver: FGMRES on the monolithic velocity-pressure system with a block pr
 | `solver.atol` | real | `0` | FGMRES absolute tolerance. |
 | `solver.max_iter` | int | `2000` | FGMRES iteration cap. |
 | `solver.kdim` | int | `200` | FGMRES restart size. |
-| `solver.tolerance_reference` | initial_residual \| rhs | `initial_residual` | What solver.rtol is relative to. initial_residual: \|\|r\|\| <= rtol \|\|r_0\|\| (MFEM's; a better initial guess then saves no iterations). rhs: \|\|r\|\| <= rtol \|\|b\|\|, so that solver.initial_guess pays off. |
+| `solver.tolerance_reference` | initial_residual \| rhs \| step | `initial_residual` | What solver.rtol is relative to. initial_residual: \|\|r\|\| <= rtol \|\|r_0\|\| (MFEM's; a better initial guess then saves no iterations). rhs: \|\|r\|\| <= rtol \|\|b\|\|, so that solver.initial_guess pays off (loose at a small dt: \|\|b\|\| holds c0 M u_n). step: \|\|r\|\| <= rtol \|\|b - A x_prev\|\|, the previous solution's residual -- rtol of what the step changes, at any dt, with initial_guess project at no extra operator application. |
 | `solver.initial_guess` | previous \| extrapolate \| project | `previous` | The outer solve's initial guess. previous: the last step's solution. extrapolate: its linear extrapolation in time (one more system vector). project: the least-squares projection onto the last solver.projection_k solutions (2 projection_k system vectors). Pair with tolerance_reference: rhs. |
 | `solver.projection_k` | int | `8` | initial_guess project: the most solutions kept (>= 1). |
 | `solver.print_level` | int | `-1` | Solver verbosity (-1 = quiet). |

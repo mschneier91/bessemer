@@ -21,7 +21,13 @@ enum class ToleranceReference
    /// makes the answer more accurate, it saves no iterations.
    InitialResidual,
    /// ||r|| <= rtol ||b||: a better initial guess stops the solve sooner.
-   Rhs
+   /// ||b|| holds the mass term c0 M u_n (c0 = beta0 / dt), so at a small dt
+   /// the bound is loose against what a step changes.
+   Rhs,
+   /// ||r|| <= rtol ||b - A x_prev||, x_prev the previous solution: rtol of
+   /// what this step has to change, whatever dt; a better initial guess
+   /// still stops the solve sooner.
+   Step
 };
 
 /// The outer solve's initial guess (deck `solver.initial_guess`).
@@ -74,10 +80,13 @@ public:
 
    /**
     * @brief Add a solution of the system with operator @p A.
-    * @param A The operator (applied once).
-    * @param x The solution.
+    * @param A  The operator (applied once).
+    * @param x  The solution.
+    * @param ax Optional output: A x (a copy of the image before it is
+    *           orthonormalized), for ToleranceReference::Step.
     */
-   void Add(const mfem::Operator& A, const mfem::Vector& x);
+   void Add(const mfem::Operator& A, const mfem::Vector& x,
+            mfem::Vector* ax = nullptr);
 
    /**
     * @brief Recompute the images with a changed operator @p A (m

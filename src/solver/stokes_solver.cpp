@@ -404,11 +404,15 @@ void StokesSolver::WarmUp()
 
 int StokesSolver::GuessVectors() const
 {
+   // ToleranceReference::Step keeps A x_prev and works in one more system
+   // vector and two velocity-sized ones: counted as four.
+   const int step =
+      (opts_.tolerance_reference == ToleranceReference::Step) ? 4 : 0;
    switch (opts_.initial_guess)
    {
-      case InitialGuess::Project: return 2 * opts_.projection_k;
-      case InitialGuess::Extrapolate: return 2;
-      default: return 0;
+      case InitialGuess::Project: return 2 * opts_.projection_k + step;
+      case InitialGuess::Extrapolate: return 2 + step;
+      default: return step;
    }
 }
 
@@ -462,20 +466,86 @@ void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
    if (guessed && ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, u_dirichlet); }
 }
 
-void StokesSolver::SetTolerance(const Vector& b)
+void StokesSolver::SetTolerance(const Vector& b, const Vector& x)
 {
+   const bool step_as_initial =
+      opts_.tolerance_reference == ToleranceReference::Step &&
+      opts_.initial_guess == InitialGuess::Previous;
    if (opts_.tolerance_reference == ToleranceReference::Rhs)
    {
       const double b_norm =
          std::sqrt(InnerProduct(spaces_.Velocity().GetComm(), b, b));
+      tol_scale_ = b_norm;
       fgmres_.SetRelTol(0.0);
       fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * b_norm));
    }
+   else if (opts_.tolerance_reference == ToleranceReference::Step &&
+            !step_as_initial)
+   {
+      const double r_norm = StepResidualNorm(b, x);
+      tol_scale_ = r_norm;
+      fgmres_.SetRelTol(0.0);
+      fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * r_norm));
+   }
    else
    {
+      // InitialResidual, or Step from the warm start itself: FGMRES's initial
+      // residual IS b - A x_prev then.
+      tol_scale_ = 0.0;
       fgmres_.SetRelTol(opts_.rtol);
       fgmres_.SetAbsTol(opts_.atol);
    }
+}
+
+double StokesSolver::StepResidualNorm(const Vector& b, const Vector& x)
+{
+   // ||b - A x_prev||: how far this step moves the solution -- small at a
+   // small dt, so the tolerance follows the step, unlike ||b|| (which holds
+   // c0 M u_n). With the projection, A x_prev is the image the projection
+   // made when it recorded x_prev (no operator application); if the mass
+   // factor moved since (the step size changed), (c0 - c0_prev) M x_u is
+   // added on the free velocity rows -- the momentum block's other terms and
+   // B, B^T do not depend on dt. x_prev's Dirichlet values are the previous
+   // step's, so the essential rows hold their change. Otherwise (the first
+   // solve, a new viscosity, the rotation term, other initial guesses) the
+   // operator is applied to the warm start @p x.
+   Vector& r = step_r_;
+   r.SetSize(b.Size());
+   r.UseDevice(true);
+   const bool reuse = opts_.step_reference_reuse && step_ax_valid_ &&
+                      step_ax_.Size() == b.Size() && step_nu_ == opts_.nu &&
+                      !op_.Rotation();
+   if (reuse)
+   {
+      r = step_ax_;
+      const double dc0 = opts_.mass_coeff - step_c0_;
+      if (dc0 != 0.0)
+      {
+         INCNS_PROFILE("stokes_solver::step_reference");
+         const Array<int>& ess = op_.EssentialTrueDofs();
+         const int n_u = spaces_.Velocity().GetTrueVSize();
+         Vector xu;
+         xu.MakeRef(const_cast<Vector&>(x), 0, n_u);
+         step_xu_.SetSize(n_u);
+         step_xu_.UseDevice(true);
+         step_xu_ = xu;
+         if (ess.Size() > 0) { step_xu_.SetSubVector(ess, 0.0); }
+         step_mx_.SetSize(n_u);
+         step_mx_.UseDevice(true);
+         op_.Mass().Mult(step_xu_, step_mx_);
+         if (ess.Size() > 0) { step_mx_.SetSubVector(ess, 0.0); }
+         Vector ru;
+         ru.MakeRef(r, 0, n_u);
+         ru.Add(dc0, step_mx_);
+      }
+   }
+   else
+   {
+      INCNS_PROFILE("stokes_solver::step_reference");
+      block_op_.Mult(x, r);
+   }
+   subtract(b, r, r);
+   return std::sqrt(InnerProduct(spaces_.Velocity().GetComm(), r, r));
 }
 
 void StokesSolver::RecordSolution(const Vector& x)
@@ -489,7 +559,15 @@ void StokesSolver::RecordSolution(const Vector& x)
          projection_ = std::make_unique<SolutionProjection>(
                           opts_.projection_k, spaces_.Velocity().GetComm());
       }
-      projection_->Add(block_op_, x);
+      const bool keep_ax =
+         opts_.tolerance_reference == ToleranceReference::Step;
+      projection_->Add(block_op_, x, keep_ax ? &step_ax_ : nullptr);
+      if (keep_ax)
+      {
+         step_ax_valid_ = true;
+         step_c0_ = c0;
+         step_nu_ = opts_.nu;
+      }
       if (projection_->Size() <= 1) // a new basis
       {
          projection_c0_ = c0;
@@ -668,8 +746,8 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
       // Converged() = false) rather than be silently projected away.
    }
 
+   SetTolerance(b, x); // before PrepareGuess: Step reads the warm start
    PrepareGuess(b, x);
-   SetTolerance(b);
 
    // Per-solve counters (the rotation fields persist from UpdateRotation).
    stats_.vel_applications = stats_.vel_inner_iterations = 0;
