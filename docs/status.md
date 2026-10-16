@@ -53,8 +53,9 @@ cannot build: NOT compiled, NOT run, `scripts/style.sh` and `scripts/docs.sh` no
 Human: "implement the uzawa stuff here as an option for the solver" (the proposal is
 [design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md)); on the initial guess,
 "ok ya that makes sense" (pressure-only projection under Schur). `solver.outer: coupled |
-schur` (default coupled), `solver.uzawa.*` (method `flexible_cg` | `cg` | `fgmres`, inner
-tolerance `relaxed` | `tight` | `loose`, ...), `solver.log_interval` (per-step solver log,
+schur` (default coupled), `solver.uzawa.*` (flexible CG only, human: "drop both" for plain CG
+and pressure FGMRES; inner tolerance `relaxed` | `tight` | `loose`, ...; not with the
+rotational form), `solver.log_interval` (per-step solver log,
 either method, with device memory). New `SchurComplementOperator`, `SchurSolver`;
 `StokesSolver` dispatches on `outer`; the pressure projection is checkpointed. Departures
 from the proposal and the study plan: [uzawa.md](uzawa.md). **First, on a build machine:**
