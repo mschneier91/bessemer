@@ -52,3 +52,18 @@ checkpoint:
   enabled: true
   path: tgv_n64/chk
   interval: 200
+
+solver:
+  # The fast configuration (docs/throughput.md, 2026-10-15): the initial guess
+  # projected onto the last 8 solutions, two inner Schur iterations, and rtol
+  # as a fraction of what a step changes (the step reference). 1e-3 keeps this
+  # flow's checks (TGV 32^3 dissipation within 1.7e-4 of the reference peak;
+  # channel Re_tau 180 statistics over t = 60 to 120 within the sampling
+  # noise) and is the fastest measured; instantaneous forces (DFG) want 1e-6.
+  # A restart from a checkpoint matches an uninterrupted run to the solver
+  # tolerance, not bitwise: the projection's solutions are not checkpointed.
+  tolerance_reference: step
+  initial_guess: project
+  projection_k: 8
+  n_inner: 2
+  rtol: 1.0e-3

@@ -12,8 +12,8 @@
 # pi x 2 x pi/2 box: 1708 x 854 wall units, the usual smaller box for
 # one-point statistics (Lee & Moser used 8 pi x 2 x 3 pi), and larger in wall
 # units than the Re_tau 180 deck's. OIFS (BDF3, collocated mass) at CFL 2,
-# with the opt-in solver settings of docs/throughput.md (rtol 1e-8, the
-# conservative one). Statistics over t in [20, 40] (delta / u_tau units).
+# substep CFL 1.5, the fast solver configuration of the Re_tau 180 deck
+# (docs/throughput.md). Statistics over t in [20, 40] (delta / u_tau units).
 #
 #   mpirun -np 1 build/cuda/apps/run_case benchmarks/channel/channel_retau550.yaml
 #   python3 benchmarks/channel/plot.py channel_retau550/chan550_profiles.csv --re 550
@@ -49,6 +49,7 @@ time:
   step_control: cfl
   cfl_target: 2.0
   convection: oifs
+  oifs_cfl: 1.5                  # substep CFL (default 0.5): no measurable cost in accuracy here
 
 boundary_conditions:
   - {select: [ymin, ymax], type: no_slip}
@@ -76,8 +77,16 @@ reference:
   re_tau: 543.496
 
 solver:
-  tolerance_reference: rhs
+  # The fast configuration (docs/throughput.md, 2026-10-15): the initial guess
+  # projected onto the last 8 solutions, two inner Schur iterations, and rtol
+  # as a fraction of what a step changes (the step reference). 1e-3 keeps this
+  # flow's checks (TGV 32^3 dissipation within 1.7e-4 of the reference peak;
+  # channel Re_tau 180 statistics over t = 60 to 120 within the sampling
+  # noise) and is the fastest measured; instantaneous forces (DFG) want 1e-6.
+  # A restart from a checkpoint matches an uninterrupted run to the solver
+  # tolerance, not bitwise: the projection's solutions are not checkpointed.
+  tolerance_reference: step
   initial_guess: project
   projection_k: 8
-  n_inner: 3
-  rtol: 1.0e-8
+  n_inner: 2
+  rtol: 1.0e-3
