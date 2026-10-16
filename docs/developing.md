@@ -128,7 +128,9 @@ src/
                nullspace, lp_surrogate (LOR-AMG L_p), point_block_jacobi (nvcc),
                rotational_schur (CC/tensor/auto + RotationNumber, nvcc), viscous_ratio
   solver/      stokes_solver (one saddle-point solve; SolveStats, MonitoredSolver),
-               velocity_preconditioner (enums), case (THE driver-facing class)
+               velocity_preconditioner (enums), case (THE driver-facing class),
+               outer_solver (enums), schur_complement + schur_solver (the Uzawa
+               option, docs/uzawa.md)
   time/        multistep_coeffs, time_integrator (in-repo BDF; NOT mfem::ODESolver),
                adaptive_controller, integrator_state, cfl (nvcc)
   post/        pressure_mean, kinetic_head (nvcc), body_force (lift/drag), diagnostics,
@@ -409,8 +411,16 @@ additive term inside `StokesTimeIntegrator`.
   fluid's ν in every solver (`grad_div_nu_ref`). GPU memory record and the remaining
   opportunity (MFEM's 27-per-point vector-diffusion data; declined, human 2026-10-13):
   [gpu_memory.md](gpu_memory.md).
-- **Outer: FGMRES on the monolithic system, always** (no MINRES, no Schur-only production
-  Krylov). Block preconditioner; FGMRES is required because inner PCs are nonlinear.
+- **Outer: FGMRES on the monolithic system by default** (no MINRES). Block preconditioner;
+  FGMRES is required because inner PCs are nonlinear. **Option under study: the Schur
+  complement (Uzawa) method** (`solver.outer: schur`; human 2026-10-16; [uzawa.md](uzawa.md)):
+  flexible CG (default; plain CG only with `schur: laplacian_legacy`, since CC's
+  fixed-count inner CG is nonlinear) or pressure FGMRES (required with the rotational
+  form) on S = B A⁻¹ Bᵀ, each application a velocity solve to a relaxed inner tolerance,
+  same CC preconditioner and same stopping rule (the coupled residual, split τ/√2 pressure
+  + τ/√2 momentum, both true residuals). `initial_guess: project` is pressure-only there.
+  Default stays `coupled` until the study's decision rule (≤ 1.2× step time, ≥ 25 % less
+  peak memory) is measured. Not compiled or run as of 2026-10-16.
 - **Schur block** (`solver.schur`): **Cahouet–Chabard is the case-level default** (human
   2026-07-17); `mass` (ν M_p⁻¹, Δt-sensitive) remains, and is the LOW-LEVEL
   `StokesSolverOptions` default so solver unit tests pin what they test.
