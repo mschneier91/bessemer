@@ -538,6 +538,72 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    }
    MFEM_VERIFY(p.rotation_log_interval >= 0,
                "parameters: solver.rotation_log_interval must be >= 0");
+   r.ReadEnum(solver, "outer", p.outer,
+   {{"coupled", OuterMethod::Coupled}, {"schur", OuterMethod::Schur}},
+   "Outer iteration. coupled: FGMRES on the velocity-pressure system with the "
+   "block preconditioner. schur: Krylov on the pressure Schur complement "
+   "B A^-1 B^T (Uzawa), each operator application a velocity solve; same "
+   "preconditioners and the same coupled-residual stopping rule (solver.rtol, "
+   "atol, tolerance_reference), a few pressure and velocity vectors instead "
+   "of the coupled Krylov basis. Needs solver.schur cc or laplacian_legacy. "
+   "initial_guess project then projects the pressure only.");
+   r.Read(solver, "log_interval", p.solver_log_interval,
+          "Write the per-step solver log (<name>_solver.csv: iterations, inner "
+          "work, timings, final coupled residual, device memory) every N steps "
+          "(0 = off).");
+   MFEM_VERIFY(p.solver_log_interval >= 0,
+               "parameters: solver.log_interval must be >= 0");
+   {
+      SchurSolveOptions& o = p.uzawa;
+      const DeckSection uz = r.Section(solver, "uzawa",
+                                       "Schur complement (Uzawa) outer method.");
+      r.ReadEnum(uz, "method", o.method,
+      {
+         {"flexible_cg", SchurKrylov::FlexibleCG}, {"cg", SchurKrylov::CG},
+         {"fgmres", SchurKrylov::FGMRES}
+      },
+      "outer schur: Krylov method on the pressure. flexible_cg: Notay's "
+      "flexible CG (tolerates the Cahouet-Chabard inner CG and inexact velocity "
+      "solves). cg: plain PCG (needs a fixed linear preconditioner: schur "
+      "laplacian_legacy). fgmres: pressure-space FGMRES (rotational form).");
+      r.ReadEnum(uz, "inner_tolerance", o.inner,
+      {
+         {"relaxed", InnerTolerance::Relaxed}, {"tight", InnerTolerance::Tight},
+         {"loose", InnerTolerance::Loose}
+      },
+      "outer schur: the velocity solve inside each Schur application. relaxed: "
+      "min(eps_max, max(eps_tight, relax_c tol / ||r||)). tight: eps_tight. "
+      "loose: eps_loose.");
+      r.Read(uz, "eps_tight", o.eps_tight,
+             "outer schur: tight inner relative tolerance (relaxed: the floor).");
+      r.Read(uz, "eps_loose", o.eps_loose,
+             "outer schur: loose inner relative tolerance.");
+      r.Read(uz, "eps_max", o.eps_max,
+             "outer schur, relaxed: the loosest inner relative tolerance.");
+      r.Read(uz, "relax_c", o.relax_c,
+             "outer schur, relaxed: the constant c of the schedule.");
+      r.Read(uz, "inner_max_iter", o.inner_max_iter,
+             "outer schur: iteration cap of each velocity solve.");
+      r.Read(uz, "inner_kdim", o.inner_kdim,
+             "outer schur: restart of the velocity GMRES (rotational form).");
+      r.Read(uz, "kdim", o.kdim, "outer schur, fgmres: restart length.");
+      r.Read(uz, "max_cycles", o.max_cycles,
+             "outer schur: Krylov cycles, each ended by a velocity solve and a "
+             "true pressure-residual check that restarts the iteration if the "
+             "residual drifted above the tolerance.");
+      r.Read(uz, "history", o.history,
+             "outer schur: record every iteration (recurrence residual, inner "
+             "tolerance and iterations, coupled residual of the iterate: one "
+             "momentum application each) for solver.log_interval.");
+      MFEM_VERIFY(o.max_cycles >= 1 && o.inner_max_iter >= 1 && o.kdim >= 1 &&
+                  o.inner_kdim >= 1 && o.eps_tight > 0.0 &&
+                  o.eps_tight <= o.eps_max && o.eps_loose > 0.0 &&
+                  o.relax_c > 0.0, "parameters: bad solver.uzawa options");
+   }
+   MFEM_VERIFY(p.outer == OuterMethod::Coupled ||
+               p.schur == SchurBlockType::CahouetChabard,
+               "parameters: solver.outer schur needs solver.schur cc or "
+               "laplacian_legacy");
 
    // Boundary-condition groups: topology + type only (fields are bound in the
    // driver by group name). A selector token is an attribute integer if it
