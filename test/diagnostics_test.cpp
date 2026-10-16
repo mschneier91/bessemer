@@ -105,14 +105,14 @@ TEST(Diagnostics, DissipationLinearShear)
 
 // FlowDiagnostics (the assembled-operator form the solver logs with) returns
 // the same three numbers as the free functions, in 2D and 3D, velocity orders
-// 2 to 4 (each 3D order has its own compile-time-sized kernel), on a field
+// 2 to 6 (each 3D order has its own compile-time-sized kernel), on a field
 // that is neither divergence-free nor polynomial; and it reports a refined
 // space.
 TEST(Diagnostics, AssembledFormsMatchTheFreeFunctions)
 {
    for (const int dim : {2, 3})
    {
-      for (const int order : {2, 3, 4})
+      for (const int order : {2, 3, 4, 5, 6})
       {
          SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << order);
          ParMesh mesh;

@@ -1,5 +1,6 @@
 #include "operators/lean_vector_diffusion.hpp"
 
+#include "operators/component_kernels.hpp"
 #include "operators/grad_div_integrator.hpp"
 
 #include "mfem/fem/kernels.hpp"
@@ -193,6 +194,61 @@ void CompactApply3D(const int NE, const Array<real_t>& b,
          MFEM_SYNC_THREAD;
          kernels::internal::GradTranspose3d(D1D, Q1D, smem, sB, sG, r0, r1, i);
          kernels::internal::WriteDofs3d(e, D1D, i, i, r1, YE);
+      }
+   });
+}
+
+// CompactApply3D at Q1D >= 7, one component at a time
+// (operators/component_kernels.hpp): there r0 and r1 went to the stack even
+// with the component loop unrolled, 1008 and 1152 bytes per thread at (6, 7)
+// and (7, 8) (ptxas, 2026-10-16). The components are independent; the
+// arithmetic is CompactApply3D's.
+template <int D1D, int Q1D>
+void CompactApply3DByComponent(const int NE, const Array<real_t>& b,
+                               const Array<real_t>& g, const Vector& d,
+                               const Vector& x, Vector& y, const int,
+                               const int)
+{
+   static constexpr int VDIM = 3;
+   const auto B = b.Read(), G = g.Read();
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MD1 = SetMaxOf(D1D), MQ1 = SetMaxOf(Q1D);
+      MFEM_SHARED real_t sB[MD1][MQ1], sG[MD1][MQ1], smem[MQ1][MQ1];
+      kernels::internal::vd_regs3d_t<1, 3, MQ1> r0, r1;
+      kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
+      kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+      MFEM_UNROLL(VDIM)
+      for (int i = 0; i < VDIM; i++)
+      {
+         kernels3d::LoadComponent(e, D1D, i, XE, r0);
+         kernels3d::GradComponent<false>(D1D, Q1D, smem, sB, sG, r0, r1);
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  const real_t gradX = r1[0][0][qz][qy][qx];
+                  const real_t gradY = r1[0][1][qz][qy][qx];
+                  const real_t gradZ = r1[0][2][qz][qy][qx];
+                  const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
+                               O13 = DE(qx, qy, qz, 2, e);
+                  const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
+                  const real_t O33 = DE(qx, qy, qz, 5, e);
+                  r0[0][0][qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ);
+                  r0[0][1][qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ);
+                  r0[0][2][qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ);
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         kernels3d::GradComponent<true>(D1D, Q1D, smem, sB, sG, r0, r1);
+         kernels::internal::WriteDofs3d(e, D1D, 0, i, r1, YE);
       }
    });
 }
@@ -709,6 +765,10 @@ LeanVectorDiffusionIntegrator::ApplyKernelType
 LeanVectorDiffusionIntegrator::CompactApplyKernels::Kernel()
 {
    if constexpr(DIM == 2) { return leandiff::CompactApply2D<D1D, Q1D>; }
+   else if constexpr(DIM == 3 && Q1D >= 7)
+   {
+      return leandiff::CompactApply3DByComponent<D1D, Q1D>;
+   }
    else if constexpr(DIM == 3) { return leandiff::CompactApply3D<D1D, Q1D>; }
    MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
 }
@@ -727,7 +787,10 @@ LeanVectorDiffusionIntegrator::FusedApplyKernels::Kernel()
 {
    if constexpr(DIM == 2) { return leandiff::FusedApply2D<D1D, Q1D>; }
    // A thread per point while its static shared memory fits in 48 KB (Q1D up
-   // to 7: 44 KB at (7, 7)); (7, 8) needs 64 KB and keeps FusedApply3D.
+   // to 7: 44 KB at (7, 7)); (7, 8) needs 64 KB and keeps FusedApply3D, 1.2 KB
+   // of stack per thread included: a two-pass variant one component at a time
+   // (no stack, 255 registers, the gradients computed twice) took 1.01 ms per
+   // apply against its 0.87 ms (TGV 16^3 Q6, one H100, job 49270936).
    else if constexpr(DIM == 3 && Q1D <= 7)
    {
       return leandiff::FusedApply3DPoints<D1D, Q1D>;

@@ -1,8 +1,11 @@
 #include "operators/kernel_specializations.hpp"
 
+#include "operators/component_kernels.hpp"
+
 #include "mfem.hpp"
 #include "mfem/fem/integ/bilininteg_vecdiv_pa.hpp"
 #include "mfem/fem/integ/bilininteg_vecmass_pa.hpp"
+#include "mfem/fem/integ/nonlininteg_vecconvection_pa.hpp"
 
 #include <tuple>
 #include <type_traits>
@@ -139,6 +142,113 @@ void ApplyTranspose3D(const int NE, const mfem::Array<mfem::real_t>& bt,
    });
 }
 
+// Velocity orders 5 and up (Q1D >= 7): the kernels above one velocity
+// component at a time (operators/component_kernels.hpp). There ptxas put the
+// kernels above's two 3 x 3 x Q1D gradient arrays on the stack, 1008 and 1152
+// bytes per thread at Q1D 7 (transpose) and 8 (both); one component's arrays
+// are 6 Q1D doubles, in registers (2026-10-16). Each point's sum keeps the
+// order of the kernels above (component, then direction).
+template <int TR_D1D, int TE_D1D, int Q1D>
+void Apply3DByComponent(const int NE, const mfem::Array<mfem::real_t>& b_,
+                        const mfem::Array<mfem::real_t>& g_,
+                        const mfem::Array<mfem::real_t>& bt_,
+                        const mfem::Vector& q_, const mfem::Vector& x_,
+                        mfem::Vector& y_, const int, const int, const int)
+{
+   using mfem::real_t;
+   namespace ki = mfem::kernels::internal;
+   const auto B = b_.Read(), G = g_.Read(), Bt = bt_.Read();
+   const auto Q = mfem::Reshape(q_.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto X = mfem::Reshape(x_.Read(), TR_D1D, TR_D1D, TR_D1D, 3, NE);
+   auto Y = mfem::Reshape(y_.ReadWrite(), TE_D1D, TE_D1D, TE_D1D, 1, NE);
+
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1];
+      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
+      ki::v_regs3d_t<1, MQ1> r0, r1;
+      ki::LoadMatrix(TR_D1D, Q1D, B, sB);
+      ki::LoadMatrix(TR_D1D, Q1D, G, sG);
+      MFEM_UNROLL(3)
+      for (int c = 0; c < 3; ++c)
+      {
+         kernels3d::LoadComponent(e, TR_D1D, c, X, g0);
+         kernels3d::GradComponent<false>(TR_D1D, Q1D, smem, sB, sG, g0, g1);
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  real_t r = g1[0][0][qz][qy][qx] * Q(qx, qy, qz, 0, c, e);
+                  if (c > 0) { r = r0[0][qz][qy][qx] + r; }
+                  r += g1[0][1][qz][qy][qx] * Q(qx, qy, qz, 1, c, e);
+                  r += g1[0][2][qz][qy][qx] * Q(qx, qy, qz, 2, c, e);
+                  r0[0][qz][qy][qx] = r;
+               }
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      ki::LoadMatrix<MQ1, true>(TE_D1D, Q1D, Bt, sB);
+      ki::EvalTranspose3d(TE_D1D, Q1D, smem, sB, r0, r1);
+      ki::WriteDofs3d(e, TE_D1D, r1, Y);
+   });
+}
+
+template <int TR_D1D, int TE_D1D, int Q1D>
+void ApplyTranspose3DByComponent(const int NE,
+                                 const mfem::Array<mfem::real_t>& bt,
+                                 const mfem::Array<mfem::real_t>& gt,
+                                 const mfem::Array<mfem::real_t>& b,
+                                 const mfem::Vector& q_, const mfem::Vector& x_,
+                                 mfem::Vector& y_, const int, const int,
+                                 const int)
+{
+   using mfem::real_t;
+   namespace ki = mfem::kernels::internal;
+   const auto Bt = bt.Read(), Gt = gt.Read(), B = b.Read();
+   const auto Q = mfem::Reshape(q_.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto X = mfem::Reshape(x_.Read(), TE_D1D, TE_D1D, TE_D1D, 1, NE);
+   auto Y = mfem::Reshape(y_.ReadWrite(), TR_D1D, TR_D1D, TR_D1D, 3, NE);
+
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1];
+      ki::v_regs3d_t<1, MQ1> r0, r1;
+      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
+      ki::LoadMatrix(TE_D1D, Q1D, B, sB);
+      ki::LoadDofs3d(e, TE_D1D, X, r0);
+      ki::Eval3d(TE_D1D, Q1D, smem, sB, r0, r1);
+      MFEM_SYNC_THREAD;
+      ki::LoadMatrix<MQ1, true>(TR_D1D, Q1D, Bt, sB);
+      ki::LoadMatrix<MQ1, true>(TR_D1D, Q1D, Gt, sG);
+      MFEM_UNROLL(3)
+      for (int c = 0; c < 3; ++c)
+      {
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  const real_t r = r1[0][qz][qy][qx];
+                  g0[0][0][qz][qy][qx] = r * Q(qx, qy, qz, 0, c, e);
+                  g0[0][1][qz][qy][qx] = r * Q(qx, qy, qz, 1, c, e);
+                  g0[0][2][qz][qy][qx] = r * Q(qx, qy, qz, 2, c, e);
+               }
+            }
+         }
+         kernels3d::GradComponent<true>(TR_D1D, Q1D, smem, sB, sG, g0, g1);
+         ki::WriteDofs3d(e, TR_D1D, 0, c, g1, Y);
+      }
+   });
+}
+
 } // namespace divkernels
 
 namespace
@@ -171,11 +281,22 @@ void AddOrder()
    Specialization < 2, K + 1, K, K + 2 >::Add();
    // 3D: ours, in MFEM's tables under MFEM's keys (dim, trial d1d, test d1d,
    // q1d), so VectorDivergenceIntegrator dispatches to them.
-   Table<VectorDivergenceIntegrator::VectorDivergenceAddMultPA>()
-   [std::make_tuple(3, K + 1, K, K + 2)] = divkernels::Apply3D < K + 1, K, K + 2 >;
-   Table<VectorDivergenceIntegrator::VectorDivergenceAddMultTransposePA>()
-   [std::make_tuple(3, K + 1, K, K + 2)] =
-      divkernels::ApplyTranspose3D < K + 1, K, K + 2 >;
+   auto& apply =
+      Table<VectorDivergenceIntegrator::VectorDivergenceAddMultPA>()
+      [std::make_tuple(3, K + 1, K, K + 2)];
+   auto& apply_t =
+      Table<VectorDivergenceIntegrator::VectorDivergenceAddMultTransposePA>()
+      [std::make_tuple(3, K + 1, K, K + 2)];
+   if constexpr(K + 2 >= 7)
+   {
+      apply = divkernels::Apply3DByComponent < K + 1, K, K + 2 >;
+      apply_t = divkernels::ApplyTranspose3DByComponent < K + 1, K, K + 2 >;
+   }
+   else
+   {
+      apply = divkernels::Apply3D < K + 1, K, K + 2 >;
+      apply_t = divkernels::ApplyTranspose3D < K + 1, K, K + 2 >;
+   }
 }
 
 } // namespace
@@ -187,6 +308,20 @@ void AddKernelSpecializations()
       AddOrder<2>();
       AddOrder<3>();
       AddOrder<4>();
+      // Orders 5 and 6 (human 2026-10-16, before the polynomial-order study):
+      // without these, MFEM's runtime-size kernels (arrays sized for 14
+      // points per direction) ran there.
+      AddOrder<5>();
+      AddOrder<6>();
+      // The IMEX nonlinear convection at the dealiased order 3K
+      // (Convection::DealiasedOrder: K + 1 dofs, ceil((3K + 1) / 2) Gauss
+      // points per direction); MFEM's table stops at 5 dofs in 3D. The apply
+      // only: AddSpecialization would also add the Newton gradient's kernels,
+      // which the solver does not use (and whose templates MFEM defines in
+      // other headers).
+      using Convection = mfem::VectorConvectionNLFIntegrator;
+      Convection::AddMultPAKernels::Specialization<3, 6, 8>::Add();
+      Convection::AddMultPAKernels::Specialization<3, 7, 10>::Add();
       return true;
    }();
    (void)added;

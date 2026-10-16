@@ -1,12 +1,13 @@
 // incns::AddKernelSpecializations (operators/kernel_specializations): MFEM's
-// vector mass and vector divergence (and transpose) partial-assembly applies
-// at the solver's sizes give the same results, to roundoff, after the
+// vector mass, vector divergence (and transpose) and nonlinear convection
+// partial-assembly applies at the solver's sizes give the same results, to
+// roundoff, after the
 // compile-time-sized kernels are registered as before (MFEM's generic
 // kernels): the same arithmetic, but with fixed loop bounds a compiler may
 // vectorize or contract it differently (1.7e-17 absolute on the CPU build,
 // 3D, 2026-10-15). In 3D the divergence kernels are bessemer's own (unrolled
 // copies of MFEM's). The differences are printed. 2D and 3D, velocity orders
-// 2 to 4, a deformed mesh. The generic
+// 2 to 6, a deformed mesh. The generic
 // results are taken first, before anything registers: this test has its own
 // executable for that reason.
 
@@ -32,7 +33,8 @@ void Deform(const Vector& x, Vector& y)
    if (x.Size() == 3) { y(2) += 0.05 * x(0) * x(1); }
 }
 
-// M u, B u and B^T q for random u, q (fixed seeds), velocity order k.
+// M u, B u, B^T q and (u . grad) u for random u, q (fixed seeds), velocity
+// order k; the convection at the solver's dealiased rule (order 3k).
 std::vector<Vector> Apply(int dim, int k)
 {
    Mesh serial = (dim == 2)
@@ -74,14 +76,27 @@ std::vector<Vector> Apply(int dim, int k)
    mu.HostRead();
    bu.HostRead();
    btq.HostRead();
-   return {mu, bu, btq};
+
+   ParNonlinearForm n(&V);
+   auto* ni = new VectorConvectionNLFIntegrator;
+   ni->SetIntRule(&IntRules.Get(geom, 3 * k));
+   n.AddDomainIntegrator(ni);
+   n.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   n.Setup();
+   Vector ut(V.GetTrueVSize()), cu(V.GetTrueVSize());
+   ut.Randomize(11 + rank);
+   ut.UseDevice(true);
+   cu.UseDevice(true);
+   n.Mult(ut, cu);
+   cu.HostRead();
+   return {mu, bu, btq, cu};
 }
 
 } // namespace
 
 TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
 {
-   const int dims[] = {2, 3}, orders[] = {2, 3, 4};
+   const int dims[] = {2, 3}, orders[] = {2, 3, 4, 5, 6};
    std::vector<std::vector<Vector>> generic;
    for (int dim : dims)
    {
@@ -95,8 +110,10 @@ TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
       for (int k : orders)
       {
          const std::vector<Vector> special = Apply(dim, k);
-         const char* names[] = {"mass", "divergence", "divergence transpose"};
-         for (int i = 0; i < 3; ++i)
+         const char* names[] = {"mass", "divergence", "divergence transpose",
+                                "convection"
+                               };
+         for (int i = 0; i < 4; ++i)
          {
             SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << k
                          << " " << names[i]);

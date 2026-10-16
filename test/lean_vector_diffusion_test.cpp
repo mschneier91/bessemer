@@ -1,6 +1,6 @@
 // LeanVectorDiffusionIntegrator (operators/lean_vector_diffusion): compact
 // partial-assembly storage and a stack-free diagonal, against MFEM's
-// VectorDiffusionIntegrator. 2D and 3D, orders 2 and 3, a deformed mesh,
+// VectorDiffusionIntegrator. 2D and 3D, orders 2, 3, 5 and 6, a deformed mesh,
 // byNODES and byVDIM, a variable and a constant coefficient.
 //  L1 Storage::Mfem: the apply is MFEM's, bit for bit; the diagonal equals
 //     MFEM's to roundoff.
@@ -150,7 +150,7 @@ TEST(LeanVectorDiffusion, L1_MfemStorageIsMfems)
 TEST(LeanVectorDiffusion, L2_CompactStorageEqualsMfem)
 {
    for (const int dim : {2, 3})
-      for (const int order : {2, 3})
+      for (const int order : {2, 3, 5, 6})
          for (const Ordering::Type ordering : {Ordering::byNODES, Ordering::byVDIM})
             for (const bool constant : {false, true})
             {
@@ -161,13 +161,13 @@ TEST(LeanVectorDiffusion, L2_CompactStorageEqualsMfem)
 // L3 FuseGradDiv: nu K + gamma (div u, div v) applied by one kernel equals the
 //    two integrators applied separately, to roundoff (the sums are formed at
 //    the quadrature points instead of after the contraction), and the
-//    grad-div integrator's own apply is switched off. 2D and 3D, orders 2 and
-//    3, deformed mesh, variable nu and gamma.
+//    grad-div integrator's own apply is switched off. 2D and 3D, orders 2, 3,
+//    5 and 6, deformed mesh, variable nu and gamma.
 TEST(LeanVectorDiffusion, L3_FusedGradDivMatchesSeparateApplies)
 {
    for (const int dim : {2, 3})
    {
-      for (const int k : {2, 3})
+      for (const int k : {2, 3, 5, 6})
       {
          SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << k);
          Mesh serial = (dim == 2)

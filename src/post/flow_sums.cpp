@@ -349,6 +349,14 @@ void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
       {
          flowsums::Sums3DPoints<5, 6>(ne, maps.B, maps.G, w, geom->J, xe, out);
       }
+      else if (d1 == 6 && q1 == 7)
+      {
+         flowsums::Sums3DPoints<6, 7>(ne, maps.B, maps.G, w, geom->J, xe, out);
+      }
+      else if (d1 == 7 && q1 == 8)
+      {
+         flowsums::Sums3DPoints<7, 8>(ne, maps.B, maps.G, w, geom->J, xe, out);
+      }
       else
       {
          flowsums::Sums3D(ne, d1, q1, maps.B, maps.G, w, geom->J, xe, out);

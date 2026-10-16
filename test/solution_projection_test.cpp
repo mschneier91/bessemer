@@ -49,7 +49,8 @@ Vector Random(int n, int seed)
 double Norm(const Vector& v) { return std::sqrt(InnerProduct(MPI_COMM_WORLD, v, v)); }
 
 // || guess(A x) - x || / || x ||.
-double GuessError(const SolutionProjection& p, const Operator& A, const Vector& x)
+double GuessError(const SolutionProjection& p, const Operator& A,
+                  const Vector& x)
 {
    Vector b(x.Size()), g(x.Size());
    b.UseDevice(true);
@@ -104,7 +105,7 @@ TEST(SolutionProjection, GuessesFromTheKeptSolutions)
    EXPECT_GT(GuessError(p, A2, xs[0]), 1e-3);
 
    // P4: the same sequence, the same bits.
-   auto run = [&](Vector& g)
+   auto run = [&](Vector & g)
    {
       SolutionProjection q(k, MPI_COMM_WORLD);
       for (int j = 0; j < 5; ++j) { q.Add(A, xs[j]); }
