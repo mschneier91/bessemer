@@ -63,6 +63,15 @@ public:
    void AddOutflow(int attr);
 
    /**
+    * @brief Whether every Dirichlet coefficient is a constant
+    *        (mfem::VectorConstantCoefficient, e.g. no-slip): data that does not
+    *        depend on time or position. Deck `velocity` conditions are
+    *        functions (they may ramp in time), so they do not count.
+    * @return True when they all are (also when there are none).
+    */
+   bool DirichletIsConstant() const;
+
+   /**
     * @brief Advance every Dirichlet coefficient to time @p t.
     * @param t New time; a subsequent ProjectDirichlet() uses data at this time.
     */

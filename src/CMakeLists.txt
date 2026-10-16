@@ -28,11 +28,15 @@ add_library(incns STATIC
   operators/convection.cpp
   operators/directional_do_nothing.cpp
   time/oifs.cpp
+  time/oifs_convection.cpp
   operators/grad_div_integrator.cpp
+  operators/kernel_specializations.cpp
   operators/lean_vector_diffusion.cpp
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
+  solver/persistent_fgmres.cpp
+  solver/solution_projection.cpp
   solver/stokes_solver.cpp
   time/multistep_coeffs.cpp
   time/time_integrator.cpp
@@ -73,6 +77,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure);
 # amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
 # time/cfl.cpp -- the per-element directional convective CFL rate;
+# post/channel_statistics.cpp -- the plane averages' per-element line sums;
 # precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
 # points and the rotation-number statistics; util/device_sync.cpp -- no kernel,
 # but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
@@ -89,12 +94,15 @@ target_link_libraries(incns PUBLIC incns_mfem)
 if(USE_CUDA)
   set_source_files_properties(operators/grad_div_integrator.cpp
                               operators/lean_vector_diffusion.cpp
+                              operators/kernel_specializations.cpp
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp
                               post/flow_sums.cpp
+                              post/channel_statistics.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
+                              time/oifs_convection.cpp
                               precond/rotational_schur.cpp
                               util/device_sync.cpp
                               PROPERTIES LANGUAGE CUDA)

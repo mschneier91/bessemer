@@ -29,9 +29,6 @@ time:
   t_final: 8
   step_control: fixed
 
-solver:
-  rtol: 1.0e-10
-
 boundary_conditions:
   - {select: [inflow], type: velocity, profile: parabolic, u_max: 1.5, height: 0.41,
      time_profile: sine, time_scale: 8.0}

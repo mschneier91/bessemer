@@ -1,0 +1,92 @@
+# Turbulent channel flow, Re_tau = 543.496 (Lee & Moser, J. Fluid Mech. 774
+# (2015) 395-415; the DNS profiles are in
+# benchmarks/channel/reference/lm_chan550.csv, fetched by
+# benchmarks/fetch_references.py). Walls at y = 0 and y = 2 (half-height
+# delta = 1), periodic in x (streamwise, pi) and z (spanwise, pi/2), driven by
+# a constant pressure gradient f_x = 1, so u_tau = 1 and the statistically
+# steady Re_tau is exactly 1 / nu = 543.496.
+#
+# Resolution matched in wall units to channel_retau180.yaml: dx+ ~ 15.8,
+# dz+ ~ 7.9, first velocity node at y+ ~ 2, centre-line nodes ~ 12.5+.
+# 36 x 48 x 36 = 62,208 elements (Q3: 108 x 144 x 108 velocity nodes) in a
+# pi x 2 x pi/2 box: 1708 x 854 wall units, the usual smaller box for
+# one-point statistics (Lee & Moser used 8 pi x 2 x 3 pi), and larger in wall
+# units than the Re_tau 180 deck's. OIFS (BDF3, collocated mass) at CFL 2,
+# substep CFL 1.5, the fast solver configuration of the Re_tau 180 deck
+# (docs/throughput.md). Statistics over t in [20, 40] (delta / u_tau units).
+#
+#   mpirun -np 1 build/cuda/apps/run_case benchmarks/channel/channel_retau550.yaml
+#   python3 benchmarks/channel/plot.py channel_retau550/chan550_profiles.csv --re 550
+
+equation: navier_stokes
+
+physics:
+  nu: 1.83993994e-3         # 1 / 543.496
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 3
+  elements: [36, 48, 36]
+  lengths: [3.141592653589793, 2.0, 1.5707963267948966]
+  periodic: [true, false, true]
+  stretch: [none, tanh, none]
+  stretch_beta: [1.0, 3.0, 1.0]     # only y is stretched
+
+initial_velocity: channel
+initial:
+  perturbation: 0.1
+  seed: 1
+
+forcing:
+  body_force: [1.0, 0.0, 0.0]    # the mean pressure gradient: u_tau = sqrt(f_x delta) = 1
+
+time:
+  dt: 0.0005                     # the first step; CFL control after it
+  t_final: 40
+  step_control: cfl
+  cfl_target: 2.0
+  convection: oifs
+  oifs_cfl: 1.5                  # substep CFL (default 0.5): no measurable cost in accuracy here
+
+boundary_conditions:
+  - {select: [ymin, ymax], type: no_slip}
+
+channel_statistics:
+  enabled: true
+  start_time: 20
+  interval: 5
+
+output:
+  path: channel_retau550
+  name: chan550
+  progress: 1.0
+  history: true
+  diagnostics: true
+  interval: 50
+
+checkpoint:
+  enabled: true
+  path: channel_retau550/chk
+  interval: 500
+  at_time: 20                   # the developed flow, to branch more runs from
+
+reference:
+  re_tau: 543.496
+
+solver:
+  # The fast configuration (docs/throughput.md, 2026-10-15): the initial guess
+  # projected onto the last 8 solutions, two inner Schur iterations, and rtol
+  # as a fraction of what a step changes (the step reference). 1e-3 keeps this
+  # flow's checks (TGV 32^3 dissipation within 1.7e-4 of the reference peak;
+  # channel Re_tau 180 statistics over t = 60 to 120 within the sampling
+  # noise) and is the fastest measured; instantaneous forces (DFG) want 1e-6.
+  # A restart from a checkpoint matches an uninterrupted run to the solver
+  # tolerance, not bitwise: the projection's solutions are not checkpointed.
+  tolerance_reference: step
+  initial_guess: project
+  projection_k: 8
+  n_inner: 2
+  rtol: 1.0e-3

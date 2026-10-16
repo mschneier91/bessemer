@@ -4,6 +4,7 @@
 
 #if defined(MFEM_USE_CUDA)
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
 #endif
 
 // MFEM_DEVICE_SYNC is cudaDeviceSynchronize() only under nvcc (mfem
@@ -56,6 +57,22 @@ double DeviceMemoryInUse()
    }
 #endif
    return 0.0;
+}
+
+void NvtxPush(const char* name)
+{
+#if defined(MFEM_USE_CUDA)
+   nvtxRangePushA(name);
+#else
+   (void)name;
+#endif
+}
+
+void NvtxPop()
+{
+#if defined(MFEM_USE_CUDA)
+   nvtxRangePop();
+#endif
 }
 
 } // namespace incns

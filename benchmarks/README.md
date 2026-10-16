@@ -10,8 +10,6 @@ decks.
 | [tgv_re1600/](tgv_re1600/) | transition to turbulence in a periodic box: E(t), dissipation rate | spectral DNS on 512³ (high-order workshop case C3.5) | 16³, 32³, 64³ elements | 16³ and 32³ fit the desktop limits; 64³ needs GPU/many ranks |
 | [channel/](channel/) | wall-bounded turbulence: U⁺(y⁺), Reynolds stresses, Re_τ | Moser, Kim & Mansour 1999, Re_τ 178 and 392 | Re_τ 180, 395 | 180 fits the desktop limits (slow); 395 needs GPU/many ranks |
 | [dfg_3d/](dfg_3d/) | laminar 3D flow past a cylinder: drag, lift | FeatFlow (Bayraktar, Mierka & Turek 2012) | 3D-1Z (steady, Re 20), 3D-3Z (unsteady) | desktop |
-| [square_cylinder_re1000/](square_cylinder_re1000/) | 2D irregular wake: C_D mean, C_L rms, Strouhal spectrum, **resolution convergence** across AMR levels | none: the levels are each other's reference | l05, l1, l2, l3 | l05, l1 on a laptop (1 h, ~10 h); l2 days; l3 HPC |
-| [square_cylinder_re10000/](square_cylinder_re10000/) | the same at Re 10 000, 2D: the first levels on Bridges-2 | none (the levels) | l1eq, l2eq; scaling probes; Slurm job scripts | HPC (RM, CPU); not run yet |
 | [sphere_re300/](sphere_re300/) | 3D wake and forces with AMR | Johnson & Patel 1999 | needs a hex mesh file first | — |
 
 **Status (2026-10-10):** the infrastructure is in place and unit-tested: the decks load,

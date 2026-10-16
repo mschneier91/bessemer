@@ -9,8 +9,21 @@
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
 
+#include <utility>
+#include <vector>
+
 namespace incns
 {
+
+/**
+ * @brief Abort with a clear message when a CFL rate is not finite: the
+ *        velocity holds a NaN or an Inf (the rate kernel reports a NaN node as
+ *        an infinite rate), so the run has diverged. Collective callers pass
+ *        the same (global) rate on every rank.
+ * @param rate A rate from ConvectiveCfl::Rate or MaxRate.
+ * @param t    The time of the velocity it was computed from (for the message).
+ */
+void RequireFiniteRate(double rate, double t);
 
 /**
  * @brief The convective CFL rate, Nek5000's definition (`compute_cfl`):
@@ -52,6 +65,28 @@ public:
    double Rate(const mfem::ParGridFunction& u) const;
 
    /**
+    * @brief The largest Rate() of several velocities (collective), with the
+    *        Jacobians and the element vector allocated once for all of them.
+    * @param us Velocities on the space given at construction (>= 1).
+    * @return max over us of Rate(), the same value.
+    */
+   double MaxRate(const std::vector<const mfem::ParGridFunction*>& us) const;
+
+   /**
+    * @brief MaxRate of velocities that are the solution at @p times (a step's
+    *        history levels), each time's rate kept and reused while the space
+    *        is unchanged (its sequence number): a level is evaluated once --
+    *        by the step-size choice, or the first OIFS step that sees it --
+    *        instead of at every step it stays in the history. The max of the
+    *        levels' maxima is MaxRate's value exactly.
+    * @param us    The velocities.
+    * @param times Their times: the keys, one velocity per time.
+    * @return The largest rate; collective.
+    */
+   double MaxRateAt(const std::vector<const mfem::ParGridFunction*>& us,
+                    const std::vector<double>& times) const;
+
+   /**
     * @brief Rate() and where it peaks (collective; diagnostics): the centre
     *        of the element with the largest rate, on every rank.
     * @param u     Velocity on the space given at construction.
@@ -83,6 +118,13 @@ private:
    /// values at the GLL points and nothing is interpolated.
    bool nodal_gll_ = false;
    mutable mfem::Vector rate_; ///< Per-element rate.
+   /// The rate of each of @p us (each a max over the ranks), with one
+   /// evaluation of the Jacobians for all of them.
+   void Rates(const std::vector<const mfem::ParGridFunction*>& us,
+              std::vector<double>& rates) const;
+   /// (time, rate) of the levels MaxRateAt has seen, newest few kept.
+   mutable std::vector<std::pair<double, double>> level_rates_;
+   mutable long level_seq_ = -1; ///< The space sequence they belong to.
 };
 
 } // namespace incns

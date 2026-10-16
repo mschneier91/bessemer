@@ -173,6 +173,15 @@ public:
     */
    std::vector<std::string> UnknownKeys() const;
 
+   /**
+    * @return The keys some map of the deck sets more than once, each as
+    *         "'key' in section 'path' (lines a, b)" ("at the top level" for
+    *         the root; list entries as "path[i]"). yaml-cpp keeps both pairs
+    *         but a lookup sees only the first, so a later value would be
+    *         ignored without a word. Every map is checked, list entries too.
+    */
+   std::vector<std::string> DuplicateKeys() const;
+
    /// @return Every declared key, in declaration order.
    const std::vector<DeckKey>& Keys() const { return keys_; }
 

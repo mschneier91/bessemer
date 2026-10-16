@@ -2,6 +2,7 @@
 
 #include "operators/convection.hpp" // DealiasedOrder
 #include "operators/grad_div_integrator.hpp"
+#include "operators/kernel_specializations.hpp"
 #include "operators/lean_vector_diffusion.hpp"
 
 #include "mesh/mesh_size_coefficient.hpp"
@@ -54,6 +55,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
      div_form_(&spaces.Velocity(), &spaces.Pressure())
 {
    INCNS_PROFILE("stokes_operator::assemble");
+   AddKernelSpecializations(); // MFEM's kernels at our sizes, before any apply
 
    MFEM_VERIFY(opts_.nu > 0.0, "stokes_operator: viscosity must be positive");
    MFEM_VERIFY(opts_.mass_coeff >= 0.0,
@@ -241,7 +243,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
 
 GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
    ParBilinearForm& form, bool include_mass, bool include_grad_div,
-   Coefficient* gamma, BilinearFormIntegrator** diffusion)
+   Coefficient* gamma, BilinearFormIntegrator** diffusion,
+   BilinearFormIntegrator** mass)
 {
    GradDivIntegrator* added = nullptr;
    // Diffusion at the default exactness order 2k + dim - 1 (covers the metric
@@ -259,6 +262,7 @@ GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
       auto* mmi = new VectorMassIntegrator(mass_coeff_);
       mmi->SetIntRule(mass_rule_);
       form.AddDomainIntegrator(mmi);
+      if (mass) { *mass = mmi; }
    }
    if (include_grad_div && gamma_)
    {
@@ -336,6 +340,7 @@ void StokesOperator::SetViscosity(double nu)
    opts_.nu = nu;
    ReleaseViscousUnconstrained(); // it was nu_old * K
    rest_diag_valid_ = false;      // and so was this: nu_old K + grad-div
+   momentum_stale_ = true;        // and the momentum form's viscous data
 }
 
 void StokesOperator::BuildMomentum()
@@ -348,13 +353,22 @@ void StokesOperator::BuildMomentum()
    // and it hands us the new diagonal for free.
    momentum_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
    BilinearFormIntegrator* diffusion = nullptr;
+   mass_integ_ = nullptr;
    grad_div_integ_ = AddMomentumIntegrators(*momentum_form_,
                      /*include_mass=*/true,
-                     /*include_grad_div=*/true, nullptr, &diffusion);
+                     /*include_grad_div=*/true, nullptr, &diffusion,
+                     &mass_integ_);
+   momentum_stale_ = false;
    momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
    {
       INCNS_PROFILE("momentum::assemble");
       momentum_form_->Assemble();
+   }
+   // nu K and grad-div in one kernel: the velocity gradients once per apply.
+   if (opts_.fuse_grad_div && grad_div_integ_ && diffusion)
+   {
+      static_cast<LeanVectorDiffusionIntegrator*>(diffusion)->FuseGradDiv(
+         *grad_div_integ_);
    }
    {
       INCNS_PROFILE("momentum::form_system");
@@ -373,12 +387,29 @@ void StokesOperator::BuildMomentum()
       // (same rule), and that of nu K (+ grad-div) is assembled once. The
       // mass integrator is in the form only when c0 > 0.
       if (!rest_diag_valid_) { AssembleRestDiagonal(*diffusion); }
-      momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-      momentum_diag_.UseDevice(true);
-      const double c0 = (opts_.mass_coeff > 0.0) ? opts_.mass_coeff : 0.0;
-      add(rest_diag_, c0, mass_diag_, momentum_diag_);
+      UpdateMomentumDiagonal();
    }
 
+   BuildLorSource();
+
+   // The outer operator A + N re-points at the rebuilt momentum block.
+   if (Nc_)
+   {
+      full_momentum_ = std::make_unique<SumOperator>(K_.Ptr(), 1.0, Nc_.get(),
+                       1.0, false, false);
+   }
+}
+
+void StokesOperator::UpdateMomentumDiagonal()
+{
+   momentum_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+   momentum_diag_.UseDevice(true);
+   const double c0 = (opts_.mass_coeff > 0.0) ? opts_.mass_coeff : 0.0;
+   add(rest_diag_, c0, mass_diag_, momentum_diag_);
+}
+
+void StokesOperator::BuildLorSource()
+{
    // Non-frozen LOR source (c0*M + nu*K + grad-div, the latter with the
    // parent-element gamma) tracks the current mass factor, so the
    // BoomerAMG hierarchy is rebuilt to match on each refresh (see lor_frozen for
@@ -395,13 +426,6 @@ void StokesOperator::BuildMomentum()
          lor_form_->AddDomainIntegrator(new VectorRotationalConvectionIntegrator(
                                            *w_lor_, opts_.rotation_alpha));
       }
-   }
-
-   // The outer operator A + N re-points at the rebuilt momentum block.
-   if (Nc_)
-   {
-      full_momentum_ = std::make_unique<SumOperator>(K_.Ptr(), 1.0, Nc_.get(),
-                       1.0, false, false);
    }
 }
 
@@ -423,8 +447,25 @@ void StokesOperator::AssembleRestDiagonal(BilinearFormIntegrator& diffusion)
 void StokesOperator::SetMassCoeff(double c0)
 {
    MFEM_VERIFY(c0 >= 0.0, "stokes_operator: mass_coeff must be non-negative");
+   const double c0_old = opts_.mass_coeff;
    mass_coeff_.constant = c0;
    opts_.mass_coeff = c0;
+   if (momentum_form_ && mass_integ_ && !momentum_stale_ && c0_old > 0.0 &&
+       c0 > 0.0)
+   {
+      // Only c0 M depends on dt: re-assemble the mass integrator's data alone
+      // (c0 W det J from the new mass_coeff_: the values a new form computes,
+      // so the same operator bitwise). The viscous and grad-div data, their
+      // fusion, the true-dof and constrained operators stay -- rebuilding
+      // the whole form cost ~1.3 ms per step-size change on the Re_tau 180
+      // channel, where CFL-controlled steps change dt at ~75 % of the steps
+      // (2026-10-15).
+      INCNS_PROFILE("momentum::mass_coeff");
+      mass_integ_->AssemblePA(spaces_.Velocity());
+      UpdateMomentumDiagonal();
+      BuildLorSource();
+      return;
+   }
    BuildMomentum();
 }
 

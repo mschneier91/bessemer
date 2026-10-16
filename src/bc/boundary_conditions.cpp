@@ -90,6 +90,18 @@ void BoundaryConditions::AddOutflow(int attr)
    // Outflow is natural: nothing to assemble, nothing to eliminate.
 }
 
+bool BoundaryConditions::DirichletIsConstant() const
+{
+   for (const auto& entry : dirichlet_)
+   {
+      if (!dynamic_cast<const VectorConstantCoefficient*>(entry.second))
+      {
+         return false;
+      }
+   }
+   return true;
+}
+
 void BoundaryConditions::SetTime(double t)
 {
    for (auto& entry : dirichlet_) { entry.second->SetTime(t); }

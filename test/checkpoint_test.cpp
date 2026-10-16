@@ -46,6 +46,12 @@ Parameters TgvParams(incns::StepControl control)
       p.controller.atol = 2e-4;
       p.controller.rtol = 1e-16;
    }
+   // On a GPU two runs of a case agree only to the solver tolerance
+   // (hypre's device AMG is not run-to-run deterministic: repro_tolerance.hpp),
+   // so a tight rtol keeps that floor near 1e-11; the guess and the tolerance
+   // reference stay the case defaults (project, step), whose state the
+   // checkpoint carries. On a host backend the runs are bitwise at any rtol.
+   p.krylov_rtol = 1e-10;
    p.Normalize();
    return p;
 }

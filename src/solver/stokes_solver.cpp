@@ -9,6 +9,20 @@ namespace incns
 
 using namespace mfem;
 
+namespace
+{
+// x is split into blocks of the sizes @p offsets gives.
+bool HasBlockLayout(const BlockVector& x, const Array<int>& offsets)
+{
+   if (x.NumBlocks() != offsets.Size() - 1) { return false; }
+   for (int i = 0; i < x.NumBlocks(); ++i)
+   {
+      if (x.GetBlock(i).Size() != offsets[i + 1] - offsets[i]) { return false; }
+   }
+   return true;
+}
+} // namespace
+
 // Map the solver options to the operator's assembly options. A LOR source is
 // built when the velocity block PC is (LOR-)AMG on either Schur path;
 // amg_reuse freezes it so its hierarchy survives Delta-t.
@@ -23,6 +37,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    so.grad_div_nu = o.grad_div_nu;
    so.grad_div_nu_ref = o.grad_div_nu_ref;
    so.compact_diffusion = o.compact_diffusion;
+   so.fuse_grad_div = o.fuse_grad_div;
    const bool cc = (o.schur == SchurBlockType::CahouetChabard);
    so.lagged_velocity = o.lagged_velocity;
    so.rotation_alpha = o.rotation_alpha;
@@ -68,7 +83,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc,
                            const StokesSolverOptions& opts)
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
-     nullspace_(bc.PressureNullspaceExists()),
+     nullspace_(bc.PressureNullspaceExists()), pressure_mean_(rules),
      cc_mode_(opts.schur == SchurBlockType::CahouetChabard),
      op_(spaces, rules, MakeOpOptions(opts), &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
@@ -101,8 +116,8 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
    // With the constant null space, the pressure block is P * S^{-1} * P
-   // (mfem::OrthoSolver): iterates never accumulate the constant mode. The
-   // Sprint-1 Schur block is Delta-t independent, so it too is built once.
+   // (DeviceOrthoSolver, precond/nullspace.hpp): iterates never accumulate
+   // the constant mode. The Sprint-1 Schur block is Delta-t independent, so it too is built once.
    // (Mass path only; the CC PC owns its own nullspace treatment.)
    if (!cc_mode_)
    {
@@ -401,6 +416,274 @@ void StokesSolver::WarmUp()
    warmed_up_ = true;
 }
 
+int StokesSolver::GuessVectors() const
+{
+   // ToleranceReference::Step keeps A x_prev and works in one more system
+   // vector and two velocity-sized ones: counted as four.
+   const int step =
+      (opts_.tolerance_reference == ToleranceReference::Step) ? 4 : 0;
+   switch (opts_.initial_guess)
+   {
+      case InitialGuess::Project: return 2 * opts_.projection_k + step;
+      case InitialGuess::Extrapolate: return 2 + step;
+      default: return step;
+   }
+}
+
+void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
+{
+   if (opts_.initial_guess == InitialGuess::Previous) { return; }
+   INCNS_PROFILE("stokes_solver::initial_guess");
+   // The elimination put the Dirichlet values in x: keep them.
+   const Array<int>& ess = op_.EssentialTrueDofs();
+   Vector& u_dirichlet = guess_dirichlet_;
+   u_dirichlet.UseDevice(true);
+   if (ess.Size() > 0) { x.GetBlock(0).GetSubVector(ess, u_dirichlet); }
+   bool guessed = false;
+   const double c0 = opts_.mass_coeff;
+   if (opts_.initial_guess == InitialGuess::Project && projection_ &&
+       projection_->Size() > 0)
+   {
+      // Images of an operator whose mass factor moved by more than
+      // projection_rebuild_threshold (default 5 %), or whose viscosity
+      // changed, are recomputed: m operator applications.
+      if (projection_stale_ ||
+          (projection_c0_ > 0.0 && std::abs(c0 / projection_c0_ - 1.0) >
+           opts_.projection_rebuild_threshold))
+      {
+         projection_->Rebuild(block_op_);
+         projection_c0_ = c0;
+         projection_stale_ = false;
+      }
+      guessed = projection_->Guess(b, x);
+   }
+   else if (opts_.initial_guess == InitialGuess::Extrapolate)
+   {
+      // x holds x_n (the warm start). x_0 = x_n + r (x_n - x_{n-1}) with
+      // r = dt_new / dt_old, taken as c0_old / c0_new.
+      Vector x_n(x.Size(), Device::GetDeviceMemoryType());
+      x_n.UseDevice(true);
+      x_n = x;
+      if (previous_x_.Size() == x.Size())
+      {
+         const double r = (c0 > 0.0 && previous_c0_ > 0.0) ? previous_c0_ / c0
+                          : 1.0;
+         x *= 1.0 + r;
+         x.Add(-r, previous_x_);
+         guessed = true;
+      }
+      else
+      {
+         previous_x_.SetSize(x.Size(), Device::GetDeviceMemoryType());
+         previous_x_.UseDevice(true);
+      }
+      previous_x_ = x_n;
+      previous_x_valid_ = true;
+   }
+   if (guessed && ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, u_dirichlet); }
+}
+
+void StokesSolver::SetTolerance(const Vector& b, const Vector& x)
+{
+   const bool step_as_initial =
+      opts_.tolerance_reference == ToleranceReference::Step &&
+      opts_.initial_guess == InitialGuess::Previous;
+   if (opts_.tolerance_reference == ToleranceReference::Rhs)
+   {
+      const double b_norm =
+         std::sqrt(InnerProduct(spaces_.Velocity().GetComm(), b, b));
+      tol_scale_ = b_norm;
+      fgmres_.SetRelTol(0.0);
+      fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * b_norm));
+   }
+   else if (opts_.tolerance_reference == ToleranceReference::Step &&
+            !step_as_initial)
+   {
+      const double r_norm = StepResidualNorm(b, x);
+      tol_scale_ = r_norm;
+      fgmres_.SetRelTol(0.0);
+      fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * r_norm));
+   }
+   else
+   {
+      // InitialResidual, or Step from the warm start itself: FGMRES's initial
+      // residual IS b - A x_prev then.
+      tol_scale_ = 0.0;
+      fgmres_.SetRelTol(opts_.rtol);
+      fgmres_.SetAbsTol(opts_.atol);
+   }
+}
+
+double StokesSolver::StepResidualNorm(const Vector& b, const Vector& x)
+{
+   // ||b - A x_prev||: how far this step moves the solution -- small at a
+   // small dt, so the tolerance follows the step, unlike ||b|| (which holds
+   // c0 M u_n). With the projection, A x_prev is the image the projection
+   // made when it recorded x_prev (no operator application); if the mass
+   // factor moved since (the step size changed), (c0 - c0_prev) M x_u is
+   // added on the free velocity rows -- the momentum block's other terms and
+   // B, B^T do not depend on dt. x_prev's Dirichlet values are the previous
+   // step's, so the essential rows hold their change. Otherwise (the first
+   // solve, a new viscosity, the rotation term, other initial guesses) the
+   // operator is applied to the warm start @p x.
+   Vector& r = step_r_;
+   r.SetSize(b.Size());
+   r.UseDevice(true);
+   const bool reuse = opts_.step_reference_reuse && step_ax_valid_ &&
+                      step_ax_.Size() == b.Size() && step_nu_ == opts_.nu &&
+                      !op_.Rotation();
+   if (reuse)
+   {
+      r = step_ax_;
+      const double dc0 = opts_.mass_coeff - step_c0_;
+      if (dc0 != 0.0)
+      {
+         INCNS_PROFILE("stokes_solver::step_reference");
+         const Array<int>& ess = op_.EssentialTrueDofs();
+         const int n_u = spaces_.Velocity().GetTrueVSize();
+         Vector xu;
+         xu.MakeRef(const_cast<Vector&>(x), 0, n_u);
+         step_xu_.SetSize(n_u);
+         step_xu_.UseDevice(true);
+         step_xu_ = xu;
+         if (ess.Size() > 0) { step_xu_.SetSubVector(ess, 0.0); }
+         step_mx_.SetSize(n_u);
+         step_mx_.UseDevice(true);
+         op_.Mass().Mult(step_xu_, step_mx_);
+         if (ess.Size() > 0) { step_mx_.SetSubVector(ess, 0.0); }
+         Vector ru;
+         ru.MakeRef(r, 0, n_u);
+         ru.Add(dc0, step_mx_);
+      }
+   }
+   else
+   {
+      INCNS_PROFILE("stokes_solver::step_reference");
+      block_op_.Mult(x, r);
+   }
+   subtract(b, r, r);
+   return std::sqrt(InnerProduct(spaces_.Velocity().GetComm(), r, r));
+}
+
+void StokesSolver::RecordSolution(const Vector& x)
+{
+   const double c0 = opts_.mass_coeff;
+   if (opts_.initial_guess == InitialGuess::Project)
+   {
+      INCNS_PROFILE("stokes_solver::initial_guess");
+      if (!projection_)
+      {
+         projection_ = std::make_unique<SolutionProjection>(
+                          opts_.projection_k, spaces_.Velocity().GetComm());
+      }
+      const bool keep_ax =
+         opts_.tolerance_reference == ToleranceReference::Step;
+      projection_->Add(block_op_, x, keep_ax ? &step_ax_ : nullptr);
+      if (keep_ax)
+      {
+         step_ax_valid_ = true;
+         step_c0_ = c0;
+         step_nu_ = opts_.nu;
+      }
+      if (projection_->Size() <= 1) // a new basis
+      {
+         projection_c0_ = c0;
+         projection_stale_ = false;
+      }
+   }
+   previous_c0_ = c0;
+}
+
+namespace
+{
+// A non-owning alias of v.
+void Alias(const Vector& v, Vector& a)
+{
+   a.MakeRef(const_cast<Vector&>(v), 0, v.Size());
+}
+} // namespace
+
+void StokesSolver::ExportGuessState(SolverGuessState& s) const
+{
+   s.projection_x.clear();
+   s.projection_w.clear();
+   if (projection_)
+   {
+      const std::vector<Vector>& xs = projection_->Solutions();
+      const std::vector<Vector>& ws = projection_->Images();
+      s.projection_x.resize(xs.size());
+      s.projection_w.resize(ws.size());
+      for (std::size_t i = 0; i < xs.size(); ++i)
+      {
+         Alias(xs[i], s.projection_x[i]);
+         Alias(ws[i], s.projection_w[i]);
+      }
+   }
+   s.projection_c0 = projection_c0_;
+   s.projection_stale = projection_stale_;
+   s.previous_x.Destroy();
+   s.has_previous_x = previous_x_valid_;
+   if (previous_x_valid_) { Alias(previous_x_, s.previous_x); }
+   s.previous_c0 = previous_c0_;
+   s.step_ax.Destroy();
+   s.has_step_ax = step_ax_valid_;
+   if (step_ax_valid_) { Alias(step_ax_, s.step_ax); }
+   s.step_c0 = step_c0_;
+   s.step_nu = step_nu_;
+}
+
+void StokesSolver::ImportGuessState(SolverGuessState& s)
+{
+   const int n = SystemSize();
+   auto check = [n](const Vector & v)
+   {
+      MFEM_VERIFY(v.Size() == 0 || v.Size() == n,
+                  "stokes_solver: a restored guess vector holds " << v.Size()
+                  << " entries, the system " << n);
+   };
+   for (const Vector& v : s.projection_x) { check(v); }
+   for (const Vector& v : s.projection_w) { check(v); }
+   check(s.previous_x);
+   check(s.step_ax);
+
+   if (opts_.initial_guess == InitialGuess::Project &&
+       !s.projection_x.empty())
+   {
+      if (!projection_)
+      {
+         projection_ = std::make_unique<SolutionProjection>(
+                          opts_.projection_k, spaces_.Velocity().GetComm());
+      }
+      projection_->Restore(s.projection_x, s.projection_w);
+   }
+   else if (projection_) { projection_->Reset(); }
+   projection_c0_ = s.projection_c0;
+   projection_stale_ = s.projection_stale;
+
+   if (opts_.initial_guess == InitialGuess::Extrapolate)
+   {
+      previous_x_.Swap(s.previous_x);
+      previous_x_.UseDevice(true);
+   }
+   else { previous_x_.Destroy(); }
+   previous_x_valid_ = opts_.initial_guess == InitialGuess::Extrapolate &&
+                       s.has_previous_x;
+   previous_c0_ = s.previous_c0;
+
+   // The flag, not the size: an empty rank must take the same path as the
+   // others (StepResidualNorm may apply the operator otherwise).
+   const bool step = opts_.tolerance_reference == ToleranceReference::Step &&
+                     s.has_step_ax;
+   if (step)
+   {
+      step_ax_.Swap(s.step_ax);
+      step_ax_.UseDevice(true);
+   }
+   step_ax_valid_ = step;
+   step_c0_ = s.step_c0;
+   step_nu_ = s.step_nu;
+}
+
 void StokesSolver::SetKrylovDim(int k)
 {
    MFEM_VERIFY(k >= 1, "stokes_solver: the restart length must be >= 1");
@@ -427,6 +710,7 @@ void StokesSolver::Refresh(double c0, double nu)
                   "change its viscosity (see CanChangeViscosity)");
       op_.SetViscosity(nu);
       opts_.nu = nu; // the Schur preconditioner's nu, in Refresh(c0) below
+      projection_stale_ = true; // its images are of the old operator
    }
    Refresh(c0);
 }
@@ -494,19 +778,46 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    // so BlockOperator::Mult and the Krylov work vectors it spawns stay resident
    // on the device instead of triggering per-apply host<->device copies. Found
    // via the debug device (scripts/debug_device.sh), which faulted here.
+   // Kept between solves (locals cost an allocation and a synchronizing free
+   // per solve on a GPU), rebuilt when the block layout changes. Compared
+   // block by block, not by total size: on a rank that owns no elements the
+   // offsets are {0, 0, 0}, the size of a never-built BlockVector, which has
+   // no blocks to return.
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
-   const MemoryType mt = Device::GetMemoryType();
-   BlockVector x(const_cast<Array<int>&>(offsets), mt);
-   BlockVector b(const_cast<Array<int>&>(offsets), mt);
-   x.UseDevice(true);
-   b.UseDevice(true);
+   if (!HasBlockLayout(solve_x_, offsets))
+   {
+      const MemoryType mt = Device::GetMemoryType();
+      solve_x_.Update(const_cast<Array<int>&>(offsets), mt);
+      solve_b_.Update(const_cast<Array<int>&>(offsets), mt);
+      solve_x_.UseDevice(true);
+      solve_b_.UseDevice(true);
+   }
+   BlockVector& x = solve_x_;
+   BlockVector& b = solve_b_;
    b = 0.0;
 
    // Dirichlet data (at the BC's current time) -> u's boundary; the incoming
    // u/p act as the Krylov warm start. The eliminated (identity) rows of the
-   // block system reproduce the boundary values.
-   bc_.ProjectDirichlet(u);
-   u.GetTrueDofs(x.GetBlock(0));
+   // block system reproduce the boundary values. Constant data (no-slip) is
+   // projected once (on the host: a device round trip of u) and then written
+   // on the essential true dofs, the only ones the projection sets.
+   const Array<int>& ess = op_.EssentialTrueDofs();
+   if (bc_.DirichletIsConstant() && dirichlet_cached_)
+   {
+      u.GetTrueDofs(x.GetBlock(0));
+      if (ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, dirichlet_vals_); }
+   }
+   else
+   {
+      bc_.ProjectDirichlet(u);
+      u.GetTrueDofs(x.GetBlock(0));
+      if (bc_.DirichletIsConstant())
+      {
+         dirichlet_vals_.UseDevice(true);
+         if (ess.Size() > 0) { x.GetBlock(0).GetSubVector(ess, dirichlet_vals_); }
+         dirichlet_cached_ = true;
+      }
+   }
    p.GetTrueDofs(x.GetBlock(1));
    // CC path iterates on the internal pressure p~ = -p_physical (the canonical
    // symmetric convention): flip the warm start in, flip the answer out.
@@ -545,6 +856,9 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
       // Converged() = false) rather than be silently projected away.
    }
 
+   SetTolerance(b, x); // before PrepareGuess: Step reads the warm start
+   PrepareGuess(b, x);
+
    // Per-solve counters (the rotation fields persist from UpdateRotation).
    stats_.vel_applications = stats_.vel_inner_iterations = 0;
    stats_.vel_cap_hits = stats_.schur_applications = 0;
@@ -560,6 +874,7 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    converged_ = fgmres_.GetConverged();
    stats_.outer_iterations = iterations_;
 
+   RecordSolution(x); // in the solver's variables, before the sign flip
    u.SetFromTrueDofs(x.GetBlock(0));
    if (cc_mode_) { x.GetBlock(1).Neg(); } // p = -p~: the ONE output sign flip
    p.SetFromTrueDofs(x.GetBlock(1));
@@ -568,7 +883,7 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    // pressure level is otherwise undetermined.
    if (nullspace_)
    {
-      SubtractMean(p, rules_);
+      pressure_mean_.Subtract(p);
    }
 }
 

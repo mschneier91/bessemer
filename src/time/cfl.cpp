@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 // This TU defines a device kernel (mfem::forall). A host compiler would build
 // it as a host loop over device pointers, which segfaults on a GPU;
@@ -34,6 +35,7 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
    const auto J = Reshape(jac.Read(), nq, dim, dim, ne);
    const auto X = inv_dxi.Read();
    auto R = rate.Write();
+   const real_t inf = std::numeric_limits<real_t>::infinity();
    mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
    {
       real_t rmax = 0.0;
@@ -71,6 +73,9 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
                 fabs((a10 * u0 + a11 * u1 + a12 * u2) / det) * X[iy] +
                 fabs((a20 * u0 + a21 * u1 + a22 * u2) / det) * X[iz];
          }
+         // A NaN velocity reports an infinite rate: a max skips a NaN (every
+         // comparison with it is false), and so would MPI's.
+         if (!(s == s)) { s = inf; }
          rmax = (s > rmax) ? s : rmax;
       }
       R[e] = rmax;
@@ -78,6 +83,13 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
 }
 
 } // namespace cfl_kernels
+
+void RequireFiniteRate(double rate, double t)
+{
+   MFEM_VERIFY(std::isfinite(rate), "the velocity is not finite (NaN or Inf) "
+               "at t = " << t << ": the run diverged in the step that reached "
+               "it (the usual remedy is a smaller time step or CFL target)");
+}
 
 Vector ConvectiveCfl::InverseNodeSpacing(int k)
 {
@@ -124,7 +136,13 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
 
 double ConvectiveCfl::Rate(const ParGridFunction& u) const
 {
-   MFEM_VERIFY(u.ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+   return MaxRate({&u});
+}
+
+double ConvectiveCfl::MaxRate(const std::vector<const ParGridFunction*>& us)
+const
+{
+   MFEM_VERIFY(!us.empty(), "cfl: no velocity");
    double local = 0.0;
    if (ne_ > 0)
    {
@@ -132,34 +150,122 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
       // members they held 0.8 GB for 64^3 Q3 elements (2026-10-13).
       Vector ue(restr_->Height());
       ue.UseDevice(true);
-      restr_->Mult(u, ue);
       // So do the Jacobians at the GLL nodes: cached in the mesh they held
       // 1.2 GB at 64^3 Q3 for the whole run, and the rate is evaluated
       // between solves, away from the memory peak (2026-10-14). MFEM's own
-      // computation, not its cache: the same values.
+      // computation, not its cache: the same values. Once per call for all
+      // the velocities (OIFS: one per history level).
       const GeometricFactors geom(*vfes_.GetParMesh()->GetNodes(), *ir_,
                                   GeometricFactors::JACOBIANS,
                                   Device::GetDeviceMemoryType());
-      if (nodal_gll_)
+      for (const ParGridFunction* up : us)
       {
-         // (dofs, component, element), lexicographic: the layout the kernel
-         // reads, with the dofs at the GLL points.
-         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
-                                   inv_dxi_, rate_);
+         const ParGridFunction& u = *up;
+         MFEM_VERIFY(u.ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+         restr_->Mult(u, ue);
+         if (nodal_gll_)
+         {
+            // (dofs, component, element), lexicographic: the layout the kernel
+            // reads, with the dofs at the GLL points.
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         else
+         {
+            Vector uq(ir_->GetNPoints() * dim_ * ne_);
+            uq.UseDevice(true);
+            qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
+            qi_->Values(ue, uq);
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         local = std::max(local, rate_.Max()); // device-aware reduction
       }
-      else
-      {
-         Vector uq(ir_->GetNPoints() * dim_ * ne_);
-         uq.UseDevice(true);
-         qi_->SetOutputLayout(QVectorLayout::byNODES); // shared object: set it
-         qi_->Values(ue, uq);
-         cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
-                                   inv_dxi_, rate_);
-      }
-      local = rate_.Max(); // device-aware reduction
    }
    double global = 0.0;
    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MAX, vfes_.GetComm());
+   return global;
+}
+
+void ConvectiveCfl::Rates(const std::vector<const ParGridFunction*>& us,
+                          std::vector<double>& rates) const
+{
+   // MaxRate's evaluation, keeping each velocity's maximum apart.
+   rates.assign(us.size(), 0.0);
+   if (ne_ > 0)
+   {
+      Vector ue(restr_->Height());
+      ue.UseDevice(true);
+      const GeometricFactors geom(*vfes_.GetParMesh()->GetNodes(), *ir_,
+                                  GeometricFactors::JACOBIANS,
+                                  Device::GetDeviceMemoryType());
+      for (std::size_t l = 0; l < us.size(); ++l)
+      {
+         const ParGridFunction& u = *us[l];
+         MFEM_VERIFY(u.ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+         restr_->Mult(u, ue);
+         if (nodal_gll_)
+         {
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         else
+         {
+            Vector uq(ir_->GetNPoints() * dim_ * ne_);
+            uq.UseDevice(true);
+            qi_->SetOutputLayout(QVectorLayout::byNODES);
+            qi_->Values(ue, uq);
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         rates[l] = std::max(0.0, rate_.Max());
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, rates.data(), static_cast<int>(rates.size()),
+                 MPI_DOUBLE, MPI_MAX, vfes_.GetComm());
+}
+
+double ConvectiveCfl::MaxRateAt(const std::vector<const ParGridFunction*>& us,
+                                const std::vector<double>& times) const
+{
+   MFEM_VERIFY(!us.empty() && us.size() == times.size(),
+               "cfl: one time per velocity");
+   if (level_seq_ != vfes_.GetSequence())
+   {
+      level_rates_.clear();
+      level_seq_ = vfes_.GetSequence();
+   }
+   double global = 0.0;
+   std::vector<const ParGridFunction*> todo;
+   std::vector<double> todo_t;
+   for (std::size_t i = 0; i < us.size(); ++i)
+   {
+      const auto it = std::find_if(level_rates_.begin(), level_rates_.end(),
+                                   [&](const std::pair<double, double>& p)
+      { return p.first == times[i]; });
+      if (it != level_rates_.end()) { global = std::max(global, it->second); }
+      else
+      {
+         todo.push_back(us[i]);
+         todo_t.push_back(times[i]);
+      }
+   }
+   if (!todo.empty()) // the same on every rank: the keys are global
+   {
+      std::vector<double> r;
+      Rates(todo, r);
+      for (std::size_t k = 0; k < todo.size(); ++k)
+      {
+         global = std::max(global, r[k]);
+         level_rates_.emplace_back(todo_t[k], r[k]);
+      }
+      // Keep the newest few levels (OIFS uses up to three).
+      while (level_rates_.size() > 8)
+      {
+         level_rates_.erase(std::min_element(
+                               level_rates_.begin(), level_rates_.end()));
+      }
+   }
    return global;
 }
 

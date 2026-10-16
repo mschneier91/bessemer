@@ -119,4 +119,92 @@ private:
    const ConstantPressureProjector& P_;    ///< Projector (borrowed).
 };
 
+/**
+ * @brief mfem::OrthoSolver with the projection on the device.
+ *
+ * mfem::OrthoSolver (MFEM 1c19aba, linalg/solvers.cpp, marked "TODO:
+ * GPU/device implementation") subtracts the mean of its input and of its
+ * output in a host loop: two device-host round trips of the vector around
+ * every solve. Around the Cahouet-Chabard pressure AMG that was 32 per
+ * channel step, the GPU idle ~0.16 ms each (2026-10-15). This is the same
+ * algorithm -- the sum by Vector::Sum, summed over the ranks, then
+ * v - sum / global size -- with the subtraction as a device-aware vector
+ * operation: the same IEEE operation on every entry, so the same values
+ * (nullspace_test). Drop-in for the uses here: SetSolver, SetOperator, Mult,
+ * iterative_mode passed on to the wrapped solver.
+ */
+class DeviceOrthoSolver : public mfem::Solver
+{
+public:
+   /// @param comm Communicator of the vectors (the global size and sums).
+   explicit DeviceOrthoSolver(MPI_Comm comm) : mfem::Solver(0, false),
+      comm_(comm) {}
+
+   /// Wrap @p s (borrowed; square).
+   void SetSolver(mfem::Solver& s)
+   {
+      solver_ = &s;
+      height = s.Height();
+      width = s.Width();
+      MFEM_VERIFY(height == width, "DeviceOrthoSolver: the solver must be "
+                  "square");
+      global_size_ = -1;
+   }
+
+   /// Forwarded to the wrapped solver.
+   void SetOperator(const mfem::Operator& op) override
+   {
+      MFEM_VERIFY(solver_, "DeviceOrthoSolver: call SetSolver first");
+      solver_->SetOperator(op);
+      height = solver_->Height();
+      width = solver_->Width();
+      MFEM_VERIFY(height == width, "DeviceOrthoSolver: the solver must be "
+                  "square");
+      global_size_ = -1;
+   }
+
+   /// x = P S^{-1} P b, P the projection off the constant vector.
+   void Mult(const mfem::Vector& b, mfem::Vector& x) const override
+   {
+      MFEM_VERIFY(solver_, "DeviceOrthoSolver: call SetSolver first");
+      MFEM_VERIFY(height == solver_->Height(), "DeviceOrthoSolver: the solver "
+                  "was modified externally; call SetSolver again");
+      MFEM_VERIFY(height == b.Size() && height == x.Size(),
+                  "DeviceOrthoSolver: incompatible vector sizes");
+      Orthogonalize(b, b_ortho_);
+      solver_->iterative_mode = iterative_mode;
+      solver_->Mult(b_ortho_, x);
+      Orthogonalize(x, x);
+   }
+
+private:
+   /// v_ortho = v - (sum of v) / (global size); v_ortho may be v.
+   void Orthogonalize(const mfem::Vector& v, mfem::Vector& v_ortho) const
+   {
+      if (global_size_ == -1)
+      {
+         global_size_ = height;
+         MPI_Allreduce(MPI_IN_PLACE, &global_size_, 1, HYPRE_MPI_BIG_INT,
+                       MPI_SUM, comm_);
+      }
+      mfem::real_t global_sum = v.Sum();
+      MPI_Allreduce(MPI_IN_PLACE, &global_sum, 1,
+                    mfem::MPITypeMap<mfem::real_t>::mpi_type, MPI_SUM, comm_);
+      const mfem::real_t ratio =
+         global_sum / static_cast<mfem::real_t>(global_size_);
+      if (&v_ortho != &v)
+      {
+         v_ortho.SetSize(v.Size());
+         v_ortho.UseDevice(true);
+         v_ortho = v;
+      }
+      v_ortho -= ratio;
+   }
+
+   mfem::Solver* solver_ = nullptr;         ///< Wrapped solver (borrowed).
+   MPI_Comm comm_;                          ///< Communicator.
+   mutable HYPRE_BigInt global_size_ = -1;  ///< Global size (lazy).
+   mutable mfem::Vector b_ortho_;           ///< The projected input.
+};
+
 } // namespace incns

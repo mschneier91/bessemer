@@ -209,6 +209,12 @@ incns::Parameters ChannelDeck(const std::string& out, double t_final,
       "forcing:\n  body_force: [1.0, 0.0]\n"
       "boundary_conditions:\n  - {select: [ymin, ymax], type: no_slip}\n"
       "channel_statistics:\n  enabled: true\n"
+      // On a GPU two runs of a case agree only to the solver tolerance
+      // (hypre's device AMG is not run-to-run deterministic: repro_tolerance.hpp),
+      // so a tight rtol keeps that floor near 1e-11; the guess and the tolerance
+      // reference stay the case defaults (project, step). On a host backend the
+      // runs are bitwise at any rtol.
+      "solver:\n  rtol: 1.0e-10\n"
       "output:\n  path: " + out + "\n  name: chan\n" + extra;
    return incns::Parameters::LoadYAMLString(deck);
 }

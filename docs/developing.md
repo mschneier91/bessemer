@@ -71,14 +71,19 @@ fully before planning a code change. The current project state and open items ar
   sandbox resolves for the wrong OS (`os=org.freedesktop.platform25`; the morning's
   incremental MUMPS attempt failed to link that way), and spack re-resolves an env on
   activation once `spack.yaml` changes.
-- **MFEM tracks `dev`** (commit recorded in the lock), **currently PINNED** to
-  `1c19aba` (master 2026-08-04, the parent of PR #5297's merge; human 2026-10-09): PR
-  #5297 "General NC mesh spacing in parallel" makes `ParMesh::AnisotropicConflict`
-  segfault on nonconforming 3D hex meshes at np >= 2 (`DirectedHexEdgeScale` assumes the
-  shared face edge is an edge of both hexes; fails across refinement levels). Reported
-  upstream 2026-10-09 with a standalone reproducer; `cfl_test` and `amr_indicator_test`
-  (np 2/4) and 3D parallel anisotropic AMR (`ResolveAnisotropicConflicts`) hit it. Drop
-  the pin (both envs, commented in `spack.yaml`) once MFEM fixes it. Verify API/capability claims against
+- **MFEM is v4.10 with a local patch** (human 2026-10-15; both envs, commented in
+  `spack.yaml`): a clone at tag v4.10 in `$PROJECT/mfem-src/mfem-4.10`, branch
+  `v4.10-pr5464`, with mfem/mfem#5464's own diff committed, built through Spack's
+  `develop:` section (the compute nodes have no internet). v4.10 contains PR #5297
+  ("General NC mesh spacing in parallel"), whose `ParMesh::AnisotropicConflict` segfaults
+  on nonconforming 3D hex meshes at np >= 2 (mfem/mfem#5602, reported by the maintainer
+  2026-10-09: `DirectedHexEdgeScale` assumes the shared face edge is an edge of both hexes;
+  `cfl_test`, `amr_indicator_test` and 3D parallel anisotropic AMR hit it); the unmerged
+  #5464 fixes it. Before 2026-10-16 MFEM was pinned to `1c19aba` (master 2026-08-04, the
+  parent of #5297's merge). Drop the patch once #5464 is in a release. MFEM 4.10 still
+  orthogonalizes `OrthoSolver` on the host, allocates in every `FGMRESSolver::Mult` and
+  loops over components in its divergence kernels: bessemer's `DeviceOrthoSolver`,
+  `PersistentFGMRESSolver` and `kernel_specializations` stay. Verify API/capability claims against
   the installed headers (`$MFEM_DIR/include/mfem`; `. scripts/env.sh` exports `MFEM_DIR`);
   if an API seems missing, suspect a commit mismatch and flag it.
 - **Presets** (`CMakePresets.json`): `cpu` (RelWithDebInfo, ccache — the one that matters),
@@ -764,7 +769,8 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   `run_monitor_test` (R1 force statistics on a synthetic shedding signal, R2 JSON, R3
   time-based AMR events, R4 the summary is valid JSON), `deck_boundary_test` (B1 box
   coverage, B2 cylinder geometries and names, B3 a deck velocity is imposed), the
-  `run_case_cavity` / `run_case_rejects_missing_bcs` driver tests,
+  `run_case_cavity` / `run_case_rejects_missing_bcs` / `run_case_rejects_duplicate_key`
+  driver tests,
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
   square-cylinder domain's area, boundary lengths, grading), `deck_test`,

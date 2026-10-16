@@ -4,6 +4,7 @@
 #include "amr/history_projection.hpp"
 #include "amr/mesh_adapter.hpp"
 #include "bc/boundary_names.hpp"
+#include "operators/kernel_specializations.hpp"
 #include "util/device.hpp"
 #include "util/json.hpp"
 #include "util/profiler.hpp"
@@ -32,6 +33,9 @@ Case::Case(ParMesh& mesh, const Parameters& params)
    MFEM_VERIFY(params_.nondim.normalized,
                "case: call Parameters::Normalize() before building the "
                "mesh and the case (LoadYAML does it automatically)");
+   // MFEM's kernels at our sizes before anything assembles: the mesh caches
+   // its geometric factors on first use (the diagnostics' among them).
+   AddKernelSpecializations();
    // The deck's constant body force; SetForcing still overrides it.
    if (params_.forcing.Active())
    {
@@ -118,6 +122,7 @@ void Case::BuildIntegrator()
    opts.collocated_mass = params_.CollocatedMass();
    opts.compact_diffusion =
       params_.vector_diffusion == VectorDiffusionStorage::Compact;
+   opts.fuse_grad_div = params_.fuse_grad_div;
    // The raw right-hand side is kept only for the force on the body.
    opts.keep_rhs = params_.forces.enabled;
    opts.grad_div = params_.grad_div_h; // the part proportional to h_K
@@ -135,6 +140,10 @@ void Case::BuildIntegrator()
    opts.max_iter = params_.max_iter;
    opts.kdim = params_.kdim;
    opts.print_level = params_.print_level;
+   opts.tolerance_reference = params_.tolerance_reference;
+   opts.initial_guess = params_.initial_guess;
+   opts.projection_k = params_.projection_k;
+   opts.projection_rebuild_threshold = params_.projection_rebuild_threshold;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
    body_force_.reset();
@@ -172,6 +181,12 @@ void Case::EnsureSetup()
       {
          Profiler::Instance().SetGauge(&DeviceMemoryInUse);
       }
+   }
+   // Nsight Systems sees the profiler's regions as NVTX ranges (no cost
+   // without a tool attached).
+   if (mfem::Device::Allows(mfem::Backend::CUDA_MASK))
+   {
+      Profiler::Instance().SetMarkers(&NvtxPush, &NvtxPop);
    }
    INCNS_PROFILE("case::setup");
 
@@ -785,6 +800,7 @@ void Case::SetupCfl()
       if (integrator_->StepCount() == 0)
       {
          const double c = cfl_->Rate(integrator_->Velocity());
+         RequireFiniteRate(c, integrator_->Time());
          if (c > 0.0 && params_.dt * c > params_.cfl_target)
          {
             integrator_->SetStepSize(params_.cfl_target / c);
@@ -799,6 +815,7 @@ void Case::SetupCfl()
       integrator_->SetDtCeiling([this](double)
       {
          const double c = cfl_->Rate(integrator_->Velocity());
+         RequireFiniteRate(c, integrator_->Time());
          return c > 0.0 ? params_.cfl_max / c
                 : std::numeric_limits<double>::infinity();
       });
@@ -821,6 +838,7 @@ double Case::ConvectiveCflNumber(Vector* where)
    const ConvectiveCfl& c = cfl_ ? *cfl_ : local;
    const double rate = where ? c.RateAndLocation(integrator_->Velocity(), *where)
                        : c.Rate(integrator_->Velocity());
+   RequireFiniteRate(rate, integrator_->Time());
    return rate * integrator_->CurrentDt();
 }
 
@@ -863,7 +881,8 @@ void Case::RecordStep(double t_prev, double step_wall)
       r.cd = C(0);
       r.cl = (C.Size() > 1) ? C(1) : 0.0;
    }
-   Vector u(spaces_.Velocity().GetTrueVSize());
+   Vector& u = record_u_;
+   u.SetSize(spaces_.Velocity().GetTrueVSize()); // reallocates after AMR only
    integrator_->Velocity().GetTrueDofs(u);
    r.velocity_norm = std::sqrt(InnerProduct(mesh_.GetComm(), u, u));
    monitor_->Record(r);

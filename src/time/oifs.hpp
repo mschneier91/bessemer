@@ -12,6 +12,7 @@
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "time/cfl.hpp"
+#include "time/oifs_convection.hpp"
 #include "mfem.hpp"
 
 #include <deque>
@@ -132,6 +133,32 @@ public:
                    const std::deque<double>& field_times, double t_new,
                    mfem::Vector& phi);
 
+   /**
+    * @brief The CFL rate of @p u, the solution at time @p t, through the
+    *        advector's per-level cache (ConvectiveCfl::MaxRateAt): the step
+    *        size is chosen from it, and the substeps then find the newest
+    *        level's rate there (and the older levels' from earlier steps).
+    * @param u Velocity on the velocity space.
+    * @param t Its time.
+    * @return The rate (the same value as ConvectiveCfl::Rate); collective.
+    */
+   double RateAt(const mfem::ParGridFunction& u, double t) const
+   {
+      return cfl_->MaxRateAt({&u}, {t});
+   }
+
+private:
+   /// AdvectWith() on borrowed winds (Advect() passes the history itself:
+   /// no copies of it per step). @p history_winds: the winds are the
+   /// solution at @p wind_times, so their rates may come from the cache.
+   void AdvectImpl(const std::vector<const mfem::Vector*>& wind,
+                   const std::vector<double>& wind_times,
+                   const std::vector<double>& c,
+                   const std::deque<mfem::Vector>& fields,
+                   const std::deque<double>& field_times, double t_new,
+                   mfem::Vector& phi, bool history_winds);
+
+public:
    /// @return RK4 substeps taken by the last Advect().
    int LastSubsteps() const { return last_substeps_; }
 
@@ -178,12 +205,37 @@ private:
     */
    void SetDirichlet(double s, double weight, mfem::Vector& phi);
    /**
+    * @brief The Dirichlet data u_D(s) on @p dofs (true dofs; a projection on
+    *        the host, so a device round trip of the velocity on a GPU).
+    * @param s    Time of the data.
+    * @param dofs True dofs to read.
+    * @param vals Output: the values, in the order of @p dofs.
+    */
+   void DirichletValues(double s, const mfem::Array<int>& dofs,
+                        mfem::Vector& vals);
+   /**
+    * @brief Whether the Dirichlet data on @p dofs is the same at three times
+    *        spanning [s0, s1] (exactly; collective).
+    * @param dofs True dofs to compare.
+    * @param s0   Window start.
+    * @param s1   Window end.
+    * @param vals Output: the data at s0.
+    * @return True when it is: the substeps can then reuse @p vals instead of
+    *         projecting at every stage (no-slip walls, constant inflow).
+    */
+   bool StaticDirichlet(const mfem::Array<int>& dofs, double s0, double s1,
+                        mfem::Vector& vals);
+   /**
     * @brief imposed_ := the Dirichlet true dofs where the wind enters or is
     *        tangential (outward normal from the adjacent element;
-    *        collective).
+    *        collective). Deterministic: a node is free (outflow) only when
+    *        its outward normal velocity exceeds 1e-10 of the largest wind on
+    *        the boundary, so a no-slip wall (zero wind) is imposed everywhere.
     * @param w The wind (the newest velocity).
     */
    void ClassifyBoundary(const mfem::ParGridFunction& w);
+   /// Caches the boundary nodes of ClassifyBoundary (bnode_*).
+   void CacheBoundaryNodes();
 
    MixedSpaces& spaces_;        ///< Mixed spaces (borrowed).
    const RuleBook& rules_;      ///< Quadrature source (borrowed).
@@ -213,13 +265,38 @@ private:
    /// Convection forms C_l (one per history velocity).
    std::vector<std::unique_ptr<mfem::ParBilinearForm>> conv_;
    std::vector<mfem::OperatorPtr> conv_op_; ///< Their true-dof operators.
+   /// 3D at the solver's sizes: all winds and components in one kernel per
+   /// RK stage (OifsConvection), in place of conv_ / conv_op_.
+   std::unique_ptr<OifsConvection> combo_;
    std::vector<double> times_ext_;  ///< Times of the advecting velocities.
    int n_ext_ = 0;                  ///< Advecting velocities in use.
    std::unique_ptr<mfem::ParGridFunction> bd_; ///< Dirichlet projection scratch.
    std::unique_ptr<mfem::ParGridFunction> flag_; ///< Inflow flags (scratch).
    mfem::Array<int> imposed_;       ///< Dirichlet tdofs imposed in the substeps.
+   /// The nodes of the boundary elements, for ClassifyBoundary: per node its
+   /// dim_ local vdofs (component-major), outward normal, boundary element
+   /// and node index. Cached per velocity-space sequence (the geometry does
+   /// not change between steps).
+   std::vector<int> bnode_vdofs_;
+   std::vector<double> bnode_normals_; ///< Outward normals (unnormalised).
+   std::vector<int> bnode_be_;         ///< Boundary element of each node.
+   std::vector<int> bnode_k_;          ///< Node index within it.
+   long bnode_seq_ = -1;      ///< Velocity-space sequence of the cache.
+   bool bnode_nodal_ = false; ///< Nodal boundary elements: w(node) = dofs.
+   std::vector<double> bnode_w_; ///< The wind at the nodes (scratch).
+   /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant), true
+   /// dofs, projected once per velocity-space sequence (bd_const_seq_).
+   mfem::Vector bd_const_true_;
+   long bd_const_seq_ = -1;   ///< Velocity-space sequence of bd_const_true_.
+   bool bd_const_zero_ = false; ///< ... and zero on every Dirichlet dof.
    mfem::Vector bd_true_;           ///< Its true dofs.
    mfem::Vector bd_vals_;           ///< Values on the Dirichlet dofs.
+   /// The Dirichlet data on imposed_, when it does not change over the
+   /// current Advect() window (bd_static_valid_): reused at every stage.
+   mfem::Vector bd_static_;
+   bool bd_static_valid_ = false;   ///< bd_static_ holds this window's data.
+   bool bd_zero_ = false;           ///< ... and it is zero (no-slip walls).
+   mfem::Vector ess_scratch_;       ///< Dirichlet-dof values (scratch).
    mfem::Vector tmp_s_;             ///< Scalar scratch.
    mfem::Vector k1_; ///< RK4 stage 1.
    mfem::Vector k2_; ///< RK4 stage 2.

@@ -102,6 +102,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    MFEM_VERIFY(!disc.Has("collocated_mass"), "parameters: "
                "discretization.collocated_mass was replaced by "
                "discretization.mass: auto | collocated | consistent");
+   r.Read(disc, "fuse_grad_div", p.fuse_grad_div,
+          "Apply the grad-div term with the viscous term in one kernel (the "
+          "velocity gradients once per apply; compact vector_diffusion only). "
+          "false: two kernels.");
    r.ReadEnum(disc, "vector_diffusion", p.vector_diffusion,
    {
       {"compact", VectorDiffusionStorage::Compact},
@@ -363,6 +367,40 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(solver, "atol", p.krylov_atol, "FGMRES absolute tolerance.");
    r.Read(solver, "max_iter", p.max_iter, "FGMRES iteration cap.");
    r.Read(solver, "kdim", p.kdim, "FGMRES restart size.");
+   r.ReadEnum(solver, "tolerance_reference", p.tolerance_reference,
+   {
+      {"initial_residual", ToleranceReference::InitialResidual},
+      {"rhs", ToleranceReference::Rhs},
+      {"step", ToleranceReference::Step}
+   },
+   "What solver.rtol is relative to. initial_residual: ||r|| <= rtol ||r_0|| "
+   "(MFEM's; a better initial guess then saves no iterations). rhs: ||r|| <= "
+   "rtol ||b||, so that solver.initial_guess pays off (loose at a small dt: "
+   "||b|| holds c0 M u_n). step: ||r|| <= rtol ||b - A x_prev||, the previous "
+   "solution's residual -- rtol of what the step changes, at any dt, with "
+   "initial_guess project at no extra operator application.");
+   r.ReadEnum(solver, "initial_guess", p.initial_guess,
+   {
+      {"previous", InitialGuess::Previous},
+      {"extrapolate", InitialGuess::Extrapolate},
+      {"project", InitialGuess::Project}
+   },
+   "The outer solve's initial guess. previous: the last step's solution. "
+   "extrapolate: its linear extrapolation in time (one more system vector). "
+   "project: the least-squares projection onto the last solver.projection_k "
+   "solutions (2 projection_k system vectors). Pair with "
+   "tolerance_reference: rhs.");
+   r.Read(solver, "projection_k", p.projection_k,
+          "initial_guess project: the most solutions kept (>= 1).");
+   MFEM_VERIFY(p.projection_k >= 1, "parameters: solver.projection_k must be "
+               ">= 1");
+   r.Read(solver, "projection_rebuild_threshold", p.projection_rebuild_threshold,
+          "initial_guess project: recompute the kept solutions' images (k "
+          "operator applications) once the mass factor beta0/dt has moved by "
+          "more than this fraction since they were made; until then the "
+          "guess uses the older operator's images (valid, less good).");
+   MFEM_VERIFY(p.projection_rebuild_threshold > 0.0, "parameters: "
+               "solver.projection_rebuild_threshold must be positive");
    r.Read(solver, "print_level", p.print_level, "Solver verbosity (-1 = quiet).");
    r.Declare(solver, "schur", "enum", "cc", "cc | mass | laplacian_legacy",
              "Pressure Schur block: Cahouet-Chabard, scaled pressure mass, or the "
@@ -788,6 +826,19 @@ void VerifyNoUnknownKeys(const DeckReader& r, const std::string& where)
               "run_case --deck-reference)");
 }
 
+// Abort with every key a map of the deck sets twice: only the first would be
+// read, and the later value silently ignored.
+void VerifyNoDuplicateKeys(const DeckReader& r, const std::string& where)
+{
+   const std::vector<std::string> dups = r.DuplicateKeys();
+   if (dups.empty()) { return; }
+   std::string list;
+   for (const std::string& d : dups) { list += "\n  " + d; }
+   MFEM_ABORT("parameters: duplicate key(s) in " << where << ":" << list
+              << "\n(a key may be set once per section; YAML would keep "
+              "only the first value)");
+}
+
 Parameters FromYAML(const YAML::Node& root, const std::string& where);
 } // namespace
 
@@ -824,11 +875,12 @@ std::string Parameters::DeckReferenceMarkdown()
 
 namespace
 {
-// Read, check for unknown keys, validate, normalize.
+// Check for duplicate keys, read, check for unknown keys, validate, normalize.
 Parameters FromYAML(const YAML::Node& root, const std::string& where)
 {
    Parameters p;
    DeckReader r(root);
+   VerifyNoDuplicateKeys(r, where);
    FillFromDeck(r, p);
    VerifyNoUnknownKeys(r, where);
 

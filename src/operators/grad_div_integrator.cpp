@@ -354,6 +354,8 @@ struct GradDivRegistrar
       I::AddSpecialization<3, 6, 6>(); I::AddSpecialization<3, 6, 7>();
       I::AddSpecialization<3, 7, 7>(); I::AddSpecialization<3, 7, 8>();
       I::AddSpecialization<2, 7, 7>(); I::AddSpecialization<2, 7, 8>();
+      I::AddSpecialization<2, 8, 8>(); I::AddSpecialization<2, 8, 9>();
+      I::AddSpecialization<3, 8, 8>(); I::AddSpecialization<3, 8, 9>();
    }
 };
 const GradDivRegistrar grad_div_registrar;
@@ -538,6 +540,7 @@ void GradDivIntegrator::AssemblePA(const FiniteElementSpace& fes)
 
 void GradDivIntegrator::AddMultPA(const Vector& x, Vector& y) const
 {
+   if (apply_fused_) { return; } // applied with the diffusion term
    ApplyPAKernels::Run(dim_, dofs1D_, quad1D_, ne_, maps_->B, maps_->G,
                        geom_->J, pa_data_, x, y, dofs1D_, quad1D_);
 }

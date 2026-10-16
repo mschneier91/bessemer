@@ -15,6 +15,13 @@
 //  C4 The Jacobians the rate reads, computed at every call instead of cached
 //     in the mesh, equal MFEM's cached ones bit for bit on a curved mesh:
 //     dropping the cache changes no rate and no step size.
+//  C5 A NaN in the velocity gives an infinite rate, for Rate and MaxRate (a
+//     max reduction would skip it and report a finite rate: a diverged run
+//     went on until an unrelated check failed), and the finite rate is the
+//     same as before; RequireFiniteRate accepts it.
+//  C6 MaxRateAt (the per-level cache: a step's history levels keyed by their
+//     times) gives MaxRate's value bitwise, computed or from the cache. (A
+//     space change clears the cache; the integrator is rebuilt then anyway.)
 
 #include <gtest/gtest.h>
 
@@ -28,6 +35,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <memory>
 
 using namespace mfem;
 
@@ -263,3 +272,66 @@ TEST(Cfl, C3_CflControlledSteps)
    CflControlledSteps(incns::ConvectiveForm::Rotational);
 }
 
+TEST(Cfl, C5_NanVelocityGivesAnInfiniteRate)
+{
+   incns::RuleBook rules;
+   for (int dim : {2, 3})
+   {
+      SCOPED_TRACE("dim=" + std::to_string(dim));
+      Mesh serial = incns::MakeBoxMesh(amr_test::Box(dim, dim == 2 ? 4 : 2, false));
+      auto mesh = incns::PartitionMesh(serial, true);
+      H1_FECollection fec(3, dim);
+      ParFiniteElementSpace fes(mesh.get(), &fec, dim, Ordering::byNODES);
+      ParGridFunction u(&fes), v(&fes);
+      Vector uv(dim);
+      for (int i = 0; i < dim; ++i) { uv(i) = kU[i]; }
+      VectorConstantCoefficient uc(uv);
+      u.ProjectCoefficient(uc);
+      v = u;
+
+      incns::ConvectiveCfl cfl(fes, rules);
+      const double finite = cfl.Rate(u);
+      EXPECT_TRUE(std::isfinite(finite));
+      EXPECT_GT(finite, 0.0);
+      incns::RequireFiniteRate(finite, 0.0); // returns
+
+      // One NaN dof on every rank (every rank owns elements here).
+      v.HostReadWrite()[0] = std::numeric_limits<double>::quiet_NaN();
+      EXPECT_TRUE(std::isinf(cfl.Rate(v)));
+      EXPECT_TRUE(std::isinf(cfl.MaxRate({&u, &v})));
+      EXPECT_EQ(cfl.Rate(u), finite); // unchanged for a finite velocity
+   }
+}
+
+TEST(Cfl, C6_LevelCacheMatchesMaxRateBitwise)
+{
+   incns::RuleBook rules;
+   Mesh serial = incns::MakeBoxMesh(amr_test::Box(3, 2, false));
+   auto mesh = incns::PartitionMesh(serial, true);
+   H1_FECollection fec(3, 3);
+   ParFiniteElementSpace fes(mesh.get(), &fec, 3, Ordering::byNODES);
+   std::vector<std::unique_ptr<ParGridFunction>> u;
+   for (int l = 0; l < 4; ++l)
+   {
+      u.push_back(std::make_unique<ParGridFunction>(&fes));
+      VectorFunctionCoefficient f(3, [l](const Vector & x, Vector & y)
+      {
+         y.SetSize(3);
+         y(0) = std::sin(x(1) + 0.3 * l);
+         y(1) = 0.5 * std::cos(x(2) - l);
+         y(2) = 0.2 * (1 + l) * x(0);
+      });
+      u[l]->ProjectCoefficient(f);
+   }
+   incns::ConvectiveCfl cfl(fes, rules);
+   // A step's three levels, then the next step's (one new, two cached).
+   const double a = cfl.MaxRateAt({u[0].get(), u[1].get(), u[2].get()}, {0.3, 0.2, 0.1});
+   EXPECT_EQ(a, cfl.MaxRate({u[0].get(), u[1].get(), u[2].get()}));
+   const double b = cfl.MaxRateAt({u[3].get(), u[0].get(), u[1].get()}, {0.4, 0.3, 0.2});
+   EXPECT_EQ(b, cfl.MaxRate({u[3].get(), u[0].get(), u[1].get()}));
+   EXPECT_EQ(cfl.MaxRateAt({u[3].get()}, {0.4}), cfl.Rate(*u[3]));
+   EXPECT_EQ(cfl.MaxRateAt({u[2].get()}, {0.1}), cfl.Rate(*u[2]));
+   // Cached: the same value again, without an evaluation.
+   EXPECT_EQ(cfl.MaxRateAt({u[0].get(), u[1].get()}, {0.3, 0.2}),
+             cfl.MaxRate({u[0].get(), u[1].get()}));
+}

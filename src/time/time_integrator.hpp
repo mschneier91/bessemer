@@ -17,6 +17,9 @@
 #include "time/oifs.hpp"
 #include "mfem.hpp"
 
+#include <map>
+#include <string>
+
 #include <deque>
 #include <functional>
 #include <memory>
@@ -83,6 +86,8 @@ struct TimeIntegratorOptions
    bool keep_rhs = true;
    /// Compact vector-diffusion storage (StokesOperatorOptions).
    bool compact_diffusion = true;
+   /// Grad-div with the viscous term in one kernel (StokesOperatorOptions).
+   bool fuse_grad_div = true;
    /// Controller tolerances and constants (used when adaptive is on).
    AdaptiveControllerOptions controller;
    /// Solve Navier-Stokes rather than unsteady Stokes (Sprint 2.2): adds the
@@ -133,6 +138,12 @@ struct TimeIntegratorOptions
    CahouetChabardConfig cc;
    double rtol = 1e-10;          ///< FGMRES relative tolerance.
    double atol = 0.0;            ///< FGMRES absolute tolerance.
+   /// What rtol is relative to, the initial guess and the solutions it keeps
+   /// (StokesSolverOptions).
+   ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   InitialGuess initial_guess = InitialGuess::Previous; ///< See above.
+   int projection_k = 8;                                ///< See above.
+   double projection_rebuild_threshold = 0.05;          ///< See above.
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart size.
    int print_level = -1;         ///< Solver print level.
@@ -291,6 +302,22 @@ public:
    ///         its SolveStats.
    const StokesSolver* LastSolver() const { return last_solver_; }
 
+   /**
+    * @brief The guess state (StokesSolver::ExportGuessState) of each solver
+    *        built so far: "trap", "bdf2", "bdf3". What a checkpoint keeps
+    *        beyond ExportState() for a restart to repeat the solves exactly.
+    * @param states Output, by solver; aliases valid until the next step.
+    */
+   void ExportSolverStates(std::map<std::string, SolverGuessState>& states)
+   const;
+
+   /**
+    * @brief Restore states from ExportSolverStates() (a checkpoint): each
+    *        goes to its solver now if it is built, else when it is.
+    * @param states The states; their vectors are swapped out.
+    */
+   void ImportSolverStates(std::map<std::string, SolverGuessState>& states);
+
    /// @return Completed (accepted) steps.
    int StepCount() const { return step_count_; }
 
@@ -314,11 +341,14 @@ public:
     * @param system_size  Local block-system size (vector entries).
     * @param velocity_size Local velocity true dofs.
     * @param kdim         The configured restart length (the upper bound).
+    * @param extra_vectors System-sized vectors the initial guess keeps
+    *                      (StokesSolver::GuessVectors), counted as not yet
+    *                      allocated.
     * @return The restart length, between 1 and kdim.
     */
    static int KrylovDimForMemory(double free_bytes, double total_bytes,
                                  long long system_size, long long velocity_size,
-                                 int kdim);
+                                 int kdim, int extra_vectors = 0);
 
    /// Verdict hook: called after a converged solve with (accepted steps so
    /// far, attempt number within the step); returning true rejects it.
@@ -557,6 +587,11 @@ private:
    /// (3.1 GB of 23.7 at 32^3 Q3 on a GPU, 2026-10-13).
    std::unique_ptr<StokesSolver> trap_;
    double trap_c0_ = 0.0;               ///< Mass factor trap_ is built for (1/dt).
+   /// Guess states from a checkpoint for solvers not built yet, by name
+   /// (ImportSolverStates).
+   std::map<std::string, SolverGuessState> pending_guess_;
+   /// Give @p solver its pending guess state, if any (the name's).
+   void ApplyPendingGuess(const std::string& name, StokesSolver& solver);
    SolverCache bdf2_;                   ///< BDF2 solver cache.
    SolverCache bdf3_;                   ///< BDF3 solver cache.
 
@@ -568,6 +603,8 @@ private:
    /// OIFS: the convection operator N, for the convective acceleration at
    /// the imposed boundary nodes (OifsBoundaryValues); never on the RHS.
    std::unique_ptr<Convection> oifs_conv_;
+   /// OIFS: some rank has Dirichlet true dofs (oifs_conv_ exists only then).
+   bool oifs_walls_ = false;
    /// OIFS + directional do-nothing outflow: evaluates that boundary term
    /// alone (SubtractOifsDirectionalDoNothing); null otherwise.
    std::unique_ptr<Convection> oifs_ddn_;
@@ -591,6 +628,22 @@ private:
    std::unique_ptr<KineticHeadInterpolator> kinetic_head_;
 
    std::deque<mfem::Vector> hist_; ///< Velocity true-dof history, newest first.
+   /// Per-step work vectors, kept between steps (each one a cudaMalloc and a
+   /// synchronizing cudaFree per step as locals on a GPU; 2026-10-15). Sized
+   /// on first use.
+   mfem::Vector rhs_b_;      ///< A step's momentum right-hand side.
+   mfem::Vector rhs_combo_;  ///< AssembleBdfRhs: the history combination.
+   mfem::Vector rhs_tmp_;    ///< AssembleBdfRhs: its mass product.
+   mfem::Vector conv_nj_;    ///< SubtractConvection: one level's term.
+   mfem::Vector oifs_bd_;    ///< OifsBoundaryValues: the boundary values.
+   mfem::Vector oifs_q_;     ///< OifsBoundaryValues: (u.grad)u.
+   mfem::Vector oifs_nj_;    ///< OifsBoundaryValues: one level's term.
+   mfem::Vector oifs_vals_;  ///< OifsBoundaryValues: imposed-dof values.
+   mfem::Vector u_true_;     ///< A step's solution, true dofs.
+   /// The forcing's right-hand side when the coefficient is a constant
+   /// (assembled once; forcing_value_ is the constant it was assembled for).
+   mfem::Vector forcing_const_;
+   mfem::Vector forcing_value_; ///< That constant (empty: none assembled).
    std::deque<double> hist_times_; ///< Times of the history entries.
 
    /// Solver of the last accepted step (MomentumResidual); not owned.

@@ -16,6 +16,7 @@
 #include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/rotational_schur.hpp"
+#include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
 
@@ -298,6 +299,9 @@ struct Parameters
    /// Vector-diffusion storage (deck `discretization.vector_diffusion`):
    /// compact (default; 6 numbers per point in 3D) or MFEM's (27).
    VectorDiffusionStorage vector_diffusion = VectorDiffusionStorage::Compact;
+   /// Grad-div applied with the viscous term in one kernel (deck
+   /// `discretization.fuse_grad_div`).
+   bool fuse_grad_div = true;
 
    /// Box mesh specification (quads/hexes; per-direction periodicity).
    BoxSpec mesh;
@@ -391,8 +395,21 @@ struct Parameters
    double cfl_max = 0.0;
 
    // --- Krylov ----------------------------------------------------------------
-   double krylov_rtol = 1e-10; ///< FGMRES relative tolerance.
+   /// FGMRES relative tolerance; with the default step reference, of what a
+   /// step changes (human decision 2026-10-15: 1e-6; was 1e-10 of the
+   /// initial residual). CASE-LEVEL default: StokesSolverOptions keeps its own
+   /// for the solver unit tests and their baselines.
+   double krylov_rtol = 1e-6;
    double krylov_atol = 0.0;   ///< FGMRES absolute tolerance.
+   /// What krylov_rtol is relative to (deck `solver.tolerance_reference`).
+   ToleranceReference tolerance_reference = ToleranceReference::Step;
+   /// The outer solve's initial guess (deck `solver.initial_guess`).
+   InitialGuess initial_guess = InitialGuess::Project;
+   int projection_k = 8; ///< Solutions kept (deck `solver.projection_k`).
+   /// initial_guess project: the mass factor's relative change after which
+   /// the kept images are recomputed (deck
+   /// `solver.projection_rebuild_threshold`).
+   double projection_rebuild_threshold = 0.05;
    int max_iter = 2000;        ///< FGMRES iteration cap.
    int kdim = 200;             ///< FGMRES restart size.
    int print_level = -1;       ///< Solver print level.
@@ -443,6 +460,9 @@ struct Parameters
       // Grad-div is on by default at case level, and then it belongs in
       // the Schur PC's mass term (human decision 2026-10-13).
       c.schur_grad_div = true;
+      // Two inner Schur iterations (human decision 2026-10-15; channel +12.5 %,
+      // TGV +5.6 %, both gates passed; docs/throughput.md).
+      c.n_inner = 2;
       return c;
    }
 
@@ -523,7 +543,8 @@ struct Parameters
     * @brief Load a YAML deck, overriding the defaults field by field, and
     *        Normalize() the result.
     * @param path Path to the YAML file.
-    * @return The populated, normalized parameters (throws on malformed input).
+    * @return The populated, normalized parameters (throws on malformed input;
+    *         aborts on an unknown key or a key a section sets twice).
     */
    static Parameters LoadYAML(const std::string& path);
 

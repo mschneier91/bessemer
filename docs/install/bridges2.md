@@ -110,6 +110,21 @@ Put that last line in `~/.bashrc`. Sourcing it sets `SPACK_ROOT`, which is how
 the repository's scripts find this Spack; without it they look in `~/spack`,
 their default, and `scripts/setup.sh --plan` offers to clone one there.
 
+### Step 0 — the MFEM source [LOGIN NODE]
+
+Both Bridges-2 environments build MFEM v4.10 with mfem/mfem#5464, a fix for
+mfem/mfem#5602 that is not in a release yet ([developing.md](../developing.md)),
+from a local source tree, through Spack's `develop:` section. Once per user, on a
+login node (it needs internet):
+
+```bash
+./scripts/mfem_source.sh      # -> $PROJECT/mfem-src/mfem-4.10, branch v4.10-pr5464
+```
+
+It clones v4.10 and commits `environments/patches/mfem-v4.10-pr5464.diff` on a branch
+`v4.10-pr5464`; the compute nodes then build from that tree, offline. Drop it (and the
+`develop:` sections) once #5464 is in a release.
+
 ### Step 1 — fetch all sources into mirrors [LOGIN NODE]
 
 ```bash

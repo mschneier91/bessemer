@@ -17,8 +17,8 @@ namespace incns
  * the caller's (see VelocityPreconditioner): the default is a matrix-free
  * mfem::OperatorJacobiSmoother on the momentum diagonal (the block stays
  * mass-dominated at DNS time steps), with mfem::HypreBoomerAMG as an option for
- * stiffer regimes. The pressure block is PressureMassSchur, wrapped in an
- * mfem::OrthoSolver by the caller when the pressure constant null space exists
+ * stiffer regimes. The pressure block is PressureMassSchur, wrapped in a
+ * DeviceOrthoSolver (precond/nullspace.hpp) by the caller when the pressure constant null space exists
  * (orthogonalized, never pinned -- see StokesSolver).
  */
 class StokesBlockPreconditioner : public mfem::Solver

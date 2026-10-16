@@ -14,11 +14,12 @@ spack:
     # MUMPS (human 2026-10-09): MFEM's +mumps (MFEM_USE_MUMPS; pulls MUMPS and
     # ScaLAPACK). No OpenMP in MUMPS: one MPI rank per core here, and OpenMP
     # threads per rank would oversubscribe. METIS/ParMETIS orderings.
-    # MFEM pinned (human 2026-10-09) to master just before PR #5297 ("General
-    # NC mesh spacing in parallel", https://github.com/mfem/mfem/pull/5297):
-    # its ParMesh::AnisotropicConflict segfaults on nonconforming 3D hex meshes
-    # at np >= 2 (reported upstream 2026-10-09). Drop the pin once fixed.
-    - mfem@develop commit=1c19aba72a2b91ee918a332e668cf00922848321
+    # MFEM v4.10 (2026-09-01) with mfem/mfem#5464 as a local patch (human
+    # 2026-10-15): v4.10 contains PR #5297, whose ParMesh::AnisotropicConflict
+    # segfaults on nonconforming 3D hex meshes at np >= 2 (mfem/mfem#5602);
+    # #5464 (unmerged) fixes it. Built from the source tree in the develop
+    # section below. Drop the patch once #5464 is in a release.
+    - mfem@develop
       ~cuda+gslib+lapack+libceed+mpi+mumps+shared+suite-sparse
       ^gslib@1.0.9 cflags="-fPIC"
       ^mumps+metis+parmetis~openmp
@@ -49,6 +50,14 @@ spack:
     # pip installs the numba wheel (docs/install/bridges2.md, Step 4); the
     # environment's Python has none otherwise.
     - py-pip
+
+  # The MFEM source: a clone at tag v4.10 with #5464's own diff (vs its last
+  # master merge, 3001edfcf4) committed on a local branch v4.10-pr5464. Spack
+  # builds it as a develop package (the compute nodes have no internet).
+  develop:
+    mfem:
+      spec: mfem@develop
+      path: $PROJECT/mfem-src/mfem-4.10
 
   packages:
     all:

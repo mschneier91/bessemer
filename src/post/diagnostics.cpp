@@ -95,7 +95,7 @@ FlowDiagnostics::Values FlowDiagnostics::All(const ParGridFunction& u,
    MFEM_VERIFY(!Stale(), "flow_diagnostics: the space changed since this "
                "object was built; build a new one");
    double sums[3];
-   LocalFlowSums(u, *ir_, sums);
+   LocalFlowSums(u, *ir_, sums, work_);
    MPI_Allreduce(MPI_IN_PLACE, sums, 3, MPI_DOUBLE, MPI_SUM, vfes_.GetComm());
    Values v;
    v.kinetic_energy = 0.5 * sums[0];

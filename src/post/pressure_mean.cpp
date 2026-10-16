@@ -5,9 +5,13 @@ namespace incns
 
 using namespace mfem;
 
-double MassWeightedMean(const ParGridFunction& p, const RuleBook& rules)
+namespace
 {
-   ParFiniteElementSpace& fes = *p.ParFESpace();
+
+// ones_true(i) = ∫ phi_i on the true dofs of fes (see MassWeightedMean).
+void AssembleOnesTrue(ParFiniteElementSpace& fes, const RuleBook& rules,
+                      Vector& ones_true)
+{
    ParMesh& mesh = *fes.GetParMesh();
    const MPI_Comm comm = mesh.GetComm();
 
@@ -39,8 +43,17 @@ double MassWeightedMean(const ParGridFunction& p, const RuleBook& rules)
    // page-protects a device-valid host buffer -- for a malloc'd one the
    // page-rounded protection also covers unrelated heap neighbours, which
    // then fault intermittently (seen in nse_mms_test at np2, 2026-10-05).
-   Vector ones_true(fes.GetTrueVSize());
    ones.ParallelAssemble(ones_true);
+}
+
+} // namespace
+
+double MassWeightedMean(const ParGridFunction& p, const RuleBook& rules)
+{
+   ParFiniteElementSpace& fes = *p.ParFESpace();
+   const MPI_Comm comm = fes.GetComm();
+   Vector ones_true(fes.GetTrueVSize());
+   AssembleOnesTrue(fes, rules, ones_true);
    Vector p_true;
    p.GetTrueDofs(p_true);
    Vector unit(p_true.Size());
@@ -55,6 +68,34 @@ double MassWeightedMean(const ParGridFunction& p, const RuleBook& rules)
 void SubtractMean(ParGridFunction& p, const RuleBook& rules)
 {
    p -= MassWeightedMean(p, rules);
+}
+
+void PressureMean::Setup(ParFiniteElementSpace& fes) const
+{
+   if (fes_ == &fes && sequence_ == fes.GetSequence()) { return; }
+   // MassWeightedMean's vectors, built the same way (fresh objects).
+   ones_true_ = std::make_unique<Vector>(fes.GetTrueVSize());
+   AssembleOnesTrue(fes, rules_, *ones_true_);
+   Vector unit(ones_true_->Size());
+   unit = 1.0;
+   volume_ = InnerProduct(fes.GetComm(), *ones_true_, unit);
+   MFEM_VERIFY(volume_ > 0.0, "pressure_mean: non-positive domain volume");
+   p_true_.Destroy();
+   fes_ = &fes;
+   sequence_ = fes.GetSequence();
+}
+
+double PressureMean::Mean(const ParGridFunction& p) const
+{
+   ParFiniteElementSpace& fes = *p.ParFESpace();
+   Setup(fes);
+   p.GetTrueDofs(p_true_);
+   return InnerProduct(fes.GetComm(), *ones_true_, p_true_) / volume_;
+}
+
+void PressureMean::Subtract(ParGridFunction& p) const
+{
+   p -= Mean(p);
 }
 
 } // namespace incns

@@ -43,9 +43,6 @@ time:
   rtol: 1.0e-5
   cfl_max: 0.24
 
-solver:
-  rtol: 1.0e-10
-
 boundary_conditions:
   - {select: [inflow], type: velocity, profile: parabolic, u_max: 0.45, height: 0.41,
      time_profile: ramp, time_scale: 1.0}

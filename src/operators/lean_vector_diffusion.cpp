@@ -1,5 +1,8 @@
 #include "operators/lean_vector_diffusion.hpp"
 
+#include "operators/component_kernels.hpp"
+#include "operators/grad_div_integrator.hpp"
+
 #include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
@@ -159,6 +162,12 @@ void CompactApply3D(const int NE, const Array<real_t>& b,
       kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
       kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
 
+      // The component loops are unrolled: r0 and r1 hold VDIM x DIM x Q1D
+      // values per thread and stay in registers only when every index is a
+      // compile-time constant (with a runtime component index they went to
+      // the stack: 720-792 bytes of local memory per thread at Q1D = 5, most
+      // of the kernel's DRAM traffic; Nsight Compute, 2026-10-15).
+      MFEM_UNROLL(VDIM)
       for (int i = 0; i < VDIM; i++)
       {
          kernels::internal::LoadDofs3d(e, D1D, i, XE, r0);
@@ -185,6 +194,61 @@ void CompactApply3D(const int NE, const Array<real_t>& b,
          MFEM_SYNC_THREAD;
          kernels::internal::GradTranspose3d(D1D, Q1D, smem, sB, sG, r0, r1, i);
          kernels::internal::WriteDofs3d(e, D1D, i, i, r1, YE);
+      }
+   });
+}
+
+// CompactApply3D at Q1D >= 7, one component at a time
+// (operators/component_kernels.hpp): there r0 and r1 went to the stack even
+// with the component loop unrolled, 1008 and 1152 bytes per thread at (6, 7)
+// and (7, 8) (ptxas, 2026-10-16). The components are independent; the
+// arithmetic is CompactApply3D's.
+template <int D1D, int Q1D>
+void CompactApply3DByComponent(const int NE, const Array<real_t>& b,
+                               const Array<real_t>& g, const Vector& d,
+                               const Vector& x, Vector& y, const int,
+                               const int)
+{
+   static constexpr int VDIM = 3;
+   const auto B = b.Read(), G = g.Read();
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MD1 = SetMaxOf(D1D), MQ1 = SetMaxOf(Q1D);
+      MFEM_SHARED real_t sB[MD1][MQ1], sG[MD1][MQ1], smem[MQ1][MQ1];
+      kernels::internal::vd_regs3d_t<1, 3, MQ1> r0, r1;
+      kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
+      kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+      MFEM_UNROLL(VDIM)
+      for (int i = 0; i < VDIM; i++)
+      {
+         kernels3d::LoadComponent(e, D1D, i, XE, r0);
+         kernels3d::GradComponent<false>(D1D, Q1D, smem, sB, sG, r0, r1);
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  const real_t gradX = r1[0][0][qz][qy][qx];
+                  const real_t gradY = r1[0][1][qz][qy][qx];
+                  const real_t gradZ = r1[0][2][qz][qy][qx];
+                  const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
+                               O13 = DE(qx, qy, qz, 2, e);
+                  const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
+                  const real_t O33 = DE(qx, qy, qz, 5, e);
+                  r0[0][0][qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ);
+                  r0[0][1][qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ);
+                  r0[0][2][qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ);
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         kernels3d::GradComponent<true>(D1D, Q1D, smem, sB, sG, r0, r1);
+         kernels::internal::WriteDofs3d(e, D1D, 0, i, r1, YE);
       }
    });
 }
@@ -263,6 +327,436 @@ void Diagonal3D(int ne, int D1D, int Q1D, bool compact, const Array<real_t>& b,
    });
 }
 
+
+// adj(J) at a point, A[k][i] (row k: reference direction, column i: physical
+// component), with the expressions graddiv's kernels use (grad_div_integrator.cpp
+// View3D/View2D), so the fused apply forms the same values.
+template <typename TJ>
+MFEM_HOST_DEVICE inline void Adjugate3D(const TJ& J, int qx, int qy, int qz,
+                                        int e, real_t A[3][3])
+{
+   const real_t j00 = J(qx, qy, qz, 0, 0, e), j01 = J(qx, qy, qz, 0, 1, e);
+   const real_t j02 = J(qx, qy, qz, 0, 2, e), j10 = J(qx, qy, qz, 1, 0, e);
+   const real_t j11 = J(qx, qy, qz, 1, 1, e), j12 = J(qx, qy, qz, 1, 2, e);
+   const real_t j20 = J(qx, qy, qz, 2, 0, e), j21 = J(qx, qy, qz, 2, 1, e);
+   const real_t j22 = J(qx, qy, qz, 2, 2, e);
+   A[0][0] = (j11 * j22) - (j12 * j21);
+   A[1][0] = (j20 * j12) - (j10 * j22);
+   A[2][0] = (j10 * j21) - (j20 * j11);
+   A[0][1] = (j21 * j02) - (j01 * j22);
+   A[1][1] = (j00 * j22) - (j02 * j20);
+   A[2][1] = (j20 * j01) - (j00 * j21);
+   A[0][2] = (j01 * j12) - (j11 * j02);
+   A[1][2] = (j10 * j02) - (j00 * j12);
+   A[2][2] = (j00 * j11) - (j01 * j10);
+}
+
+template <typename TJ>
+MFEM_HOST_DEVICE inline void Adjugate2D(const TJ& J, int qx, int qy, int e,
+                                        real_t A[2][2])
+{
+   A[0][0] = J(qx, qy, 1, 1, e);
+   A[1][0] = -J(qx, qy, 1, 0, e);
+   A[0][1] = -J(qx, qy, 0, 1, e);
+   A[1][1] = J(qx, qy, 0, 0, e);
+}
+
+// The compact apply with grad-div's term (LeanVectorDiffusionIntegrator::
+// FuseGradDiv). Pass 1: every component's reference gradients (r1 keeps them
+// all) and, per point, t = alpha S, S = sum_c sum_k grad_c[k] A[k][c] summed
+// as graddiv's kernel sums it. Pass 2, per component: the flux O grad_c +
+// t A[:,c], contracted back and written once.
+template <int T_D1D = 0, int T_Q1D = 0>
+void FusedApply2D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
+                  const Vector& d, const Vector& j, const Vector& alpha,
+                  const Vector& x, Vector& y, const int d1d = 0,
+                  const int q1d = 0)
+{
+   static constexpr int DIM = 2, VDIM = 2;
+   const int D1D = T_D1D ? T_D1D : d1d;
+   const int Q1D = T_Q1D ? T_Q1D : q1d;
+   const auto B = b.Read(), G = g.Read();
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, 3, NE);
+   const auto J = Reshape(j.Read(), Q1D, Q1D, 2, 2, NE);
+   const auto AL = Reshape(alpha.Read(), Q1D, Q1D, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, VDIM, NE);
+
+   mfem::forall_2D<T_Q1D* T_Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MD1 = T_D1D > 0 ? SetMaxOf(T_D1D) : DofQuadLimits::MAX_T1D;
+      constexpr int MQ1 = T_Q1D > 0 ? SetMaxOf(T_Q1D) : DofQuadLimits::MAX_T1D;
+      MFEM_SHARED real_t sB[MD1][MQ1], sG[MD1][MQ1], smem[MQ1][MQ1];
+      kernels::internal::vd_regs2d_t<VDIM, DIM, MQ1> r0, r1;
+      kernels::internal::vd_regs2d_t<1, 1, MQ1> T;
+      kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
+      kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+      for (int c = 0; c < VDIM; ++c)
+      {
+         kernels::internal::LoadDofs2d(e, D1D, c, XE, r0);
+         kernels::internal::Grad2d(D1D, Q1D, smem, sB, sG, r0, r1, c);
+      }
+      MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+         {
+            real_t A[2][2];
+            Adjugate2D(J, qx, qy, e, A);
+            real_t s = 0.0;
+            for (int c = 0; c < VDIM; ++c)
+            {
+               real_t acc = 0.0;
+               for (int k = 0; k < DIM; ++k) { acc += r1[c][k][qy][qx] * A[k][c]; }
+               s += acc;
+            }
+            T[0][0][qy][qx] = AL(qx, qy, e) * s;
+         }
+      }
+      for (int c = 0; c < VDIM; ++c)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+            {
+               real_t A[2][2];
+               Adjugate2D(J, qx, qy, e, A);
+               const real_t t = T[0][0][qy][qx];
+               const real_t gradX = r1[c][0][qy][qx];
+               const real_t gradY = r1[c][1][qy][qx];
+               const real_t O11 = DE(qx, qy, 0, e), O12 = DE(qx, qy, 1, e);
+               const real_t O22 = DE(qx, qy, 2, e);
+               r0[c][0][qy][qx] = (O11 * gradX) + (O12 * gradY) + t * A[0][c];
+               r0[c][1][qy][qx] = (O12 * gradX) + (O22 * gradY) + t * A[1][c];
+            }
+         }
+         MFEM_SYNC_THREAD;
+         kernels::internal::GradTranspose2d(D1D, Q1D, smem, sB, sG, r0, r1, c);
+         kernels::internal::WriteDofs2d(e, D1D, c, c, r1, YE);
+      }
+   });
+}
+
+template <int T_D1D = 0, int T_Q1D = 0>
+void FusedApply3D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
+                  const Vector& d, const Vector& j, const Vector& alpha,
+                  const Vector& x, Vector& y, const int d1d = 0,
+                  const int q1d = 0)
+{
+   static constexpr int DIM = 3, VDIM = 3;
+   const int D1D = T_D1D ? T_D1D : d1d;
+   const int Q1D = T_Q1D ? T_Q1D : q1d;
+   const auto B = b.Read(), G = g.Read();
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto J = Reshape(j.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto AL = Reshape(alpha.Read(), Q1D, Q1D, Q1D, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+
+   mfem::forall_2D<T_Q1D* T_Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MD1 = T_D1D > 0 ? SetMaxOf(T_D1D) : DofQuadLimits::MAX_T1D;
+      constexpr int MQ1 = T_Q1D > 0 ? SetMaxOf(T_Q1D) : DofQuadLimits::MAX_T1D;
+      MFEM_SHARED real_t sB[MD1][MQ1], sG[MD1][MQ1], smem[MQ1][MQ1];
+      kernels::internal::vd_regs3d_t<VDIM, DIM, MQ1> r0, r1;
+      kernels::internal::vd_regs3d_t<1, 1, MQ1> T;
+      kernels::internal::LoadMatrix(D1D, Q1D, B, sB);
+      kernels::internal::LoadMatrix(D1D, Q1D, G, sG);
+      // Unrolled component loops: see CompactApply3D.
+      MFEM_UNROLL(VDIM)
+      for (int c = 0; c < VDIM; ++c)
+      {
+         kernels::internal::LoadDofs3d(e, D1D, c, XE, r0);
+         kernels::internal::Grad3d(D1D, Q1D, smem, sB, sG, r0, r1, c);
+      }
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+            {
+               real_t A[3][3];
+               Adjugate3D(J, qx, qy, qz, e, A);
+               real_t s = 0.0;
+               MFEM_UNROLL(VDIM)
+               for (int c = 0; c < VDIM; ++c)
+               {
+                  real_t acc = 0.0;
+                  for (int k = 0; k < DIM; ++k)
+                  {
+                     acc += r1[c][k][qz][qy][qx] * A[k][c];
+                  }
+                  s += acc;
+               }
+               T[0][0][qz][qy][qx] = AL(qx, qy, qz, e) * s;
+            }
+         }
+      }
+      MFEM_UNROLL(VDIM)
+      for (int c = 0; c < VDIM; ++c)
+      {
+         for (int qz = 0; qz < Q1D; ++qz)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  real_t A[3][3];
+                  Adjugate3D(J, qx, qy, qz, e, A);
+                  const real_t t = T[0][0][qz][qy][qx];
+                  const real_t gradX = r1[c][0][qz][qy][qx];
+                  const real_t gradY = r1[c][1][qz][qy][qx];
+                  const real_t gradZ = r1[c][2][qz][qy][qx];
+                  const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
+                               O13 = DE(qx, qy, qz, 2, e);
+                  const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
+                  const real_t O33 = DE(qx, qy, qz, 5, e);
+                  r0[c][0][qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ) +
+                                         t * A[0][c];
+                  r0[c][1][qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ) +
+                                         t * A[1][c];
+                  r0[c][2][qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ) +
+                                         t * A[2][c];
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         kernels::internal::GradTranspose3d(D1D, Q1D, smem, sB, sG, r0, r1, c);
+         kernels::internal::WriteDofs3d(e, D1D, c, c, r1, YE);
+      }
+   });
+}
+
+// The fused apply in 3D at compile-time sizes: one thread per quadrature
+// point (Q1D^3 per element), the shape of MFEM's SmemPAConvectionApply3D.
+// Every value a thread holds is its own point's; the gradients of all
+// components sit in shared memory (VDIM x DIM x Q1D^3) and the contractions
+// go through shared memory. FusedApply3D (the runtime-size fallback) gives
+// each thread a column of Q1D points of every component's gradient: 248
+// registers and 12 % occupancy at (4, 5), against 56 and 55 % here; 1.09 ->
+// 0.65 ms per apply on an H100 at TGV 32^3 (Nsight Compute, 2026-10-15). The
+// same terms; the contractions sum in a different order (roundoff).
+template <int D1D, int Q1D>
+void FusedApply3DPoints(const int NE, const Array<real_t>& b,
+                        const Array<real_t>& g, const Vector& d,
+                        const Vector& j, const Vector& alpha, const Vector& x,
+                        Vector& y, const int, const int)
+{
+   static constexpr int DIM = 3, VDIM = 3;
+   const auto B = Reshape(b.Read(), Q1D, D1D);
+   const auto G = Reshape(g.Read(), Q1D, D1D);
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto J = Reshape(j.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto AL = Reshape(alpha.Read(), Q1D, Q1D, Q1D, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+
+   mfem::forall_3D(NE, Q1D, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int DQ = (Q1D > D1D) ? Q1D : D1D;
+      MFEM_SHARED real_t sGr[VDIM][DIM][Q1D][Q1D][Q1D];
+      MFEM_SHARED real_t sT[Q1D][Q1D][Q1D];
+      MFEM_SHARED real_t sm0[DQ * DQ * DQ];
+      MFEM_SHARED real_t sm1[DQ * DQ * DQ];
+      MFEM_SHARED real_t sm2[DQ * DQ * DQ];
+      MFEM_SHARED real_t sm3[DQ * DQ * DQ];
+      MFEM_SHARED real_t sm4[DQ * DQ * DQ];
+      MFEM_SHARED real_t sm5[DQ * DQ * DQ];
+      // Every component's reference gradient at the points.
+      for (int c = 0; c < VDIM; ++c)
+      {
+         real_t (*u)[D1D][D1D] = (real_t (*)[D1D][D1D]) sm0;
+         MFEM_FOREACH_THREAD(dz, z, D1D)
+         {
+            MFEM_FOREACH_THREAD(dy, y, D1D)
+            {
+               MFEM_FOREACH_THREAD(dx, x, D1D) { u[dz][dy][dx] = XE(dx, dy, dz, c, e); }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         real_t (*Bu)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm1;
+         real_t (*Gu)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm2;
+         MFEM_FOREACH_THREAD(dz, z, D1D)
+         {
+            MFEM_FOREACH_THREAD(dy, y, D1D)
+            {
+               MFEM_FOREACH_THREAD(qx, x, Q1D)
+               {
+                  real_t bu = 0.0, gu = 0.0;
+                  for (int dx = 0; dx < D1D; ++dx)
+                  {
+                     bu += B(qx, dx) * u[dz][dy][dx];
+                     gu += G(qx, dx) * u[dz][dy][dx];
+                  }
+                  Bu[dz][dy][qx] = bu;
+                  Gu[dz][dy][qx] = gu;
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         real_t (*BBu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm3;
+         real_t (*GBu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm4;
+         real_t (*BGu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm5;
+         MFEM_FOREACH_THREAD(dz, z, D1D)
+         {
+            MFEM_FOREACH_THREAD(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD(qx, x, Q1D)
+               {
+                  real_t bbu = 0.0, gbu = 0.0, bgu = 0.0;
+                  for (int dy = 0; dy < D1D; ++dy)
+                  {
+                     bbu += B(qy, dy) * Bu[dz][dy][qx];
+                     gbu += G(qy, dy) * Bu[dz][dy][qx];
+                     bgu += B(qy, dy) * Gu[dz][dy][qx];
+                  }
+                  BBu[dz][qy][qx] = bbu;
+                  GBu[dz][qy][qx] = gbu;
+                  BGu[dz][qy][qx] = bgu;
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         MFEM_FOREACH_THREAD(qz, z, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD(qx, x, Q1D)
+               {
+                  real_t gx = 0.0, gy = 0.0, gz = 0.0;
+                  for (int dz = 0; dz < D1D; ++dz)
+                  {
+                     gx += B(qz, dz) * BGu[dz][qy][qx];
+                     gy += B(qz, dz) * GBu[dz][qy][qx];
+                     gz += G(qz, dz) * BBu[dz][qy][qx];
+                  }
+                  sGr[c][0][qz][qy][qx] = gx;
+                  sGr[c][1][qz][qy][qx] = gy;
+                  sGr[c][2][qz][qy][qx] = gz;
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+      }
+      // grad-div's term at each point: alpha sum_c sum_k grad_c[k] A[k][c].
+      MFEM_FOREACH_THREAD(qz, z, Q1D)
+      {
+         MFEM_FOREACH_THREAD(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t A[3][3];
+               Adjugate3D(J, qx, qy, qz, e, A);
+               real_t s = 0.0;
+               MFEM_UNROLL(VDIM)
+               for (int c = 0; c < VDIM; ++c)
+               {
+                  real_t acc = 0.0;
+                  MFEM_UNROLL(DIM)
+                  for (int k = 0; k < DIM; ++k) { acc += sGr[c][k][qz][qy][qx] * A[k][c]; }
+                  s += acc;
+               }
+               sT[qz][qy][qx] = AL(qx, qy, qz, e) * s;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      // Per component: the flux O grad_c + t adj(J)[:, c], contracted back.
+      // Unrolled: adj(J)[:, c] then has compile-time indices.
+      MFEM_UNROLL(VDIM)
+      for (int c = 0; c < VDIM; ++c)
+      {
+         real_t (*F0)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm0;
+         real_t (*F1)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm1;
+         real_t (*F2)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm2;
+         MFEM_FOREACH_THREAD(qz, z, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD(qx, x, Q1D)
+               {
+                  real_t A[3][3];
+                  Adjugate3D(J, qx, qy, qz, e, A);
+                  const real_t t = sT[qz][qy][qx];
+                  const real_t gradX = sGr[c][0][qz][qy][qx];
+                  const real_t gradY = sGr[c][1][qz][qy][qx];
+                  const real_t gradZ = sGr[c][2][qz][qy][qx];
+                  const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
+                               O13 = DE(qx, qy, qz, 2, e);
+                  const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
+                  const real_t O33 = DE(qx, qy, qz, 5, e);
+                  F0[qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ) + t * A[0][c];
+                  F1[qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ) + t * A[1][c];
+                  F2[qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ) + t * A[2][c];
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         // z: B for F0 and F1, G for F2.
+         real_t (*Z0)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm3;
+         real_t (*Z1)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm4;
+         real_t (*Z2)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm5;
+         MFEM_FOREACH_THREAD(dz, z, D1D)
+         {
+            MFEM_FOREACH_THREAD(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD(qx, x, Q1D)
+               {
+                  real_t z0 = 0.0, z1 = 0.0, z2 = 0.0;
+                  for (int qz = 0; qz < Q1D; ++qz)
+                  {
+                     z0 += B(qz, dz) * F0[qz][qy][qx];
+                     z1 += B(qz, dz) * F1[qz][qy][qx];
+                     z2 += G(qz, dz) * F2[qz][qy][qx];
+                  }
+                  Z0[dz][qy][qx] = z0;
+                  Z1[dz][qy][qx] = z1;
+                  Z2[dz][qy][qx] = z2;
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         // y: B for F0, G for F1, B for F2; F1 and F2 both take B in x.
+         real_t (*W0)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm0;
+         real_t (*W1)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm1;
+         MFEM_FOREACH_THREAD(dz, z, D1D)
+         {
+            MFEM_FOREACH_THREAD(dy, y, D1D)
+            {
+               MFEM_FOREACH_THREAD(qx, x, Q1D)
+               {
+                  real_t w0 = 0.0, w1 = 0.0;
+                  for (int qy = 0; qy < Q1D; ++qy)
+                  {
+                     w0 += B(qy, dy) * Z0[dz][qy][qx];
+                     w1 += G(qy, dy) * Z1[dz][qy][qx] + B(qy, dy) * Z2[dz][qy][qx];
+                  }
+                  W0[dz][dy][qx] = w0;
+                  W1[dz][dy][qx] = w1;
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         // x: G for F0, B for F1 and F2.
+         MFEM_FOREACH_THREAD(dz, z, D1D)
+         {
+            MFEM_FOREACH_THREAD(dy, y, D1D)
+            {
+               MFEM_FOREACH_THREAD(dx, x, D1D)
+               {
+                  real_t v = 0.0;
+                  for (int qx = 0; qx < Q1D; ++qx)
+                  {
+                     v += G(qx, dx) * W0[dz][dy][qx] + B(qx, dx) * W1[dz][dy][qx];
+                  }
+                  YE(dx, dy, dz, c, e) += v;
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+      }
+   });
+}
+
 } // namespace leandiff
 
 /// \cond DO_NOT_DOCUMENT
@@ -271,6 +765,10 @@ LeanVectorDiffusionIntegrator::ApplyKernelType
 LeanVectorDiffusionIntegrator::CompactApplyKernels::Kernel()
 {
    if constexpr(DIM == 2) { return leandiff::CompactApply2D<D1D, Q1D>; }
+   else if constexpr(DIM == 3 && Q1D >= 7)
+   {
+      return leandiff::CompactApply3DByComponent<D1D, Q1D>;
+   }
    else if constexpr(DIM == 3) { return leandiff::CompactApply3D<D1D, Q1D>; }
    MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
 }
@@ -283,7 +781,33 @@ LeanVectorDiffusionIntegrator::CompactApplyKernels::Fallback(int dim, int, int)
    MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
 }
 
-// The (DIM, D1D, Q1D) specializations GradDivIntegrator registers (through Q6
+template <int DIM, int D1D, int Q1D>
+LeanVectorDiffusionIntegrator::FusedKernelType
+LeanVectorDiffusionIntegrator::FusedApplyKernels::Kernel()
+{
+   if constexpr(DIM == 2) { return leandiff::FusedApply2D<D1D, Q1D>; }
+   // A thread per point while its static shared memory fits in 48 KB (Q1D up
+   // to 7: 44 KB at (7, 7)); (7, 8) needs 64 KB and keeps FusedApply3D, 1.2 KB
+   // of stack per thread included: a two-pass variant one component at a time
+   // (no stack, 255 registers, the gradients computed twice) took 1.01 ms per
+   // apply against its 0.87 ms (TGV 16^3 Q6, one H100, job 49270936).
+   else if constexpr(DIM == 3 && Q1D <= 7)
+   {
+      return leandiff::FusedApply3DPoints<D1D, Q1D>;
+   }
+   else if constexpr(DIM == 3) { return leandiff::FusedApply3D<D1D, Q1D>; }
+   MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
+}
+
+LeanVectorDiffusionIntegrator::FusedKernelType
+LeanVectorDiffusionIntegrator::FusedApplyKernels::Fallback(int dim, int, int)
+{
+   if (dim == 2) { return leandiff::FusedApply2D; }
+   else if (dim == 3) { return leandiff::FusedApply3D; }
+   MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
+}
+
+// The (DIM, D1D, Q1D) specializations GradDivIntegrator registers (through Q7
 // velocity; GL rules give Q1D ~ D1D + 1, collocated GLL Q1D == D1D): the
 // untemplated fallback sizes its registers at MAX_T1D.
 namespace
@@ -303,6 +827,8 @@ struct LeanVectorDiffusionRegistrar
       I::AddSpecialization<3, 5, 5>(); I::AddSpecialization<3, 5, 6>();
       I::AddSpecialization<3, 6, 6>(); I::AddSpecialization<3, 6, 7>();
       I::AddSpecialization<3, 7, 7>(); I::AddSpecialization<3, 7, 8>();
+      I::AddSpecialization<2, 8, 8>(); I::AddSpecialization<2, 8, 9>();
+      I::AddSpecialization<3, 8, 8>(); I::AddSpecialization<3, 8, 9>();
    }
 };
 const LeanVectorDiffusionRegistrar lean_vector_diffusion_registrar;
@@ -374,8 +900,31 @@ void LeanVectorDiffusionIntegrator::AddMultPA(const Vector& x, Vector& y) const
       return;
    }
    if (cne_ == 0) { return; }
+   if (fused_gd_)
+   {
+      FusedApplyKernels::Run(cdim_, cd1d_, cq1d_, cne_, cmaps_->B, cmaps_->G,
+                             cpa_, fused_gd_->PAJacobians(),
+                             fused_gd_->PAAlpha(), x, y, cd1d_, cq1d_);
+      return;
+   }
    CompactApplyKernels::Run(cdim_, cd1d_, cq1d_, cne_, cmaps_->B, cmaps_->G,
                             cpa_, x, y, cd1d_, cq1d_);
+}
+
+bool LeanVectorDiffusionIntegrator::FuseGradDiv(GradDivIntegrator& gd)
+{
+   fused_gd_ = nullptr;
+   gd.SetApplyFused(false);
+   if (!compact_ || cne_ == 0 || gd.PAMaps() == nullptr) { return false; }
+   if (gd.PAMaps() != cmaps_ || gd.PADim() != cdim_ ||
+       gd.PANumElements() != cne_ || gd.PADofs1D() != cd1d_ ||
+       gd.PAQuad1D() != cq1d_)
+   {
+      return false;
+   }
+   fused_gd_ = &gd;
+   gd.SetApplyFused(true);
+   return true;
 }
 
 void LeanVectorDiffusionIntegrator::AssembleDiagonalPA(Vector& diag)

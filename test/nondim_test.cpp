@@ -101,6 +101,12 @@ TEST(Nondim, DimensionalTgvMatchesDimensionlessTwin)
    ref.dt = 0.02;
    ref.t_final = 0.2;
    ref.initial_velocity = "taylor_green_2d";
+   // The twins differ by a few ulps (below), and a loose solver tolerance lets
+   // that move where a solve stops: a tight rtol keeps the difference at
+   // roundoff, also on a GPU, whose runs agree only to the tolerance (hypre's
+   // device AMG is not run-to-run deterministic: repro_tolerance.hpp). The
+   // guess and the tolerance reference stay the case defaults.
+   ref.krylov_rtol = 1e-10;
    ref.Normalize();
 
    Mesh ref_serial = MakeBoxMesh(ref.mesh);
@@ -123,6 +129,7 @@ TEST(Nondim, DimensionalTgvMatchesDimensionlessTwin)
    dim.mesh.lengths = {2.0 * M_PI * L, 2.0 * M_PI * L, 2.0 * M_PI * L};
    dim.dt = 0.02 * L / U;                  // seconds
    dim.t_final = 0.2 * L / U;              // seconds
+   dim.krylov_rtol = 1e-10;                // as ref's
    dim.Normalize();
 
    Mesh dim_serial = MakeBoxMesh(dim.mesh); // built from NORMALIZED lengths

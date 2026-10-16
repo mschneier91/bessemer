@@ -25,6 +25,15 @@ add_executable(square_cylinder square_cylinder.cpp)
 target_link_libraries(square_cylinder PRIVATE incns)
 
 # Where a checkpointed AMR run put its elements, pass by pass (checks an
-# amr.end_time freeze; benchmarks/square_cylinder_re1000/README.md).
+# amr.end_time freeze).
 add_executable(mesh_census mesh_census.cpp)
 target_link_libraries(mesh_census PRIVATE incns)
+
+# dFEM probe (MFEM 4.10's fem/dfem): the vector mass as MFEM partial assembly
+# and as a dFEM DifferentiableOperator -- agreement, time per apply, memory.
+# Its quadrature-point function is a device lambda: nvcc in a CUDA build.
+add_executable(dfem_probe dfem_probe.cpp)
+target_link_libraries(dfem_probe PRIVATE incns)
+if(USE_CUDA)
+  set_source_files_properties(dfem_probe.cpp PROPERTIES LANGUAGE CUDA)
+endif()

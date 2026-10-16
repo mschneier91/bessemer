@@ -18,13 +18,14 @@ synchronizing profiler on.
 | After changes 7–9 | 80³ | 41.5 M | — | 43.5 GB (38 GB after step 1) |
 | After changes 11–12 (2026-10-14) | 85³ | 49.7 M | — | 37.6 GB |
 | After changes 13–15 | 87³ | 53.3 M | — | 35.8 GB |
-| After change 16 | measurement pending | | — | expected ~34.6 GB |
+| After change 16 | **88³** | **55.2 M** | — | **34.7 GB** |
 
 Per velocity dof: 5.2 kB at 56³ before, 1.95 kB at 80³ after the first two rounds,
-1.53 kB at 87³ after change 15. Sweeps: after change 9, 64³ 43.5 GB, 72³ 59.0, 76³
+1.53 kB at 87³ after change 15, 1.48 kB at 88³ after change 16. Sweeps: after change 9, 64³ 43.5 GB, 72³ 59.0, 76³
 68.0, 80³ 78.9, 81³ out of memory; after change 12, 82³ 73.2 GB, 84³ 78.1, 85³ 80.5, 86³
 out of memory; after change 15, 86³ and 87³ run (at FGMRES restart lengths 3–6 and 1)
-and 88³ does not. Change 16 was committed before its measurement (job 49216290).
+and 88³ does not; after change 16, 88³ runs (restart length 1, 32.4 s per step) and 89³
+does not (job 49216290).
 
 Near the limit the meshes run with a short FGMRES restart (change 15): 87³ converged in
 12.3 outer iterations per step at restart length 1, 29.9 s per step, about 20 % slower than
@@ -39,7 +40,7 @@ iterations per step):
 | Change 11, compact storage | 37.6 GB | 10.54 s |
 | Change 13, grad-div stores α only | 35.3 GB | 11.11 s |
 | Change 14, refresh work kept across Δt | 35.8 GB | 9.84 s |
-| Change 16, CFL Jacobians per call | pending (expected −1.2 GB) | pending |
+| Change 16, CFL Jacobians per call | 34.7 GB | 10.02 s (within noise) |
 
 ## The changes
 
@@ -178,7 +179,7 @@ and make that CFL change" (16).
     CFL at the GLL nodes and needs the Jacobians there; MFEM cached them in the mesh for
     the whole run (1.2 GB at 64³). They are now computed at each call with MFEM's own
     routine, without the cache (bit-identical, test C4), between solves and so away from
-    the peak: **1.2 GB expected at 64³** (measurement pending when committed). The definition and every CFL number are unchanged. With the
+    the peak: **64³ 35.8 → 34.7 GB**; the limit moves to 88³. The definition and every CFL number are unchanged. With the
     collocated mass (BDF3, OIFS) the mass form caches the same Jacobians and nothing is
     saved. (`src/time/cfl.*`)
 

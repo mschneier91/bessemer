@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "config/deck_reader.hpp"
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "mesh/periodic_box.hpp"
@@ -15,6 +16,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -91,10 +93,17 @@ TEST(Deck, YamlReproducesInCodeDriver)
    in_code.t_final = 0.2;
    in_code.initial_velocity = "taylor_green_2d";
    in_code.output.enabled = false;
+   // On a GPU two runs of a case agree only to the solver tolerance
+   // (hypre's device AMG is not run-to-run deterministic: repro_tolerance.hpp),
+   // so a tight rtol keeps that floor near 1e-11; the guess and the tolerance
+   // reference stay the case defaults (project, step). On a host backend the
+   // runs are bitwise at any rtol.
+   in_code.krylov_rtol = 1e-10;
    in_code.Normalize(); // in-code drivers normalize explicitly (LoadYAML does it)
 
    Parameters deck = Parameters::LoadYAML(INCNS_TGV_DECK);
    deck.output.enabled = false; // same physics; skip I/O here
+   deck.krylov_rtol = 1e-10;
 
    const Vector u_code = RunCase(in_code);
    const Vector u_deck = RunCase(deck);
@@ -470,4 +479,57 @@ TEST(Deck, SchemaIsCompleteAndCurrent)
    EXPECT_EQ(ss.str(), Parameters::DeckReferenceMarkdown())
          << "docs/deck_reference.md is out of date; regenerate it with\n"
          "  build/cpu/apps/run_case --deck-reference > docs/deck_reference.md";
+}
+
+// A key set twice in one map is an error: yaml-cpp keeps both pairs but a
+// lookup sees only the first, so bench.py's `order_u: 5` appended after its
+// template's `order_u: 3` once ran at order 3 without a word. Each duplicate
+// is reported with its key, its section and its lines, in every map (list
+// entries included); the same key in different sections is no duplicate.
+// LoadYAML aborts on them (run_case_rejects_duplicate_key_* runs that path).
+TEST(Deck, DuplicateKeysAreReported)
+{
+   auto duplicates = [](const std::string & text)
+   {
+      return incns::DeckReader(YAML::Load(text)).DuplicateKeys();
+   };
+   // Lines 1-4, 5-8, 9-12, 13-16.
+   const std::string text =
+      "discretization:\n  order_u: 3\n  order_p: 2\n  order_u: 5\n"
+      "output:\n  profile: wall\noutput:\n  profile: sync\n"
+      "solver:\n  rotation_schur:\n    mu_on: 1\n    mu_on: 2\n"
+      "boundary_conditions:\n  - select: all\n    type: no_slip\n"
+      "    type: outflow\n";
+   const std::vector<std::string> d = duplicates(text);
+   ASSERT_EQ(d.size(), 4u);
+   EXPECT_EQ(d[0], "'order_u' in section 'discretization' (lines 2, 4)");
+   EXPECT_EQ(d[1], "'mu_on' in section 'solver.rotation_schur' (lines 11, 12)");
+   EXPECT_EQ(d[2], "'type' in section 'boundary_conditions[0]' (lines 15, 16)");
+   EXPECT_EQ(d[3], "'output' at the top level (lines 5, 7)");
+
+   const std::string clean =
+      "output:\n  interval: 2\ncheckpoint:\n  interval: 5\n"
+      "boundary_conditions:\n  - {select: all, type: no_slip}\n"
+      "  - {select: all, type: no_slip}\n";
+   EXPECT_TRUE(duplicates(clean).empty());
+   const incns::DeckReader empty{YAML::Node(YAML::NodeType::Map)};
+   EXPECT_TRUE(empty.DuplicateKeys().empty());
+}
+
+// Every committed case deck loads: no duplicate or unknown keys, valid
+// values (benchmark_setup_test checks the decks under benchmarks/).
+TEST(Deck, EveryCaseDeckLoads)
+{
+   namespace fs = std::filesystem;
+   const fs::path cases = fs::path(INCNS_SOURCE_DIR) / "cases";
+   int decks = 0;
+   for (const auto& e : fs::directory_iterator(cases))
+   {
+      if (e.path().extension() != ".yaml") { continue; }
+      EXPECT_TRUE(incns::DeckReader(YAML::LoadFile(e.path().string()))
+                  .DuplicateKeys().empty()) << e.path();
+      EXPECT_GT(Parameters::LoadYAML(e.path().string()).nu, 0.0) << e.path();
+      ++decks;
+   }
+   EXPECT_GE(decks, 8);
 }

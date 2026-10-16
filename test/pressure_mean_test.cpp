@@ -17,6 +17,7 @@ using namespace mfem;
 using incns::BoxSpec;
 using incns::MakeBoxMesh;
 using incns::MassWeightedMean;
+using incns::PressureMean;
 using incns::RuleBook;
 using incns::SubtractMean;
 
@@ -86,4 +87,43 @@ TEST(PressureMean, LinearFieldMeanIsCentroid2D)
    EXPECT_NEAR(MassWeightedMean(p, rules), M_PI, 1e-10);
    SubtractMean(p, rules);
    EXPECT_NEAR(MassWeightedMean(p, rules), 0.0, 1e-12);
+}
+
+// PressureMean (the space's functional kept between calls) gives the free
+// functions' values bitwise, call after call, and follows a changed space.
+TEST(PressureMean, KeptMatchesFreeFunctionsBitwise)
+{
+   BoxSpec s;
+   s.dim = 3;
+   s.num_elems = {3, 4, 3};
+   s.periodic = {false, true, false};
+   ParMesh mesh = MakeParBox(s);
+   H1_FECollection fec(2, mesh.Dimension());
+   ParFiniteElementSpace pfes(&mesh, &fec);
+   RuleBook rules;
+   PressureMean kept(rules);
+
+   ParGridFunction p(&pfes), q(&pfes);
+   for (int call = 0; call < 4; ++call)
+   {
+      FunctionCoefficient f([call](const Vector & x)
+      { return std::sin(x[0] + call) * std::cos(2.0 * x[1]) + 0.3 * call * x[2]; });
+      p.ProjectCoefficient(f);
+      q = p;
+      EXPECT_EQ(kept.Mean(p), MassWeightedMean(p, rules)) << "call " << call;
+      kept.Subtract(p);
+      SubtractMean(q, rules);
+      // Through HostRead: on a GPU the subtraction ran on the device.
+      const double* ph = p.HostRead();
+      const double* qh = q.HostRead();
+      for (int i = 0; i < p.Size(); ++i) { ASSERT_EQ(ph[i], qh[i]) << "call " << call; }
+   }
+
+   // A refined mesh: the space's sequence moves, the functional is rebuilt.
+   mesh.UniformRefinement();
+   pfes.Update();
+   p.Update();
+   FunctionCoefficient g([](const Vector & x) { return 1.0 + x[0] * x[1]; });
+   p.ProjectCoefficient(g);
+   EXPECT_EQ(kept.Mean(p), MassWeightedMean(p, rules));
 }

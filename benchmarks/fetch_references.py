@@ -85,6 +85,26 @@ def channel():
                "urms+ = sqrt(R_uu), uv+ = R_uv."],
               ["y", "y_plus", "U_plus", "urms_plus", "vrms_plus", "wrms_plus",
                "uv_plus"], data)
+    # Re_tau 543.5: Lee & Moser (2015), the same columns.
+    base = "https://turbulence.oden.utexas.edu/channel2015/data/"
+    means = rows(fetch(base + "LM_Channel_0550_mean_prof.dat"))
+    fluc = rows(fetch(base + "LM_Channel_0550_vel_fluc_prof.dat"))
+    assert len(means) == len(fluc)
+    data = []
+    for m, r in zip(means, fluc):
+        # mean_prof: y/delta, y+, U+, dU/dy, W, P; vel_fluc_prof: y/delta, y+,
+        # u'u', v'v', w'w', u'v', u'w', v'w', k (wall units).
+        data.append([m[0], m[1], m[2], math.sqrt(max(r[2], 0.0)),
+                     math.sqrt(max(r[3], 0.0)), math.sqrt(max(r[4], 0.0)), r[5]])
+    write(os.path.join(HERE, "channel", "reference", "lm_chan550.csv"),
+          ["Turbulent channel flow, Re_tau = 543.496: Lee & Moser, J. Fluid Mech.",
+           "774 (2015) 395-415 (DNS, Fourier-B-spline, 8 pi x 2 x 3 pi).",
+           "Source: %sLM_Channel_0550_mean_prof.dat and _vel_fluc_prof.dat" % base,
+           "Lower half of the channel, y in units of the half-height h (y = 0",
+           "at the wall); everything else in wall units: U+ = U / u_tau,",
+           "urms+ = sqrt(u'u'), uv+ = u'v'."],
+          ["y", "y_plus", "U_plus", "urms_plus", "vrms_plus", "wrms_plus",
+           "uv_plus"], data)
 
 
 def dfg3d():

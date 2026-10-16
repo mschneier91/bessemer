@@ -106,6 +106,7 @@ incns_add_mpi_test(adaptive_tgv_test adaptive_tgv_test.cpp)
 incns_add_mpi_test(grad_div_test grad_div_test.cpp)
 incns_add_mpi_test(grad_div_integrator_test grad_div_integrator_test.cpp)
 incns_add_mpi_test(lean_vector_diffusion_test lean_vector_diffusion_test.cpp)
+incns_add_mpi_test(kernel_specializations_test kernel_specializations_test.cpp)
 # Self-contained: MFEM + the integrator header only.
 incns_add_mpi_test(grad_div_integrator_elasticity_test grad_div_integrator_elasticity_test.cpp)
 incns_add_mpi_test(rotational_convection_test rotational_convection_test.cpp)
@@ -137,6 +138,9 @@ incns_add_mpi_test(body_force_test body_force_test.cpp)
 incns_add_mpi_test(cylinder_mesh_test cylinder_mesh_test.cpp)
 incns_add_mpi_test(directional_do_nothing_test directional_do_nothing_test.cpp)
 incns_add_mpi_test(oifs_test oifs_test.cpp)
+incns_add_mpi_test(oifs_convection_test oifs_convection_test.cpp)
+incns_add_mpi_test(persistent_fgmres_test persistent_fgmres_test.cpp)
+incns_add_mpi_test(solution_projection_test solution_projection_test.cpp)
 incns_add_mpi_test(step_retry_test step_retry_test.cpp)
 # The DFG 2D-1 benchmark (c_D, c_L, dp vs John's reference values): `slow`
 # label, np = 4 only, on demand (`scripts/test.sh cpu -L slow`).
@@ -193,6 +197,7 @@ incns_add_mpi_test(channel_statistics_test channel_statistics_test.cpp)
 incns_add_mpi_test(mesh_census_test mesh_census_test.cpp)
 incns_add_mpi_test(benchmark_setup_test benchmark_setup_test.cpp
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+incns_add_mpi_test(empty_partition_test empty_partition_test.cpp)
 # The benchmark comparison scripts against their own reference data
 # (benchmarks/*/plot.py --selftest; standard library only).
 foreach(_bench tgv_re1600 channel dfg_3d)
@@ -238,6 +243,14 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   set_tests_properties(run_case_rejects_missing_bcs_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "declares no boundary_conditions")
+  # A deck that sets a key twice must be refused, not run with the first value.
+  add_test(NAME run_case_rejects_duplicate_key_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_CURRENT_SOURCE_DIR}/decks/duplicate_key.yaml
+            --summary run_case_rejects_duplicate_np${np}_summary.json)
+  set_tests_properties(run_case_rejects_duplicate_key_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "'order_u' in section 'discretization' \\(lines 8, 10\\)")
   add_test(NAME taylor_green_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:taylor_green>)
   set_tests_properties(taylor_green_np${np} PROPERTIES

@@ -1,3 +1,4 @@
+#include "time/cfl.hpp"
 #include "time/time_integrator.hpp"
 
 #include "post/pressure_mean.hpp"
@@ -75,7 +76,16 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                   "CFL-controlled steps, not error control (by design: its "
                   "step is a CFL multiple)");
       // oifs_ itself is built below, once the BDF step's mass exists.
-      oifs_conv_ = std::make_unique<Convection>(spaces_, rules_);
+      // The convection form serves the Dirichlet nodes the wind enters
+      // through (OifsBoundaryValues, the starter): a mesh with none anywhere
+      // (periodic boxes) skips it -- its applies were discarded there, and at
+      // velocity order 7 its 3k rule (11 points per direction) is more than
+      // MFEM's partial assembly launches on a GPU.
+      int walls = bc_.EssentialTrueDofs().Size() > 0 ? 1 : 0;
+      MPI_Allreduce(MPI_IN_PLACE, &walls, 1, MPI_INT, MPI_MAX,
+                    spaces_.Velocity().GetComm());
+      oifs_walls_ = (walls != 0);
+      if (oifs_walls_) { oifs_conv_ = std::make_unique<Convection>(spaces_, rules_); }
       // Directional do-nothing: explicit and extrapolated in the BDF step,
       // exactly as IMEX treats it (SubtractOifsDirectionalDoNothing). Inside
       // the substeps it is consistent but stiff at backflow nodes (rate
@@ -112,7 +122,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    // that resumes with its history (a restart, an adapted mesh) never
    // needs it.
 
-   if (oifs_conv_)
+   if (opts_.convection && !rotational_ &&
+       opts_.convection_treatment == ConvectionTreatment::Oifs)
    {
       // The substeps invert the BDF step's own mass (every solver's Mass() is
       // the same plain M; the right-hand side uses trap_'s). OifsAdvector
@@ -266,7 +277,11 @@ void StokesTimeIntegrator::ChooseCflStep()
    INCNS_PROFILE("time_integrator::cfl_step");
    MFEM_VERIFY(cfl_rate_, "time_integrator: CFL-controlled steps need "
                "SetCflRate");
-   const double c = cfl_rate_();
+   // With OIFS, through the advector's per-level cache (the same rate, same
+   // definition and space): the substeps then reuse it instead of evaluating
+   // this velocity again.
+   const double c = oifs_ ? oifs_->RateAt(u_, t_) : cfl_rate_();
+   RequireFiniteRate(c, t_);
    double dt = dt_;
    const double dt_cfl = (c > 0.0) ? opts_.cfl_target / c
                          : std::numeric_limits<double>::infinity();
@@ -310,6 +325,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.grad_div_nu = opts_.grad_div_nu;
    so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
    so.compact_diffusion = opts_.compact_diffusion;
+   so.fuse_grad_div = opts_.fuse_grad_div;
    so.velocity_prec = opts_.velocity_prec;
    so.amg_reuse = opts_.amg_reuse;
    so.schur = opts_.schur;
@@ -328,12 +344,45 @@ StokesSolver& StokesTimeIntegrator::Trap()
    }
    so.rtol = opts_.rtol;
    so.atol = opts_.atol;
+   so.tolerance_reference = opts_.tolerance_reference;
+   so.initial_guess = opts_.initial_guess;
+   so.projection_k = opts_.projection_k;
+   so.projection_rebuild_threshold = opts_.projection_rebuild_threshold;
    so.max_iter = opts_.max_iter;
    so.kdim = opts_.kdim;
    so.print_level = opts_.print_level;
    trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
    trap_c0_ = 1.0 / dt_;
+   ApplyPendingGuess("trap", *trap_);
    return *trap_;
+}
+
+void StokesTimeIntegrator::ExportSolverStates(
+   std::map<std::string, SolverGuessState>& states) const
+{
+   states.clear();
+   if (trap_) { trap_->ExportGuessState(states["trap"]); }
+   if (bdf2_.solver) { bdf2_.solver->ExportGuessState(states["bdf2"]); }
+   if (bdf3_.solver) { bdf3_.solver->ExportGuessState(states["bdf3"]); }
+}
+
+void StokesTimeIntegrator::ImportSolverStates(
+   std::map<std::string, SolverGuessState>& states)
+{
+   pending_guess_.swap(states);
+   states.clear();
+   if (trap_) { ApplyPendingGuess("trap", *trap_); }
+   if (bdf2_.solver) { ApplyPendingGuess("bdf2", *bdf2_.solver); }
+   if (bdf3_.solver) { ApplyPendingGuess("bdf3", *bdf3_.solver); }
+}
+
+void StokesTimeIntegrator::ApplyPendingGuess(const std::string& name,
+      StokesSolver& solver)
+{
+   auto it = pending_guess_.find(name);
+   if (it == pending_guess_.end()) { return; }
+   solver.ImportGuessState(it->second);
+   pending_guess_.erase(it);
 }
 
 Operator& StokesTimeIntegrator::PlainMass()
@@ -372,7 +421,12 @@ void StokesTimeIntegrator::ReleaseStarter()
 StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       double c0)
 {
-   if (!cache.solver && AdoptSolver(cache, c0)) { return *cache.solver; }
+   const char* name = (&cache == &bdf2_) ? "bdf2" : "bdf3";
+   if (!cache.solver && AdoptSolver(cache, c0))
+   {
+      ApplyPendingGuess(name, *cache.solver);
+      return *cache.solver;
+   }
    if (!cache.solver)
    {
       // No solver to adopt: the starter goes first, so that it and the new
@@ -387,6 +441,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.grad_div_nu = opts_.grad_div_nu;
       so.grad_div_nu_ref = opts_.nu; // gamma from the fluid's nu
       so.compact_diffusion = opts_.compact_diffusion;
+      so.fuse_grad_div = opts_.fuse_grad_div;
       so.velocity_prec = opts_.velocity_prec;
       so.amg_reuse = opts_.amg_reuse;
       so.schur = opts_.schur;
@@ -403,11 +458,16 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       }
       so.rtol = opts_.rtol;
       so.atol = opts_.atol;
+      so.tolerance_reference = opts_.tolerance_reference;
+      so.initial_guess = opts_.initial_guess;
+      so.projection_k = opts_.projection_k;
+      so.projection_rebuild_threshold = opts_.projection_rebuild_threshold;
       so.max_iter = opts_.max_iter;
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;
       cache.solver = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
       cache.c0 = c0;
+      ApplyPendingGuess(name, *cache.solver);
    }
    else if (std::abs(c0 - cache.c0) > 1e-12 * std::abs(c0))
    {
@@ -418,9 +478,36 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
    return *cache.solver;
 }
 
+namespace
+{
+// A device-aware work vector of size n (no reallocation when it has it).
+void Scratch(Vector& v, int n)
+{
+   v.UseDevice(true);
+   v.SetSize(n);
+}
+} // namespace
+
 void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
 {
    INCNS_PROFILE("time_integrator::forcing");
+   // A constant coefficient (a body force, or none): assembled once, reused
+   // while the constant stays the same.
+   const auto* cf = dynamic_cast<const VectorConstantCoefficient*>(&forcing_);
+   if (cf && forcing_value_.Size() == cf->GetVec().Size())
+   {
+      bool same = true;
+      for (int i = 0; i < forcing_value_.Size(); ++i)
+      {
+         same = same && forcing_value_(i) == cf->GetVec()(i);
+      }
+      if (same)
+      {
+         Scratch(F, forcing_const_.Size());
+         F = forcing_const_;
+         return;
+      }
+   }
    forcing_.SetTime(t);
    ParLinearForm f_form(&spaces_.Velocity());
    auto* fi = new VectorDomainLFIntegrator(forcing_);
@@ -435,6 +522,12 @@ void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
    // debug-device page-protection fault that pattern causes.
    F.SetSize(spaces_.Velocity().GetTrueVSize());
    f_form.ParallelAssemble(F);
+   if (cf)
+   {
+      Scratch(forcing_const_, F.Size());
+      forcing_const_ = F;
+      forcing_value_ = cf->GetVec(); // host copy of the constant
+   }
 }
 
 void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
@@ -445,7 +538,10 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    // => A u^{n+1} - B^T p = F^{n+1} - M sum_{j>=1} c_j u^{n+1-j}.
    const int n_u = spaces_.Velocity().GetTrueVSize();
    AssembleForcing(t_new, b);
-   Vector combo(n_u), tmp(n_u);
+   Vector& combo = rhs_combo_;
+   Vector& tmp = rhs_tmp_;
+   Scratch(combo, n_u);
+   Scratch(tmp, n_u);
    if (oifs_)
    {
       // OIFS: the history levels advected to t_new replace both the plain
@@ -476,10 +572,16 @@ void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
       double t_new, Vector& phi)
 {
    INCNS_PROFILE("oifs::boundary_values");
+   if (!oifs_walls_) { return; } // no Dirichlet nodes on any rank
    // Collective (N applies): every rank runs it, imposed dofs or not.
    const int n_u = spaces_.Velocity().GetTrueVSize();
    const std::size_t k = c.size() - 1;
-   Vector bd(n_u), q(n_u), nj(n_u);
+   Vector& bd = oifs_bd_;
+   Vector& q = oifs_q_;
+   Vector& nj = oifs_nj_;
+   Scratch(bd, n_u);
+   Scratch(q, n_u);
+   Scratch(nj, n_u);
    bd = 0.0;
    double ctau = 0.0;
    for (std::size_t j = 1; j <= k; ++j)
@@ -499,7 +601,8 @@ void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
    oifs_->MassInverse(q, q); // (u.grad)u at the nodes
    bd.Add(-ctau, q);
    const Array<int>& imp = oifs_->ImposedDofs();
-   Vector vals;
+   Vector& vals = oifs_vals_;
+   vals.UseDevice(true); // the gather stays on the device
    bd.GetSubVector(imp, vals);
    phi.SetSubVector(imp, vals);
 }
@@ -537,7 +640,8 @@ void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b, int ext)
    const std::vector<double> g = ExtrapolationWeights(t_new, times);
 
    const int n_u = spaces_.Velocity().GetTrueVSize();
-   Vector nu_j(n_u);
+   Vector& nu_j = conv_nj_;
+   Scratch(nu_j, n_u);
    // Device-aware Vector ops throughout -- NEVER a hand-written mfem::forall
    // (CLAUDE.md: it silently becomes a host loop over device pointers). MFEM's
    // navier miniapp combines its AB history with a forall; this is the
@@ -590,13 +694,27 @@ void StokesTimeIntegrator::Commit(double t_new, const Vector& u_true,
    if (&u_gf != &u_) { u_ = u_gf; }
    if (&p_gf != &p_) { p_ = p_gf; }
 
-   hist_.push_front(u_true);
-   hist_times_.push_front(t_new);
    // BDF2 needs 2 levels; the BDF3 estimator / test mode and EXT3 need 3
    // (EXT only matters with convection: Stokes keeps 2 under ext_order 3).
    const std::size_t needed =
       (opts_.adaptive || opts_.order == 3 ||
        (opts_.convection && opts_.ext_order == 3)) ? 3 : 2;
+   // The level that drops out lends its memory to the new one (no
+   // allocation and free per step). mfem::Vector has no move operations:
+   // the memory changes hands by Swap(), and the deque holds an empty Vector
+   // (no allocation) until it does.
+   Vector slot;
+   if (hist_.size() >= needed)
+   {
+      slot.Swap(hist_.back());
+      hist_.pop_back();
+      hist_times_.pop_back();
+   }
+   Scratch(slot, u_true.Size());
+   slot = u_true;
+   hist_.emplace_front();
+   hist_.front().Swap(slot);
+   hist_times_.push_front(t_new);
    while (hist_.size() > needed)
    {
       hist_.pop_back();
@@ -613,7 +731,7 @@ int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
       double total_bytes,
       long long system_size,
       long long velocity_size,
-      int kdim)
+      int kdim, int extra_vectors)
 {
    const double word = sizeof(double);
    const double margin = 0.03 * total_bytes + 6.0 * word * velocity_size;
@@ -621,7 +739,8 @@ int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
    // k + 1 basis vectors and k preconditioned ones, FGMRES's residual, and
    // the solve's right-hand side and solution: 2k + 4 vectors.
    const double fit =
-      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 4.0) / 2.0);
+      std::floor(((free_bytes - margin) / std::max(vector, 1.0) - 4.0 -
+                  extra_vectors) / 2.0);
    return static_cast<int>(std::max(1.0, std::min<double>(kdim, fit)));
 }
 
@@ -641,8 +760,12 @@ void StokesTimeIntegrator::CapKrylovDim(StokesSolver& solver)
       solver.WarmUp();
       DeviceMemoryInfo(free, total);
    }
+   // FGMRES's work vectors from the last solve are kept for the next: free
+   // for this count (it assumes every Krylov vector is still to allocate).
+   free += solver.KeptKrylovBytes();
    int k = KrylovDimForMemory(free, total, solver.SystemSize(),
-                              spaces_.Velocity().GetTrueVSize(), opts_.kdim);
+                              spaces_.Velocity().GetTrueVSize(), opts_.kdim,
+                              solver.GuessVectors());
    MPI_Allreduce(MPI_IN_PLACE, &k, 1, MPI_INT, MPI_MIN, comm);
    if (k != solver.KrylovDim()) { solver.SetKrylovDim(k); }
    // Report a cap when it appears and when it moves by more than 10 %
@@ -713,13 +836,16 @@ bool StokesTimeIntegrator::StepStartup()
          oifs_->Advect({0.0, 1.0}, hist_, hist_times_, t_new, 1, u0_adv);
          // Imposed boundary nodes: the one-step characteristic expansion
          // u^0 - dt (u^0.grad)u^0 (see OifsBoundaryValues).
-         Vector q(n_u);
-         oifs_conv_->Mult(hist_[0], q);
-         oifs_->MassInverse(q, q);
-         Vector bd(hist_[0]), vals;
-         bd.Add(-dt_, q);
-         bd.GetSubVector(oifs_->ImposedDofs(), vals);
-         u0_adv.SetSubVector(oifs_->ImposedDofs(), vals);
+         if (oifs_walls_)
+         {
+            Vector q(n_u);
+            oifs_conv_->Mult(hist_[0], q);
+            oifs_->MassInverse(q, q);
+            Vector bd(hist_[0]), vals;
+            bd.Add(-dt_, q);
+            bd.GetSubVector(oifs_->ImposedDofs(), vals);
+            u0_adv.SetSubVector(oifs_->ImposedDofs(), vals);
+         }
       }
       const Vector& u0 = oifs_ ? u0_adv : hist_[0];
       Trap().Blocks().Mass().Mult(u0, tmp);
@@ -778,7 +904,8 @@ bool StokesTimeIntegrator::StepStartup()
    if (!AcceptSolve(*solver, t_new)) { return false; }
 
 
-   Vector u_true(n_u);
+   Vector& u_true = u_true_;
+   Scratch(u_true, n_u);
    u_.GetTrueDofs(u_true);
    Commit(t_new, u_true, u_, p_);
    return true;
@@ -799,7 +926,8 @@ bool StokesTimeIntegrator::StepFixed()
    StokesSolver& solver =
       EnsureBdfSolver(use_bdf3 ? bdf3_ : bdf2_, c[0]);
 
-   Vector b(n_u);
+   Vector& b = rhs_b_;
+   Scratch(b, n_u);
    AssembleBdfRhs(c, t_new, b);
    if (rotational_)
    {
@@ -814,7 +942,8 @@ bool StokesTimeIntegrator::StepFixed()
    last_solver_ = &solver;
    if (!AcceptSolve(solver, t_new)) { return false; }
 
-   Vector u_true(n_u);
+   Vector& u_true = u_true_;
+   Scratch(u_true, n_u);
    u_.GetTrueDofs(u_true);
    Commit(t_new, u_true, u_, p_);
    return true;

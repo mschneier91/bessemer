@@ -3,9 +3,8 @@
  * @brief Where an adaptively refined mesh has its elements: counts per
  *        streamwise band, after every refinement pass of a checkpointed run.
  *
- * Used to check the `amr.end_time` freeze of the Re 1000 square-cylinder
- * ladder (benchmarks/square_cylinder_re1000/README.md, "Is the mesh freeze
- * safe?"): refinement is refinement-only, so the mesh keeps growing behind the
+ * Used to check an `amr.end_time` freeze of a bluff-body run: refinement is
+ * refinement-only, so the mesh keeps growing behind the
  * vortices; freezing it is safe for the forces if the bands near the body have
  * stopped growing and the growth is far downstream. apps/mesh_census runs it.
  */

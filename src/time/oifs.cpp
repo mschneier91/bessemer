@@ -1,6 +1,7 @@
 #include "time/oifs.hpp"
 
 #include "time/multistep_coeffs.hpp"
+#include "util/profiler.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -28,8 +29,18 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
 
    SetupMass(mass_diag);
    cfl_ = std::make_unique<ConvectiveCfl>(V, rules_);
+   if (dim_ == 3)
+   {
+      const IntegrationRule& ir = rules_.Get(Geometry::CUBE, 3 * spaces_.OrderU());
+      if (OifsConvection::Supported(V, ir))
+      {
+         combo_ = std::make_unique<OifsConvection>(V, ir);
+      }
+   }
    bd_ = std::make_unique<ParGridFunction>(&V);
    bd_true_.SetSize(V.GetTrueVSize());
+   bd_vals_.UseDevice(true);
+   bd_static_.UseDevice(true);
    tmp_s_.SetSize(n_s_);
    tmp_s_.UseDevice(true);
    for (Vector* v : {&k1_, &k2_, &k3_, &k4_, &y_})
@@ -41,23 +52,34 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
 
 void OifsAdvector::Rhs(double s, const Vector& phi, Vector& dphi)
 {
+   INCNS_PROFILE("oifs::rhs");
    const std::vector<double> w = LagrangeWeights(s, times_ext_);
-   dphi = 0.0;
-   for (int c = 0; c < dim_; ++c)
+   if (combo_)
    {
-      Vector phi_c, dphi_c;
-      phi_c.MakeRef(const_cast<Vector&>(phi), c * n_s_, n_s_);
-      dphi_c.MakeRef(dphi, c * n_s_, n_s_);
-      // MFEM's alias protocol (device memory): the aliases start from their
-      // bases' valid location, and the base learns of the alias's writes.
-      phi_c.SyncMemory(phi);
-      dphi_c.SyncMemory(dphi);
-      for (int l = 0; l < n_ext_; ++l)
+      // dphi = -sum_l w_l C(u_l) phi, every component, one kernel.
+      std::vector<double> mw(w.size());
+      for (std::size_t l = 0; l < w.size(); ++l) { mw[l] = -w[l]; }
+      combo_->Mult(mw, phi, dphi);
+   }
+   else
+   {
+      dphi = 0.0;
+      for (int c = 0; c < dim_; ++c)
       {
-         conv_op_[l]->Mult(phi_c, tmp_s_);
-         dphi_c.Add(-w[l], tmp_s_);
+         Vector phi_c, dphi_c;
+         phi_c.MakeRef(const_cast<Vector&>(phi), c * n_s_, n_s_);
+         dphi_c.MakeRef(dphi, c * n_s_, n_s_);
+         // MFEM's alias protocol (device memory): the aliases start from their
+         // bases' valid location, and the base learns of the alias's writes.
+         phi_c.SyncMemory(phi);
+         dphi_c.SyncMemory(dphi);
+         for (int l = 0; l < n_ext_; ++l)
+         {
+            conv_op_[l]->Mult(phi_c, tmp_s_);
+            dphi_c.Add(-w[l], tmp_s_);
+         }
+         dphi_c.SyncAliasMemory(dphi);
       }
-      dphi_c.SyncAliasMemory(dphi);
    }
    // The FULL inverse, imposed rows included, then the imposed rates
    // dropped (SetDirichlet sets those values). The BDF step's right-hand
@@ -164,20 +186,21 @@ void OifsAdvector::MassInverse(const Vector& g, Vector& nodal)
    mass_iterations_ += mass_cg_->GetNumIterations();
 }
 
-void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
+void OifsAdvector::CacheBoundaryNodes()
 {
    ParFiniteElementSpace& V = spaces_.Velocity();
    ParMesh& mesh = *V.GetParMesh();
-   if (!flag_) { flag_ = std::make_unique<ParGridFunction>(&V); }
-   ParGridFunction& flag = *flag_;
-   flag = 0.0; // device-aware; take the host pointer only afterwards
-   double* fl = flag.HostReadWrite();
-   w.HostRead();
+   bnode_vdofs_.clear();
+   bnode_normals_.clear();
+   bnode_be_.clear();
+   bnode_k_.clear();
+   bnode_nodal_ = true;
    Array<int> vdofs;
-   Vector wv(dim_), nor(dim_), x(dim_), c(dim_);
+   Vector nor(dim_), x(dim_), c(dim_);
    for (int be = 0; be < mesh.GetNBE(); ++be)
    {
       const FiniteElement* fe = V.GetBE(be);
+      if (!dynamic_cast<const NodalFiniteElement*>(fe)) { bnode_nodal_ = false; }
       const IntegrationRule& nodes = fe->GetNodes();
       const int nd = fe->GetDof();
       V.GetBdrElementVDofs(be, vdofs);
@@ -193,15 +216,88 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
          CalcOrtho(T->Jacobian(), nor);
          x -= c;
          if (nor * x < 0.0) { nor.Neg(); } // outward, whatever the orientation
-         w.GetVectorValue(*T, ip, wv);
-         if (wv * nor <= 1e-10 * wv.Norml2() * nor.Norml2())
+         for (int d = 0; d < dim_; ++d)
          {
-            // Inflow or tangential (walls: w = 0): impose here.
+            bnode_vdofs_.push_back(vdofs[k + d * nd]);
+            bnode_normals_.push_back(nor(d));
+         }
+         bnode_be_.push_back(be);
+         bnode_k_.push_back(k);
+      }
+   }
+   bnode_seq_ = V.GetSequence();
+}
+
+void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
+{
+   ParFiniteElementSpace& V = spaces_.Velocity();
+   if (bnode_seq_ != V.GetSequence()) { CacheBoundaryNodes(); }
+   if (!flag_) { flag_ = std::make_unique<ParGridFunction>(&V); }
+   ParGridFunction& flag = *flag_;
+   flag = 0.0; // device-aware; take the host pointer only afterwards
+   double* fl = flag.HostReadWrite();
+   const double* wh = w.HostRead();
+   ParMesh& mesh = *V.GetParMesh();
+   const int n_nodes = static_cast<int>(bnode_be_.size());
+   // The wind at every boundary node: a nodal element's value at its node is
+   // that node's dofs (exactly zero on a no-slip wall); otherwise evaluated
+   // through the element.
+   bnode_w_.resize(static_cast<std::size_t>(n_nodes) * dim_);
+   double w_max = 0.0;
+   {
+      Vector wv(dim_);
+      ElementTransformation* T = nullptr;
+      for (int i = 0; i < n_nodes; ++i)
+      {
+         const int* v = &bnode_vdofs_[i * dim_];
+         double* wi = &bnode_w_[i * dim_];
+         if (bnode_nodal_)
+         {
             for (int d = 0; d < dim_; ++d)
             {
-               const int v = vdofs[k + d * nd];
-               fl[v >= 0 ? v : -1 - v] = 1.0;
+               wi[d] = (v[d] >= 0) ? wh[v[d]] : -wh[-1 - v[d]];
             }
+         }
+         else
+         {
+            const int be = bnode_be_[i];
+            if (T == nullptr || be != bnode_be_[i - 1])
+            {
+               T = mesh.GetBdrElementTransformation(be);
+            }
+            const IntegrationPoint& ip =
+               V.GetBE(be)->GetNodes().IntPoint(bnode_k_[i]);
+            T->SetIntPoint(&ip);
+            w.GetVectorValue(*T, ip, wv);
+            for (int d = 0; d < dim_; ++d) { wi[d] = wv(d); }
+         }
+         double ww = 0.0;
+         for (int d = 0; d < dim_; ++d) { ww += wi[d] * wi[d]; }
+         w_max = std::max(w_max, std::sqrt(ww));
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &w_max, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+   // Free (outflow) only where the outward normal velocity is more than
+   // roundoff of the boundary's largest wind; everything else, a no-slip wall
+   // included, is imposed. (Until 2026-10-15 the test was relative to the
+   // node's own |w|, with w evaluated through the element: on a wall that w
+   // is roundoff, and its sign decided whether the node was imposed.)
+   for (int i = 0; i < n_nodes; ++i)
+   {
+      const int* v = &bnode_vdofs_[i * dim_];
+      const double* wi = &bnode_w_[i * dim_];
+      const double* nor = &bnode_normals_[i * dim_];
+      double wn = 0.0, nn = 0.0;
+      for (int d = 0; d < dim_; ++d)
+      {
+         wn += wi[d] * nor[d];
+         nn += nor[d] * nor[d];
+      }
+      if (wn <= 1e-10 * w_max * std::sqrt(nn))
+      {
+         for (int d = 0; d < dim_; ++d)
+         {
+            fl[v[d] >= 0 ? v[d] : -1 - v[d]] = 1.0;
          }
       }
    }
@@ -225,15 +321,57 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
 
 void OifsAdvector::SetDirichlet(double s, double weight, Vector& phi)
 {
+   INCNS_PROFILE("oifs::dirichlet");
+   if (bd_static_valid_)
+   {
+      // The data does not change over this window: no projection (a host
+      // loop over the boundary and, on a GPU, a round trip of the whole
+      // velocity, at every RK stage). bd_static_valid_ is the same on every
+      // rank (StaticDirichlet reduces it).
+      if (imposed_.Size() > 0 && bd_zero_) { phi.SetSubVector(imposed_, 0.0); }
+      else if (imposed_.Size() > 0)
+      {
+         bd_vals_ = bd_static_;
+         bd_vals_ *= weight;
+         phi.SetSubVector(imposed_, bd_vals_);
+      }
+      return;
+   }
    // Every rank takes the same path (the projection may communicate).
-   const Array<int>& ess = imposed_;
+   DirichletValues(s, imposed_, bd_vals_);
+   bd_vals_ *= weight;
+   phi.SetSubVector(imposed_, bd_vals_);
+}
+
+void OifsAdvector::DirichletValues(double s, const Array<int>& dofs,
+                                   Vector& vals)
+{
    bc_.SetTime(s);
    *bd_ = 0.0;
    bc_.ProjectDirichlet(*bd_);
    bd_->GetTrueDofs(bd_true_);
-   bd_true_.GetSubVector(ess, bd_vals_);
-   bd_vals_ *= weight;
-   phi.SetSubVector(ess, bd_vals_);
+   bd_true_.GetSubVector(dofs, vals);
+}
+
+bool OifsAdvector::StaticDirichlet(const Array<int>& dofs, double s0,
+                                   double s1, Vector& vals)
+{
+   // Three times, the middle one irregular (a periodic signal is unlikely to
+   // repeat there); equal values at all three mean time-independent data.
+   Vector mid, end;
+   DirichletValues(s0, dofs, vals);
+   DirichletValues(s0 + 0.37 * (s1 - s0), dofs, mid);
+   DirichletValues(s1, dofs, end);
+   double diff = 0.0;
+   if (vals.Size() > 0)
+   {
+      mid -= vals;
+      end -= vals;
+      diff = std::max(mid.Normlinf(), end.Normlinf());
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX,
+                 spaces_.Velocity().GetComm());
+   return diff == 0.0;
 }
 
 void OifsAdvector::Advect(const std::vector<double>& c,
@@ -241,12 +379,12 @@ void OifsAdvector::Advect(const std::vector<double>& c,
                           const std::deque<double>& times, double t_new,
                           int ext, Vector& phi)
 {
-   // The advecting velocity: the newest `ext` history levels.
+   // The advecting velocity: the newest `ext` history levels (borrowed).
    const int n = std::max(1, std::min<int>(ext, static_cast<int>(hist.size())));
-   std::deque<Vector> wind;
-   for (int l = 0; l < n; ++l) { wind.emplace_back(hist[l]); }
+   std::vector<const Vector*> wind(n);
+   for (int l = 0; l < n; ++l) { wind[l] = &hist[l]; }
    const std::vector<double> wind_times(times.begin(), times.begin() + n);
-   AdvectWith(wind, wind_times, c, hist, times, t_new, phi);
+   AdvectImpl(wind, wind_times, c, hist, times, t_new, phi, true);
 }
 
 void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
@@ -255,6 +393,18 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
                               const std::deque<Vector>& hist,
                               const std::deque<double>& times, double t_new,
                               Vector& phi)
+{
+   std::vector<const Vector*> w(wind.size());
+   for (std::size_t l = 0; l < wind.size(); ++l) { w[l] = &wind[l]; }
+   AdvectImpl(w, wind_times, c, hist, times, t_new, phi, false);
+}
+
+void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
+                              const std::vector<double>& wind_times,
+                              const std::vector<double>& c,
+                              const std::deque<Vector>& hist,
+                              const std::deque<double>& times, double t_new,
+                              Vector& phi, bool history_winds)
 {
    const int k = static_cast<int>(c.size()) - 1;
    MFEM_VERIFY(k >= 1 && static_cast<int>(hist.size()) >= k,
@@ -277,8 +427,29 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
    for (int l = 0; l < n_ext_; ++l)
    {
       if (!vel_[l]) { vel_[l] = std::make_unique<ParGridFunction>(&V); }
-      vel_[l]->SetFromTrueDofs(wind[l]);
-      rate = std::max(rate, cfl_->Rate(*vel_[l]));
+      vel_[l]->SetFromTrueDofs(*wind[l]);
+   }
+   {
+      INCNS_PROFILE("oifs::rate");
+      std::vector<const ParGridFunction*> us(n_ext_);
+      for (int l = 0; l < n_ext_; ++l) { us[l] = vel_[l].get(); }
+      // History winds: each level's rate once in its lifetime (the step
+      // choice usually computed the newest already); otherwise all of them,
+      // with one evaluation of the Jacobians.
+      rate = history_winds ? cfl_->MaxRateAt(us, wind_times) : cfl_->MaxRate(us);
+      RequireFiniteRate(rate, times.front());
+   }
+   for (int l = 0; l < n_ext_; ++l)
+   {
+      INCNS_PROFILE("oifs::setup");
+      if (combo_)
+      {
+         combo_->SetWind(l, *vel_[l]);
+         continue;
+      }
+      // New forms at every step: re-assembling them in place instead (same
+      // coefficient, new wind) changed the OIFS MMS results and crashed
+      // nondeterministically (2026-10-15; cause not found).
       vel_coef_[l] = std::make_unique<VectorGridFunctionCoefficient>(vel_[l].get());
       conv_[l] = std::make_unique<ParBilinearForm>(sfes_.get());
       auto* ci = new ConvectionIntegrator(*vel_coef_[l], 1.0); // (w.grad u, v)
@@ -289,7 +460,69 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
       conv_[l]->FormSystemMatrix(none, conv_op_[l]);
    }
 
-   ClassifyBoundary(*vel_[0]); // the newest wind decides in/outflow
+   {
+      INCNS_PROFILE("oifs::classify");
+      const Array<int>& ess = bc_.EssentialTrueDofs();
+      const bool constant = bc_.DirichletIsConstant(); // same on every rank
+      if (constant && bd_const_seq_ != V.GetSequence())
+      {
+         // Constant data (no-slip walls): projected once per space.
+         *bd_ = 0.0;
+         bc_.ProjectDirichlet(*bd_);
+         bd_->GetTrueDofs(bd_const_true_);
+         Vector e;
+         bd_const_true_.GetSubVector(ess, e);
+         double m = (e.Size() > 0) ? e.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+         bd_const_zero_ = (m == 0.0);
+         bd_const_seq_ = V.GetSequence();
+      }
+      // Zero data and a wind that is zero on every Dirichlet dof (the history
+      // satisfies the data): ClassifyBoundary would impose them all, so skip
+      // its host loop.
+      bool all_imposed = false;
+      if (constant && bd_const_zero_)
+      {
+         Vector& we = ess_scratch_;
+         we.UseDevice(true);
+         wind[0]->GetSubVector(ess, we);
+         double m = (we.Size() > 0) ? we.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+         all_imposed = (m == 0.0);
+      }
+      if (all_imposed)
+      {
+         imposed_.SetSize(ess.Size());
+         const int* e = ess.HostRead();
+         int* d = imposed_.HostWrite();
+         for (int i = 0; i < ess.Size(); ++i) { d[i] = e[i]; }
+         imposed_.GetMemory().UseDevice(true);
+      }
+      else
+      {
+         ClassifyBoundary(*vel_[0]); // the newest wind decides in/outflow
+      }
+      // Data that does not change over the window (no-slip walls, a
+      // constant inflow): the substeps reuse it instead of projecting it at
+      // every stage.
+      if (constant)
+      {
+         bd_const_true_.GetSubVector(imposed_, bd_static_);
+         bd_static_valid_ = true;
+      }
+      else
+      {
+         bd_static_valid_ = StaticDirichlet(imposed_, times[k - 1], t_new,
+                                            bd_static_);
+      }
+      bd_zero_ = false;
+      if (bd_static_valid_)
+      {
+         double m = (bd_static_.Size() > 0) ? bd_static_.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
+         bd_zero_ = (m == 0.0);
+      }
+   }
 
    // One combined field, oldest level first.
    phi.SetSize(V.GetTrueVSize());

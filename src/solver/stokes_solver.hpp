@@ -8,12 +8,16 @@
 #include "operators/block_preconditioner.hpp"
 #include "operators/pressure_schur.hpp"
 #include "operators/stokes_operator.hpp"
+#include "post/pressure_mean.hpp"
 #include "precond/block_stokes_pc.hpp"
 #include "precond/cahouet_chabard.hpp"
+#include "precond/nullspace.hpp"
 #include "precond/point_block_jacobi.hpp"
 #include "precond/rotational_schur.hpp"
 #include "precond/viscous_ratio.hpp"
 #include "quadrature/rule_book.hpp"
+#include "solver/persistent_fgmres.hpp"
+#include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -39,6 +43,7 @@ struct StokesSolverOptions
    double grad_div_nu_ref = -1.0;
    /// Compact vector-diffusion storage (StokesOperatorOptions).
    bool compact_diffusion = true;
+   bool fuse_grad_div = true; ///< StokesOperatorOptions::fuse_grad_div.
    /// Velocity-block preconditioner (default Jacobi; LORAMG for stiffer
    /// regimes -- it triggers a full assembly of the momentum block).
    VelocityPreconditioner velocity_prec = VelocityPreconditioner::Jacobi;
@@ -87,6 +92,55 @@ struct StokesSolverOptions
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart (Krylov subspace) size.
    int print_level = -1;         ///< mfem::IterativeSolver print level.
+   /// What rtol is relative to: the initial residual (MFEM's rel_tol, the
+   /// default), the right-hand side (||r|| <= rtol ||b||, under which a
+   /// better initial guess saves iterations), or the step (||r|| <= rtol
+   /// ||b - A x_prev||: the same, scaled by what the step changes).
+   ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   /// ToleranceReference::Step with InitialGuess::Project: take A x_prev from
+   /// the projection (no extra operator application). False applies the
+   /// operator instead (the reference the test compares with).
+   bool step_reference_reuse = true;
+   /// The outer solve's initial guess in SolveTrue: the incoming u, p (the
+   /// previous solution: the warm start), their extrapolation in time from
+   /// the last two solutions (one more system vector), or the least-squares
+   /// projection onto the last projection_k solutions (2 projection_k
+   /// system vectors, SolutionProjection).
+   InitialGuess initial_guess = InitialGuess::Previous;
+   int projection_k = 8; ///< Solutions kept by InitialGuess::Project.
+   /// InitialGuess::Project: recompute the kept images once the mass factor
+   /// has moved by more than this fraction since they were made.
+   double projection_rebuild_threshold = 0.05;
+};
+
+/**
+ * @brief What a StokesSolver carries from one solve to the next for its
+ *        initial guess and its tolerance (StokesSolver::ExportGuessState):
+ *        a checkpoint keeps it, so that a restart's solves are the
+ *        uninterrupted run's bit for bit.
+ */
+struct SolverGuessState
+{
+   /// InitialGuess::Project: the kept solutions and their images (2 m
+   /// system-sized vectors), the mass factor the images were made with, and
+   /// whether the viscosity changed since.
+   std::vector<mfem::Vector> projection_x;
+   std::vector<mfem::Vector> projection_w; ///< See projection_x.
+   double projection_c0 = 0.0;             ///< See projection_x.
+   bool projection_stale = false;          ///< See projection_x.
+   /// InitialGuess::Extrapolate: the solution before the previous one (none
+   /// before the second solve).
+   mfem::Vector previous_x;
+   /// previous_x exists. A flag, not previous_x's size: the same on every
+   /// rank, also on one that owns no dofs (its vectors are empty).
+   bool has_previous_x = false;
+   double previous_c0 = 0.0; ///< Mass factor of the previous solve.
+   /// ToleranceReference::Step: A x_prev (none before the first solve), and
+   /// the mass factor and viscosity it was made with.
+   mfem::Vector step_ax;
+   bool has_step_ax = false; ///< step_ax exists (see has_previous_x).
+   double step_c0 = 0.0; ///< See step_ax.
+   double step_nu = 0.0; ///< See step_ax.
 };
 
 /**
@@ -158,7 +212,7 @@ private:
  * block-diagonal preconditioner diag(Jacobi(nu*K), nu*M_p^{-1}) -- the Sprint-1
  * pressure-mass Schur block. When the BC set implies the constant pressure
  * null space (no outflow -- fully periodic or fully enclosed), the Schur block
- * is wrapped in an mfem::OrthoSolver (P * S^{-1} * P with P the zero-sum
+ * is wrapped in a DeviceOrthoSolver (P * S^{-1} * P with P the zero-sum
  * projection) and the output pressure is normalized to zero mass-weighted
  * mean by the post-processor. The pressure is never pinned. (The constraint
  * RHS needs no projection: it is compatible to roundoff by construction, and
@@ -290,11 +344,25 @@ public:
     */
    void WarmUp();
 
+   /// @return System-sized vectors the initial guess keeps (initial_guess:
+   ///         2 projection_k for Project, 2 for Extrapolate, 0 otherwise;
+   ///         4 more for ToleranceReference::Step), for the restart-length
+   ///         guard.
+   int GuessVectors() const;
+
    /// @return The local size of the block system FGMRES works on.
    int SystemSize() const { return block_op_.Height(); }
 
+   /// @return The norm the last solve's rtol was relative to: ||b|| (Rhs),
+   ///         ||b - A x_prev|| (Step), 0 (InitialResidual: FGMRES's own).
+   double LastToleranceScale() const { return tol_scale_; }
+
    /// @return The FGMRES restart length in use.
    int KrylovDim() const { return kdim_; }
+
+   /// @return Bytes of FGMRES work vectors kept from the last solve (reused
+   ///         by the next: the restart-length guard counts them as free).
+   double KeptKrylovBytes() const { return fgmres_.KeptBytes(); }
 
    /**
     * @brief Change the FGMRES restart length (it holds two system-sized
@@ -309,6 +377,24 @@ public:
    /// @return The assembled operator blocks (constrained with the BC's dofs).
    StokesOperator& Blocks() { return op_; }
 
+   /**
+    * @brief The state the initial guess and the step reference carry between
+    *        solves, for a checkpoint.
+    * @param s Output: ALIASES of the solver's vectors (no copies: a
+    *          checkpoint of a full GPU must not double them), valid until
+    *          the next solve.
+    */
+   void ExportGuessState(SolverGuessState& s) const;
+
+   /**
+    * @brief Restore a state from ExportGuessState() (a checkpoint): the
+    *        solves then continue as in the run it came from. The parts of
+    *        another initial guess or tolerance reference than this solver's
+    *        are dropped.
+    * @param s The state; its vectors are swapped in.
+    */
+   void ImportGuessState(SolverGuessState& s);
+
 private:
    /// (Re)build the velocity preconditioner + block preconditioner and hand it
    /// to FGMRES. Called at construction and on a non-frozen Refresh.
@@ -319,6 +405,7 @@ private:
    BoundaryConditions& bc_;     ///< Boundary conditions (borrowed).
    StokesSolverOptions opts_;   ///< Options.
    bool nullspace_;             ///< Constant pressure mode present?
+   PressureMean pressure_mean_; ///< Output normalization (its functional kept).
    bool cc_mode_;               ///< CahouetChabard Schur path active?
 
    StokesOperator op_;          ///< Constrained blocks.
@@ -328,7 +415,7 @@ private:
    std::unique_ptr<PressureMassSchur> schur_;
    /// Wraps schur_ as P*S^{-1}*P (P = zero-sum projection) when the constant
    /// pressure null space exists -- orthogonalization, never pinning.
-   mfem::OrthoSolver ortho_schur_;
+   DeviceOrthoSolver ortho_schur_;
    /// Active pressure block (schur_ or ortho_schur_); set once at construction.
    mfem::Solver* pressure_block_ = nullptr;
    /// Inner preconditioner of an iterative velocity PC (the Jacobi of
@@ -363,13 +450,55 @@ private:
    /// Block preconditioner: StokesBlockPreconditioner (Mass) or BlockStokesPC
    /// (CC shapes) behind the common Solver interface.
    std::unique_ptr<mfem::Solver> prec_;
-   mfem::FGMRESSolver fgmres_;                   ///< Outer Krylov solver.
+   /// Outer Krylov solver (MFEM's FGMRES, work vectors kept between solves).
+   PersistentFGMRESSolver fgmres_;
+   /// SolveTrue's block vectors, kept between solves (allocated, and freed
+   /// with a device synchronization, at every solve as locals).
+   mfem::BlockVector solve_x_;
+   mfem::BlockVector solve_b_;              ///< Its right-hand side.
+   mfem::Vector guess_dirichlet_;           ///< PrepareGuess's u_D (scratch).
+   /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant) on
+   /// the essential true dofs, from the first solve: later solves write it
+   /// instead of projecting it on the host.
+   mfem::Vector dirichlet_vals_;
+   bool dirichlet_cached_ = false;          ///< dirichlet_vals_ is set.
 
    int iterations_ = 0;      ///< Iterations of the last solve.
    long solves_ = 0;         ///< Solves run so far.
    int kdim_ = 0;            ///< FGMRES restart length in use.
    bool converged_ = false;  ///< Convergence flag of the last solve.
    bool warmed_up_ = false;  ///< WarmUp() has run.
+
+   /// Replace the warm start in @p x by the initial guess (initial_guess),
+   /// keeping its Dirichlet values; @p b is the eliminated right-hand side.
+   void PrepareGuess(const mfem::Vector& b, mfem::BlockVector& x);
+   /// Set FGMRES's tolerances for right-hand side @p b
+   /// (tolerance_reference); @p x is the warm start (the previous solution
+   /// with this step's Dirichlet values), before PrepareGuess.
+   void SetTolerance(const mfem::Vector& b, const mfem::Vector& x);
+   /// ||b - A x_prev|| for ToleranceReference::Step (see SetTolerance).
+   double StepResidualNorm(const mfem::Vector& b, const mfem::Vector& x);
+   /// Record the solution @p x for later guesses.
+   void RecordSolution(const mfem::Vector& x);
+
+   /// InitialGuess::Project: the earlier solutions (made at the first
+   /// solve).
+   std::unique_ptr<SolutionProjection> projection_;
+   double projection_c0_ = 0.0; ///< Mass factor the images were made with.
+   bool projection_stale_ = false; ///< The viscosity changed since.
+   /// InitialGuess::Extrapolate: the solution before the previous one.
+   mfem::Vector previous_x_;
+   bool previous_x_valid_ = false; ///< previous_x_ is set (on every rank).
+   double previous_c0_ = 0.0; ///< Mass factor of the previous solve.
+
+   double tol_scale_ = 0.0; ///< LastToleranceScale().
+   /// ToleranceReference::Step: A x of the last solution (the projection's
+   /// image of it, kept), the mass factor and viscosity it was made with,
+   /// and work vectors.
+   mfem::Vector step_ax_;
+   bool step_ax_valid_ = false;
+   double step_c0_ = 0.0, step_nu_ = 0.0;
+   mfem::Vector step_r_, step_xu_, step_mx_;
 };
 
 } // namespace incns

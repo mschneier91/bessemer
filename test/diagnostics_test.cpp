@@ -36,8 +36,9 @@ using incns::TimeIntegratorOptions;
 
 namespace
 {
-// Unit box, non-periodic, n^2 (or n^3) Q3/Q2, for the algebraic checks.
-MixedSpaces* MakeUnit(ParMesh& mesh, int dim, int n)
+// Unit box, non-periodic, n^2 (or n^3) Q_k/Q_{k-1} (default Q3/Q2), for the
+// algebraic checks.
+MixedSpaces* MakeUnit(ParMesh& mesh, int dim, int n, int order = 3)
 {
    BoxSpec s;
    s.dim = dim;
@@ -46,7 +47,7 @@ MixedSpaces* MakeUnit(ParMesh& mesh, int dim, int n)
    s.periodic = {false, false, false};
    Mesh serial = MakeBoxMesh(s);
    mesh = ParMesh(MPI_COMM_WORLD, serial);
-   return new MixedSpaces(mesh, 3, 2);
+   return new MixedSpaces(mesh, order, order - 1);
 }
 } // namespace
 
@@ -103,38 +104,43 @@ TEST(Diagnostics, DissipationLinearShear)
 }
 
 // FlowDiagnostics (the assembled-operator form the solver logs with) returns
-// the same three numbers as the free functions, in 2D and 3D, on a field that
-// is neither divergence-free nor polynomial; and it reports a refined space.
+// the same three numbers as the free functions, in 2D and 3D, velocity orders
+// 2 to 7 (each 3D order has its own compile-time-sized kernel), on a field
+// that is neither divergence-free nor polynomial; and it reports a refined
+// space.
 TEST(Diagnostics, AssembledFormsMatchTheFreeFunctions)
 {
    for (const int dim : {2, 3})
    {
-      SCOPED_TRACE(dim);
-      ParMesh mesh;
-      MixedSpaces* spaces = MakeUnit(mesh, dim, dim == 2 ? 4 : 2);
-      RuleBook rules;
-      ParGridFunction u(&spaces->Velocity());
-      VectorFunctionCoefficient f(dim, [dim](const Vector & x, Vector & v)
+      for (const int order : {2, 3, 4, 5, 6, 7})
       {
-         v(0) = std::sin(1.3 * x[0]) * std::cos(0.7 * x[1]) + x[1] * x[1];
-         v(1) = std::cos(0.9 * x[0] + 0.4 * x[1]) + 2.0 * x[0];
-         if (dim == 3)
+         SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << order);
+         ParMesh mesh;
+         MixedSpaces* spaces = MakeUnit(mesh, dim, dim == 2 ? 4 : 2, order);
+         RuleBook rules;
+         ParGridFunction u(&spaces->Velocity());
+         VectorFunctionCoefficient f(dim, [dim](const Vector & x, Vector & v)
          {
-            v(0) += 0.5 * x[2];
-            v(2) = std::sin(x[0] + x[1] + 1.1 * x[2]);
-         }
-      });
-      u.ProjectCoefficient(f);
-      const incns::FlowDiagnostics d(spaces->Velocity(), rules);
-      EXPECT_FALSE(d.Stale());
-      const double ke = KineticEnergy(u, rules);
-      const double eps = DissipationRate(u, 0.37, rules);
-      const double div = DivergenceNorm(u, rules);
-      ASSERT_GT(div, 0.1);
-      EXPECT_NEAR(d.KineticEnergy(u), ke, 1e-12 * ke);
-      EXPECT_NEAR(d.DissipationRate(u, 0.37), eps, 1e-12 * eps);
-      EXPECT_NEAR(d.DivergenceNorm(u), div, 1e-12 * div);
-      delete spaces;
+            v(0) = std::sin(1.3 * x[0]) * std::cos(0.7 * x[1]) + x[1] * x[1];
+            v(1) = std::cos(0.9 * x[0] + 0.4 * x[1]) + 2.0 * x[0];
+            if (dim == 3)
+            {
+               v(0) += 0.5 * x[2];
+               v(2) = std::sin(x[0] + x[1] + 1.1 * x[2]);
+            }
+         });
+         u.ProjectCoefficient(f);
+         const incns::FlowDiagnostics d(spaces->Velocity(), rules);
+         EXPECT_FALSE(d.Stale());
+         const double ke = KineticEnergy(u, rules);
+         const double eps = DissipationRate(u, 0.37, rules);
+         const double div = DivergenceNorm(u, rules);
+         ASSERT_GT(div, 0.1);
+         EXPECT_NEAR(d.KineticEnergy(u), ke, 1e-12 * ke);
+         EXPECT_NEAR(d.DissipationRate(u, 0.37), eps, 1e-12 * eps);
+         EXPECT_NEAR(d.DivergenceNorm(u), div, 1e-12 * div);
+         delete spaces;
+      }
    }
 }
 

@@ -1,0 +1,15 @@
+# A deck that sets discretization.order_u twice: run_case must refuse it, not
+# run at the first value (YAML keeps only that one). Used by
+# run_case_rejects_duplicate_key_*.
+equation: navier_stokes
+physics:
+  Re: 10
+discretization:
+  order_u: 3
+  order_p: 2
+  order_u: 5
+mesh:
+  dim: 2
+  elements: [2, 2]
+time:
+  t_final: 0.02

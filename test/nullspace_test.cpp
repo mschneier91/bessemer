@@ -70,3 +70,63 @@ void CheckProjector(bool periodic)
 TEST(Nullspace, ProjectorEnclosedBox) { CheckProjector(/*periodic=*/false); }
 
 TEST(Nullspace, ProjectorFullyPeriodicBox) { CheckProjector(/*periodic=*/true); }
+
+namespace
+{
+// A device-aware SPD stand-in for the AMG: x = d .* b (+ x0 in iterative mode).
+class DiagSolver : public Solver
+{
+public:
+   explicit DiagSolver(const Vector& d) : Solver(d.Size()), d_(d) {}
+   void SetOperator(const Operator&) override {}
+   void Mult(const Vector& b, Vector& x) const override
+   {
+      Vector t(b.Size());
+      t.UseDevice(true);
+      t = b;
+      t *= d_;
+      if (iterative_mode) { x += t; }
+      else { x = t; }
+   }
+private:
+   const Vector& d_;
+};
+} // namespace
+
+// incns::DeviceOrthoSolver gives mfem::OrthoSolver's results bitwise, for
+// both iterative modes and repeated calls (the projection on the device
+// instead of MFEM's host loop).
+TEST(Nullspace, DeviceOrthoSolverMatchesMfem)
+{
+   int rank = 0;
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   const int n = 1000 + 37 * rank;
+   Vector d(n);
+   d.Randomize(3 + rank);
+   d += 0.5;
+   d.UseDevice(true);
+   DiagSolver s1(d), s2(d);
+   OrthoSolver ref(MPI_COMM_WORLD);
+   incns::DeviceOrthoSolver dev(MPI_COMM_WORLD);
+   ref.SetSolver(s1);
+   dev.SetSolver(s2);
+   for (int call = 0; call < 4; ++call)
+   {
+      const bool iterative = (call % 2 == 1);
+      ref.iterative_mode = iterative;
+      dev.iterative_mode = iterative;
+      Vector b(n), x0(n);
+      b.Randomize(10 + call + 7 * rank);
+      b += 0.25 * call;
+      x0.Randomize(20 + call + 7 * rank);
+      Vector xr(x0), xd(x0);
+      b.UseDevice(true);
+      xr.UseDevice(true);
+      xd.UseDevice(true);
+      ref.Mult(b, xr);
+      dev.Mult(b, xd);
+      const double* r = xr.HostRead();
+      const double* v = xd.HostRead();
+      for (int i = 0; i < n; ++i) { ASSERT_EQ(r[i], v[i]) << "call " << call; }
+   }
+}
