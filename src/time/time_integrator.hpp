@@ -140,6 +140,7 @@ struct TimeIntegratorOptions
    ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
    InitialGuess initial_guess = InitialGuess::Previous; ///< See above.
    int projection_k = 8;                                ///< See above.
+   double projection_rebuild_threshold = 0.05;          ///< See above.
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart size.
    int print_level = -1;         ///< Solver print level.

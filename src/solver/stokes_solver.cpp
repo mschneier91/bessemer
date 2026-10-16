@@ -430,10 +430,12 @@ void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
    if (opts_.initial_guess == InitialGuess::Project && projection_ &&
        projection_->Size() > 0)
    {
-      // Images of an operator whose mass factor moved by more than 5 % (or
-      // whose viscosity changed) are recomputed: m operator applications.
+      // Images of an operator whose mass factor moved by more than
+      // projection_rebuild_threshold (default 5 %), or whose viscosity
+      // changed, are recomputed: m operator applications.
       if (projection_stale_ ||
-          (projection_c0_ > 0.0 && std::abs(c0 / projection_c0_ - 1.0) > 0.05))
+          (projection_c0_ > 0.0 && std::abs(c0 / projection_c0_ - 1.0) >
+           opts_.projection_rebuild_threshold))
       {
          projection_->Rebuild(block_op_);
          projection_c0_ = c0;

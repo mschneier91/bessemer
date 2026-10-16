@@ -139,6 +139,7 @@ void Case::BuildIntegrator()
    opts.tolerance_reference = params_.tolerance_reference;
    opts.initial_guess = params_.initial_guess;
    opts.projection_k = params_.projection_k;
+   opts.projection_rebuild_threshold = params_.projection_rebuild_threshold;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
    body_force_.reset();

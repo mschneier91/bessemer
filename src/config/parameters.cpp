@@ -394,6 +394,13 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "initial_guess project: the most solutions kept (>= 1).");
    MFEM_VERIFY(p.projection_k >= 1, "parameters: solver.projection_k must be "
                ">= 1");
+   r.Read(solver, "projection_rebuild_threshold", p.projection_rebuild_threshold,
+          "initial_guess project: recompute the kept solutions' images (k "
+          "operator applications) once the mass factor beta0/dt has moved by "
+          "more than this fraction since they were made; until then the "
+          "guess uses the older operator's images (valid, less good).");
+   MFEM_VERIFY(p.projection_rebuild_threshold > 0.0, "parameters: "
+               "solver.projection_rebuild_threshold must be positive");
    r.Read(solver, "print_level", p.print_level, "Solver verbosity (-1 = quiet).");
    r.Declare(solver, "schur", "enum", "cc", "cc | mass | laplacian_legacy",
              "Pressure Schur block: Cahouet-Chabard, scaled pressure mass, or the "

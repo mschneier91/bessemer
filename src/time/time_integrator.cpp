@@ -337,6 +337,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.tolerance_reference = opts_.tolerance_reference;
    so.initial_guess = opts_.initial_guess;
    so.projection_k = opts_.projection_k;
+   so.projection_rebuild_threshold = opts_.projection_rebuild_threshold;
    so.max_iter = opts_.max_iter;
    so.kdim = opts_.kdim;
    so.print_level = opts_.print_level;
@@ -416,6 +417,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.tolerance_reference = opts_.tolerance_reference;
       so.initial_guess = opts_.initial_guess;
       so.projection_k = opts_.projection_k;
+      so.projection_rebuild_threshold = opts_.projection_rebuild_threshold;
       so.max_iter = opts_.max_iter;
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;

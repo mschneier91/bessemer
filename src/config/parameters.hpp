@@ -402,6 +402,10 @@ struct Parameters
    /// The outer solve's initial guess (deck `solver.initial_guess`).
    InitialGuess initial_guess = InitialGuess::Previous;
    int projection_k = 8; ///< Solutions kept (deck `solver.projection_k`).
+   /// initial_guess project: the mass factor's relative change after which
+   /// the kept images are recomputed (deck
+   /// `solver.projection_rebuild_threshold`).
+   double projection_rebuild_threshold = 0.05;
    int max_iter = 2000;        ///< FGMRES iteration cap.
    int kdim = 200;             ///< FGMRES restart size.
    int print_level = -1;       ///< Solver print level.

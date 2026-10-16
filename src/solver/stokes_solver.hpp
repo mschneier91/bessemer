@@ -108,6 +108,9 @@ struct StokesSolverOptions
    /// system vectors, SolutionProjection).
    InitialGuess initial_guess = InitialGuess::Previous;
    int projection_k = 8; ///< Solutions kept by InitialGuess::Project.
+   /// InitialGuess::Project: recompute the kept images once the mass factor
+   /// has moved by more than this fraction since they were made.
+   double projection_rebuild_threshold = 0.05;
 };
 
 /**
