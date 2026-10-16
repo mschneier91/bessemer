@@ -327,6 +327,8 @@ private:
     *                         gamma_.
     * @param diffusion        If not null, receives the diffusion integrator
     *                         added to @p form (owned by the form).
+    * @param mass             If not null, receives the mass integrator
+    *                         added to @p form (owned by the form), or null.
     * @return The grad-div integrator added to @p form (owned by the form), or
     *         null when none was.
     */
@@ -334,10 +336,16 @@ private:
          bool include_mass,
          bool include_grad_div,
          mfem::Coefficient* gamma = nullptr,
-         mfem::BilinearFormIntegrator** diffusion = nullptr);
+         mfem::BilinearFormIntegrator** diffusion = nullptr,
+         mfem::BilinearFormIntegrator** mass = nullptr);
    /// (Re)build the momentum block A = c0*M + nu*K (+ grad-div), its diagonal,
    /// and the non-frozen LOR source, from the current mass_coeff_.
    void BuildMomentum();
+   /// momentum_diag_ = c0 mass_diag_ + rest_diag_ (rest_diag_ assembled).
+   void UpdateMomentumDiagonal();
+   /// The non-frozen LOR source, from the current mass_coeff_ (nothing
+   /// otherwise).
+   void BuildLorSource();
    /// Assemble rest_diag_ from the current momentum form's diffusion and
    /// grad-div integrators (no assembly of their data: a proxy form).
    void AssembleRestDiagonal(mfem::BilinearFormIntegrator& diffusion);
@@ -359,6 +367,12 @@ private:
    /// The grad-div integrator of the current momentum form (owned by that
    /// form; null when grad-div is off). Replaced by every BuildMomentum().
    GradDivIntegrator* grad_div_integ_ = nullptr;
+   /// The mass integrator of the current momentum form (owned by that form;
+   /// null when c0 = 0). A new c0 re-assembles only its data (SetMassCoeff).
+   mfem::BilinearFormIntegrator* mass_integ_ = nullptr;
+   /// The viscosity changed since BuildMomentum: the next SetMassCoeff
+   /// rebuilds the whole form.
+   bool momentum_stale_ = false;
    /// The same gamma for the LOR source: evaluated on the order-k_u LOR mesh,
    /// it returns the parent high-order element's value (owned; null unless
    /// grad-div and lor_momentum).
