@@ -67,7 +67,7 @@ closest valid key. **Every key, with its default and allowed values:
 | `discretization` | `order_u`, `order_p`, `mass: auto \| collocated \| consistent`, `vector_diffusion: compact \| mfem`, `fuse_grad_div` |
 | `mesh` | `dim`, `elements`, `lengths`, `periodic`, `stretch`, `geometry`, `file`, `boundary_names`, `square_cylinder.*`, `cylinder_channel.*` |
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol`, `on_solver_failure: cut_step \| abort`, `retry_factor`, `retry_hold`, `retry_max`, `retry_dt_min` |
-| `solver` | `rtol`, `atol`, `tolerance_reference: initial_residual \| rhs`, `initial_guess: previous \| extrapolate \| project`, `projection_k`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
+| `solver` | `rtol`, `atol`, `tolerance_reference: initial_residual \| rhs \| step`, `initial_guess: previous \| extrapolate \| project`, `projection_k`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
 | `boundary_conditions` | a list of `{select: [xmin, ymax, ...] or attributes, type: no_slip \| outflow \| velocity_dirichlet}` |
 | `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, ... |
 | `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
@@ -153,15 +153,18 @@ stability limit; pass `-dt 0.001`.)
     used exactly as given (the behaviour before 2026-10-13).
   Error-controlled steps (`step_control: error`) keep their own rejection logic.
 - **The outer solve's initial guess and tolerance** (`solver.initial_guess`,
-  `solver.tolerance_reference`; defaults unchanged). By default the tolerance is relative to
-  the initial residual, so the warm start (the previous step's solution) saves no
-  iterations. With `tolerance_reference: rhs` the solve stops at `rtol` times the
-  right-hand side's norm, and a better guess stops it sooner: `extrapolate` (linear in time,
-  one more system-sized vector) or `project` (least squares over the last `projection_k`
-  solutions, 2 `projection_k` system-sized vectors, e.g. 2.9 GB at 64³ for 8). On a small
-  Taylor–Green on CPU: 13.0 outer iterations per step by default, 8.9 with `rhs`, 7.4 with
-  `extrapolate`, 5.2 with `project` (k 8), the energy unchanged to 4e-11
-  ([throughput.md](throughput.md)).
+  `solver.tolerance_reference`, `solver.rtol`). By default (since 2026-10-16) the solve
+  starts from `project`, the least-squares combination of the last `projection_k` (8)
+  solutions (2 `projection_k` system-sized vectors, e.g. 2.9 GB at 64³), and stops at `rtol`
+  1e-6 of `step`: the residual of the previous solution, ||b - A x_prev||, so of what the
+  step has to change, whatever dt. **`rtol` is per problem:** where dt is CFL-limited near 1
+  to 2 (Taylor–Green, the channel) 1e-3 passes the accuracy gates and is 1.7-2.3x faster (the
+  committed decks set it); a small fixed dt or an error controller wants 1e-6. The other
+  choices: `previous` (the warm start) or `extrapolate` (linear in time); `initial_residual`
+  (rtol of FGMRES's initial residual: a better guess then saves no iterations) or `rhs` (of
+  ||b||: loose at a small dt, where ||b|| holds the mass term). Checkpoints keep the guess
+  state (up to 2 `projection_k` + 1 system-sized vectors per solver), so a restart repeats
+  the uninterrupted run's solves exactly ([throughput.md](throughput.md)).
 
 ## 5. Outputs
 

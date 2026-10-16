@@ -95,6 +95,20 @@ public:
     */
    void Rebuild(const mfem::Operator& A);
 
+   /// @return The kept solutions (transformed along with the images).
+   const std::vector<mfem::Vector>& Solutions() const { return x_; }
+
+   /// @return Their images, orthonormal.
+   const std::vector<mfem::Vector>& Images() const { return w_; }
+
+   /**
+    * @brief Replace the basis by one saved from Solutions() and Images()
+    *        (a checkpoint): the same vectors, so the same guesses.
+    * @param xs Solutions, at most K; swapped in (they come back empty).
+    * @param ws Their images, as many; swapped in.
+    */
+   void Restore(std::vector<mfem::Vector>& xs, std::vector<mfem::Vector>& ws);
+
 private:
    /// Orthonormalize w (and carry x along) against the basis, twice
    /// (classical Gram-Schmidt reorthogonalized); append unless w vanishes.

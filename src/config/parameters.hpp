@@ -395,12 +395,16 @@ struct Parameters
    double cfl_max = 0.0;
 
    // --- Krylov ----------------------------------------------------------------
-   double krylov_rtol = 1e-10; ///< FGMRES relative tolerance.
+   /// FGMRES relative tolerance; with the default step reference, of what a
+   /// step changes (human decision 2026-10-15: 1e-6; was 1e-10 of the
+   /// initial residual). CASE-LEVEL default: StokesSolverOptions keeps its own
+   /// for the solver unit tests and their baselines.
+   double krylov_rtol = 1e-6;
    double krylov_atol = 0.0;   ///< FGMRES absolute tolerance.
    /// What krylov_rtol is relative to (deck `solver.tolerance_reference`).
-   ToleranceReference tolerance_reference = ToleranceReference::InitialResidual;
+   ToleranceReference tolerance_reference = ToleranceReference::Step;
    /// The outer solve's initial guess (deck `solver.initial_guess`).
-   InitialGuess initial_guess = InitialGuess::Previous;
+   InitialGuess initial_guess = InitialGuess::Project;
    int projection_k = 8; ///< Solutions kept (deck `solver.projection_k`).
    /// initial_guess project: the mass factor's relative change after which
    /// the kept images are recomputed (deck
@@ -456,6 +460,9 @@ struct Parameters
       // Grad-div is on by default at case level, and then it belongs in
       // the Schur PC's mass term (human decision 2026-10-13).
       c.schur_grad_div = true;
+      // Two inner Schur iterations (human decision 2026-10-15; channel +12.5 %,
+      // TGV +5.6 %, both gates passed; docs/throughput.md).
+      c.n_inner = 2;
       return c;
    }
 

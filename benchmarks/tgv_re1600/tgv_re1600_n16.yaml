@@ -50,7 +50,9 @@ output:
 checkpoint:
   enabled: true
   path: tgv_n16/chk
-  interval: 200
+  # Every 1000 steps: a checkpoint holds the solvers' guess state too (up to
+  # 17 system-sized vectors more), ~1.7 s at 64^3 (job 49276194).
+  interval: 1000
 
 solver:
   # The fast configuration (docs/throughput.md, 2026-10-15): the initial guess

@@ -27,8 +27,9 @@ each row adding to the previous one:
 | + step-relative `rtol` 1e-3 (b1bc283; the decks, 4440522), the CFL rate once per level (eb328eb), a new dt re-assembles only the mass term (9a36852) | **0.0314** | **45.9x** | **0.0259** | **37.1x** |
 
 The solver settings and `time.oifs_cfl` are deck keys, set by the Taylor-Green and channel
-decks (4440522); the case-level defaults are unchanged, pending the human (see "Restarts with
-the projected guess"); `rtol` depends on the problem (see "The step-relative tolerance").
+decks (4440522); since 2026-10-16 the case-level defaults are the same configuration at `rtol`
+1e-6 (see "Restarts with the projected guess, and the defaults"); `rtol` depends on the
+problem (see "The step-relative tolerance").
 Everything else is code. A production channel run (CFL-controlled steps, statistics every 5
 steps) from t = 0 to 120 costs **0.0289 s of wall time per step**: the spin-up's 7 h 15 min
 is **13.8 min** (job 49270033; "Final runs"). Gates: the expensive Taylor-Green gate passes
@@ -355,7 +356,7 @@ and its convection substeps are work the solver changes do not touch.
 energy at t = 20) is far below the discretization's, but it has been gated on Taylor-Green
 only. Before it becomes a default it should pass the channel statistics gate too.
 
-### Recommended deck settings (opt-in; the defaults are unchanged)
+### Recommended deck settings (2026-10-14; superseded by the defaults of 2026-10-16)
 
 ```yaml
 solver:
@@ -889,15 +890,33 @@ velocity-size vectors (1.4 GB at 64^3); not done (human: memory weighs more). Ba
 Gram-Schmidt's inner products (one reduction per pass) gave nothing measurable (production
 channel 0.0413 -> 0.0418 s, job 49269460) and was dropped.
 
-## Restarts with the projected guess (the defaults: held)
+## Restarts with the projected guess, and the defaults (2026-10-16)
 
-With `initial_guess: project`, a restart matches the uninterrupted run only to the solver
+With `initial_guess: project`, a restart matched the uninterrupted run only to the solver
 tolerance (relative differences 1e-10 to 4e-7 in checkpoint_test and channel_statistics_test
-S5): the projection's kept solutions and images, and the step reference's A x_prev, are not
-checkpointed. The decks set the fast configuration explicitly; the case-level defaults stay
-as they were until the human chooses: (a) checkpoint the projection state (exact restarts,
-2k extra system-size vectors per checkpoint), (b) accept tolerance-level restart
-differences, or (c) default to `initial_guess: previous` with the rest of the configuration.
+S5, job 49269820): the projection's kept solutions and images, and the step reference's
+A x_prev, were not checkpointed. The human chose (a), checkpointing them, over (b)
+tolerance-level restarts and (c) the previous solution as the default guess. A checkpoint
+now holds each built solver's guess state (`StokesTimeIntegrator::ExportSolverStates`: the
+starter's, BDF2's and BDF3's), handed to that solver when the restarted run builds it:
+restarts are exact again on the CPU (np 1 and 2, jobs 49276071, 49276460: relative difference
+0 for the adaptive, CFL-controlled, channel-statistics and AMR restarts; fixed steps 0 at the
+default `rtol` and 1.7e-15 at the tests' 1e-10, the roundoff that test has always allowed
+there). On GPUs two runs agree only to the solver tolerance (hypre's device AMG is not
+run-to-run deterministic): at `rtol` 1e-6 checkpoint_test, channel_statistics_test S5,
+deck_test and nondim_test differed by 3e-9 to 1e-6 (job 49276194), so those reproducibility
+tests pin `rtol` 1e-10 (the guess and the reference stay the defaults) and agree to 3e-12 to
+5e-11 (job 49276461). The cost: up to 2k + 1 system-sized vectors more per solver in each
+checkpoint (17 at k 8), written from aliases of the solvers' vectors (no extra device memory).
+Taylor-Green 64^3: 0.32 -> 1.69 s per checkpoint, 337 MB -> 1.8 GB (job 49276194), so the
+Taylor-Green decks checkpoint every 1000 steps instead of 200 (~1 % of the run). Checkpoints
+from before read as before (the solvers then start afresh).
+
+The case-level defaults are now `initial_guess: project` (k 8), `tolerance_reference: step`,
+`rtol` 1e-6 and `n_inner` 2 (`Parameters`; `StokesSolverOptions` keeps its own for the solver
+unit tests and their baselines). The DFG decks drop their `rtol` 1e-10 for the default
+(validated in "The step-relative tolerance"); the Taylor-Green and channel decks keep their
+explicit `rtol` 1e-3.
 
 ## Final runs (2026-10-16; one H100, the 4440522 binary, the committed decks)
 

@@ -114,6 +114,32 @@ struct StokesSolverOptions
 };
 
 /**
+ * @brief What a StokesSolver carries from one solve to the next for its
+ *        initial guess and its tolerance (StokesSolver::ExportGuessState):
+ *        a checkpoint keeps it, so that a restart's solves are the
+ *        uninterrupted run's bit for bit.
+ */
+struct SolverGuessState
+{
+   /// InitialGuess::Project: the kept solutions and their images (2 m
+   /// system-sized vectors), the mass factor the images were made with, and
+   /// whether the viscosity changed since.
+   std::vector<mfem::Vector> projection_x;
+   std::vector<mfem::Vector> projection_w; ///< See projection_x.
+   double projection_c0 = 0.0;             ///< See projection_x.
+   bool projection_stale = false;          ///< See projection_x.
+   /// InitialGuess::Extrapolate: the solution before the previous one (empty
+   /// before the second solve).
+   mfem::Vector previous_x;
+   double previous_c0 = 0.0; ///< Mass factor of the previous solve.
+   /// ToleranceReference::Step: A x_prev (empty when there is none), and the
+   /// mass factor and viscosity it was made with.
+   mfem::Vector step_ax;
+   double step_c0 = 0.0; ///< See step_ax.
+   double step_nu = 0.0; ///< See step_ax.
+};
+
+/**
  * @brief What the last solve of a StokesSolver did, for the per-step log of
  *        the rotational form (spec section 9). Counters cover the last
  *        SolveTrue(); the rotation fields the last UpdateRotation().
@@ -346,6 +372,24 @@ public:
 
    /// @return The assembled operator blocks (constrained with the BC's dofs).
    StokesOperator& Blocks() { return op_; }
+
+   /**
+    * @brief The state the initial guess and the step reference carry between
+    *        solves, for a checkpoint.
+    * @param s Output: ALIASES of the solver's vectors (no copies: a
+    *          checkpoint of a full GPU must not double them), valid until
+    *          the next solve.
+    */
+   void ExportGuessState(SolverGuessState& s) const;
+
+   /**
+    * @brief Restore a state from ExportGuessState() (a checkpoint): the
+    *        solves then continue as in the run it came from. The parts of
+    *        another initial guess or tolerance reference than this solver's
+    *        are dropped.
+    * @param s The state; its vectors are swapped in.
+    */
+   void ImportGuessState(SolverGuessState& s);
 
 private:
    /// (Re)build the velocity preconditioner + block preconditioner and hand it

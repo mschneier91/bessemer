@@ -31,9 +31,15 @@ namespace incns
  *    only u(t) would force a restart ramp); the adaptive controller resumes
  *    with its PI memory.
  *  - One ROLLING checkpoint per directory (each write overwrites).
+ *  - The solvers' guess state (StokesTimeIntegrator::ExportSolverStates:
+ *    initial_guess project's kept solutions and images, the step
+ *    reference's A x_prev, extrapolate's older solution), so that a restart
+ *    repeats the uninterrupted run's solves bit for bit: with project k 8 and
+ *    the step reference, up to 17 system-sized vectors per solver.
  *
  * Layout: `<dir>/meta.yaml`, `<dir>/u_hist<j>.r<rank>.bin`,
- * `<dir>/pressure.r<rank>.bin`.
+ * `<dir>/pressure.r<rank>.bin`, `<dir>/guess_<solver>_{x<i>,w<i>,prev,ax}
+ * .r<rank>.bin`.
  */
 class Checkpoint
 {

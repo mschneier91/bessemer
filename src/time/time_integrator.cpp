@@ -343,7 +343,36 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.print_level = opts_.print_level;
    trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
    trap_c0_ = 1.0 / dt_;
+   ApplyPendingGuess("trap", *trap_);
    return *trap_;
+}
+
+void StokesTimeIntegrator::ExportSolverStates(
+   std::map<std::string, SolverGuessState>& states) const
+{
+   states.clear();
+   if (trap_) { trap_->ExportGuessState(states["trap"]); }
+   if (bdf2_.solver) { bdf2_.solver->ExportGuessState(states["bdf2"]); }
+   if (bdf3_.solver) { bdf3_.solver->ExportGuessState(states["bdf3"]); }
+}
+
+void StokesTimeIntegrator::ImportSolverStates(
+   std::map<std::string, SolverGuessState>& states)
+{
+   pending_guess_.swap(states);
+   states.clear();
+   if (trap_) { ApplyPendingGuess("trap", *trap_); }
+   if (bdf2_.solver) { ApplyPendingGuess("bdf2", *bdf2_.solver); }
+   if (bdf3_.solver) { ApplyPendingGuess("bdf3", *bdf3_.solver); }
+}
+
+void StokesTimeIntegrator::ApplyPendingGuess(const std::string& name,
+      StokesSolver& solver)
+{
+   auto it = pending_guess_.find(name);
+   if (it == pending_guess_.end()) { return; }
+   solver.ImportGuessState(it->second);
+   pending_guess_.erase(it);
 }
 
 Operator& StokesTimeIntegrator::PlainMass()
@@ -382,7 +411,12 @@ void StokesTimeIntegrator::ReleaseStarter()
 StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       double c0)
 {
-   if (!cache.solver && AdoptSolver(cache, c0)) { return *cache.solver; }
+   const char* name = (&cache == &bdf2_) ? "bdf2" : "bdf3";
+   if (!cache.solver && AdoptSolver(cache, c0))
+   {
+      ApplyPendingGuess(name, *cache.solver);
+      return *cache.solver;
+   }
    if (!cache.solver)
    {
       // No solver to adopt: the starter goes first, so that it and the new
@@ -423,6 +457,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.print_level = opts_.print_level;
       cache.solver = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
       cache.c0 = c0;
+      ApplyPendingGuess(name, *cache.solver);
    }
    else if (std::abs(c0 - cache.c0) > 1e-12 * std::abs(c0))
    {

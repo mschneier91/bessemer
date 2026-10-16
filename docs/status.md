@@ -4,10 +4,23 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-14)
+## Where development left off (2026-10-16)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Throughput merged into main; new solver defaults (2026-10-16).** The `throughput` branch
+(2026-10-14 to 16; record and decision log: [throughput.md](throughput.md)) is in `main`.
+One H100 against main of 2026-10-14: Taylor-Green 64^3 Q3/Q2 to t = 20 in **17.8 min instead
+of 12 h 44 min** (43x), the channel at Re_tau 180 from t = 0 to 120 in **13.8 min instead of
+7 h 15 min** (31.6x), 37-46x per step; compile-time kernels for velocity orders 2 to 6; an
+order study (Q4 and Q5 reach a given accuracy fastest; Q3 is the fastest per DOF). **Case-level
+defaults** (human 2026-10-16, option (a) in throughput.md's "Restarts with the projected
+guess, and the defaults"): `solver.initial_guess: project` (k 8), `tolerance_reference: step`,
+`rtol` 1e-6, `n_inner` 2; checkpoints keep the solvers' guess state, so restarts stay bitwise
+exact. `rtol` is per problem: the Taylor-Green and channel decks set 1e-3 (CFL-limited
+steps); a small fixed dt or an error controller wants 1e-6. Next (human): MFEM 4.10 with the
+PR #5464 patch, then a single-kernel dFEM probe.
 
 **Throughput plan, overnight 2026-10-14/15 (branch `throughput`, not merged).** Human:
 up to 80 GPU SU, push only the branch, "as far as possible", projection "absolutely ...
@@ -17,7 +30,8 @@ ranges, MFEM kernel specializations (+24 %), the fused viscous + grad-div kernel
 and the opt-in `solver.initial_guess` / `solver.tolerance_reference`; Tier 3 found
 `solver.n_inner` 3 (+54 %) and, with the projection, `rtol` 1e-6. With all of it: TGV
 32^3 14.2x, 64^3 14.6x per step, and the 64^3 run to t = 20 in **1 h 01 min instead of 12 h
-44 min** with the same dissipation curve (2.4e-4). Defaults unchanged pending the human.
+44 min** with the same dissipation curve (2.4e-4). Defaults unchanged pending the human
+(decided 2026-10-16, above).
 
 **GPU memory, third round (2026-10-14): the single-H100 limit is 88^3 Q3/Q2
 (55.2 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all

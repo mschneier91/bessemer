@@ -91,10 +91,17 @@ TEST(Deck, YamlReproducesInCodeDriver)
    in_code.t_final = 0.2;
    in_code.initial_velocity = "taylor_green_2d";
    in_code.output.enabled = false;
+   // On a GPU two runs of a case agree only to the solver tolerance
+   // (hypre's device AMG is not run-to-run deterministic: repro_tolerance.hpp),
+   // so a tight rtol keeps that floor near 1e-11; the guess and the tolerance
+   // reference stay the case defaults (project, step). On a host backend the
+   // runs are bitwise at any rtol.
+   in_code.krylov_rtol = 1e-10;
    in_code.Normalize(); // in-code drivers normalize explicitly (LoadYAML does it)
 
    Parameters deck = Parameters::LoadYAML(INCNS_TGV_DECK);
    deck.output.enabled = false; // same physics; skip I/O here
+   deck.krylov_rtol = 1e-10;
 
    const Vector u_code = RunCase(in_code);
    const Vector u_deck = RunCase(deck);

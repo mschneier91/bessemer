@@ -146,12 +146,12 @@ Linear solver: FGMRES on the monolithic velocity-pressure system with a block pr
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `solver.rtol` | real | `1e-10` | FGMRES relative tolerance. |
+| `solver.rtol` | real | `1e-06` | FGMRES relative tolerance. |
 | `solver.atol` | real | `0` | FGMRES absolute tolerance. |
 | `solver.max_iter` | int | `2000` | FGMRES iteration cap. |
 | `solver.kdim` | int | `200` | FGMRES restart size. |
-| `solver.tolerance_reference` | initial_residual \| rhs \| step | `initial_residual` | What solver.rtol is relative to. initial_residual: \|\|r\|\| <= rtol \|\|r_0\|\| (MFEM's; a better initial guess then saves no iterations). rhs: \|\|r\|\| <= rtol \|\|b\|\|, so that solver.initial_guess pays off (loose at a small dt: \|\|b\|\| holds c0 M u_n). step: \|\|r\|\| <= rtol \|\|b - A x_prev\|\|, the previous solution's residual -- rtol of what the step changes, at any dt, with initial_guess project at no extra operator application. |
-| `solver.initial_guess` | previous \| extrapolate \| project | `previous` | The outer solve's initial guess. previous: the last step's solution. extrapolate: its linear extrapolation in time (one more system vector). project: the least-squares projection onto the last solver.projection_k solutions (2 projection_k system vectors). Pair with tolerance_reference: rhs. |
+| `solver.tolerance_reference` | initial_residual \| rhs \| step | `step` | What solver.rtol is relative to. initial_residual: \|\|r\|\| <= rtol \|\|r_0\|\| (MFEM's; a better initial guess then saves no iterations). rhs: \|\|r\|\| <= rtol \|\|b\|\|, so that solver.initial_guess pays off (loose at a small dt: \|\|b\|\| holds c0 M u_n). step: \|\|r\|\| <= rtol \|\|b - A x_prev\|\|, the previous solution's residual -- rtol of what the step changes, at any dt, with initial_guess project at no extra operator application. |
+| `solver.initial_guess` | previous \| extrapolate \| project | `project` | The outer solve's initial guess. previous: the last step's solution. extrapolate: its linear extrapolation in time (one more system vector). project: the least-squares projection onto the last solver.projection_k solutions (2 projection_k system vectors). Pair with tolerance_reference: rhs. |
 | `solver.projection_k` | int | `8` | initial_guess project: the most solutions kept (>= 1). |
 | `solver.projection_rebuild_threshold` | real | `0.05` | initial_guess project: recompute the kept solutions' images (k operator applications) once the mass factor beta0/dt has moved by more than this fraction since they were made; until then the guess uses the older operator's images (valid, less good). |
 | `solver.print_level` | int | `-1` | Solver verbosity (-1 = quiet). |
@@ -163,7 +163,7 @@ Linear solver: FGMRES on the monolithic velocity-pressure system with a block pr
 | `solver.a_pcg_max_iter` | int | `50` | jacobi_pcg: inner CG iteration cap. |
 | `solver.preconditioner` | jacobi \| loramg | `jacobi` | Velocity-block preconditioner on the mass Schur path. |
 | `solver.block_shape` | upper \| lower \| diag | `upper` | Block preconditioner shape. |
-| `solver.n_inner` | int | `10` | Cahouet-Chabard: fixed inner CG iterations on the pressure Poisson block. |
+| `solver.n_inner` | int | `2` | Cahouet-Chabard: fixed inner CG iterations on the pressure Poisson block. |
 | `solver.lp_strong_threshold` | real | `-1` | Pressure LOR-AMG: BoomerAMG strength threshold (< 0: 0.25 in 3D, 0.1 in 2D). Larger gives sparser coarse levels and less memory. |
 | `solver.lp_agg_levels` | int | `0` | Pressure LOR-AMG: levels of aggressive coarsening (0 = none). |
 | `solver.lp_print_level` | int | `0` | Pressure LOR-AMG: hypre's setup print level (1 prints the grid and operator complexities). |

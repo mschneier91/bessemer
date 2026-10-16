@@ -17,6 +17,9 @@
 #include "time/oifs.hpp"
 #include "mfem.hpp"
 
+#include <map>
+#include <string>
+
 #include <deque>
 #include <functional>
 #include <memory>
@@ -299,6 +302,22 @@ public:
    ///         its SolveStats.
    const StokesSolver* LastSolver() const { return last_solver_; }
 
+   /**
+    * @brief The guess state (StokesSolver::ExportGuessState) of each solver
+    *        built so far: "trap", "bdf2", "bdf3". What a checkpoint keeps
+    *        beyond ExportState() for a restart to repeat the solves exactly.
+    * @param states Output, by solver; aliases valid until the next step.
+    */
+   void ExportSolverStates(std::map<std::string, SolverGuessState>& states)
+   const;
+
+   /**
+    * @brief Restore states from ExportSolverStates() (a checkpoint): each
+    *        goes to its solver now if it is built, else when it is.
+    * @param states The states; their vectors are swapped out.
+    */
+   void ImportSolverStates(std::map<std::string, SolverGuessState>& states);
+
    /// @return Completed (accepted) steps.
    int StepCount() const { return step_count_; }
 
@@ -568,6 +587,11 @@ private:
    /// (3.1 GB of 23.7 at 32^3 Q3 on a GPU, 2026-10-13).
    std::unique_ptr<StokesSolver> trap_;
    double trap_c0_ = 0.0;               ///< Mass factor trap_ is built for (1/dt).
+   /// Guess states from a checkpoint for solvers not built yet, by name
+   /// (ImportSolverStates).
+   std::map<std::string, SolverGuessState> pending_guess_;
+   /// Give @p solver its pending guess state, if any (the name's).
+   void ApplyPendingGuess(const std::string& name, StokesSolver& solver);
    SolverCache bdf2_;                   ///< BDF2 solver cache.
    SolverCache bdf3_;                   ///< BDF3 solver cache.
 

@@ -6,7 +6,9 @@
 //  P2 a full basis restarts from the newest solution: the newest is still
 //     reproduced, an older one no longer is;
 //  P3 Rebuild with a changed operator: exact again for the new operator;
-//  P4 the same sequence twice gives the same guess, bitwise.
+//  P4 the same sequence twice gives the same guess, bitwise;
+//  P5 a basis restored from Solutions() and Images() (a checkpoint) guesses,
+//     adds and rebuilds as the original does, bitwise.
 
 #include <gtest/gtest.h>
 
@@ -122,4 +124,40 @@ TEST(SolutionProjection, GuessesFromTheKeptSolutions)
    const double* a = g1.HostRead();
    const double* c = g2.HostRead();
    for (int i = 0; i < n; ++i) { ASSERT_EQ(a[i], c[i]); }
+
+   // P5: a restored copy of a basis (3 of k) follows the original, bitwise:
+   // the guess, then one more solution, then a rebuild for A2.
+   SolutionProjection orig(k, MPI_COMM_WORLD);
+   for (int j = 0; j < 3; ++j) { orig.Add(A, xs[j]); }
+   std::vector<Vector> sx(orig.Size()), sw(orig.Size());
+   for (int i = 0; i < orig.Size(); ++i)
+   {
+      sx[i] = orig.Solutions()[i];
+      sw[i] = orig.Images()[i];
+      sx[i].UseDevice(true);
+      sw[i].UseDevice(true);
+   }
+   SolutionProjection copy(k, MPI_COMM_WORLD);
+   copy.Restore(sx, sw);
+   EXPECT_EQ(copy.Size(), orig.Size());
+   auto same_guess = [&](const Operator & op)
+   {
+      Vector b(n), go(n), gc(n);
+      b.UseDevice(true);
+      go.UseDevice(true);
+      gc.UseDevice(true);
+      op.Mult(comb, b);
+      orig.Guess(b, go);
+      copy.Guess(b, gc);
+      const double* o = go.HostRead();
+      const double* r = gc.HostRead();
+      for (int i = 0; i < n; ++i) { ASSERT_EQ(o[i], r[i]); }
+   };
+   same_guess(A);
+   orig.Add(A, xs[3]);
+   copy.Add(A, xs[3]);
+   same_guess(A);
+   orig.Rebuild(A2);
+   copy.Rebuild(A2);
+   same_guess(A2);
 }

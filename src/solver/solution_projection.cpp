@@ -128,4 +128,20 @@ void SolutionProjection::Rebuild(const Operator& A)
    }
 }
 
+void SolutionProjection::Restore(std::vector<Vector>& xs,
+                                 std::vector<Vector>& ws)
+{
+   MFEM_VERIFY(xs.size() == ws.size() && static_cast<int>(xs.size()) <= k_,
+               "solution projection: a restored basis needs one image per "
+               "solution and at most k of them");
+   Reset();
+   for (std::size_t i = 0; i < xs.size(); ++i)
+   {
+      x_.emplace_back();
+      x_.back().Swap(xs[i]);
+      w_.emplace_back();
+      w_.back().Swap(ws[i]);
+   }
+}
+
 } // namespace incns

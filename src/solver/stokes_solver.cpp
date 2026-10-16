@@ -579,6 +579,90 @@ void StokesSolver::RecordSolution(const Vector& x)
    previous_c0_ = c0;
 }
 
+namespace
+{
+// A non-owning alias of v.
+void Alias(const Vector& v, Vector& a)
+{
+   a.MakeRef(const_cast<Vector&>(v), 0, v.Size());
+}
+} // namespace
+
+void StokesSolver::ExportGuessState(SolverGuessState& s) const
+{
+   s.projection_x.clear();
+   s.projection_w.clear();
+   if (projection_)
+   {
+      const std::vector<Vector>& xs = projection_->Solutions();
+      const std::vector<Vector>& ws = projection_->Images();
+      s.projection_x.resize(xs.size());
+      s.projection_w.resize(ws.size());
+      for (std::size_t i = 0; i < xs.size(); ++i)
+      {
+         Alias(xs[i], s.projection_x[i]);
+         Alias(ws[i], s.projection_w[i]);
+      }
+   }
+   s.projection_c0 = projection_c0_;
+   s.projection_stale = projection_stale_;
+   s.previous_x.Destroy();
+   if (previous_x_.Size() > 0) { Alias(previous_x_, s.previous_x); }
+   s.previous_c0 = previous_c0_;
+   s.step_ax.Destroy();
+   if (step_ax_valid_) { Alias(step_ax_, s.step_ax); }
+   s.step_c0 = step_c0_;
+   s.step_nu = step_nu_;
+}
+
+void StokesSolver::ImportGuessState(SolverGuessState& s)
+{
+   const int n = SystemSize();
+   auto check = [n](const Vector & v)
+   {
+      MFEM_VERIFY(v.Size() == 0 || v.Size() == n,
+                  "stokes_solver: a restored guess vector holds " << v.Size()
+                  << " entries, the system " << n);
+   };
+   for (const Vector& v : s.projection_x) { check(v); }
+   for (const Vector& v : s.projection_w) { check(v); }
+   check(s.previous_x);
+   check(s.step_ax);
+
+   if (opts_.initial_guess == InitialGuess::Project &&
+       !s.projection_x.empty())
+   {
+      if (!projection_)
+      {
+         projection_ = std::make_unique<SolutionProjection>(
+                          opts_.projection_k, spaces_.Velocity().GetComm());
+      }
+      projection_->Restore(s.projection_x, s.projection_w);
+   }
+   else if (projection_) { projection_->Reset(); }
+   projection_c0_ = s.projection_c0;
+   projection_stale_ = s.projection_stale;
+
+   if (opts_.initial_guess == InitialGuess::Extrapolate)
+   {
+      previous_x_.Swap(s.previous_x);
+      previous_x_.UseDevice(true);
+   }
+   else { previous_x_.Destroy(); }
+   previous_c0_ = s.previous_c0;
+
+   const bool step = opts_.tolerance_reference == ToleranceReference::Step &&
+                     s.step_ax.Size() > 0;
+   if (step)
+   {
+      step_ax_.Swap(s.step_ax);
+      step_ax_.UseDevice(true);
+   }
+   step_ax_valid_ = step;
+   step_c0_ = s.step_c0;
+   step_nu_ = s.step_nu;
+}
+
 void StokesSolver::SetKrylovDim(int k)
 {
    MFEM_VERIFY(k >= 1, "stokes_solver: the restart length must be >= 1");

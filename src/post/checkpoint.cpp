@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
+#include <string>
 #include <vector>
 
 namespace incns
@@ -148,6 +150,28 @@ void Checkpoint::Write(const std::string& dir,
       WriteVector(BinPath(dir, "u_hist" + std::to_string(j), rank), hist[j]);
    }
    WriteVector(BinPath(dir, "pressure", rank), state.pressure);
+   // The solvers' guess state (aliases of the solvers' vectors).
+   std::map<std::string, SolverGuessState> guesses;
+   integrator.ExportSolverStates(guesses);
+   for (const auto& [name, g] : guesses)
+   {
+      const std::string base = "guess_" + name + "_";
+      for (std::size_t i = 0; i < g.projection_x.size(); ++i)
+      {
+         WriteVector(BinPath(dir, base + "x" + std::to_string(i), rank),
+                     g.projection_x[i]);
+         WriteVector(BinPath(dir, base + "w" + std::to_string(i), rank),
+                     g.projection_w[i]);
+      }
+      if (g.previous_x.Size() > 0)
+      {
+         WriteVector(BinPath(dir, base + "prev", rank), g.previous_x);
+      }
+      if (g.step_ax.Size() > 0)
+      {
+         WriteVector(BinPath(dir, base + "ax", rank), g.step_ax);
+      }
+   }
    const bool refined = refinements && !refinements->empty();
    if (refined)
    {
@@ -177,6 +201,21 @@ void Checkpoint::Write(const std::string& dir,
       if (refined)
       {
          meta << "amr_refinements: " << refinements->size() << "\n";
+      }
+      if (!guesses.empty())
+      {
+         meta << "solver_guess:\n";
+         for (const auto& [name, g] : guesses)
+         {
+            meta << "  " << name << ": {projection: " << g.projection_x.size()
+                 << ", projection_c0: " << g.projection_c0
+                 << ", projection_stale: " << (g.projection_stale ? 1 : 0)
+                 << ", previous_x: " << (g.previous_x.Size() > 0 ? 1 : 0)
+                 << ", previous_c0: " << g.previous_c0
+                 << ", step_ax: " << (g.step_ax.Size() > 0 ? 1 : 0)
+                 << ", step_c0: " << g.step_c0 << ", step_nu: " << g.step_nu
+                 << "}\n";
+         }
       }
       // Reference scales, so a consumer can re-dimensionalize the state.
       meta << "Re: " << params.nondim.Re << "\nL_ref: " << params.nondim.L_ref
@@ -244,6 +283,45 @@ void Checkpoint::Read(const std::string& dir, StokesTimeIntegrator& integrator)
       }
    }
    integrator.ImportState(state);
+
+   // The solvers' guess state (none in checkpoints from before 2026-10-16:
+   // the solvers then start afresh, as those restarts always did).
+   if (meta["solver_guess"])
+   {
+      const int n_sys = n_u + n_p;
+      std::map<std::string, SolverGuessState> guesses;
+      for (const auto& kv : meta["solver_guess"])
+      {
+         const std::string name = kv.first.as<std::string>();
+         const YAML::Node g = kv.second;
+         const std::string base = "guess_" + name + "_";
+         SolverGuessState& s = guesses[name];
+         const int m = g["projection"].as<int>();
+         s.projection_x.resize(m);
+         s.projection_w.resize(m);
+         for (int i = 0; i < m; ++i)
+         {
+            ReadVector(BinPath(dir, base + "x" + std::to_string(i), rank),
+                       n_sys, s.projection_x[i]);
+            ReadVector(BinPath(dir, base + "w" + std::to_string(i), rank),
+                       n_sys, s.projection_w[i]);
+         }
+         s.projection_c0 = g["projection_c0"].as<double>();
+         s.projection_stale = g["projection_stale"].as<int>() != 0;
+         if (g["previous_x"].as<int>() != 0)
+         {
+            ReadVector(BinPath(dir, base + "prev", rank), n_sys, s.previous_x);
+         }
+         s.previous_c0 = g["previous_c0"].as<double>();
+         if (g["step_ax"].as<int>() != 0)
+         {
+            ReadVector(BinPath(dir, base + "ax", rank), n_sys, s.step_ax);
+         }
+         s.step_c0 = g["step_c0"].as<double>();
+         s.step_nu = g["step_nu"].as<double>();
+      }
+      integrator.ImportSolverStates(guesses);
+   }
 }
 
 } // namespace incns
