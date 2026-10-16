@@ -1,3 +1,4 @@
+#include "time/cfl.hpp"
 #include "time/time_integrator.hpp"
 
 #include "post/pressure_mean.hpp"
@@ -267,6 +268,7 @@ void StokesTimeIntegrator::ChooseCflStep()
    MFEM_VERIFY(cfl_rate_, "time_integrator: CFL-controlled steps need "
                "SetCflRate");
    const double c = cfl_rate_();
+   RequireFiniteRate(c, t_);
    double dt = dt_;
    const double dt_cfl = (c > 0.0) ? opts_.cfl_target / c
                          : std::numeric_limits<double>::infinity();

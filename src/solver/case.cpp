@@ -795,6 +795,7 @@ void Case::SetupCfl()
       if (integrator_->StepCount() == 0)
       {
          const double c = cfl_->Rate(integrator_->Velocity());
+         RequireFiniteRate(c, integrator_->Time());
          if (c > 0.0 && params_.dt * c > params_.cfl_target)
          {
             integrator_->SetStepSize(params_.cfl_target / c);
@@ -809,6 +810,7 @@ void Case::SetupCfl()
       integrator_->SetDtCeiling([this](double)
       {
          const double c = cfl_->Rate(integrator_->Velocity());
+         RequireFiniteRate(c, integrator_->Time());
          return c > 0.0 ? params_.cfl_max / c
                 : std::numeric_limits<double>::infinity();
       });
@@ -831,6 +833,7 @@ double Case::ConvectiveCflNumber(Vector* where)
    const ConvectiveCfl& c = cfl_ ? *cfl_ : local;
    const double rate = where ? c.RateAndLocation(integrator_->Velocity(), *where)
                        : c.Rate(integrator_->Velocity());
+   RequireFiniteRate(rate, integrator_->Time());
    return rate * integrator_->CurrentDt();
 }
 
@@ -873,7 +876,8 @@ void Case::RecordStep(double t_prev, double step_wall)
       r.cd = C(0);
       r.cl = (C.Size() > 1) ? C(1) : 0.0;
    }
-   Vector u(spaces_.Velocity().GetTrueVSize());
+   Vector& u = record_u_;
+   u.SetSize(spaces_.Velocity().GetTrueVSize()); // reallocates after AMR only
    integrator_->Velocity().GetTrueDofs(u);
    r.velocity_norm = std::sqrt(InnerProduct(mesh_.GetComm(), u, u));
    monitor_->Record(r);

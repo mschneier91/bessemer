@@ -292,6 +292,9 @@ private:
    BoundaryConditions own_bc_; ///< Default (empty) BC set.
    BoundaryConditions* bc_;    ///< Active BC set (own_bc_ or user-supplied).
    mfem::Vector zero_vec_;     ///< Zero vector for the default forcing.
+   /// RecordStep's copy of the velocity's true dofs (for its norm): kept, a
+   /// new one cost a device allocation and a synchronizing free per step.
+   mfem::Vector record_u_;
    mfem::VectorConstantCoefficient zero_forcing_; ///< Default forcing.
    mfem::VectorCoefficient* forcing_;  ///< Active forcing.
    mfem::VectorCoefficient* initial_;  ///< Initial velocity (null = zero).

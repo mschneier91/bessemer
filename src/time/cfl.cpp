@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 // This TU defines a device kernel (mfem::forall). A host compiler would build
 // it as a host loop over device pointers, which segfaults on a GPU;
@@ -34,6 +35,7 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
    const auto J = Reshape(jac.Read(), nq, dim, dim, ne);
    const auto X = inv_dxi.Read();
    auto R = rate.Write();
+   const real_t inf = std::numeric_limits<real_t>::infinity();
    mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
    {
       real_t rmax = 0.0;
@@ -71,6 +73,9 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
                 fabs((a10 * u0 + a11 * u1 + a12 * u2) / det) * X[iy] +
                 fabs((a20 * u0 + a21 * u1 + a22 * u2) / det) * X[iz];
          }
+         // A NaN velocity reports an infinite rate: a max skips a NaN (every
+         // comparison with it is false), and so would MPI's.
+         if (!(s == s)) { s = inf; }
          rmax = (s > rmax) ? s : rmax;
       }
       R[e] = rmax;
@@ -78,6 +83,13 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
 }
 
 } // namespace cfl_kernels
+
+void RequireFiniteRate(double rate, double t)
+{
+   MFEM_VERIFY(std::isfinite(rate), "the velocity is not finite (NaN or Inf) "
+               "at t = " << t << ": the run diverged in the step that reached "
+               "it (the usual remedy is a smaller time step or CFL target)");
+}
 
 Vector ConvectiveCfl::InverseNodeSpacing(int k)
 {

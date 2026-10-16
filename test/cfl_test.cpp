@@ -15,6 +15,10 @@
 //  C4 The Jacobians the rate reads, computed at every call instead of cached
 //     in the mesh, equal MFEM's cached ones bit for bit on a curved mesh:
 //     dropping the cache changes no rate and no step size.
+//  C5 A NaN in the velocity gives an infinite rate, for Rate and MaxRate (a
+//     max reduction would skip it and report a finite rate: a diverged run
+//     went on until an unrelated check failed), and the finite rate is the
+//     same as before; RequireFiniteRate accepts it.
 
 #include <gtest/gtest.h>
 
@@ -28,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace mfem;
 
@@ -263,3 +268,33 @@ TEST(Cfl, C3_CflControlledSteps)
    CflControlledSteps(incns::ConvectiveForm::Rotational);
 }
 
+TEST(Cfl, C5_NanVelocityGivesAnInfiniteRate)
+{
+   incns::RuleBook rules;
+   for (int dim : {2, 3})
+   {
+      SCOPED_TRACE("dim=" + std::to_string(dim));
+      Mesh serial = incns::MakeBoxMesh(amr_test::Box(dim, dim == 2 ? 4 : 2, false));
+      auto mesh = incns::PartitionMesh(serial, true);
+      H1_FECollection fec(3, dim);
+      ParFiniteElementSpace fes(mesh.get(), &fec, dim, Ordering::byNODES);
+      ParGridFunction u(&fes), v(&fes);
+      Vector uv(dim);
+      for (int i = 0; i < dim; ++i) { uv(i) = kU[i]; }
+      VectorConstantCoefficient uc(uv);
+      u.ProjectCoefficient(uc);
+      v = u;
+
+      incns::ConvectiveCfl cfl(fes, rules);
+      const double finite = cfl.Rate(u);
+      EXPECT_TRUE(std::isfinite(finite));
+      EXPECT_GT(finite, 0.0);
+      incns::RequireFiniteRate(finite, 0.0); // returns
+
+      // One NaN dof on every rank (every rank owns elements here).
+      v.HostReadWrite()[0] = std::numeric_limits<double>::quiet_NaN();
+      EXPECT_TRUE(std::isinf(cfl.Rate(v)));
+      EXPECT_TRUE(std::isinf(cfl.MaxRate({&u, &v})));
+      EXPECT_EQ(cfl.Rate(u), finite); // unchanged for a finite velocity
+   }
+}

@@ -113,7 +113,10 @@ TEST(PressureMean, KeptMatchesFreeFunctionsBitwise)
       EXPECT_EQ(kept.Mean(p), MassWeightedMean(p, rules)) << "call " << call;
       kept.Subtract(p);
       SubtractMean(q, rules);
-      for (int i = 0; i < p.Size(); ++i) { ASSERT_EQ(p(i), q(i)) << "call " << call; }
+      // Through HostRead: on a GPU the subtraction ran on the device.
+      const double* ph = p.HostRead();
+      const double* qh = q.HostRead();
+      for (int i = 0; i < p.Size(); ++i) { ASSERT_EQ(ph[i], qh[i]) << "call " << call; }
    }
 
    // A refined mesh: the space's sequence moves, the functional is rebuilt.

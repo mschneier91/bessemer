@@ -434,6 +434,7 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
       std::vector<const ParGridFunction*> us(n_ext_);
       for (int l = 0; l < n_ext_; ++l) { us[l] = vel_[l].get(); }
       rate = cfl_->MaxRate(us); // one evaluation of the Jacobians
+      RequireFiniteRate(rate, times.front());
    }
    for (int l = 0; l < n_ext_; ++l)
    {

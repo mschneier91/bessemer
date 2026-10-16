@@ -15,6 +15,16 @@ namespace incns
 {
 
 /**
+ * @brief Abort with a clear message when a CFL rate is not finite: the
+ *        velocity holds a NaN or an Inf (the rate kernel reports a NaN node as
+ *        an infinite rate), so the run has diverged. Collective callers pass
+ *        the same (global) rate on every rank.
+ * @param rate A rate from ConvectiveCfl::Rate or MaxRate.
+ * @param t    The time of the velocity it was computed from (for the message).
+ */
+void RequireFiniteRate(double rate, double t);
+
+/**
  * @brief The convective CFL rate, Nek5000's definition (`compute_cfl`):
  *        @f$ c = \max_K \max_{\text{GLL nodes } n} \sum_d
  *        |(J_n^{-1} u_n)_d| \,/\, \Delta\xi_d(n) @f$,
