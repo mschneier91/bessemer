@@ -14,8 +14,7 @@
 //
 // What it is for: checking an `amr.end_time` freeze (refinement-only AMR keeps
 // growing behind the vortices). The freeze is safe for the forces if the bands
-// near the body stopped growing well before it and the growth is downstream:
-// benchmarks/square_cylinder_re1000/README.md, "Is the mesh freeze safe?".
+// near the body stopped growing well before it and the growth is downstream.
 // It reads the checkpoint only; it never writes or runs anything.
 
 #include "amr/mesh_census.hpp"

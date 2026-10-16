@@ -24,7 +24,7 @@ RunMonitor::RunMonitor(const Parameters& p, MPI_Comm comm)
       // statistics of a chained run need every segment). It appends from the
       // checkpoint's time, so rows the earlier segment wrote after that time
       // are superseded: readers drop them where time goes back
-      // (benchmarks/square_cylinder_re1000/analyze.py, benchmarks/common.py).
+      // (benchmarks/common.py).
       const std::string path = p.output.path + "/" + p.output.name + "_history.csv";
       const bool append = !p.restart_from.empty() && std::ifstream(path).good();
       history_.open(path, append ? std::ios::app : std::ios::trunc);

@@ -631,7 +631,7 @@ ordering check) is a small open item.
 | AMG settings (V-cycles, coarsening, strength) | deferred | human ("an optimization for another day") |
 | Tier 5 multi-GPU | deferred | human: more than two GPUs needed |
 | periodic hill | deferred | human |
-| square cylinder Tier 4 | replaced | human: the channel instead (no GPUs for 2D; RM hours kept for Re 10k) |
+| square cylinder Tier 4 | replaced | human: the channel instead (no GPUs for 2D) |
 | rotational form | deferred | fails on the channel (above); a separate thread |
 
 ## Host overhead (human 2026-10-15: "strictly free, do that for sure")

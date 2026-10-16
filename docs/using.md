@@ -208,7 +208,7 @@ stability limit; pass `-dt 0.001`.)
   count.
 - **Where an AMR run refined:** `apps/mesh_census -d <deck> -c <checkpoint>` rebuilds the
   mesh from a checkpoint pass by pass and counts elements per streamwise band (for
-  checking an `amr.end_time` freeze; benchmarks/square_cylinder_re1000/README.md).
+  checking an `amr.end_time` freeze).
 
 ## 6. Resources
 
