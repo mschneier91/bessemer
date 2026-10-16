@@ -77,6 +77,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure);
 # amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
 # time/cfl.cpp -- the per-element directional convective CFL rate;
+# post/channel_statistics.cpp -- the plane averages' per-element line sums;
 # precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
 # points and the rotation-number statistics; util/device_sync.cpp -- no kernel,
 # but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
@@ -98,6 +99,7 @@ if(USE_CUDA)
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp
                               post/flow_sums.cpp
+                              post/channel_statistics.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
                               time/oifs_convection.cpp

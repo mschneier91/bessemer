@@ -1,15 +1,101 @@
 #include "post/channel_statistics.hpp"
 
+#include "mfem/general/forall.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 
+// This TU defines a device kernel (mfem::forall). A host compiler would build
+// it as a host loop over device pointers, which segfaults on a GPU;
+// src/CMakeLists.txt marks this file LANGUAGE CUDA, and this line turns a lost
+// entry there into a compile error.
+#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)
+#error "channel_statistics.cpp defines device kernels and must be compiled by nvcc -- see the nvcc TU list in src/CMakeLists.txt"
+#endif
+
 namespace incns
 {
 
 using namespace mfem;
+
+// Kernel in a NAMED namespace: nvcc rejects extended lambdas whose enclosing
+// function has internal linkage.
+namespace chanstats
+{
+
+// Per element e and node line j (j < k, or j = k on a top element): the seven
+// sums of PlaneAverages over the line's x-z points (w u, w v, w w, w u^2,
+// w v^2, w w^2, w u v; w = point weight x face weight), and on the walls the
+// line's sum of (point weight) du/deta. The arithmetic of the host loop this
+// replaced (2026-10-15), in its order: at each point the values as
+// DenseMatrix::Mult forms them (x_0 N(q,0), then += x_i N(q,i)), then the
+// point sums -- one thread per (element, line), so nothing is shared.
+void LineSums(int ne, int k, int dim, int ndof, int npts, const Vector& ue,
+              const Vector& shape, const Vector& dshape, const Vector& line_w,
+              const Vector& face_w, const Array<int>& flags, Vector& sums,
+              Vector& walls)
+{
+   const int nl = k + 1;
+   const auto U = Reshape(ue.Read(), ndof, dim, ne);
+   const auto S = Reshape(shape.Read(), npts, ndof, nl);
+   const auto D = Reshape(dshape.Read(), npts, ndof, 2);
+   const auto W = Reshape(line_w.Read(), npts, nl);
+   const auto F = face_w.Read();
+   const auto G = flags.Read();
+   auto L = Reshape(sums.Write(), ChannelStatistics::kQuantities, nl, ne);
+   auto WS = Reshape(walls.Write(), 2, ne);
+   mfem::forall(ne * nl, [ = ] MFEM_HOST_DEVICE(int idx)
+   {
+      const int e = idx / nl, j = idx % nl;
+      const bool bottom = (G[e] & 1) != 0, top = (G[e] & 2) != 0;
+      double acc[7] = {0, 0, 0, 0, 0, 0, 0};
+      if (j < k || top)
+      {
+         for (int q = 0; q < npts; ++q)
+         {
+            double a = U(0, 0, e) * S(q, 0, j);
+            double b = U(0, 1, e) * S(q, 0, j);
+            double c = (dim == 3) ? U(0, 2, e) * S(q, 0, j) : 0.0;
+            for (int i = 1; i < ndof; ++i)
+            {
+               a += U(i, 0, e) * S(q, i, j);
+               b += U(i, 1, e) * S(q, i, j);
+               if (dim == 3) { c += U(i, 2, e) * S(q, i, j); }
+            }
+            const double w = W(q, j) * F[e];
+            acc[0] += w * a;
+            acc[1] += w * b;
+            acc[2] += w * c;
+            acc[3] += w * a * a;
+            acc[4] += w * b * b;
+            acc[5] += w * c * c;
+            acc[6] += w * a * b;
+         }
+      }
+      for (int m = 0; m < 7; ++m) { L(m, j, e) = acc[m]; }
+      // The wall shear: the bottom wall on line 0, the top wall on line k.
+      for (int wall = 0; wall < 2; ++wall)
+      {
+         if (j != (wall == 0 ? 0 : k)) { continue; }
+         double s = 0.0;
+         if (wall == 0 ? bottom : top)
+         {
+            for (int q = 0; q < npts; ++q)
+            {
+               double a = U(0, 0, e) * D(q, 0, wall);
+               for (int i = 1; i < ndof; ++i) { a += U(i, 0, e) * D(q, i, wall); }
+               s += W(q, j) * a;
+            }
+         }
+         WS(wall, e) = s;
+      }
+   });
+}
+
+} // namespace chanstats
 
 ChannelStatistics::ChannelStatistics(ParFiniteElementSpace& V, double nu,
                                      double start_time)
@@ -209,6 +295,41 @@ ChannelStatistics::ChannelStatistics(ParFiniteElementSpace& V, double nu,
    const std::size_t nval = static_cast<std::size_t>(ns) * kQuantities + 2;
    prev_.assign(nval, 0.0);
    sums_.assign(nval, 0.0);
+
+   // The shapes, weights and per-element data for PlaneAverages' kernel.
+   const int nl = k + 1;
+   shape_dev_.SetSize(npts * ndof_ * nl);
+   line_w_.SetSize(npts * nl);
+   for (int j = 0; j < nl; ++j)
+   {
+      for (int i = 0; i < ndof_; ++i)
+      {
+         for (int q = 0; q < npts; ++q)
+         {
+            shape_dev_[q + npts * (i + ndof_ * j)] = shape_[j](q, i);
+         }
+      }
+      for (int q = 0; q < npts; ++q)
+      {
+         line_w_[q + npts * j] = lines_[j].IntPoint(q).weight;
+      }
+   }
+   dshape_dev_.SetSize(npts * ndof_ * 2);
+   for (int i = 0; i < ndof_; ++i)
+   {
+      for (int q = 0; q < npts; ++q)
+      {
+         dshape_dev_[q + npts * i] = dshape_bottom_(q, i);
+         dshape_dev_[q + npts * (i + ndof_)] = dshape_top_(q, i);
+      }
+   }
+   face_w_.SetSize(mesh.GetNE());
+   wall_flags_.SetSize(mesh.GetNE());
+   for (const ElementLines& el : elements_)
+   {
+      face_w_[el.element] = el.face_weight;
+      wall_flags_[el.element] = (el.bottom ? 1 : 0) | (el.top ? 2 : 0);
+   }
 }
 
 std::vector<double>
@@ -217,52 +338,41 @@ ChannelStatistics::PlaneAverages(const ParGridFunction& u) const
    const int ns = static_cast<int>(y_.size());
    const int k = static_cast<int>(lines_.size()) - 1;
    std::vector<double> r(static_cast<std::size_t>(ns) * kQuantities + 2, 0.0);
-   u.HostRead();
-   Array<int> vdofs;
-   Vector vals;
-   const int npts = lines_[0].GetNPoints();
-   Vector ua(npts), ub(npts), uc(npts);
-   uc = 0.0;
-   for (const ElementLines& el : elements_)
+   const int ne = V_.GetNE();
+   if (ne > 0)
    {
-      V_.GetElementVDofs(el.element, vdofs);
-      u.GetSubVector(vdofs, vals);
-      const double* vx = vals.GetData();
-      const double* vy = vx + ndof_;
-      const double* vz = (dim_ == 3) ? vx + 2 * ndof_ : nullptr;
-      for (int j = 0; j <= k; ++j)
+      // The per-element, per-line sums on the device (they were a host loop
+      // over the elements: ~28 ms per sample for the Re_tau 180 channel, 10 %
+      // of its run at a sample every 5 steps), then summed into the stations
+      // here in the same order as before.
+      const int npts = lines_[0].GetNPoints();
+      const Operator* R = V_.GetElementRestriction(ElementDofOrdering::NATIVE);
+      Vector ue(R->Height()); // per call: an element copy of u (see ConvectiveCfl)
+      ue.UseDevice(true);
+      R->Mult(u, ue);
+      line_sums_.SetSize(kQuantities * (k + 1) * ne);
+      line_sums_.UseDevice(true);
+      wall_sums_.SetSize(2 * ne);
+      wall_sums_.UseDevice(true);
+      chanstats::LineSums(ne, k, dim_, ndof_, npts, ue, shape_dev_, dshape_dev_,
+                          line_w_, face_w_, wall_flags_, line_sums_, wall_sums_);
+      const double* L = line_sums_.HostRead();
+      const double* WS = wall_sums_.HostRead();
+      for (const ElementLines& el : elements_)
       {
-         if (j == k && !el.top) { continue; } // the next layer's line 0
-         const DenseMatrix& N = shape_[j];
-         N.Mult(vx, ua.GetData());
-         N.Mult(vy, ub.GetData());
-         if (vz) { N.Mult(vz, uc.GetData()); }
-         double acc[kQuantities] = {0, 0, 0, 0, 0, 0, 0};
-         for (int q = 0; q < npts; ++q)
+         for (int j = 0; j <= k; ++j)
          {
-            const double w = lines_[j].IntPoint(q).weight * el.face_weight;
-            const double a = ua(q), b = ub(q), c = uc(q);
-            acc[0] += w * a;
-            acc[1] += w * b;
-            acc[2] += w * c;
-            acc[3] += w * a * a;
-            acc[4] += w * b * b;
-            acc[5] += w * c * c;
-            acc[6] += w * a * b;
+            if (j == k && !el.top) { continue; } // the next layer's line 0
+            const double* acc = L + kQuantities * (j + (k + 1) * el.element);
+            double* out = &r[static_cast<std::size_t>(el.station[j]) * kQuantities];
+            for (int m = 0; m < kQuantities; ++m) { out[m] += acc[m]; }
          }
-         double* out = &r[static_cast<std::size_t>(el.station[j]) * kQuantities];
-         for (int m = 0; m < kQuantities; ++m) { out[m] += acc[m]; }
-      }
-      for (int wall = 0; wall < 2; ++wall)
-      {
-         if (!(wall == 0 ? el.bottom : el.top)) { continue; }
-         const DenseMatrix& D = (wall == 0) ? dshape_bottom_ : dshape_top_;
-         const IntegrationRule& ir = lines_[wall == 0 ? 0 : k];
-         D.Mult(vx, ua.GetData());
-         double acc = 0.0;
-         for (int q = 0; q < npts; ++q) { acc += ir.IntPoint(q).weight * ua(q); }
-         r[static_cast<std::size_t>(ns) * kQuantities + wall] +=
-            acc * el.face_weight / el.dy;
+         for (int wall = 0; wall < 2; ++wall)
+         {
+            if (!(wall == 0 ? el.bottom : el.top)) { continue; }
+            r[static_cast<std::size_t>(ns) * kQuantities + wall] +=
+               WS[wall + 2 * el.element] * el.face_weight / el.dy;
+         }
       }
    }
    MPI_Allreduce(MPI_IN_PLACE, r.data(), static_cast<int>(r.size()), MPI_DOUBLE,

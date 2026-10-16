@@ -154,6 +154,14 @@ private:
    std::vector<mfem::DenseMatrix> shape_;
    mfem::DenseMatrix dshape_bottom_; ///< d/deta of the shapes at eta = 0.
    mfem::DenseMatrix dshape_top_;    ///< d/deta of the shapes at eta = 1.
+   /// The same for the device (PlaneAverages' kernel): shape_ as
+   /// (point, dof, line), dshape_bottom_ / dshape_top_ as (point, dof, 2),
+   /// the line weights as (point, line), and per element its face weight and
+   /// wall flags (1 bottom, 2 top).
+   mfem::Vector shape_dev_, dshape_dev_, line_w_, face_w_;
+   mfem::Array<int> wall_flags_;
+   mutable mfem::Vector line_sums_; ///< (quantity, line, element) sums.
+   mutable mfem::Vector wall_sums_; ///< (wall, element) sums of w du/deta.
 
    bool have_prev_ = false;         ///< A sample was taken.
    double t_prev_ = 0.0;            ///< Its time.
