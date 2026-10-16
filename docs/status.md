@@ -9,6 +9,24 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Ranks that own no elements run (2026-10-16, branch `throughput`).** `benchmark_setup_test`
+M1 (a 3-element Gmsh mesh) segfaulted at np 4 on rank 3, which owns no elements (job
+49276869; with the pinned MFEM and 4.10 alike). The CPU test jobs ran np 1 and 2 only, so
+it went unnoticed. `StokesSolver::SolveTrue` built its kept block vectors only when their
+total size changed. An empty rank's offsets are {0, 0, 0} from the start, so it never built
+them, and `GetBlock(0)` dereferenced a BlockVector with no blocks. It now compares the
+block layout. Same family in the checkpointed guess state (32287da): whether x_prev / A
+x_prev existed was read off the vectors' sizes. An empty rank wrote no `guess_*_prev` /
+`guess_*_ax` files, so a restart aborted there, and the import would have marked A x_prev
+absent on that rank alone. `SolverGuessState::has_previous_x` / `has_step_ax` carry it now,
+the same on every rank. New `empty_partition_test` puts every element on rank 0, so the
+other ranks are empty at np 2 and 4. A Stokes cavity and Navier-Stokes Taylor-Green (IMEX,
+OIFS, CFL control) match the default partition to 1e-8, and a restart with the guess state
+(project, extrapolate) is bitwise. Bitwise-neutral otherwise: the old and new `run_case`
+write byte-identical checkpoints (cavity, np 2, both guesses). smoke|fast green at np 1, 2
+and 4 on the CPU (job 49277774, 72 tests each). Next: the CPU test jobs should also run
+np 4 (`-R "_np4$"`).
+
 **Duplicate deck keys are an error; bench.py's `--set` replaces template keys
 (2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
 appended `order_u: 5` after the template's `order_u: 3`, and the loader read the first

@@ -163,11 +163,13 @@ void Checkpoint::Write(const std::string& dir,
          WriteVector(BinPath(dir, base + "w" + std::to_string(i), rank),
                      g.projection_w[i]);
       }
-      if (g.previous_x.Size() > 0)
+      // By the flags, not the sizes: every rank writes its file, also an
+      // empty one (a rank that owns no dofs), since every rank reads one.
+      if (g.has_previous_x)
       {
          WriteVector(BinPath(dir, base + "prev", rank), g.previous_x);
       }
-      if (g.step_ax.Size() > 0)
+      if (g.has_step_ax)
       {
          WriteVector(BinPath(dir, base + "ax", rank), g.step_ax);
       }
@@ -210,9 +212,9 @@ void Checkpoint::Write(const std::string& dir,
             meta << "  " << name << ": {projection: " << g.projection_x.size()
                  << ", projection_c0: " << g.projection_c0
                  << ", projection_stale: " << (g.projection_stale ? 1 : 0)
-                 << ", previous_x: " << (g.previous_x.Size() > 0 ? 1 : 0)
+                 << ", previous_x: " << (g.has_previous_x ? 1 : 0)
                  << ", previous_c0: " << g.previous_c0
-                 << ", step_ax: " << (g.step_ax.Size() > 0 ? 1 : 0)
+                 << ", step_ax: " << (g.has_step_ax ? 1 : 0)
                  << ", step_c0: " << g.step_c0 << ", step_nu: " << g.step_nu
                  << "}\n";
          }
@@ -308,12 +310,14 @@ void Checkpoint::Read(const std::string& dir, StokesTimeIntegrator& integrator)
          }
          s.projection_c0 = g["projection_c0"].as<double>();
          s.projection_stale = g["projection_stale"].as<int>() != 0;
-         if (g["previous_x"].as<int>() != 0)
+         s.has_previous_x = g["previous_x"].as<int>() != 0;
+         if (s.has_previous_x)
          {
             ReadVector(BinPath(dir, base + "prev", rank), n_sys, s.previous_x);
          }
          s.previous_c0 = g["previous_c0"].as<double>();
-         if (g["step_ax"].as<int>() != 0)
+         s.has_step_ax = g["step_ax"].as<int>() != 0;
+         if (s.has_step_ax)
          {
             ReadVector(BinPath(dir, base + "ax", rank), n_sys, s.step_ax);
          }

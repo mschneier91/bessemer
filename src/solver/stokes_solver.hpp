@@ -128,13 +128,17 @@ struct SolverGuessState
    std::vector<mfem::Vector> projection_w; ///< See projection_x.
    double projection_c0 = 0.0;             ///< See projection_x.
    bool projection_stale = false;          ///< See projection_x.
-   /// InitialGuess::Extrapolate: the solution before the previous one (empty
+   /// InitialGuess::Extrapolate: the solution before the previous one (none
    /// before the second solve).
    mfem::Vector previous_x;
+   /// previous_x exists. A flag, not previous_x's size: the same on every
+   /// rank, also on one that owns no dofs (its vectors are empty).
+   bool has_previous_x = false;
    double previous_c0 = 0.0; ///< Mass factor of the previous solve.
-   /// ToleranceReference::Step: A x_prev (empty when there is none), and the
-   /// mass factor and viscosity it was made with.
+   /// ToleranceReference::Step: A x_prev (none before the first solve), and
+   /// the mass factor and viscosity it was made with.
    mfem::Vector step_ax;
+   bool has_step_ax = false; ///< step_ax exists (see has_previous_x).
    double step_c0 = 0.0; ///< See step_ax.
    double step_nu = 0.0; ///< See step_ax.
 };
@@ -484,6 +488,7 @@ private:
    bool projection_stale_ = false; ///< The viscosity changed since.
    /// InitialGuess::Extrapolate: the solution before the previous one.
    mfem::Vector previous_x_;
+   bool previous_x_valid_ = false; ///< previous_x_ is set (on every rank).
    double previous_c0_ = 0.0; ///< Mass factor of the previous solve.
 
    double tol_scale_ = 0.0; ///< LastToleranceScale().
