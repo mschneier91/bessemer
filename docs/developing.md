@@ -420,7 +420,10 @@ additive term inside `StokesTimeIntegrator`.
   same CC preconditioner and same stopping rule (the coupled residual, split τ/√2 pressure
   + τ/√2 momentum, both true residuals). `initial_guess: project` is pressure-only there.
   Default stays `coupled` until the study's decision rule (≤ 1.2× step time, ≥ 25 % less
-  peak memory) is measured. Not compiled or run as of 2026-10-16.
+  peak memory) is measured. Under `schur` nothing coupled-only is built (no block PC,
+  coupled PCG or step-reference residual); its velocity solves share one in-place CG
+  (`VelocityCG`) whose two work vectors Cahouet-Chabard borrows: 4 velocity + 2k + 6
+  pressure vectors in all (uzawa.md §4). CI-tested on the CPU; never run on a GPU.
 - **Schur block** (`solver.schur`): **Cahouet–Chabard is the case-level default** (human
   2026-07-17); `mass` (ν M_p⁻¹, Δt-sensitive) remains, and is the LOW-LEVEL
   `StokesSolverOptions` default so solver unit tests pin what they test.
