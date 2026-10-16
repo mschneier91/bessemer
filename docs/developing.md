@@ -739,6 +739,17 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
 - **Slow** (`scripts/test.sh cpu -L slow`, np 4, on demand): `cc_sweep_slow_test` (full CC
   robustness grid), `dfg_cylinder_slow_test` (DFG 2D-1, ~9 min). ctest names
   `cc_sweep_slow_np4` / `dfg_cylinder_slow_np4` (select one with `-R`).
+- **Verify** (`scripts/test.sh cpu -L verify`, np 4; human 2026-10-15): convergence
+  rates against exact solutions, through `Case` on minimal decks, so they verify
+  whatever the case-level defaults are and need no edit when a default changes.
+  `verify_spatial_test` (steady Stokes, Taylor-Hood degree sweep 2D/3D, a curved
+  isoparametric mesh, hanging-node meshes), `verify_kovasznay_test` (steady NSE),
+  `verify_temporal_test` (3D: the default scheme, IMEX BDF3/EXT3, OIFS; exact
+  history, self-convergence). Velocity L2/H1 and mean-matched pressure L2; every
+  spatial study also runs with grad-div off (an open question, human 2026-10-15).
+  Pass: the least-squares rate over all levels >= theory - 0.3 (`baselines.yaml`
+  `verification`, with the levels). Errors and rates go to
+  `build/<preset>/verify/*.csv`. Every third day and on demand in CI (§7.6).
 - **Debug device** (`scripts/debug_device.sh`), **ASan/UBSan** (`scripts/asan.sh`),
   **Python** (`cpu-python` build, `ctest -R py_`).
 - **Expensive** (human-launched only): 3D TGV Re 1600, channel DNS, DFG 2D-2, anything
@@ -790,3 +801,16 @@ kernels listed here before (`rotational_convection.cpp`, `point_block_jacobi.cpp
 slow tier, which need one GPU per rank (4 H100s); two ranks per card time out. A GPU run
 reproduces a restart to ~1e-11, not bitwise, and hypre's GPU AMG setup depends on the
 setups before it (status.md): write reproducibility checks with `incns_test::ReproTol`.
+
+### 7.6 Continuous integration (GitHub Actions, `.github/workflows/ci.yml`)
+One CPU job in an `ubuntu:24.04` container: style check, `cpu` build (warnings are
+errors), Doxygen, the fast tier; the verify tier every third day (days 1, 4, 7, ... of
+the month), by manual dispatch (input `verify`) and on pull requests labelled `verify`,
+with the rates in the run summary and the CSVs as an artifact. The machine is
+`environments/ci` (the portable stack without the Python packages, the container's gcc
+13.3 as the external compiler, `target=x86_64_v3`). Its Spack install tree is cached
+under a key of the Spack release and the hash of `environments/ci/spack.yaml`: a change
+to either rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes,
+and ccache carries the object files between runs. GitHub evicts caches unused for 7
+days; the scheduled run keeps them warm. Each run uploads the resolved `spack.lock`. No
+GPU tests run in CI (§7.4).
