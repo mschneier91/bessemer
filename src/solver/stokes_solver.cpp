@@ -9,6 +9,20 @@ namespace incns
 
 using namespace mfem;
 
+namespace
+{
+// x is split into blocks of the sizes @p offsets gives.
+bool HasBlockLayout(const BlockVector& x, const Array<int>& offsets)
+{
+   if (x.NumBlocks() != offsets.Size() - 1) { return false; }
+   for (int i = 0; i < x.NumBlocks(); ++i)
+   {
+      if (x.GetBlock(i).Size() != offsets[i + 1] - offsets[i]) { return false; }
+   }
+   return true;
+}
+} // namespace
+
 // Map the solver options to the operator's assembly options. A LOR source is
 // built when the velocity block PC is (LOR-)AMG on either Schur path;
 // amg_reuse freezes it so its hierarchy survives Delta-t.
@@ -464,6 +478,7 @@ void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
          previous_x_.UseDevice(true);
       }
       previous_x_ = x_n;
+      previous_x_valid_ = true;
    }
    if (guessed && ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, u_dirichlet); }
 }
@@ -607,9 +622,11 @@ void StokesSolver::ExportGuessState(SolverGuessState& s) const
    s.projection_c0 = projection_c0_;
    s.projection_stale = projection_stale_;
    s.previous_x.Destroy();
-   if (previous_x_.Size() > 0) { Alias(previous_x_, s.previous_x); }
+   s.has_previous_x = previous_x_valid_;
+   if (previous_x_valid_) { Alias(previous_x_, s.previous_x); }
    s.previous_c0 = previous_c0_;
    s.step_ax.Destroy();
+   s.has_step_ax = step_ax_valid_;
    if (step_ax_valid_) { Alias(step_ax_, s.step_ax); }
    s.step_c0 = step_c0_;
    s.step_nu = step_nu_;
@@ -649,10 +666,14 @@ void StokesSolver::ImportGuessState(SolverGuessState& s)
       previous_x_.UseDevice(true);
    }
    else { previous_x_.Destroy(); }
+   previous_x_valid_ = opts_.initial_guess == InitialGuess::Extrapolate &&
+                       s.has_previous_x;
    previous_c0_ = s.previous_c0;
 
+   // The flag, not the size: an empty rank must take the same path as the
+   // others (StepResidualNorm may apply the operator otherwise).
    const bool step = opts_.tolerance_reference == ToleranceReference::Step &&
-                     s.step_ax.Size() > 0;
+                     s.has_step_ax;
    if (step)
    {
       step_ax_.Swap(s.step_ax);
@@ -758,9 +779,12 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    // on the device instead of triggering per-apply host<->device copies. Found
    // via the debug device (scripts/debug_device.sh), which faulted here.
    // Kept between solves (locals cost an allocation and a synchronizing free
-   // per solve on a GPU).
+   // per solve on a GPU), rebuilt when the block layout changes. Compared
+   // block by block, not by total size: on a rank that owns no elements the
+   // offsets are {0, 0, 0}, the size of a never-built BlockVector, which has
+   // no blocks to return.
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
-   if (solve_x_.Size() != offsets.Last())
+   if (!HasBlockLayout(solve_x_, offsets))
    {
       const MemoryType mt = Device::GetMemoryType();
       solve_x_.Update(const_cast<Array<int>&>(offsets), mt);
