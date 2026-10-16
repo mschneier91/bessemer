@@ -9,6 +9,26 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
+tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be
+changing over time", rate threshold theory - 0.3 approved, grad-div "an open question",
+"can you set up the CI ... are you able to handle the caching?".
+- **CI** (`.github/workflows/ci.yml`, `environments/ci/spack.yaml`; developing.md §7.6):
+  style, `cpu` build, Doxygen, fast tier on every push to `main` and every PR; the verify
+  tier every third day (human: "it's free right?": yes, public repo), by dispatch, or
+  with the PR label `verify`. Spack stack cached by the Spack release + the env's hash:
+  the cold build took ~1 h (2026-10-15); with the stack and ccache warm a run takes
+  ~11 min (run 38807839901: build 33 s, fast tier 198/198 in 5.3 min, verify 3/3 in
+  3.7 min).
+- **Verify tier** (label `verify`, np 4; developing.md §7.2): `verify_spatial_test`,
+  `verify_kovasznay_test`, `verify_temporal_test`, helpers in `test/verify_util.hpp`,
+  levels and the 0.3 margin in `baselines.yaml` `verification`. Written in a sandbox
+  with no toolchain: compiled and run only in CI. **All three pass in CI** (run
+  38805467828; 90 / 73 / 58 s at np 4); the rates are in the run summary and PR #1.
+- **Next (audit Phases 2-4):** provenance (commit, defaults) in `summary.json`, splitting
+  `nse_mms_test` / `tgv_nse_test` (they time out on a GPU), then the solution-
+  verification and validation studies on Bridges-2.
+
 **Ranks that own no elements run (2026-10-16, branch `throughput`).** `benchmark_setup_test`
 M1 (a 3-element Gmsh mesh) segfaulted at np 4 on rank 3, which owns no elements (job
 49276869; with the pinned MFEM and 4.10 alike). The CPU test jobs ran np 1 and 2 only, so

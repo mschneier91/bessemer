@@ -11,6 +11,8 @@
 #            partition-boundary or reduction bugs) -- it exists so a small edit
 #            can be checked in seconds instead of ~25 min. See INCNS_DEV_NP.
 #   slow  -- the full CC robustness grid, np=4, on demand only.
+#   verify -- convergence-rate studies (test/verify_*_test.cpp), np=4, on
+#            demand and every third day in CI.
 
 find_program(MPIEXEC_EXECUTABLE NAMES mpirun REQUIRED)
 find_package(GTest REQUIRED)
@@ -166,6 +168,26 @@ add_test(NAME cc_sweep_slow_np4
   COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:cc_sweep_slow_test>)
 set_tests_properties(cc_sweep_slow_np4 PROPERTIES
   LABELS "slow" PROCESSORS 4 TIMEOUT 3600)
+# Verification tier: convergence rates through Case on minimal decks, so they
+# verify whatever the case-level defaults are (test/verify_util.hpp). Label
+# `verify`, np = 4 only (rates do not depend on np; the fast tier covers the
+# partitions), on demand (`scripts/test.sh cpu -L verify`) and every third day in CI.
+# Each study writes its errors and fitted rates to build/<preset>/verify/.
+function(incns_add_verify_test name src)
+  add_executable(${name} ${src})
+  target_link_libraries(${name} PRIVATE incns incns_test_main
+    yaml-cpp::yaml-cpp)
+  target_compile_definitions(${name} PRIVATE
+    INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml"
+    INCNS_VERIFY_OUT="${CMAKE_BINARY_DIR}/verify")
+  add_test(NAME ${name}_np4
+    COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:${name}>)
+  set_tests_properties(${name}_np4 PROPERTIES
+    LABELS "verify" PROCESSORS 4 TIMEOUT 3600)
+endfunction()
+incns_add_verify_test(verify_spatial_test verify_spatial_test.cpp)
+incns_add_verify_test(verify_kovasznay_test verify_kovasznay_test.cpp)
+incns_add_verify_test(verify_temporal_test verify_temporal_test.cpp)
 incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)

@@ -145,3 +145,56 @@ dfg_2d1:
     max_rel_err_c_d: 2.0e-4
     max_rel_err_c_l: 2.5e-2
     max_rel_err_dp: 1.2e-2
+
+# Verification tier (label `verify`, np 4; test/verify_*_test.cpp, human
+# 2026-10-15). Studies run through Case on minimal decks, so they verify
+# whatever the case-level defaults are; each spatial study also runs with
+# grad-div switched off. Pass: the convergence rate fitted (least squares)
+# over all levels >= theory - rate_margin (human 2026-10-15: margin 0.3), and
+# the finest error above noise_floor. The levels and march settings live here
+# so a study can be re-levelled without a code change; the margin is the
+# baseline -- never widen it to make a study pass.
+verification:
+  rate_margin: 0.3
+  noise_floor: 1.0e-12
+  # Steady Stokes by pseudo-time marching from the interpolated exact
+  # solution: nu dt = 1 damps every mode by >= ~6x per BDF2 step.
+  steady_stokes:
+    nu: 1.0
+    dt: 1.0
+    t_final: 6.0
+    rtol: 1.0e-12
+    atol: 1.0e-14   # floor: near the steady state each step's residual is tiny
+  stokes_2d:        # unit square, n x n elements per level
+    orders: [2, 3, 4]
+    levels: [4, 8, 16]
+  stokes_3d:        # unit cube, n^3 elements per level
+    orders: [2, 3]
+    levels: [2, 4, 8]
+  curved_2d:        # default orders; interior nodes moved by amplitude sin sin
+    amplitude: 0.1
+    levels: [4, 8, 16]
+  nonconforming_2d: # default orders; the box plus the AMR tests' refined bands
+    levels: [2, 4, 8]
+  # Kovasznay flow, default orders and time scheme; level n = 3n x 4n elements
+  # on [1.5 x 2]. March until the velocity error changes by < steady_tol over
+  # check_every time units twice in a row (fails if not by t_max).
+  kovasznay:
+    re: 40.0
+    levels: [2, 4, 8]
+    dt: 0.01        # first step; the default CFL control takes over
+    t_max: 40.0
+    check_every: 1.0
+    steady_tol: 1.0e-3
+    rtol: 1.0e-12
+    atol: 1.0e-14
+  # 3D temporal order: elements^3 Q-default mesh, fixed steps, errors against
+  # the same scheme at dt_ref.
+  temporal_3d:
+    nu: 0.1
+    elements: 2
+    t_final: 0.2
+    dts: [0.01, 0.005, 0.0025]
+    dt_ref: 0.000625
+    rtol: 1.0e-12
+    atol: 1.0e-15
