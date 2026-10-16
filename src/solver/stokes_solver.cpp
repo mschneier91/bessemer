@@ -104,6 +104,10 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                   opts.schur == SchurBlockType::CahouetChabard,
                   "stokes_solver: solver.outer schur needs the Cahouet-Chabard "
                   "Schur preconditioner (solver.schur: cc or laplacian_legacy)");
+      MFEM_VERIFY(opts.outer == OuterMethod::Coupled || !opts.lagged_velocity,
+                  "stokes_solver: solver.outer schur needs a symmetric momentum "
+                  "block: not with the rotational form (use solver.outer: "
+                  "coupled)");
    }
 
    // Block system. Mass path (Sprint-1 default): [A, -B^T; B, 0] on physical p
@@ -375,12 +379,6 @@ void StokesSolver::BuildVelocityPreconditioner()
 
 Solver& StokesSolver::SchurVelocityPreconditioner()
 {
-   // With the rotation term and point-block Jacobi: the blocks themselves
-   // (PbjKrylov's GMRES would be an inner solve to a tolerance).
-   if (op_.Rotation() && opts_.rotation_pc != RotationVelocityPC::Symmetric)
-   {
-      return *pbj_;
-   }
    // JacobiPCG: its CG's preconditioner, not the CG.
    if (opts_.cc.a_pc == APC::JacobiPCG) { return *vel_inner_pc_; }
    return *vel_prec_; // Jacobi, Chebyshev or a LOR-AMG V-cycle
@@ -388,9 +386,7 @@ Solver& StokesSolver::SchurVelocityPreconditioner()
 
 void StokesSolver::WireSchurSolver()
 {
-   // The Schur PC is the monitored one (counts and time in SolveStats);
-   // MonitoredSolver::SetOperator is a no-op, which the pressure FGMRES needs
-   // (Krylov solvers forward SetOperator to their preconditioner).
+   // The Schur PC is the monitored one (counts and time in SolveStats).
    Solver& a_pc = SchurVelocityPreconditioner();
    if (schur_solver_)
    {
@@ -404,8 +400,8 @@ void StokesSolver::WireSchurSolver()
    }
    schur_solver_ = std::make_unique<SchurSolver>(
                       spaces_.Velocity().GetComm(), op_.FullMomentum(),
-                      op_.Divergence(), a_pc, /*symmetric_a=*/!op_.Rotation(),
-                      *schur_mon_, schur_proj_.get(), opts_.uzawa);
+                      op_.Divergence(), a_pc, *schur_mon_, schur_proj_.get(),
+                      opts_.uzawa);
    schur_solver_->SetMaxIter(opts_.max_iter);
    schur_solver_->SetPrintLevel(opts_.print_level);
    // initial_guess project: the pressure-space projection, inside the Schur
