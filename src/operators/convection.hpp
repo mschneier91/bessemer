@@ -33,17 +33,21 @@ enum class ConvectiveForm
 
 /**
  * @brief How the convective term of the convective form is advanced in time
- *        (deck `time.convection: imex|oifs`).
+ *        (deck `time.convection: auto|imex|oifs`).
  */
 enum class ConvectionTreatment
 {
    /// EXT-extrapolated N(u) on the right-hand side: bound by the convective
-   /// CFL limit of the BDF step. The default.
+   /// CFL limit of the BDF step.
    Imex,
    /// Operator-integration-factor splitting (time/oifs.hpp): the BDF history
    /// is advected to the new time by RK4 substeps, so the BDF step can run at
    /// a CFL number of several.
-   Oifs
+   Oifs,
+   /// Case level only, the default (Parameters::Convection()): OIFS where it
+   /// applies -- Navier-Stokes, the convective form, fixed or CFL steps --
+   /// else IMEX. The integrator takes Imex or Oifs.
+   Auto
 };
 
 /**

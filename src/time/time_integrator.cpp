@@ -47,6 +47,9 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    MFEM_VERIFY(opts_.cfl_target >= 0.0 && opts_.dt_max >= 0.0 &&
                opts_.cfl_growth >= 1.0 && opts_.cfl_hysteresis >= 0.0,
                "time_integrator: bad CFL step-control settings");
+   MFEM_VERIFY(opts_.convection_treatment != ConvectionTreatment::Auto,
+               "time_integrator: resolve ConvectionTreatment::Auto first "
+               "(Parameters::Convection())");
    MFEM_VERIFY(opts_.convection_treatment == ConvectionTreatment::Imex ||
                (opts_.convection && !rotational_), "time_integrator: OIFS "
                "needs the convective form of the Navier-Stokes equation");

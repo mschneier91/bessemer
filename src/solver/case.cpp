@@ -84,7 +84,7 @@ void Case::BuildIntegrator()
    opts.convection = (params_.equation == Equation::NavierStokes);
    opts.convective_form = params_.convective_form;
    opts.outflow = params_.outflow;
-   opts.convection_treatment = params_.convection_treatment;
+   opts.convection_treatment = params_.Convection();
    opts.oifs_cfl = params_.oifs_cfl;
    opts.rotation_pc = params_.rotation_pc;
    opts.rotation_in_lor = params_.rotation_in_lor;
@@ -100,10 +100,10 @@ void Case::BuildIntegrator()
       opts.rotation_diagnostics = rotational && params_.rotation_log_interval > 0;
       opts.ext_order = params_.ext_order;
       // The integrator's switch for CFL-controlled steps is cfl_target > 0.
-      MFEM_VERIFY(params_.cfl_target > 0.0 && params_.dt_max >= 0.0,
+      MFEM_VERIFY(params_.CflTarget() > 0.0 && params_.dt_max >= 0.0,
                   "case: time.cfl_target must be > 0 and time.dt_max >= 0 "
                   "(choose the mode with Parameters::step_control)");
-      opts.cfl_target = params_.CflSteps() ? params_.cfl_target : 0.0;
+      opts.cfl_target = params_.CflSteps() ? params_.CflTarget() : 0.0;
       opts.dt_max = params_.dt_max;
    }
    opts.nu = params_.nu;
@@ -874,9 +874,9 @@ void Case::SetupCfl()
       {
          const double c = cfl_->Rate(integrator_->Velocity());
          RequireFiniteRate(c, integrator_->Time());
-         if (c > 0.0 && params_.dt * c > params_.cfl_target)
+         if (c > 0.0 && params_.dt * c > params_.CflTarget())
          {
-            integrator_->SetStepSize(params_.cfl_target / c);
+            integrator_->SetStepSize(params_.CflTarget() / c);
          }
       }
       return; // dt is controlled: the fixed-step abort below does not apply
@@ -1042,13 +1042,13 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
    c["order_p"].Set(params_.order_p);
    if (nse)
    {
-      c["convection"].Set(params_.convection_treatment ==
-                          ConvectionTreatment::Oifs ? "oifs" : "imex");
+      c["convection"].Set(params_.Convection() == ConvectionTreatment::Oifs ?
+                          "oifs" : "imex");
    }
    c["bdf_order"].Set(params_.BdfOrder());
    c["step_control"].Set(params_.step_control == StepControl::Cfl ? "cfl" :
                          params_.step_control == StepControl::Fixed ? "fixed" : "error");
-   if (params_.CflSteps()) { c["cfl_target"].Set(params_.cfl_target); }
+   if (params_.CflSteps()) { c["cfl_target"].Set(params_.CflTarget()); }
    int np = 1;
    MPI_Comm_size(mesh_.GetComm(), &np);
    c["mpi_ranks"].Set(np);

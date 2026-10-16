@@ -214,3 +214,37 @@ wall-bounded MMS shows orders 2.54 / 2.19 / 1.93 instead of approaching 3. It is
 with BDF2, which is second order anyway, and negligible in CFL-controlled runs, which start
 at `time.dt` and grow at most ×1.2 per step. The order tests seed the exact history through
 `ImportState` (`MmsConfig::exact_history` in `nse_mms_test`) instead.
+
+## When IMEX is the better choice (human 2026-10-16)
+
+OIFS is the case-level default since 2026-10-16 (`time.convection: auto`, outer CFL 2,
+substep CFL 1.5; the polynomial-order study in throughput.md). `auto` already picks IMEX
+where OIFS does not apply: Stokes, the rotational form, and error-controlled steps (an OIFS
+step is a CFL multiple, so an embedded estimator's second solve buys nothing). Q7 on walled
+domains does not run on a GPU (MFEM's convection setup at 11 points); Q6 does. Set
+`time.convection: imex` explicitly for:
+
+- **Steady states reached by time marching.** At a steady state the advected history levels
+  differ from u by Δt (u·∇)u, (Δt²/2)(u·∇)²u, ...; BDF consistency cancels the first-order
+  term only, so OIFS's steady state carries an O(Δt^k) error that depends on the step. IMEX
+  extrapolates a constant N(u) exactly and differences a constant to zero, so its steady state
+  is the discrete steady equations at any Δt. OIFS cannot leap to a steady state either: its
+  substep work grows with the simulated time and its steady-state error with Δt. (Our
+  derivation; the literature we found, e.g. Xiu, Sherwin, Dong and Karniadakis on
+  semi-Lagrangian Navier-Stokes, compares the OIFS and strong forms on stability and accuracy
+  but does not state this. To be confirmed on Kovasznay, verify tier.)
+- **A step that convection does not limit.** OIFS pays off because IMEX is stability-capped
+  near CFL 0.5. When accuracy alone needs less (low Re or viscous-dominated flows, resolving
+  shedding harmonics or force spectra), OIFS only adds its substeps (~2x the cost per step on
+  Taylor-Green).
+- **Outflow with backflow.** The directional do-nothing term is stiff at backflow nodes
+  inside the substeps (above): Braack and Mucha's square at CFL 2 was 2.3 % off the paper,
+  converging only as CFL -> 0.25.
+- **Hanging-node (AMR) meshes**, where it is a cost question: the collocated mass is not
+  diagonal there, so every RK stage is a CG solve instead of a pointwise inverse.
+- **Small problems on a GPU.** The substeps are many small kernels: latency-bound
+  (`nse_mms_test` and `tgv_nse_test` take 15-30+ min on an H100, seconds on a CPU).
+- **Memory-bound runs.** OIFS holds ~190-250 B/DOF (Q7-Q3 at ~128^3, throughput.md), 10-13 %
+  of a run; IMEX frees it at 6-8x more steps.
+
+Keep the outer step near CFL 2: at 4 the Taylor-Green transition was mistimed at every order.

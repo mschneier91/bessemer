@@ -355,13 +355,15 @@ struct Parameters
    /// low-level TimeIntegratorOptions keep fixed steps, so integrator unit
    /// tests pin what they test (the `schur` precedent).
    StepControl step_control = StepControl::Cfl;
-   /// Cfl mode: the target CFL number c*dt (deck `time.cfl_target`, > 0). c
-   /// is Nek5000's directional CFL rate (time/cfl.hpp), so this is Nek's
+   /// Cfl mode: the target CFL number c*dt (deck `time.cfl_target`). c is
+   /// Nek5000's directional CFL rate (time/cfl.hpp), so this is Nek's
    /// `targetCFL`: the step as a multiple of the CFL = 1 step. Explicit
-   /// convection bounds it below ~1 (DFG 2D-3: unstable at ~0.8-1.1); larger
-   /// multiples need sub-stepped (OIFS) convection, which this code lacks.
-   /// See TimeIntegratorOptions::cfl_target for the growth rules.
-   double cfl_target = 0.5;
+   /// (IMEX) convection bounds it below ~1 (DFG 2D-3: unstable at ~0.8-1.1);
+   /// OIFS sub-steps the convection (the polynomial-order study: 2 is
+   /// accurate, 4 is not). <= 0, the default: 2 under OIFS, 0.5 under IMEX;
+   /// read it through CflTarget(). See TimeIntegratorOptions::cfl_target for
+   /// the growth rules.
+   double cfl_target = -1.0;
    /// Cfl mode: dt cap (deck `time.dt_max`; 0 = none). Scaled like dt.
    double dt_max = 0.0;
    /// A failed implicit solve: abort, or cut the step and retry (deck
@@ -374,14 +376,17 @@ struct Parameters
    int retry_hold = 5;        ///< Accepted steps without dt growth afterwards.
    int retry_max = 8;         ///< Cuts allowed within one step.
    double retry_dt_min = 0.0; ///< Smallest dt a cut may give. Scaled like dt.
-   /// Convective form: IMEX (explicit EXT convection, the default) or OIFS
-   /// (the BDF history advected by RK4 substeps, time/oifs.hpp; the BDF step
-   /// may then run at a CFL number of several) -- deck `time.convection:
-   /// imex|oifs`. OIFS: fixed or CFL step control, BDF3 by default
+   /// Convection: IMEX (explicit EXT convection) or OIFS (the BDF history
+   /// advected by RK4 substeps, time/oifs.hpp; the BDF step may then run at a
+   /// CFL number of several) -- deck `time.convection: auto|imex|oifs`. Auto,
+   /// the default (human 2026-10-16): OIFS where it applies, IMEX for Stokes,
+   /// the rotational form and error-controlled steps; read it through
+   /// Convection(). OIFS: fixed or CFL step control, BDF3 by default
    /// (time_order).
-   ConvectionTreatment convection_treatment = ConvectionTreatment::Imex;
-   /// OIFS: CFL number of each RK4 substep (deck `time.oifs_cfl`).
-   double oifs_cfl = 0.5;
+   ConvectionTreatment convection_treatment = ConvectionTreatment::Auto;
+   /// OIFS: CFL number of each RK4 substep (deck `time.oifs_cfl`; 1.5, the
+   /// polynomial-order study's and the channel decks' setting).
+   double oifs_cfl = 1.5;
    /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3
    /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3. CASE-LEVEL DEFAULT 2
    /// (human decision 2026-10-08, from the DFG 2D-3 study,
@@ -521,7 +526,7 @@ struct Parameters
    int BdfOrder() const
    {
       if (time_order > 0) { return time_order; }
-      return convection_treatment == ConvectionTreatment::Oifs ? 3 : 2;
+      return Convection() == ConvectionTreatment::Oifs ? 3 : 2;
    }
 
    /// @return Whether the velocity mass is the GLL collocated one: mass =
@@ -534,7 +539,30 @@ struct Parameters
    {
       return mass == VelocityMass::Collocated ||
              (mass == VelocityMass::Auto &&
-              convection_treatment == ConvectionTreatment::Oifs);
+              Convection() == ConvectionTreatment::Oifs);
+   }
+
+   /// @return The convection treatment in effect: convection_treatment, or
+   ///         under Auto (the default) OIFS where it applies -- Navier-Stokes,
+   ///         the convective form, fixed or CFL steps -- and IMEX otherwise.
+   ConvectionTreatment Convection() const
+   {
+      if (convection_treatment != ConvectionTreatment::Auto)
+      {
+         return convection_treatment;
+      }
+      return (equation == Equation::NavierStokes &&
+              convective_form == ConvectiveForm::Convective &&
+              step_control != StepControl::Error) ?
+             ConvectionTreatment::Oifs : ConvectionTreatment::Imex;
+   }
+
+   /// @return The target CFL number in effect: cfl_target, or when it is
+   ///         <= 0 (the default) 2 under OIFS and 0.5 under IMEX.
+   double CflTarget() const
+   {
+      if (cfl_target > 0.0) { return cfl_target; }
+      return Convection() == ConvectionTreatment::Oifs ? 2.0 : 0.5;
    }
 
    /// @return The h_K part of the grad-div coefficient in effect:

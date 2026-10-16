@@ -9,17 +9,21 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**Default order Q6/Q5 and grad-div gamma = 6 h_K / k_u (2026-10-16, human: "go with p=6 and
-your grad-div scaling recommendation").** The study is in throughput.md ("The default
+**Defaults: Q6/Q5, grad-div gamma = 6 h_K / k_u, OIFS at CFL 2 (2026-10-16, human: "go with
+p=6 and your grad-div scaling recommendation", "make oifs the default it honestly seems to
+always be better").** The study is in throughput.md ("The default
 polynomial order"): Taylor-Green Re 1600 with OIFS, 96^3 to 192^3, outer CFL 0.5-4. Q6 is the
 cheapest order to a 5 % largest dissipation error (126^3: 212 s at CFL 1, 13.7 GiB); Q3 and
 Q4 do not reach it by 192^3. With gamma = 2 h_K the velocity PCG's iterations grew 17 -> 38
 from Q3 to Q7 at equal DOFs; 6 h_K / k_u keeps them at 17-25 and leaves Q3 unchanged.
 `discretization.order_u` defaults to 6 and `order_p` to 5 (a deck that sets only `order_u`
 gets k_u - 1); `physics.grad_div_h` defaults to < 0 = 6 / k_u (`Parameters::GradDivH()`).
-The verify tier follows the defaults by design, so it now verifies Q6. **Open:** the
-study's numbers assume OIFS at CFL 2 (substeps 1.5) and the convection default is still
-IMEX at CFL 0.5; no order reaches 2 % by 192^3; validation on the channel at Q6.
+`time.convection` defaults to `auto` (`Parameters::Convection()`): OIFS where it applies
+(Navier-Stokes, the convective form, fixed or CFL steps), IMEX for Stokes, the rotational
+form and error-controlled steps; `time.cfl_target` defaults to auto (`CflTarget()`: 2 under
+OIFS, 0.5 under IMEX) and `time.oifs_cfl` to 1.5, the study's settings. The verify tier
+follows the defaults by design, so it now verifies Q6 with OIFS. **Open:** no order
+reaches 2 % by 192^3; validation on the channel at Q6.
 
 **GPU memory toward 100M DOFs on one H100 (2026-10-16, branch memory-audit).** The pressure
 LOR-AMG was 39 % of a Q7 run (752 B/DOF). Freeing MFEM's LOR scaffolding after assembly

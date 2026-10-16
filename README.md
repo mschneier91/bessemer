@@ -49,8 +49,9 @@ and per-step history.
   preconditioner.
 - **High order on quads and hexes:** Taylor–Hood Q6/Q5 by default (orders are runtime
   options), partial assembly throughout.
-- **Time stepping:** BDF2 with explicit convection (IMEX), or OIFS sub-stepped convection
-  with BDF3 for steps at CFL 2. CFL-controlled, fixed or error-controlled steps.
+- **Time stepping:** OIFS sub-stepped convection with BDF3 at CFL 2 by default; BDF2 with
+  explicit convection (IMEX) for Stokes, the rotational form, error-controlled steps or on
+  request. CFL-controlled, fixed or error-controlled steps.
 - **Adaptive mesh refinement** (refinement only, anisotropic), lift/drag, a directional
   do-nothing outflow, checkpoint/restart.
 - **Cases** are YAML decks, Python scripts or small C++ drivers. MPI-parallel; the GPU

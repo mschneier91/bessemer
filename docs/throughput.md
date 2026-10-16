@@ -1110,4 +1110,5 @@ pressure unknowns of Q3, which eats the operators' savings with p (2.55 -> 1.39 
 default < 0 = 6 / k_u: 2 h_K at Q3, so Q3 runs are unchanged). Q6 is the cheapest order to
 5 % (212 s at CFL 1, 152 s at CFL 2) with about half the memory of the lower orders that come
 close, and the scaled grad-div cuts its time by about a fifth. These numbers assume OIFS at
-CFL 2; the convection default is still IMEX at CFL 0.5.
+CFL 2 (substeps 1.5), which became the default the same day (`time.convection: auto`; human:
+"it honestly seems to always be better").

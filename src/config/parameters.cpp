@@ -324,8 +324,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                        : StepControl::Fixed;
    }
    r.Read(time, "cfl_target", p.cfl_target,
-          "Target CFL number (Nek5000's definition) under step_control cfl: "
-          "~0.5 for IMEX, 2 for OIFS.");
+          "Target CFL number (Nek5000's definition) under step_control cfl. "
+          "<= 0: 2 under OIFS, 0.5 under IMEX.");
    r.Read(time, "cfl_max", p.cfl_max,
           "CFL ceiling (0 = off): caps error-controlled dt, aborts fixed steps above it.");
    r.Read(time, "dt_max", p.dt_max,
@@ -348,10 +348,14 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "cut_step: stop the run instead of cutting dt below this (0 = no "
           "floor).");
    r.ReadEnum(time, "convection", p.convection_treatment,
-   {{"imex", ConvectionTreatment::Imex}, {"oifs", ConvectionTreatment::Oifs}},
-   "Convection: explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS "
-   "sub-stepping (CFL 2 practical; BDF3 and, with discretization.mass auto, the "
-   "collocated mass by default).");
+   {
+      {"auto", ConvectionTreatment::Auto}, {"imex", ConvectionTreatment::Imex},
+      {"oifs", ConvectionTreatment::Oifs}
+   },
+   "Convection: auto (OIFS where it applies -- Navier-Stokes, the convective "
+   "form, fixed or cfl steps -- else IMEX), explicit and extrapolated (IMEX, "
+   "CFL < ~0.7), or OIFS sub-stepping (CFL 2; BDF3 and, with "
+   "discretization.mass auto, the collocated mass by default).");
    r.Read(time, "oifs_cfl", p.oifs_cfl, "CFL number of each OIFS substep.");
    r.Read(time, "order", p.time_order,
           "BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX).");
@@ -955,17 +959,17 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(p.order_u >= 1 && p.order_p >= 1, "parameters: bad orders");
    MFEM_VERIFY(p.dt > 0.0 && p.t_final > 0.0, "parameters: bad time settings");
    MFEM_VERIFY(p.cfl_max >= 0.0, "parameters: time.cfl_max must be >= 0");
-   MFEM_VERIFY(p.cfl_target > 0.0 && p.dt_max >= 0.0,
-               "parameters: time.cfl_target must be > 0 and time.dt_max >= 0 "
-               "(choose the mode with time.step_control)");
-   MFEM_VERIFY(!p.CflSteps() || p.cfl_max == 0.0 || p.cfl_target <= p.cfl_max,
+   MFEM_VERIFY(p.dt_max >= 0.0,
+               "parameters: time.dt_max must be >= 0 (choose the mode with "
+               "time.step_control)");
+   MFEM_VERIFY(!p.CflSteps() || p.cfl_max == 0.0 || p.CflTarget() <= p.cfl_max,
                "parameters: time.cfl_target exceeds time.cfl_max");
    MFEM_VERIFY(p.ext_order == 2 || p.ext_order == 3,
                "parameters: time.ext_order must be 2 or 3");
    MFEM_VERIFY(p.time_order == 0 || p.time_order == 2 || p.time_order == 3,
                "parameters: time.order must be 2, 3 or 0 (auto)");
    MFEM_VERIFY(p.oifs_cfl > 0.0, "parameters: time.oifs_cfl must be > 0");
-   MFEM_VERIFY(p.convection_treatment == ConvectionTreatment::Imex ||
+   MFEM_VERIFY(p.convection_treatment != ConvectionTreatment::Oifs ||
                (p.equation == Equation::NavierStokes &&
                 p.convective_form == ConvectiveForm::Convective &&
                 p.step_control != StepControl::Error),

@@ -404,7 +404,8 @@ PYBIND11_MODULE(_core, m)
 
    py::enum_<ConvectionTreatment>(m, "ConvectionTreatment")
    .value("Imex", ConvectionTreatment::Imex)
-   .value("Oifs", ConvectionTreatment::Oifs);
+   .value("Oifs", ConvectionTreatment::Oifs)
+   .value("Auto", ConvectionTreatment::Auto);
 
    py::enum_<OutflowCondition>(m, "OutflowCondition")
    .value("Classical", OutflowCondition::Classical)

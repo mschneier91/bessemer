@@ -287,10 +287,15 @@ TEST(Deck, ConvectionKeys)
       return p;
    };
    Parameters p = load("");
-   EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Imex);
-   EXPECT_DOUBLE_EQ(p.oifs_cfl, 0.5);
-   EXPECT_EQ(p.BdfOrder(), 2); // auto: BDF2 with IMEX
-   EXPECT_FALSE(p.CollocatedMass());
+   EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Auto);
+   EXPECT_EQ(p.Convection(), incns::ConvectionTreatment::Oifs); // auto: NSE
+   EXPECT_DOUBLE_EQ(p.oifs_cfl, 1.5);
+   EXPECT_DOUBLE_EQ(p.CflTarget(), 2.0); // auto: 2 under OIFS
+   EXPECT_EQ(p.BdfOrder(), 3); // auto: BDF3 with OIFS
+   EXPECT_TRUE(p.CollocatedMass());
+   p = load("  step_control: error\n"); // OIFS has no error control
+   EXPECT_EQ(p.Convection(), incns::ConvectionTreatment::Imex);
+   EXPECT_EQ(p.BdfOrder(), 2);
    p = load("  convection: oifs\n  oifs_cfl: 0.75\n  cfl_target: 2.0\n");
    EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Oifs);
    EXPECT_DOUBLE_EQ(p.oifs_cfl, 0.75);
@@ -302,6 +307,10 @@ TEST(Deck, ConvectionKeys)
    EXPECT_EQ(p.BdfOrder(), 2); // explicit order wins
    p = load("  convection: imex\n");
    EXPECT_EQ(p.convection_treatment, incns::ConvectionTreatment::Imex);
+   EXPECT_EQ(p.Convection(), incns::ConvectionTreatment::Imex);
+   EXPECT_DOUBLE_EQ(p.CflTarget(), 0.5); // auto: 0.5 under IMEX
+   EXPECT_EQ(p.BdfOrder(), 2);
+   EXPECT_FALSE(p.CollocatedMass());
    // discretization.mass: an explicit choice wins under either treatment.
    p = load("  convection: oifs\ndiscretization:\n  mass: consistent\n");
    EXPECT_FALSE(p.CollocatedMass());
@@ -312,7 +321,8 @@ TEST(Deck, ConvectionKeys)
 // Time step control: `time.step_control: fixed|error|cfl` (the older
 // `adaptive: true|false` = error|fixed), `time.cfl_target`, `time.dt_max`
 // (scaled like dt in dimensional mode) and `time.ext_order`. Case-level
-// defaults (human decisions 2026-10-07/08): CFL control at 0.5, BDF2/EXT2.
+// defaults (human decisions 2026-10-07/08, 2026-10-16): CFL control at 2 with
+// OIFS (0.5 with IMEX), EXT2.
 TEST(Deck, StepControlKeys)
 {
    const std::string path =
@@ -334,7 +344,7 @@ TEST(Deck, StepControlKeys)
    Parameters p = load("");
    EXPECT_EQ(p.step_control, incns::StepControl::Cfl);
    EXPECT_TRUE(p.CflSteps());
-   EXPECT_DOUBLE_EQ(p.cfl_target, 0.5);
+   EXPECT_DOUBLE_EQ(p.CflTarget(), 2.0); // auto: OIFS on Navier-Stokes
    EXPECT_EQ(p.dt_max, 0.0);
    EXPECT_EQ(p.ext_order, 2);
    p = load("  step_control: cfl\n  cfl_target: 0.3\n"
@@ -450,8 +460,8 @@ TEST(Deck, SchemaIsCompleteAndCurrent)
    // Defaults come from a fresh Parameters.
    for (const incns::DeckKey& k : keys)
    {
-      if (k.path == "time.cfl_target") { EXPECT_EQ(k.default_value, "0.5"); }
-      if (k.path == "time.convection") { EXPECT_EQ(k.default_value, "imex"); }
+      if (k.path == "time.cfl_target") { EXPECT_EQ(k.default_value, "-1"); }
+      if (k.path == "time.convection") { EXPECT_EQ(k.default_value, "auto"); }
    }
 
    // Unknown keys: reported with the closest valid key; valid decks clean.

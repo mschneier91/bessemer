@@ -308,8 +308,13 @@ additive term inside `StokesTimeIntegrator`.
   variable-step weights; EXT1 on the first step), on the RHS. **Landmine:** the trapezoidal
   starter builds its RHS inline, not via `AssembleBdfRhs`, so it needs its own
   `SubtractConvection` — without it step 1 silently solves Stokes.
-- **OIFS** (`time.convection: oifs`, `time.oifs_cfl` substep CFL 0.5; `time/oifs`; human
-  request 2026-10-08; Maday–Patera–Rønquist 1990, as in Nek5000; full write-up
+- **OIFS** (`time.convection: oifs`, `time.oifs_cfl` substep CFL, default 1.5; `time/oifs`;
+  the case-level default since 2026-10-16 through `time.convection: auto`, which picks OIFS
+  wherever it applies -- Navier-Stokes, the convective form, fixed or CFL steps -- and IMEX
+  otherwise, at outer CFL 2 (`time.cfl_target` auto; human: "it honestly seems to always be
+  better"; the polynomial-order study in throughput.md: 4 is too large; when to choose IMEX
+  instead: oifs_implementation.md, steady states first among them); human request
+  2026-10-08; Maday–Patera–Rønquist 1990, as in Nek5000; full write-up
   `docs/oifs_implementation.md`): each BDF history level is
   advected to tⁿ⁺¹ by ∂ũ/∂s + (w(s)·∇)ũ = 0 (w = Lagrange interpolant/extrapolant of the
   velocity history, `LagrangeWeights`) and the step uses M·Σcⱼũⱼ — no explicit N on the RHS,

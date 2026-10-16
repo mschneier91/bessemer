@@ -115,7 +115,7 @@ Result RunScheme(const YAML::Node& b, const Scheme& s, double dt)
    flow.SetInitialVelocity(u_exact);
 
    // The exact history: as many levels as the BDF and EXT orders need.
-   const bool oifs = p.convection_treatment == incns::ConvectionTreatment::Oifs;
+   const bool oifs = p.Convection() == incns::ConvectionTreatment::Oifs;
    const int bdf = p.BdfOrder();
    const int levels = std::max(bdf, p.ext_order);
    ParFiniteElementSpace& V = flow.Spaces().Velocity();

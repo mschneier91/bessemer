@@ -6,9 +6,13 @@
 // on [-0.5, 1] x [-0.5, 1.5] (the box [0, 1.5] x [0, 2] shifted by 0.5),
 // exact velocity on the whole boundary, no forcing. Each level starts from the
 // interpolated solution and marches with the case-level defaults (CFL-
-// controlled IMEX steps, grad-div, ...) until the error stops changing: the
-// steady state of the time scheme is the discrete steady solution, so what
-// remains is the spatial error. Theory, Taylor-Hood: |u - u_h|_H1 and
+// controlled steps, grad-div, ...) until the error stops changing, except the
+// convection, pinned to IMEX: the steady state of the IMEX scheme is the
+// discrete steady solution, so what remains is the spatial error. OIFS's is
+// not: it carries the splitting error (with the OIFS default the errors stayed
+// near 1e-3 at every level, fitted rates ~1.4, 2026-10-16; see "When IMEX is
+// the better choice" in docs/oifs_implementation.md). Theory, Taylor-Hood:
+// |u - u_h|_H1 and
 // ||p - p_h|| at min(k_u, k_p + 1), ||u - u_h|| one order higher; checked
 // with grad-div at its default and switched off.
 
@@ -75,8 +79,9 @@ struct Kovasznay
    }
 };
 
-/// The level's deck: Re, the box, the march's first step and end time, the
-/// solver tolerances; everything else is the case-level default.
+/// The level's deck: Re, the box, the march's first step and end time, IMEX
+/// convection (see above), the solver tolerances; everything else is the
+/// case-level default.
 std::string Deck(const YAML::Node& b, int n, const verify::GradDivVariant& v)
 {
    std::ostringstream d;
@@ -86,7 +91,7 @@ std::string Deck(const YAML::Node& b, int n, const verify::GradDivVariant& v)
      << "mesh:\n  dim: 2\n  elements: [" << 3 * n << ", " << 4 * n << "]\n"
      << "  lengths: [1.5, 2.0]\n  periodic: [false, false]\n"
      << "time:\n  dt: " << b["dt"].as<double>() << "\n  t_final: "
-     << b["t_max"].as<double>() << "\n"
+     << b["t_max"].as<double>() << "\n  convection: imex\n"
      << "solver:\n  rtol: " << b["rtol"].as<double>() << "\n  atol: "
      << b["atol"].as<double>() << "\n";
    return d.str();
