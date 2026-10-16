@@ -9,24 +9,6 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**Schur complement (Uzawa) outer method, as an option (2026-10-16, branch
-`claude/schur-cg-solver-9sf1r5`, draft PR, NOT merged). Written in a cloud session that
-cannot build: NOT compiled, NOT run, `scripts/style.sh` and `scripts/docs.sh` not run.**
-Human: "implement the uzawa stuff here as an option for the solver" (the proposal is
-[design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md)); on the initial guess,
-"ok ya that makes sense" (pressure-only projection under Schur). `solver.outer: coupled |
-schur` (default coupled), `solver.uzawa.*` (method `flexible_cg` | `cg` | `fgmres`, inner
-tolerance `relaxed` | `tight` | `loose`, ...), `solver.log_interval` (per-step solver log,
-either method, with device memory). New `SchurComplementOperator`, `SchurSolver`;
-`StokesSolver` dispatches on `outer`; the pressure projection is checkpointed. Departures
-from the proposal and the study plan: [uzawa.md](uzawa.md). **First, on a build machine:**
-build (expect compile fixes), `schur_solver_test` at np 1/2/4, the fast tier (the
-coupled default must be unchanged), `scripts/style.sh`, `scripts/docs.sh`. Then
-`bench/uzawa/study.sh` inside a GPU allocation (Phases 0, 2, 3; submits nothing). Known
-gaps: the coupled block PC and the velocity PCG's vectors are still built under Schur;
-the velocity Krylov solver is rebuilt per refresh; the Python bindings do not expose the
-new keys.
-
 **Ranks that own no elements run (2026-10-16, branch `throughput`).** `benchmark_setup_test`
 M1 (a 3-element Gmsh mesh) segfaulted at np 4 on rank 3, which owns no elements (job
 49276869; with the pinned MFEM and 4.10 alike). The CPU test jobs ran np 1 and 2 only, so
@@ -44,6 +26,24 @@ OIFS, CFL control) match the default partition to 1e-8, and a restart with the g
 write byte-identical checkpoints (cavity, np 2, both guesses). smoke|fast green at np 1, 2
 and 4 on the CPU (job 49277774, 72 tests each). Next: the CPU test jobs should also run
 np 4 (`-R "_np4$"`).
+
+**Schur complement (Uzawa) outer method, as an option (2026-10-16, branch
+`claude/schur-cg-solver-9sf1r5`, draft PR, NOT merged). Written in a cloud session that
+cannot build: NOT compiled, NOT run, `scripts/style.sh` and `scripts/docs.sh` not run.**
+Human: "implement the uzawa stuff here as an option for the solver" (the proposal is
+[design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md)); on the initial guess,
+"ok ya that makes sense" (pressure-only projection under Schur). `solver.outer: coupled |
+schur` (default coupled), `solver.uzawa.*` (method `flexible_cg` | `cg` | `fgmres`, inner
+tolerance `relaxed` | `tight` | `loose`, ...), `solver.log_interval` (per-step solver log,
+either method, with device memory). New `SchurComplementOperator`, `SchurSolver`;
+`StokesSolver` dispatches on `outer`; the pressure projection is checkpointed. Departures
+from the proposal and the study plan: [uzawa.md](uzawa.md). **First, on a build machine:**
+build (expect compile fixes), `schur_solver_test` at np 1/2/4, the fast tier (the
+coupled default must be unchanged), `scripts/style.sh`, `scripts/docs.sh`. Then
+`bench/uzawa/study.sh` inside a GPU allocation (Phases 0, 2, 3; submits nothing). Known
+gaps: the coupled block PC and the velocity PCG's vectors are still built under Schur;
+the velocity Krylov solver is rebuilt per refresh; the Python bindings do not expose the
+new keys.
 
 **Duplicate deck keys are an error; bench.py's `--set` replaces template keys
 (2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
