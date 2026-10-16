@@ -1089,8 +1089,12 @@ memory only by needing fewer DOFs. Breakdown at ~128^3 from the profiler's gauge
 sync), B/DOF, Q3 / Q5 / Q7: pressure LOR-AMG 418 / 705 / 752; vectors (state, right-hand
 sides, scratch, solver work) 328 / 412 / 392; operator data and geometric caches 422 / 271 /
 229; OIFS 246 / 204 / 186; projection basis and FGMRES growth after step 1 174 / 171 / 150;
-the CUDA context 141 / 120 / 128; FGMRES 66 / 65 / 81; the trapezoidal starter's nu K
-67 / 38 / 28. The pressure space is Q_{p-1}, so at equal velocity resolution Q7 has 2.1x the
+the CUDA context 141 / 120 / 128; FGMRES 66 / 65 / 81. (Each figure is a region's own net
+allocation; a release booked in an enclosing region lowers that region instead. The
+trapezoidal starter's nu K, 67 / 38 / 28 in its own region, is freed right after its one
+product, so it is not held at the peak; the vectors are that much larger.) OIFS keeps one
+Jacobian array: on the column path (more than 8 points) it builds its own from the nodes and
+never asks for MFEM's cached one. The pressure space is Q_{p-1}, so at equal velocity resolution Q7 has 2.1x the
 pressure unknowns of Q3, which eats the operators' savings with p (2.55 -> 1.39 GB).
 - **The pressure LOR-AMG** (jobs 49318797, 49321252; branch memory-audit): hypre 2.33 is built
   with its device memory pool (Spack's recipe adds `--enable-device-memory-pool` to any CUDA
@@ -1103,8 +1107,9 @@ pressure unknowns of Q3, which eats the operators' savings with p (2.55 -> 1.39 
   did not shrink it. Left: the assembled LOR matrix holds 1.4 GB at Q7 for ~0.4 GB of data.
 - **After both fixes Q7 is at 1,488 B/DOF** (1,946 before), ~1,370 at scale: ~60M DOFs per
   80 GB H100. Toward 100M (850 B/DOF): Uzawa (`claude/schur-cg-solver-9sf1r5`, not yet
-  built) ~-150, the LOR matrix copies ~-130, OIFS's second Jacobian copy -58 at Q7, freeing
-  the starter's nu K -28, sharing scratch vectors ~-100 to -150 (not yet measured).
+  built) ~-150, the LOR matrix copies ~-130, sharing scratch vectors ~-100 to -150 (not yet
+  measured): ~940-990 B/DOF, ~87-91M DOFs. The last ~10 % needs another lever, e.g. the AMG
+  in single precision.
 
 **Decision (human 2026-10-16): Q6/Q5 by default and gamma = 6 h_K / k_u** (`grad_div_h`
 default < 0 = 6 / k_u: 2 h_K at Q3, so Q3 runs are unchanged). Q6 is the cheapest order to
