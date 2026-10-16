@@ -811,7 +811,8 @@ errors), Doxygen, the fast tier; the verify tier every third day (days 1, 4, 7, 
 the month), by manual dispatch (input `verify`) and on pull requests labelled `verify`,
 with the rates in the run summary and the CSVs as an artifact. The machine is
 `environments/ci` (the portable stack without the Python packages, the container's gcc
-13.3 as the external compiler, `target=x86_64_v3`). Its Spack install tree is cached
+13.3 as the external compiler, `target=x86_64_v3`; bessemer is compiled for the same
+target, `-march=x86-64-v3`, so code copied from MFEM rounds as MFEM's does). Its Spack install tree is cached
 under a key of the Spack release and the hash of `environments/ci/spack.yaml`: a change
 to either rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes,
 and ccache carries the object files between runs. GitHub evicts caches unused for 7
