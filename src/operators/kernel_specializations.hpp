@@ -24,8 +24,19 @@ namespace incns
  * transpose are our copies of MFEM's kernels with the component loops
  * unrolled (no stack arrays; see kernel_specializations.cpp), installed in
  * MFEM's dispatch tables under the same keys. Process-wide and idempotent;
- * StokesOperator calls it before it assembles anything.
+ * Case and StokesOperator call it before they assemble anything. Includes
+ * AddInterpolationKernels().
  */
 void AddKernelSpecializations();
+
+/**
+ * @brief Compile-time kernels for MFEM's quadrature interpolator where its
+ *        runtime-size ones do not hold the points: the mesh Jacobians of
+ *        linear meshes at 9 and 10 points per direction (its runtime-size
+ *        kernels hold 8 on a GPU, unchecked). A correctness fix, not a
+ *        speed-up: unlike AddKernelSpecializations()'s, these change results.
+ *        Process-wide and idempotent.
+ */
+void AddInterpolationKernels();
 
 } // namespace incns

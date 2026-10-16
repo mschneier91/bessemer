@@ -4,6 +4,7 @@
 #include "amr/history_projection.hpp"
 #include "amr/mesh_adapter.hpp"
 #include "bc/boundary_names.hpp"
+#include "operators/kernel_specializations.hpp"
 #include "util/device.hpp"
 #include "util/json.hpp"
 #include "util/profiler.hpp"
@@ -32,6 +33,9 @@ Case::Case(ParMesh& mesh, const Parameters& params)
    MFEM_VERIFY(params_.nondim.normalized,
                "case: call Parameters::Normalize() before building the "
                "mesh and the case (LoadYAML does it automatically)");
+   // MFEM's kernels at our sizes before anything assembles: the mesh caches
+   // its geometric factors on first use (the diagnostics' among them).
+   AddKernelSpecializations();
    // The deck's constant body force; SetForcing still overrides it.
    if (params_.forcing.Active())
    {

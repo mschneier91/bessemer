@@ -354,6 +354,8 @@ struct GradDivRegistrar
       I::AddSpecialization<3, 6, 6>(); I::AddSpecialization<3, 6, 7>();
       I::AddSpecialization<3, 7, 7>(); I::AddSpecialization<3, 7, 8>();
       I::AddSpecialization<2, 7, 7>(); I::AddSpecialization<2, 7, 8>();
+      I::AddSpecialization<2, 8, 8>(); I::AddSpecialization<2, 8, 9>();
+      I::AddSpecialization<3, 8, 8>(); I::AddSpecialization<3, 8, 9>();
    }
 };
 const GradDivRegistrar grad_div_registrar;

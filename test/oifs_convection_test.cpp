@@ -2,7 +2,7 @@
 // winds combined at each quadrature point and all components in one kernel,
 // against what OifsAdvector computed before it -- MFEM's ConvectionIntegrator
 // (partial assembly, alpha 1) on the scalar space, one apply per component and
-// wind, summed. 3D, velocity orders 2 to 4 at OIFS's 3k rule, a deformed mesh,
+// wind, summed. 3D, velocity orders 2 to 7 at OIFS's 3k rule, a deformed mesh,
 // three random winds (and two), random weights. Roundoff.
 
 #include <gtest/gtest.h>
@@ -34,7 +34,7 @@ TEST(OifsConvection, MatchesMfemFormsComponentwise)
 {
    int rank = 0;
    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-   for (const int k : {2, 3, 4})
+   for (const int k : {2, 3, 4, 5, 6, 7})
    {
       for (const int nw : {3, 2})
       {
@@ -69,7 +69,16 @@ TEST(OifsConvection, MatchesMfemFormsComponentwise)
             auto* ci = new ConvectionIntegrator(*uc[l], 1.0);
             ci->SetIntRule(&ir);
             forms[l]->AddDomainIntegrator(ci);
-            forms[l]->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+            // Orders 6 and 7 (Q1D 10, 11): MFEM has no compile-time
+            // convection kernel there, and at Q1D 11 its partial assembly does
+            // not launch on a GPU (a thread per point); the reference is
+            // assembled on the host (legacy assembly, its wind read there).
+            if (k >= 6)
+            {
+               u[l]->HostRead();
+               forms[l]->SetAssemblyLevel(AssemblyLevel::LEGACY);
+            }
+            else { forms[l]->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
             forms[l]->Assemble();
             forms[l]->FormSystemMatrix(none, ops[l]);
          }

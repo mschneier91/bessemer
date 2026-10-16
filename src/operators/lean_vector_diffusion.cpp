@@ -807,7 +807,7 @@ LeanVectorDiffusionIntegrator::FusedApplyKernels::Fallback(int dim, int, int)
    MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
 }
 
-// The (DIM, D1D, Q1D) specializations GradDivIntegrator registers (through Q6
+// The (DIM, D1D, Q1D) specializations GradDivIntegrator registers (through Q7
 // velocity; GL rules give Q1D ~ D1D + 1, collocated GLL Q1D == D1D): the
 // untemplated fallback sizes its registers at MAX_T1D.
 namespace
@@ -827,6 +827,8 @@ struct LeanVectorDiffusionRegistrar
       I::AddSpecialization<3, 5, 5>(); I::AddSpecialization<3, 5, 6>();
       I::AddSpecialization<3, 6, 6>(); I::AddSpecialization<3, 6, 7>();
       I::AddSpecialization<3, 7, 7>(); I::AddSpecialization<3, 7, 8>();
+      I::AddSpecialization<2, 8, 8>(); I::AddSpecialization<2, 8, 9>();
+      I::AddSpecialization<3, 8, 8>(); I::AddSpecialization<3, 8, 9>();
    }
 };
 const LeanVectorDiffusionRegistrar lean_vector_diffusion_registrar;

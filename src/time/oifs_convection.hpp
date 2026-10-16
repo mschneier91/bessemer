@@ -77,6 +77,17 @@ private:
    const mfem::Operator* prolong_ = nullptr; ///< True -> local dofs (or null).
    const mfem::DofToQuad* maps_ = nullptr;   ///< 1D maps at ir_ (not owned).
    const mfem::GeometricFactors* geom_ = nullptr; ///< Jacobians (mesh cache).
+   /// Jacobians computed here (nq x 3 x 3 x ne) when MFEM's quadrature
+   /// interpolator cannot run (Columns()), and which ones SetWind reads.
+   mfem::Vector jac_;
+   const mfem::Vector* j_ = nullptr;
+   /// Q1D > 8 (velocity orders 6 and 7 at the 3k rule): MFEM's quadrature
+   /// interpolator has no compile-time kernel for the velocity there, its
+   /// runtime-size ones hold 8 points per direction (DofQuadLimits::
+   /// MAX_INTERP_1D on CUDA) and launch a thread per point (more than a block
+   /// holds at Q1D 11). The Jacobians and the winds' values are then computed
+   /// here, a thread per (x, y) column.
+   bool Columns() const { return q1_ > 8; }
    int ne_ = 0;  ///< Local elements.
    int d1_ = 0;  ///< Dofs per direction.
    int q1_ = 0;  ///< Points per direction.

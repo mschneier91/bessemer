@@ -603,6 +603,8 @@ private:
    /// OIFS: the convection operator N, for the convective acceleration at
    /// the imposed boundary nodes (OifsBoundaryValues); never on the RHS.
    std::unique_ptr<Convection> oifs_conv_;
+   /// OIFS: some rank has Dirichlet true dofs (oifs_conv_ exists only then).
+   bool oifs_walls_ = false;
    /// OIFS + directional do-nothing outflow: evaluates that boundary term
    /// alone (SubtractOifsDirectionalDoNothing); null otherwise.
    std::unique_ptr<Convection> oifs_ddn_;

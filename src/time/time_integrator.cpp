@@ -76,7 +76,16 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                   "CFL-controlled steps, not error control (by design: its "
                   "step is a CFL multiple)");
       // oifs_ itself is built below, once the BDF step's mass exists.
-      oifs_conv_ = std::make_unique<Convection>(spaces_, rules_);
+      // The convection form serves the Dirichlet nodes the wind enters
+      // through (OifsBoundaryValues, the starter): a mesh with none anywhere
+      // (periodic boxes) skips it -- its applies were discarded there, and at
+      // velocity order 7 its 3k rule (11 points per direction) is more than
+      // MFEM's partial assembly launches on a GPU.
+      int walls = bc_.EssentialTrueDofs().Size() > 0 ? 1 : 0;
+      MPI_Allreduce(MPI_IN_PLACE, &walls, 1, MPI_INT, MPI_MAX,
+                    spaces_.Velocity().GetComm());
+      oifs_walls_ = (walls != 0);
+      if (oifs_walls_) { oifs_conv_ = std::make_unique<Convection>(spaces_, rules_); }
       // Directional do-nothing: explicit and extrapolated in the BDF step,
       // exactly as IMEX treats it (SubtractOifsDirectionalDoNothing). Inside
       // the substeps it is consistent but stiff at backflow nodes (rate
@@ -113,7 +122,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    // that resumes with its history (a restart, an adapted mesh) never
    // needs it.
 
-   if (oifs_conv_)
+   if (opts_.convection && !rotational_ &&
+       opts_.convection_treatment == ConvectionTreatment::Oifs)
    {
       // The substeps invert the BDF step's own mass (every solver's Mass() is
       // the same plain M; the right-hand side uses trap_'s). OifsAdvector
@@ -562,6 +572,7 @@ void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
       double t_new, Vector& phi)
 {
    INCNS_PROFILE("oifs::boundary_values");
+   if (!oifs_walls_) { return; } // no Dirichlet nodes on any rank
    // Collective (N applies): every rank runs it, imposed dofs or not.
    const int n_u = spaces_.Velocity().GetTrueVSize();
    const std::size_t k = c.size() - 1;
@@ -825,13 +836,16 @@ bool StokesTimeIntegrator::StepStartup()
          oifs_->Advect({0.0, 1.0}, hist_, hist_times_, t_new, 1, u0_adv);
          // Imposed boundary nodes: the one-step characteristic expansion
          // u^0 - dt (u^0.grad)u^0 (see OifsBoundaryValues).
-         Vector q(n_u);
-         oifs_conv_->Mult(hist_[0], q);
-         oifs_->MassInverse(q, q);
-         Vector bd(hist_[0]), vals;
-         bd.Add(-dt_, q);
-         bd.GetSubVector(oifs_->ImposedDofs(), vals);
-         u0_adv.SetSubVector(oifs_->ImposedDofs(), vals);
+         if (oifs_walls_)
+         {
+            Vector q(n_u);
+            oifs_conv_->Mult(hist_[0], q);
+            oifs_->MassInverse(q, q);
+            Vector bd(hist_[0]), vals;
+            bd.Add(-dt_, q);
+            bd.GetSubVector(oifs_->ImposedDofs(), vals);
+            u0_adv.SetSubVector(oifs_->ImposedDofs(), vals);
+         }
       }
       const Vector& u0 = oifs_ ? u0_adv : hist_[0];
       Trap().Blocks().Mass().Mult(u0, tmp);

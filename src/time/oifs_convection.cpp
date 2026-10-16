@@ -1,5 +1,8 @@
 #include "time/oifs_convection.hpp"
 
+#include "operators/component_kernels.hpp"
+
+#include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
 // The kernels below must be compiled by nvcc in a CUDA build, or they run on
@@ -266,6 +269,176 @@ void Apply3D(const int NE, const int nw, const real_t w0, const real_t w1,
    });
 }
 
+// Apply3D at Q1D 10 and 11 (velocity orders 6 and 7), where a thread per
+// point no longer fits: Q1D^3 threads exceed CUDA's 1024 per block, its
+// shared arrays the 48 KB of static shared memory. A thread per (x, y)
+// column, looping over z (the layout of MFEM's kernels::internal): the
+// combined wind stays in shared memory (3 Q1D^3 values, 32 KB at Q1D 11),
+// each component's gradient and the transposed interpolation go through
+// registers one component at a time (operators/component_kernels.hpp). The
+// same terms as Apply3D, contracted in the same order.
+template <int D1D, int Q1D>
+void Apply3DColumns(const int NE, const int nw, const real_t w0,
+                    const real_t w1, const real_t w2, const Array<real_t>& b,
+                    const Array<real_t>& g, const Array<real_t>& bt,
+                    const Vector& op_, const Vector& x_, Vector& y_)
+{
+   namespace ki = kernels::internal;
+   const auto B = b.Read(), G = g.Read(), Bt = bt.Read();
+   const auto op = Reshape(op_.Read(), Q1D, Q1D, Q1D, 3, NE, 3);
+   const auto x = Reshape(x_.Read(), D1D, D1D, D1D, 3, NE);
+   auto y = Reshape(y_.Write(), D1D, D1D, D1D, 3, NE);
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t sD[3][MQ1][MQ1][MQ1];
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], sBt[MQ1][MQ1];
+      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
+      ki::v_regs3d_t<1, MQ1> r0, r1;
+      ki::LoadMatrix(D1D, Q1D, B, sB);
+      ki::LoadMatrix(D1D, Q1D, G, sG);
+      ki::LoadMatrix<MQ1, true>(D1D, Q1D, Bt, sBt);
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+            {
+               for (int i = 0; i < 3; ++i)
+               {
+                  real_t v = w0 * op(qx, qy, qz, i, e, 0);
+                  if (nw > 1) { v += w1 * op(qx, qy, qz, i, e, 1); }
+                  if (nw > 2) { v += w2 * op(qx, qy, qz, i, e, 2); }
+                  sD[i][qz][qy][qx] = v;
+               }
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      MFEM_UNROLL(3)
+      for (int c = 0; c < 3; ++c)
+      {
+         kernels3d::LoadComponent(e, D1D, c, x, g0);
+         kernels3d::GradComponent<false>(D1D, Q1D, smem, sB, sG, g0, g1);
+         for (int qz = 0; qz < Q1D; ++qz)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  r0[0][qz][qy][qx] =
+                     (sD[0][qz][qy][qx] * g1[0][0][qz][qy][qx]) +
+                     (sD[1][qz][qy][qx] * g1[0][1][qz][qy][qx]) +
+                     (sD[2][qz][qy][qx] * g1[0][2][qz][qy][qx]);
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         ki::EvalTranspose3d(D1D, Q1D, smem, sBt, r0, r1);
+         for (int dz = 0; dz < D1D; ++dz)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(dy, y, D1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(dx, x, D1D)
+               {
+                  y(dx, dy, dz, c, e) = r1[0][dz][dy][dx];
+               }
+            }
+         }
+         MFEM_SYNC_THREAD; // the next component reuses the shared arrays
+      }
+   });
+}
+
+// J(q, i, k, e) = d x_i / d xi_k at the points (GeometricFactors' layout,
+// nq x 3 x 3 x ne) from the element nodes xe (nd1^3 x 3 x ne), a thread per
+// (x, y) column: GeometricFactors goes through the quadrature interpolator,
+// which does not serve these sizes (OifsConvection::Columns()).
+template <int Q1D>
+void Jacobians3DColumns(const int NE, const int nd1, const Array<real_t>& b,
+                        const Array<real_t>& g, const Vector& xe_, Vector& j_)
+{
+   namespace ki = kernels::internal;
+   const auto B = b.Read(), G = g.Read();
+   const auto X = Reshape(xe_.Read(), nd1, nd1, nd1, 3, NE);
+   auto J = Reshape(j_.Write(), Q1D, Q1D, Q1D, 3, 3, NE);
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1];
+      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
+      ki::LoadMatrix(nd1, Q1D, B, sB);
+      ki::LoadMatrix(nd1, Q1D, G, sG);
+      for (int i = 0; i < 3; ++i)
+      {
+         kernels3d::LoadComponent(e, nd1, i, X, g0);
+         kernels3d::GradComponent<false>(nd1, Q1D, smem, sB, sG, g0, g1);
+         for (int qz = 0; qz < Q1D; ++qz)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  J(qx, qy, qz, i, 0, e) = g1[0][0][qz][qy][qx];
+                  J(qx, qy, qz, i, 1, e) = g1[0][1][qz][qy][qx];
+                  J(qx, qy, qz, i, 2, e) = g1[0][2][qz][qy][qx];
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+      }
+   });
+}
+
+// The velocity's values at the points, byVDIM (3 x nq x ne), from its element
+// dofs (D1D^3 x 3 x ne), a thread per (x, y) column: the quadrature
+// interpolator's job where it cannot (OifsConvection::Columns()).
+template <int D1D, int Q1D>
+void Values3DColumns(const int NE, const Array<real_t>& b, const Vector& ue_,
+                     Vector& uq_)
+{
+   namespace ki = kernels::internal;
+   const auto B = b.Read();
+   const auto X = Reshape(ue_.Read(), D1D, D1D, D1D, 3, NE);
+   auto Y = Reshape(uq_.Write(), 3, Q1D, Q1D, Q1D, NE);
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1];
+      ki::v_regs3d_t<1, MQ1> r0, r1;
+      ki::LoadMatrix(D1D, Q1D, B, sB);
+      for (int c = 0; c < 3; ++c)
+      {
+         for (int dz = 0; dz < D1D; ++dz)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(dy, y, D1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(dx, x, D1D)
+               {
+                  r0[0][dz][dy][dx] = X(dx, dy, dz, c, e);
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+         ki::Eval3d(D1D, Q1D, smem, sB, r0, r1);
+         for (int qz = 0; qz < Q1D; ++qz)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  Y(c, qx, qy, qz, e) = r1[0][qz][qy][qx];
+               }
+            }
+         }
+         MFEM_SYNC_THREAD;
+      }
+   });
+}
+
 } // namespace oifsconv
 
 bool OifsConvection::Supported(const ParFiniteElementSpace& vfes,
@@ -284,7 +457,9 @@ bool OifsConvection::Supported(const ParFiniteElementSpace& vfes,
    }
    const DofToQuad& m = fe->GetDofToQuad(ir, DofToQuad::TENSOR);
    const int d1 = m.ndof, q1 = m.nqpt;
-   return (d1 == 3 && q1 == 4) || (d1 == 4 && q1 == 5) || (d1 == 5 && q1 == 7);
+   // Velocity orders 2 to 7 at the 3k rule.
+   return (d1 == 3 && q1 == 4) || (d1 == 4 && q1 == 5) || (d1 == 5 && q1 == 7) ||
+          (d1 == 6 && q1 == 8) || (d1 == 7 && q1 == 10) || (d1 == 8 && q1 == 11);
 }
 
 OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
@@ -298,8 +473,39 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
    maps_ = &vfes.GetTypicalFE()->GetDofToQuad(ir, DofToQuad::TENSOR);
    d1_ = maps_->ndof;
    q1_ = maps_->nqpt;
-   geom_ = mesh.GetGeometricFactors(ir, GeometricFactors::JACOBIANS);
    restr_ = vfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
+   if (Columns())
+   {
+      MFEM_VERIFY(q1_ == 10 || q1_ == 11,
+                  "oifs_convection: no column kernels for Q1D " << q1_);
+      mesh.EnsureNodes();
+      const GridFunction& nodes = *mesh.GetNodes();
+      const FiniteElementSpace& nfes = *nodes.FESpace();
+      const DofToQuad& nm =
+         nfes.GetTypicalFE()->GetDofToQuad(ir, DofToQuad::TENSOR);
+      MFEM_VERIFY(nm.ndof <= q1_, "oifs_convection: mesh order too high");
+      const Operator* nr =
+         nfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
+      Vector xe(nr->Height());
+      xe.UseDevice(true);
+      nr->Mult(nodes, xe);
+      jac_.SetSize(9 * ir.GetNPoints() * ne_);
+      jac_.UseDevice(true);
+      if (ne_ > 0 && q1_ == 10)
+      {
+         oifsconv::Jacobians3DColumns<10>(ne_, nm.ndof, nm.B, nm.G, xe, jac_);
+      }
+      else if (ne_ > 0)
+      {
+         oifsconv::Jacobians3DColumns<11>(ne_, nm.ndof, nm.B, nm.G, xe, jac_);
+      }
+      j_ = &jac_;
+   }
+   else
+   {
+      geom_ = mesh.GetGeometricFactors(ir, GeometricFactors::JACOBIANS);
+      j_ = &geom_->J;
+   }
    prolong_ = vfes.GetProlongationMatrix();
    const int nq = ir.GetNPoints();
    for (Vector* v : {&op_, &ue_, &uq_, &xl_, &xe_, &ye_, &yl_})
@@ -322,12 +528,23 @@ void OifsConvection::SetWind(int l, const ParGridFunction& u)
                "on the bound velocity space");
    if (ne_ == 0) { set_ |= (1 << l); return; }
    restr_->Mult(u, ue_);
-   const QuadratureInterpolator* qi = vfes_.GetQuadratureInterpolator(ir_);
-   qi->SetOutputLayout(QVectorLayout::byVDIM);
-   qi->Values(ue_, uq_);
+   if (Columns() && q1_ == 10)
+   {
+      oifsconv::Values3DColumns<7, 10>(ne_, maps_->B, ue_, uq_);
+   }
+   else if (Columns())
+   {
+      oifsconv::Values3DColumns<8, 11>(ne_, maps_->B, ue_, uq_);
+   }
+   else
+   {
+      const QuadratureInterpolator* qi = vfes_.GetQuadratureInterpolator(ir_);
+      qi->SetOutputLayout(QVectorLayout::byVDIM);
+      qi->Values(ue_, uq_);
+   }
    const int nq = ir_.GetNPoints();
    real_t* op = op_.ReadWrite() + static_cast<std::size_t>(l) * 3 * nq * ne_;
-   oifsconv::SetupWind(nq, ne_, ir_.GetWeights(), geom_->J, uq_, op);
+   oifsconv::SetupWind(nq, ne_, ir_.GetWeights(), *j_, uq_, op);
    set_ |= (1 << l);
 }
 
@@ -363,9 +580,24 @@ void OifsConvection::Mult(const std::vector<double>& w, const Vector& x,
       {
          oifsconv::Apply3D<4, 5>(ne_, nw, w0, w1, w2, B, G, Bt, op_, xe_, ye_);
       }
-      else
+      else if (d1_ == 5 && q1_ == 7)
       {
          oifsconv::Apply3D<5, 7>(ne_, nw, w0, w1, w2, B, G, Bt, op_, xe_, ye_);
+      }
+      else if (d1_ == 6 && q1_ == 8)
+      {
+         // 512 threads and 37 KB of shared memory: a thread per point fits.
+         oifsconv::Apply3D<6, 8>(ne_, nw, w0, w1, w2, B, G, Bt, op_, xe_, ye_);
+      }
+      else if (d1_ == 7 && q1_ == 10)
+      {
+         oifsconv::Apply3DColumns<7, 10>(ne_, nw, w0, w1, w2, B, G, Bt, op_, xe_,
+                                         ye_);
+      }
+      else
+      {
+         oifsconv::Apply3DColumns<8, 11>(ne_, nw, w0, w1, w2, B, G, Bt, op_, xe_,
+                                         ye_);
       }
    }
    else { ye_ = 0.0; }

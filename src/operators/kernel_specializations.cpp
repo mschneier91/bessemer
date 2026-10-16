@@ -6,6 +6,7 @@
 #include "mfem/fem/integ/bilininteg_vecdiv_pa.hpp"
 #include "mfem/fem/integ/bilininteg_vecmass_pa.hpp"
 #include "mfem/fem/integ/nonlininteg_vecconvection_pa.hpp"
+#include "mfem/fem/qinterp/grad.hpp"
 
 #include <tuple>
 #include <type_traits>
@@ -313,6 +314,7 @@ void AddKernelSpecializations()
       // points per direction) ran there.
       AddOrder<5>();
       AddOrder<6>();
+      AddOrder<7>(); // the order study with OIFS (human 2026-10-16)
       // The IMEX nonlinear convection at the dealiased order 3K
       // (Convection::DealiasedOrder: K + 1 dofs, ceil((3K + 1) / 2) Gauss
       // points per direction); MFEM's table stops at 5 dofs in 3D. The apply
@@ -322,6 +324,32 @@ void AddKernelSpecializations()
       using Convection = mfem::VectorConvectionNLFIntegrator;
       Convection::AddMultPAKernels::Specialization<3, 6, 8>::Add();
       Convection::AddMultPAKernels::Specialization<3, 7, 10>::Add();
+      Convection::AddMultPAKernels::Specialization<3, 8, 11>::Add();
+      AddInterpolationKernels();
+      return true;
+   }();
+   (void)added;
+}
+
+void AddInterpolationKernels()
+{
+   static const bool added = []
+   {
+      // MFEM's quadrature interpolator above 8 points per direction: its
+      // runtime-size kernels size their shared arrays for 8
+      // (DofQuadLimits::MAX_INTERP_1D on CUDA) with no check, so the mesh
+      // Jacobians (GeometricFactors: reference derivatives of the linear
+      // nodes, byNODES) at 9 and 10 points wrote past them on a GPU -- the
+      // viscous, divergence and grad-div rules at velocity order 7 (9
+      // points), the IMEX convection's at order 6 (10). Compile-time kernels
+      // at those sizes (kernel_specializations_test
+      // GeometricFactorsAtManyPoints, 2026-10-16).
+      using QI = mfem::QuadratureInterpolator;
+      constexpr auto byNodes = mfem::QVectorLayout::byNODES;
+      QI::AddGradSpecializations<2, byNodes, false, 2, 2, 9>();
+      QI::AddGradSpecializations<2, byNodes, false, 2, 2, 10>();
+      QI::AddGradSpecializations<3, byNodes, false, 3, 2, 9>();
+      QI::AddGradSpecializations<3, byNodes, false, 3, 2, 10>();
       return true;
    }();
    (void)added;

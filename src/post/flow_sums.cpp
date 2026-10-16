@@ -171,7 +171,10 @@ void Sums3DPoints(int ne, const Array<real_t>& b, const Array<real_t>& g,
    const auto J = Reshape(jac.Read(), Q1D, Q1D, Q1D, 3, 3, ne);
    const auto X = Reshape(xe.Read(), D1D, D1D, D1D, 3, ne);
    auto Y = Reshape(out.Write(), 3, ne);
-   mfem::forall_3D(ne, Q1D, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   // Launch bounds: at (8, 9) 729 threads need at most 89 registers each (the
+   // 65536 of a block); unbounded, nvcc used 124 and the launch failed.
+   mfem::forall_3D<Q1D* Q1D* Q1D>(ne, Q1D, Q1D, Q1D,
+                                  [ = ] MFEM_HOST_DEVICE(int e)
    {
       constexpr int NQ = Q1D * Q1D * Q1D;
       MFEM_SHARED real_t sB[Q1D][D1D], sG[Q1D][D1D];
@@ -356,6 +359,10 @@ void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
       else if (d1 == 7 && q1 == 8)
       {
          flowsums::Sums3DPoints<7, 8>(ne, maps.B, maps.G, w, geom->J, xe, out);
+      }
+      else if (d1 == 8 && q1 == 9)
+      {
+         flowsums::Sums3DPoints<8, 9>(ne, maps.B, maps.G, w, geom->J, xe, out);
       }
       else
       {

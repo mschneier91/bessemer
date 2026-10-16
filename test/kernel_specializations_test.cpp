@@ -7,7 +7,7 @@
 // vectorize or contract it differently (1.7e-17 absolute on the CPU build,
 // 3D, 2026-10-15). In 3D the divergence kernels are bessemer's own (unrolled
 // copies of MFEM's). The differences are printed. 2D and 3D, velocity orders
-// 2 to 6, a deformed mesh. The generic
+// 2 to 7, a deformed mesh. The generic
 // results are taken first, before anything registers: this test has its own
 // executable for that reason.
 
@@ -77,6 +77,8 @@ std::vector<Vector> Apply(int dim, int k)
    bu.HostRead();
    btq.HostRead();
 
+   const bool gpu = Device::Allows(Backend::CUDA_MASK | Backend::HIP_MASK);
+   if (gpu && dim == 3 && 3 * k >= 21) { return {mu, bu, btq, Vector()}; }
    ParNonlinearForm n(&V);
    auto* ni = new VectorConvectionNLFIntegrator;
    ni->SetIntRule(&IntRules.Get(geom, 3 * k));
@@ -96,7 +98,10 @@ std::vector<Vector> Apply(int dim, int k)
 
 TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
 {
-   const int dims[] = {2, 3}, orders[] = {2, 3, 4, 5, 6};
+   const int dims[] = {2, 3}, orders[] = {2, 3, 4, 5, 6, 7};
+   // The interpolator's kernels first: the generic and the specialized runs
+   // then use the same (correct) mesh Jacobians at order 7's 9 points.
+   incns::AddInterpolationKernels();
    std::vector<std::vector<Vector>> generic;
    for (int dim : dims)
    {
@@ -115,6 +120,10 @@ TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
                                };
          for (int i = 0; i < 4; ++i)
          {
+            // The convection at order 7 in 3D (rule 21, Q1D 11): MFEM's
+            // partial assembly (its geometric factors) launches a thread per
+            // point, more than a GPU block holds -- compared on the host only.
+            if (i == 3 && special[i].Size() == 0) { continue; }
             SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << k
                          << " " << names[i]);
             Vector d(special[i]);
@@ -132,6 +141,64 @@ TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
             EXPECT_LE(diff, 1e-14 * size);
          }
          ++c;
+      }
+   }
+}
+
+// The mesh Jacobians (GeometricFactors, through MFEM's quadrature
+// interpolator) at 7 to 10 Gauss points per direction against the element
+// transformations' (host), 2D and 3D, a deformed mesh: MFEM's runtime-size
+// interpolation kernels hold 8 points per direction on a GPU and wrote past
+// their shared arrays at 9 and 10 until AddKernelSpecializations registered
+// those sizes (2026-10-16).
+TEST(KernelSpecializations, GeometricFactorsAtManyPoints)
+{
+   incns::AddKernelSpecializations();
+   for (const int dim : {2, 3})
+   {
+      for (const int n : {7, 8, 9, 10})
+      {
+         SCOPED_TRACE(testing::Message() << "dim " << dim << ", " << n
+                      << " points");
+         Mesh serial = (dim == 2)
+                       ? Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true)
+                       : Mesh::MakeCartesian3D(3, 2, 2, Element::HEXAHEDRON);
+         serial.Transform(Deform);
+         ParMesh mesh(MPI_COMM_WORLD, serial);
+         const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+         const IntegrationRule& ir = IntRules.Get(geom, 2 * n - 1);
+         ASSERT_EQ(ir.GetNPoints(), (dim == 3) ? n * n* n : n * n);
+         const GeometricFactors* gf =
+            mesh.GetGeometricFactors(ir, GeometricFactors::JACOBIANS);
+         const int nq = ir.GetNPoints(), ne = mesh.GetNE();
+         const auto J = Reshape(gf->J.HostRead(), nq, dim, dim, ne);
+         double diff = 0.0, size = 0.0;
+         for (int e = 0; e < ne; ++e)
+         {
+            ElementTransformation* T = mesh.GetElementTransformation(e);
+            for (int q = 0; q < nq; ++q)
+            {
+               T->SetIntPoint(&ir.IntPoint(q));
+               const DenseMatrix& Jh = T->Jacobian();
+               for (int i = 0; i < dim; ++i)
+               {
+                  for (int j = 0; j < dim; ++j)
+                  {
+                     diff = std::max(diff, std::abs(J(q, i, j, e) - Jh(i, j)));
+                     size = std::max(size, std::abs(Jh(i, j)));
+                  }
+               }
+            }
+         }
+         MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         MPI_Allreduce(MPI_IN_PLACE, &size, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         if (Mpi::Root())
+         {
+            mfem::out << "[geometric factors] dim " << dim << ", " << n
+                      << " points: max difference " << diff << std::endl;
+         }
+         EXPECT_GT(size, 0.0);
+         EXPECT_LE(diff, 1e-13 * size);
       }
    }
 }
