@@ -6,7 +6,7 @@ follows the maintainer's throughput plan (tiers 0 to 5), adapted to bessemer (be
 Headline metric: **DOF-steps per second per GPU** (velocity plus pressure true dofs times
 steps, per second of step wall time) on one H100 80 GB, Bridges-2, CUDA backend.
 
-## Where it stands (2026-10-15, 17:00)
+## Where it stands (2026-10-15, 22:30)
 
 One H100. Taylor-Green 32^3 Q3/Q2 from t = 0 (IMEX; 20 + 50 or 10 + 30 steps, 3 repeats)
 and the turbulent channel at Re_tau 180 replayed from t = 60 (OIFS CFL 2, 3 + 30 steps),
@@ -21,10 +21,15 @@ each row adding to the previous one:
 | + unrolled viscous and divergence kernels (1a) | 0.058 | 24.8x | 0.157 | 6.1x |
 | + OIFS: deterministic classification, one convection kernel per stage (1d) | | | 0.082 | 11.7x |
 | + fused kernel with a thread per point, host overhead | **0.043** | **33.8x** | 0.058 | 16.5x |
-| + `time.oifs_cfl: 1.5` (opt-in substep CFL) | | | **0.050** | **19.2x** |
+| + `time.oifs_cfl: 1.5` (opt-in substep CFL) | | | 0.050 | 19.2x |
+| + `n_inner` 2, host overhead round 2 (7d880f0, a173072) | 0.0381 | 37.8x | 0.0435 | 22.1x |
+| + the constant-pressure projection on the device (747a294) | **0.0339** | **42.5x** | **0.0382** | **25.2x** |
 
 The solver settings and `time.oifs_cfl` are opt-in deck keys (the defaults are unchanged,
-pending the human); everything else is code. Gates: the expensive Taylor-Green gate passes
+pending the human; **the fast tolerance is not safe for every case**, see "The fast settings on
+the other benchmarks"); everything else is code. A production channel run (CFL-controlled
+steps, statistics every 5 steps) costs **0.0434 s of wall time per step** (job 49266911),
+the spin-up's 7 h 15 min about 21 min. Gates: the expensive Taylor-Green gate passes
 after every kernel change (the dissipation curve to t = 20 within 5.9e-5 of the default
 run's peak with all of it; that run takes 127 s against 3,390 s); the channel statistics
 gate passes for the solver settings (t = 60 to 120) and every OIFS change was checked from
@@ -255,6 +260,15 @@ skips its own apply. Results agree with the two separate applies to 2.5e-16 (tes
 | 23 | Host overhead (persistent FGMRES, work vectors, caches) | yes | channel +45 %, TGV +34 % (with 22) | 49256543 |
 | 24 | Rotational form | deferred (human) | energy loss on the channel | 49242722, 49245661 |
 | 25 | Fused restriction scatter | no (human: no nondeterminism) | needs atomics | - |
+| 26 | Host overhead round 2 (pressure mean, projection pool, flow sums, RecordStep) | yes | TGV +4.6 %, channel within noise; bitwise on the CPU | 49263939, 49263929 |
+| 27 | `n_inner` 2 (fast set) | yes, opt-in | channel +12.5 %, TGV +5.6 %; TGV gate and channel 60..120 pass | 49265246, 49265767 |
+| 28 | Velocity PCG tolerance 0.003 / 0.03 | no | within noise / slower | 49256626, 49265246 |
+| 29 | Projection depth 4 / 16, extrapolated guess, lower block, no grad-div in the Schur PC | no | within noise or slower | 49256626 |
+| 30 | NaN reported by the CFL rate | yes (fix) | - | 49266195 |
+| 31 | `DeviceOrthoSolver` (the constant-pressure projection on the device) | yes | channel +13.9 %, TGV +12.3 %; bitwise | 49266911, 49266904 |
+| 32 | Channel statistics' line sums on the device | yes | production wall per step -19 % (with 31) | 49266911 |
+| 33 | Fused PCG for the velocity block | not done | sized at ~3 % (TGV), ~1 % (channel) | - |
+| 34 | The fast set as defaults | not as it is | rhs-relative 1e-6 is wrong on DFG 2D-3, aborts on DFG 2D-1 | 49266126, 49268064 |
 | - | 1b single precision, libCEED, Tier 5 | deferred (human) | | |
 
 ## Tier 3, continued: fewer inner iterations; PC-only GLL masses rejected
@@ -633,6 +647,9 @@ ordering check) is a small open item.
 | periodic hill | deferred | human |
 | square cylinder Tier 4 | replaced | human: the channel instead (no GPUs for 2D) |
 | rotational form | deferred | fails on the channel (above); a separate thread |
+| fused PCG (velocity block) | not done | sized at ~3 % of TGV, ~1 % of the channel (below) |
+| production-only costs (dt changes) | open | ~4 ms per channel step, below; some change iterates |
+| hypre's own host work, AMG settings | deferred | human ("not a task for here"; AMG another day) |
 
 ## Host overhead (human 2026-10-15: "strictly free, do that for sure")
 
@@ -662,3 +679,148 @@ step; AMG settings deferred by the human).
 bessemer's own code -- no atomics or nondeterministic sums (so no fused restriction
 scatter); results moving at roundoff against an older binary are fine; library-level GPU
 nondeterminism (hypre, cuSPARSE) is accepted.
+
+## The channel's linear solve (human 2026-10-15; jobs 49256626, 49265246, 49265767)
+
+Why 4 outer iterations per step against TGV's 1.3: FGMRES does not stagnate. From the
+projected guess (about 10 times below ||b||) the first iteration cuts the residual ~160
+times and each further one ~10 times; 1e-6 of ||b|| takes four. Of the solver settings
+other than AMG's (human: AMG deferred), only the Cahouet-Chabard inner iterations helped,
+`n_inner` 3 having been chosen for TGV at the default tolerance and never revisited:
+
+| Channel replay (substep CFL 1.5) | s/step | its/step | vs `n_inner` 3 |
+|---|---|---|---|
+| `n_inner` 3 (repeat: -0.8 %) | 0.0495 | 4.00 | |
+| `n_inner` 2 | 0.0440 | 4.00 | +12.5 % |
+| `n_inner` 1 | 0.0453 | 5.00 | +9.4 % |
+| velocity PCG tolerance 0.003 (with 3 / 2 / 1) | 0.0483 / 0.0462 / 0.0484 | 3.53 / 4.00 / 5.00 | within noise or slower |
+| projection depth 4 / 16; extrapolated guess | 0.0494 / 0.0527 / 0.0487 | 4.0 / 4.23 / 4.0 | within noise / -5 % / within noise |
+| lower-triangular block; no grad-div in the Schur PC | 0.0704 / 0.0700 | 6.17 / 6.13 | -29 % |
+
+TGV 32^3: `n_inner` 2 +5.6 % (0.0425 -> 0.0403), 1 +1.9 %. **Gates:** TGV 32^3 CFL 0.25 to
+t = 20 passes for both (6.1e-5 and 1.05e-4 of the peak against the default run). The
+channel from t = 60 to 120 at substep CFL 1.5, the same binary (a 15-unit window had given
+`n_inner` 2 a 9.4 % U+ error, outside the earlier 7.7-9.0 %; the long window settles it):
+
+| t = 60 to 120 | Re_tau | max U+ error | u_rms | v_rms | w_rms | u'v' | its/step | s/step |
+|---|---|---|---|---|---|---|---|---|
+| `n_inner` 2 | 178.42 | 7.57 % | 0.148 | 0.096 | 0.105 | 0.060 | 4.18 | 0.0498 |
+| `n_inner` 3 | 178.31 | 8.25 % | 0.131 | 0.095 | 0.098 | 0.061 | 4.01 | 0.0543 |
+
+`n_inner` 2 joins the fast set.
+
+## Host overhead, round 2 (7d880f0, a173072; jobs 49263939, 49263929)
+
+The remaining per-step allocations, from CUDA backtraces counted step to step (an earlier
+count divided the run's setup and teardown -- hypre's pool freed at exit -- by the steps):
+the pressure mean rebuilt a linear form and three vectors at every solve (7 pairs);
+`SolutionProjection` allocated two vectors per step and deep-copied every kept vector when
+its `std::vector` grew (mfem::Vector has no move); the flow sums' per-element vectors (4);
+`Case::RecordStep`'s velocity copy (1). Now: `PressureMean` keeps the space's functional;
+the projection reuses a pool and swaps vectors in; the small vectors are kept. Left: the CFL
+rate's element copy and Jacobians (3, kept per call on purpose: memory at 64^3), MFEM's
+`RectangularConstrainedOperator::EliminateRHS` (1: `Operator::AddMult`'s temporary), the flow
+sums' element copy (1). TGV +4.6 %, the channel within noise. Bitwise: the CPU build's final
+checkpoints are byte-identical old vs new (TGV 8^3 with projection k 4, the channel).
+
+## The constant-pressure wrap: MFEM's OrthoSolver ran on the host (747a294)
+
+On the channel the GPU was idle a third of each step (16.9 of 52.5 ms, ho2's profile); 32 of
+the gaps per step, ~160 us each, sat around the Cahouet-Chabard pressure AMG. CUDA backtraces
+of the copies in them: `mfem::OrthoSolver::Orthogonalize` (MFEM 1c19aba, marked "TODO:
+GPU/device implementation") subtracts the mean of its input and output in a host loop --
+two device-host round trips of the pressure vector around every AMG call. Every singular
+pressure (periodic or enclosed: TGV, the channel) paid it. `DeviceOrthoSolver`
+(precond/nullspace.hpp) is the same algorithm with the subtraction as a device vector
+operation; `nullspace_test` checks it against MFEM's bitwise, and the CPU checkpoints are
+byte-identical. **Channel replay 0.0435 -> 0.0382 s/step (+13.9 %), TGV 0.0381 -> 0.0339
+(+12.3 %)**; GPU idle per channel step 15.3 -> 9.0 ms, gaps over 100 us 35 -> 4 (job
+49266911). An upstream candidate; re-check at the MFEM upgrade.
+
+(CPU sampling to see the host in those gaps does not work on the GPU nodes -- Nsight records
+no samples there, though the login node passes its check; the CUDA backtraces found it.)
+
+## Channel statistics on the device (df7e87e)
+
+A production channel run spent ~6 ms per step (10-11 % of its wall time) outside the step
+timer (sum of step walls against the run wall, four runs), invisible in s/step: the
+statistics' plane averages, a host loop over the elements (~28 ms per sample, every 5
+steps). A device kernel now forms the per-element line sums with the loop's arithmetic in
+its order; the host adds them into the stations in the same order. The saved sums move at
+roundoff (largest 1.1e-13 absolute); the profiles as written and the flow are identical.
+**Production channel t = 60..63: wall per step 0.0536 -> 0.0434 s (-19 %), outside the steps
+5.39 -> 0.33 ms** (job 49266911, with the previous section).
+
+## Production runs against the replay (job 49266347)
+
+The replay's fixed dt never exercises what a CFL-controlled run does at nearly every step
+(dt changed on 2,630 of 3,538 steps): with the region profiler, per step, the projection's
+images rebuilt when the mass coefficient drifts 5 % (+1.8 ms), the momentum operator
+re-assembled (+1.3 ms), a second CFL-rate evaluation (+0.8 ms; OIFS evaluates the same
+velocity again for its substeps), and 4.2 instead of 4.0 outer iterations with `n_inner` 2.
+Not done: sharing the CFL rate between the step choice and OIFS is bitwise-free (~2 %); a
+looser rebuild threshold and an in-place mass-coefficient update change iterates at the
+tolerance level or need the momentum operator restructured. The human's call.
+
+## Run-to-run reproducibility on the GPU (job 49263939)
+
+Two runs of the same binary on one H100 give different final checkpoints (TGV 32^3, the
+channel): GPU runs are already not bitwise reproducible, presumably in hypre's GPU AMG or
+cuSPARSE (not traced; human 2026-10-15: library-level GPU nondeterminism is accepted). The
+CPU build is: old vs old and old vs new byte-identical. "Bitwise-neutral" changes are
+checked on the CPU build.
+
+## NaN in the velocity (a173072)
+
+The CFL rate's element max (and MPI's MAX) skipped a NaN -- every comparison with it is
+false -- so a diverged velocity gave a finite rate and the run went on until an unrelated
+check failed (the rotational channel run aborted in the multistep coefficients' ordering).
+The kernel now reports a NaN node as an infinite rate and the steps abort with "the
+velocity is not finite (NaN or Inf) at t = ...". Finite rates unchanged (cfl_test C5).
+
+## The fast settings on the other benchmarks (human 2026-10-15, before the defaults decision)
+
+Gated so far on TGV and the channel only, where dt sits near CFL 1-2. On the DFG 2D
+benchmarks (`cases/dfg_2d3.yaml`: fixed dt 0.001; `cases/dfg_2d1.yaml`: error-controlled
+steps to steady state), CPU, np 4 (jobs 49266126, 49268064):
+
+| DFG 2D-3 (John 2004: c_D,max 2.9509, c_L,max 0.4780) | wall | its/step | c_D,max | c_L,max |
+|---|---|---|---|---|
+| the deck (`rtol` 1e-10 of the initial residual) | 242 s | 10.3 | 2.943 | 0.5178 |
+| + projected guess (k 8) | 239 s | 10.9 | 2.943 | 0.5178 |
+| + projected guess, `n_inner` 2 | 153 s | 19.6 | 2.943 | 0.5178 |
+| projected, `n_inner` 2, `rtol` 1e-6 of the initial residual | 94 s | 11.7 | 2.943 | 0.5178 |
+| **projected, `n_inner` 2, rhs-relative 1e-10** | **39 s** | 4.4 | **2.943** | **0.5178** |
+| projected, `n_inner` 2, rhs-relative 1e-8 | 36 s | 2.9 | 2.945 | 0.5180 |
+| the fast set (rhs-relative 1e-6, `n_inner` 3 / 2) | 35 / 19 s | 1.4 | 3.246 / 3.142 | 0.637 / 0.595 |
+
+DFG 2D-1 (Schaefer & Turek): the deck 160 s; rhs-relative 1e-10 35 s with the same c_D, c_L
+and Delta p; rhs-relative 1e-8 20 s with c_L moved 2 %; the fast set (1e-6) **aborts**
+(the error controller rejects step after step: the solve's error is of the size of its
+local-error tolerance). (The deck's own c_L,max error, 8 %, is this coarse mesh's.)
+
+**Why:** the rhs-relative tolerance measures the residual against ||b||, and at a small dt
+||b|| is the mass term (c0 M u^n, c0 ~ 1500 here): 1e-6 of it is loose against what a step
+changes. Near CFL 1-2 (TGV, the channel) it is not. **For the defaults:** the projected
+guess, `n_inner` 2 and the rhs-relative reference are safe everywhere tested, at a tight
+`rtol` (1e-10: DFG 2D 4.6-6.2x faster than the decks); `rtol` 1e-6 only where dt is
+CFL-limited near 1-2 (decks that opt in). A tolerance scaled by the step's own change (the
+residual of the previous solution) would cover both; a design decision, not made.
+
+## Re_tau 550 (job 49237225)
+
+`benchmarks/channel/channel_retau550.yaml`, 36 x 48 x 36 Q3/Q2 (62,208 elements), one H100,
+the morning's binary and the opt-in settings with `rtol` 1e-8 (5-7 outer its/step):
+t = 0 to 40 in 8 h 57 min (34,547 steps, ~0.93 s/step). Statistics over t = 20 to 40 against
+Lee & Moser / MKM at Re_tau 543.5: **Re_tau 546.25 (+0.5 %)**, max U+ error 3.56 % (y+ >= 5),
+largest absolute differences u_rms 0.127, v_rms 0.070, w_rms 0.079, u'v' 0.023 (wall
+units). With today's code, an estimate from the Re_tau 180 scaling (6x the elements, rtol
+1e-6): ~0.25-0.3 s/step, ~2.5-3 h; not measured.
+
+## Fused PCG for the velocity block: sized, not done
+
+The velocity block is 15.0 of TGV 32^3's 42.6 ms per step (job 49255498's profile): kernels
+12.8 ms, of which the vector operations (CG's adds, dots and fill) 1.47 ms, and the GPU idle
+1.8 ms, mostly the ~30 dot-product round trips per step. A fused, one-reduction CG would
+recover ~1.2 ms: ~3 % of TGV, ~1 % of the channel. MFEM's vector mass in the same block is
+already near its shared-memory bound. Not worth another copy of MFEM's code now.
