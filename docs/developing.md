@@ -414,9 +414,9 @@ additive term inside `StokesTimeIntegrator`.
 - **Outer: FGMRES on the monolithic system by default** (no MINRES). Block preconditioner;
   FGMRES is required because inner PCs are nonlinear. **Option under study: the Schur
   complement (Uzawa) method** (`solver.outer: schur`; human 2026-10-16; [uzawa.md](uzawa.md)):
-  flexible CG (default; plain CG only with `schur: laplacian_legacy`, since CC's
-  fixed-count inner CG is nonlinear) or pressure FGMRES (required with the rotational
-  form) on S = B A⁻¹ Bᵀ, each application a velocity solve to a relaxed inner tolerance,
+  flexible CG only (CC's fixed-count inner CG is nonlinear; plain CG and a pressure
+  FGMRES were dropped, human 2026-10-16; not with the rotational form, refused at setup)
+  on S = B A⁻¹ Bᵀ, each application a velocity solve to a relaxed inner tolerance,
   same CC preconditioner and same stopping rule (the coupled residual, split τ/√2 pressure
   + τ/√2 momentum, both true residuals). `initial_guess: project` is pressure-only there.
   Default stays `coupled` until the study's decision rule (≤ 1.2× step time, ≥ 25 % less
