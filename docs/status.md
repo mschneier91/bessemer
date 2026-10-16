@@ -4,33 +4,53 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-15)
+## Where development left off (2026-10-16)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**Branch `verification` (2026-10-15, PR #1, not merged): CI and the verification tier
-(Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be
-changing over time", rate threshold theory - 0.3 approved, grad-div "an open question",
-"can you set up the CI ... are you able to handle the caching?".
-- **CI** (`.github/workflows/ci.yml`, `environments/ci/spack.yaml`; developing.md §7.6):
-  style, `cpu` build, Doxygen, fast tier on every push to `main` and every PR; the verify
-  tier every third day (human: "it's free right?": yes, public repo), by dispatch, or
-  with the PR label `verify`. Spack stack cached by the Spack release + the env's hash:
-  the cold build took ~1 h (2026-10-15); with the stack and ccache warm a run takes
-  ~11 min (run 38807839901: build 33 s, fast tier 198/198 in 5.3 min, verify 3/3 in
-  3.7 min).
-- **Verify tier** (label `verify`, np 4; developing.md §7.2): `verify_spatial_test`,
-  `verify_kovasznay_test`, `verify_temporal_test`, helpers in `test/verify_util.hpp`,
-  levels and the 0.3 margin in `baselines.yaml` `verification`. Written in a sandbox
-  with no toolchain: compiled and run only in CI. **All three pass in CI** (run
-  38805467828; 90 / 73 / 58 s at np 4); the rates are in the run summary and PR #1.
-- **Next (audit Phases 2-4):** provenance (commit, defaults) in `summary.json`, splitting
-  `nse_mms_test` / `tgv_nse_test` (they time out on a GPU), then the solution-
-  verification and validation studies on Bridges-2.
+**Duplicate deck keys are an error; bench.py's `--set` replaces template keys
+(2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
+appended `order_u: 5` after the template's `order_u: 3`, and the loader read the first
+(job 49270645 ran at order 3). Now `write_deck` replaces a key the template sets (any
+section, nested keys too) and adds the rest at the end of their section; the loader aborts
+on a key a map sets twice, naming the key, the section and the lines
+(`DeckReader::DuplicateKeys`; tests `Deck.DuplicateKeysAreReported`,
+`Deck.EveryCaseDeckLoads`, `run_case_rejects_duplicate_key`). Before this, a `--set` had
+no effect when the template set that `discretization` or `time` key, or when it named any
+other section the template has (`physics`, `mesh`, `output`, ...: a second section);
+`solver.*` and new `discretization` / `time` keys worked.
+Verified on the CPU (job 49276422: smoke|fast at np 1 and 2) and on two H100s (job 49277617:
+`deck_test` and `run_case_rejects_duplicate_key` at np 1 and 2; `bench.py` runs with
+`--set discretization.order_u=5` and `--set mesh.elements=...` ran at the overridden order
+and mesh). `scripts/docs.sh` not run (no doxygen on Bridges-2).
 
-**GPU memory, third round (2026-10-14): the single-H100 limit is 87^3 Q3/Q2
-(53.3 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all
+**Throughput merged into main; new solver defaults (2026-10-16).** The `throughput` branch
+(2026-10-14 to 16; record and decision log: [throughput.md](throughput.md)) is in `main`.
+One H100 against main of 2026-10-14: Taylor-Green 64^3 Q3/Q2 to t = 20 in **17.8 min instead
+of 12 h 44 min** (43x), the channel at Re_tau 180 from t = 0 to 120 in **13.8 min instead of
+7 h 15 min** (31.6x), 37-46x per step; compile-time kernels for velocity orders 2 to 6; an
+order study (Q4 and Q5 reach a given accuracy fastest; Q3 is the fastest per DOF). **Case-level
+defaults** (human 2026-10-16, option (a) in throughput.md's "Restarts with the projected
+guess, and the defaults"): `solver.initial_guess: project` (k 8), `tolerance_reference: step`,
+`rtol` 1e-6, `n_inner` 2; checkpoints keep the solvers' guess state, so restarts stay bitwise
+exact. `rtol` is per problem: the Taylor-Green and channel decks set 1e-3 (CFL-limited
+steps); a small fixed dt or an error controller wants 1e-6. Next (human): MFEM 4.10 with the
+PR #5464 patch, then a single-kernel dFEM probe.
+
+**Throughput plan, overnight 2026-10-14/15 (branch `throughput`, not merged).** Human:
+up to 80 GPU SU, push only the branch, "as far as possible", projection "absolutely ...
+as an option", single precision / libCEED / Tier 5 / new cases deferred. Record and
+decision log: [throughput.md](throughput.md). Kept: the benchmark harness (`bench/`), NVTX
+ranges, MFEM kernel specializations (+24 %), the fused viscous + grad-div kernel (+7 %),
+and the opt-in `solver.initial_guess` / `solver.tolerance_reference`; Tier 3 found
+`solver.n_inner` 3 (+54 %) and, with the projection, `rtol` 1e-6. With all of it: TGV
+32^3 14.2x, 64^3 14.6x per step, and the 64^3 run to t = 20 in **1 h 01 min instead of 12 h
+44 min** with the same dissipation curve (2.4e-4). Defaults unchanged pending the human
+(decided 2026-10-16, above).
+
+**GPU memory, third round (2026-10-14): the single-H100 limit is 88^3 Q3/Q2
+(55.2 M velocity dofs); about 85^3 at full speed; 64^3 steps 8 % faster.** Human: "do all
 of these but keep a path for the rotational form ... do the vector diffusion thing too
 ... except keep a path to the built in mfem way", then "do 1", "Yes, do that for sure",
 "yes", "go ahead and make that CFL change". Changes 11-16 in
@@ -50,15 +70,15 @@ of these but keep a path for the rotational form ... do the vector diffusion thi
   solver, 1.7 s at 64^3): the 20 % allowance missed the 9.2 GB workspace and 86^3 ran out
   of memory; now 86^3 and 87^3 run, at restart lengths 3-6 and 1 (87^3: 29.9 s per step,
   ~20 % slower than proportional).
-- **CFL Jacobians per call** (MFEM's routine, not its cache; bit-identical): 1.2 GB
-  expected at 64^3; committed before its GPU measurement and limit search (job 49216290).
+- **CFL Jacobians per call** (MFEM's routine, not its cache; bit-identical): 64^3
+  35.8 -> 34.7 GB; 88^3 runs (restart length 1, 32.4 s per step), 89^3 does not.
 - **Tests:** new `StokesOperator.MomentumDiagonalAfterRefreshes2D/3D`,
   `PbjGradDiv.P4_NewDiagonalMatchesAFreshBuild`, `SchurQuality.WarmUpLeavesTheSolveUnchanged`,
   `Cfl.C4_PerCallJacobiansEqualTheCachedOnes`, R3 rewritten. Before the CFL change:
   fast tier CUDA np 1 64/64 (one H100), CPU np 1 and np 2 66/66. With it: CPU np 1 66/66.
-  **Committed before** (human: "commit merge and push now ... we will deal with it later
-  if something fails"): CUDA np 1 and np 2 (two H100s) and CPU np 2 with the CFL change,
-  jobs 49216290, 49216291, 49216292.
+  With the CFL change (after the commit, at the human's request): CUDA np 1 64/64, host
+  device 10/10, CPU np 1 and np 2 66/66 (jobs 49216290, 49216292); CUDA np 2 (two H100s,
+  job 49216291) still queued at the time of writing.
 
 **CPU environment works on RM nodes (2026-10-14).** `environments/psc_cpu` re-pinned to
 the b2rm gcc (`hosts` selects it on `r*` nodes, `preset cpu`), `reuse: false`, numpy
@@ -240,49 +260,22 @@ spent?", ahead of the 3D Taylor-Green study.
   later edits. Uncompiled: `hypre_device`, `FlowDiagnostics`, the grad-div options,
   `AddNodalOffDiagonalPA`, the PBJ extension, `a_pcg_pc`, both new tests. Unformatted
   (`scripts/style.sh format`); `docs/deck_reference.md` not regenerated. **Expect Case-level
-  results to move** with γ = 2h on by default (iteration counts, forces, the Re 1000 /
-  Re 10 000 ladders if rerun: pin `grad_div_h: 0` there to reproduce old numbers — a human
-  decision, not made). List what moves; do not re-bless `test/baselines.yaml`. The Python
+  results to move** with γ = 2h on by default (iteration counts, forces; pin
+  `grad_div_h: 0` to reproduce old numbers). List what moves; do not re-bless `test/baselines.yaml`. The Python
   bindings do not expose `output.profile` or `a_pcg_pc`. Not pushed (human: wait until the
   grad-div work is done).
 
-**Branch `mesh-census` (2026-10-12, not merged): `apps/mesh_census`**, to check the
-`amr.end_time: 60` freeze of the Re 1000 ladder (human: "how are we confident that having
-the mesh stopping expanding at t=60 is the right call?"; "go build check2 now, make sure
-you document somewhere what it is used for": documented in
-benchmarks/square_cylinder_re1000/README.md, "Is the mesh freeze safe?"). `amr/mesh_census`
-counts elements per streamwise band; `ReplayMeshCensus` rebuilds a checkpointed run's mesh
-pass by pass (as a restart does). Test `mesh_census_test` C1 (exact band counts on a box),
-C2 (replay = the run's final mesh). Readings on L2's checkpoints (t = 29, 42): within
-10 D of the square the mesh is refined by t ~ 39; the growth is a front moving downstream
-at ~1 D per time unit, so at the freeze only the wake beyond ~40 D stays coarse; about half
-the elements are 10-40 D downstream. Next for the freeze question: the A/B branch from a
-t = 60 checkpoint (AMR continuing vs frozen), cheapest at l1. (Merged 2026-10-12.)
+**Branch `mesh-census` (2026-10-12, merged): `apps/mesh_census`**, to check whether an
+`amr.end_time` freeze of a refinement-only AMR run is safe. `amr/mesh_census` counts
+elements per streamwise band; `ReplayMeshCensus` rebuilds a checkpointed run's mesh pass by
+pass (as a restart does). Test `mesh_census_test` C1 (exact band counts on a box), C2
+(replay = the run's final mesh).
 
-**Branch `re10k-plan` (2026-10-12, not merged): the Re 10 000 plan and its files, and two
-restart bugs fixed.** Human: "write all the stuff for the Re=10k case"; Bridges-2
-allocation 5 000 core-hours, CPU only ("I don't want to use GPUs for the 2D stuff").
-- Plan: `docs/design/re10000_plan.md` (supersedes the Re 10k estimates below and
-  re1000_convergence_plan.md §7): measured inputs from the desktop's Re 1000 L2, the
-  extrapolated levels (l1eq ~1.5-2 k core-hours fits; l2eq ~6-11 k does not), phases and
-  gates, cost levers, a literature note (no resolved 2D Re 10^4 square-cylinder study
-  with a convergence study found in a quick search; not a novelty claim).
-- Files: `benchmarks/square_cylinder_re10000/` (l1eq, l2eq, two fixed-mesh probes, Slurm
-  scripts for RM nodes: build/test, probe, chained production with restart). Tested on the
-  desktop without Slurm; not on Bridges-2. Blocking: `psc_cpu` needs the `b2rm` compiler
-  and an install (B0, the human's).
-- `benchmarks/square_cylinder_re1000/l1_q5.yaml`: the Q5/Q4 experiment (human: "the Q5
-  results will be interesting"); started and stopped at t = 5 (human: "seems like it won't
-  help us much"): ~2x Q3's cost per unknown; not resumed.
-- **Bugs fixed (found by the job-script tests):** a restart replaced the per-step history
-  instead of continuing it (`post/run_monitor`: appends now; `analyze.py` and
-  `benchmarks/common.py` drop rows a later segment supersedes, using the step's start
-  t - dt); a restart with forces aborted in the summary before its first step
-  (`Case::WriteSummary` gated forces on StepCount instead of an available force). Tests
-  `run_monitor_test` R5, R6 (R6 aborts without the fix: checked).
-- In flight: Re 1000 L2 on the desktop (`runs/sqcyl`, started 2026-10-12 11:49, commit
-  a0251f4; ~36-40 h). It runs the pre-fix binary: if it needs extending, restart it with a
-  binary from this branch or later.
+**Restart fixes (2026-10-12):** a restart replaced the per-step history instead of
+continuing it (`post/run_monitor` appends now; `benchmarks/common.py` drops rows a later
+segment supersedes, using the step's start t - dt); a restart with forces aborted in the
+summary before its first step (`Case::WriteSummary` gated forces on StepCount instead of an
+available force). Tests `run_monitor_test` R5, R6 (R6 aborts without the fix: checked).
 
 **NOT YET TESTED on the changes below (human 2026-10-10: merge and push anyway, test
 after). Do these before relying on them:**
@@ -361,8 +354,7 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
 
   So the clang build agrees with the GCC desktop run to the digits quoted (same step
   count), and the C_L,rms gap to the paper is the desktop's too, not a platform effect.
-  One run on one AMR level: not a mesh-converged answer. This is step 0 of the Re
-  1000 -> 10000 ramp below.
+  One run on one AMR level: not a mesh-converged answer.
 - **Fast tier on the Mac (2026-10-11, `scripts/test.sh cpu -L fast`, clang, M3 Air):**
   180 of 180 pass (0 failed), 269 s of test time (4 min 31 s wall), after the three
   clang fixes. 3 of the 180 were *skipped*, as designed: `benchmark_plot_tgv_re1600`,
@@ -371,68 +363,6 @@ fresh machine, an Apple Silicon MacBook Air, macOS 15.6.1): not merged.**
   build -> doctor -> case -> fast tier. **Not run on the Mac:** the slow tier,
   `scripts/asan.sh`, the Python tests (`cpu-python` preset), `scripts/docs.sh` (Doxygen),
   `scripts/debug_device.sh`.
-- **Re 1000 convergence benchmark added (2026-10-11):** `benchmarks/square_cylinder_re1000/`
-  (decks l05, l1, l2, l3; `analyze.py`: batch-means statistics and spectral peaks, level
-  differences against the error bar, `--save`; README with the protocol). Plan:
-  `docs/design/re1000_convergence_plan.md`. The ladder halves AMR tolerance and `min_size`
-  per level; `t_final` 130, AMR to t = 60. L0.5 and L1 were started on the Mac; L2 and L3
-  are for the desktop or HPC. **Not yet verified:** a restart with a larger `t_final`, and
-  everything on Linux. `analyze.py` was tested only on the Mac's histories.
-- **Re 1000 ladder, L0.5 and L1 done on the Mac (2026-10-12, t >= 30, 100 time units):**
-  l05 3,797 el, 2,276 steps: C_D 1.575 +- 0.022, C_L rms 0.869 +- 0.033, peak 0.180 (59 %).
-  l1 19,429 el (below the 40,000 fuse; mesh fixed from t = 60), 5,291 steps, ~8 h compute
-  (9.5 h wall incl. a lid-closed sleep): C_D 2.063 +- 0.069, C_L rms 1.258 +- 0.081, peaks
-  0.110 (16 %) and 0.150 (12 %). **l05 -> l1 differs (C_D +31 %, C_L rms +45 %) well beyond
-  the error: l05 is under-resolved.** l1 agrees with the earlier cap-limited 9,003-element
-  run (C_D 2.09 +- 0.04, C_L rms 1.30 +- 0.04) within error, but the spectral peak
-  positions of a broadband spectrum moved (0.092/0.185 vs 0.110/0.150): peak positions are
-  not a stable comparator at these power fractions. The 1-2 % criterion cannot be tested at
-  100-unit windows (3 % and 6 % sampling error). Two earlier runs were lost to
-  `forces.statistics: false` (it also switches off the force evaluation). Results in
-  `benchmarks/square_cylinder_re1000/results/`.
-- **Re 1000 -> 10000 ramp (human 2026-10-11), decisions so far:** Re 1000 runs on this
-  machine (an M3 MacBook Air), not Bridges-2; "converged" means a 1-2% change between
-  AMR levels (C_D, C_L,rms, St). Only step 0 is authorised: the Re 200 OIFS deck
-  (`cases/square_cylinder_re200_oifs.yaml`) reproducing on this machine, after the
-  install, build and doctor. Everything past it (Re 500 calibration, Re 1000
-  self-convergence, Re 10k) waits for the human. Open before step 2: whether a restart
-  may change Re, whether error-bar statistics exist, what Re 1000 costs here (the
-  desktop's IMEX estimate was ~5 h at np 4): answered by the probe below.
-- **Re 1000 cost probe (2026-10-11, this Mac, np 4, OIFS CFL 2, BDF3):**
-  `runs/re1000/re1000_l1_probe.yaml` = the Re 200 OIFS deck with Re 1000, `min_size`
-  0.1, `max_elements` 6000, `t_final` 30. Status ok, 1,076 steps, 17.2 min wall (Re 200
-  took 3.9 min to t = 30). The C_D, C_L numbers in it (C_D up to 3.2, C_L +-2.4) are
-  the start-up transient, not results.
-
-  | t | elements | dt | s/step | its |
-  |---|---|---|---|---|
-  | 5 | ~1,600 | 0.034 | ~0.6 | 19-21 |
-  | 14 | 1,908 | 0.028 | ~0.7 | 19 |
-  | 20 | 2,782 | 0.025 | ~0.9 | 16 |
-  | 26 | 4,167 | 0.026 | ~1.3 | 16 |
-  | 30 | 4,994 | 0.016 (last step, cut to land on t_final) | ~1.7 | 15 |
-
-  **Measured:** cost is ~0.33-0.40 ms per element per step at np 4 (the Re 200 run
-  gave the same), so per-step cost follows the element count; dt stayed at 0.021-0.026
-  for t = 8-28 (Re 200: 0.072); the mesh reached 4,994 elements at t = 30 (Re 200 reached
-  3,000 only at t ~ 50), still growing ~120/time unit, so the 6,000 cap will bind from
-  about t ~ 35 and level 1 is cap-limited, not tolerance-limited.
-  **Extrapolated (assumptions in brackets):**
-  - Full t = 160 at level 1: ~5,200-7,200 more steps [dt 0.018-0.025, mesh at the 6,000
-    cap from t ~ 35] x 1.9-2.4 s [0.35 ms/element] = 2.7-4.8 h, so **~3-5 h in total**.
-    Risk: the transient is long (|C_L| up to 2.4 at t = 30), the Re 200 deck averages
-    over t = 90-160 and Re 1000 in 2D may not be periodic, so t_final may need to be
-    longer; not measured.
-  - Convergence series [halving `tolerance` and `min_size`, cap raised to match, elements
-    x2-3 and dt x0.4-0.5 per level, so wall x4-7.5]: L2 ~12-38 h (~20 h), L3 ~50-280 h
-    (~4 days or more). L1 is an overnight run, L2 a day, **L3 is not realistic on this
-    machine** (and thermal behaviour of a fanless Air over days is unknown).
-  - Re 2000 / 5000 at level-1 resolution [work ~ Re^1.5, status.md]: ~11 h / ~45 h.
-  - **Re 10000 does not fit here.** 1-3e6 unknowns (status.md) at the measured ~22
-    dofs/element is ~45-140k elements, ~16-48 s/step [0.35 ms/element, optimistic: no
-    iteration growth], ~200k steps at dt ~8e-4 = 37-110 days; memory ~4-12 GB [~4 KB per
-    unknown, NOT measured] against 8 GB total RAM (`sysctl hw.memsize` = 8,589,934,592).
-    That is HPC work (status.md: Bridges-2).
 - **First build on clang (`scripts/build.sh cpu`), 2026-10-11:** configure passed (AppleClang
   17.0.0 through the Spack `mpicxx`, MFEM and GTest found). Then compile stopped at
   `src/precond/mass_inverse.hpp:187:13: error: private field 'comm_' is not used
@@ -622,10 +552,7 @@ re-resolved on the cluster on 2026-10-10 (MUMPS and the pin).
 **Next, in order:**
 1. A cold-start test: a fresh agent with no context, given real tasks (install check,
    reproduce a benchmark from its deck, set up a new case); fix where it stumbles.
-2. HPC preparation for Re 10k / 100k (2D): decide whether OIFS at CFL 2 becomes the
-   default; GPU validation (developing.md §7.5) or a CPU strong-scaling check;
-   statistics with error bars.
-3. When MFEM fixes PR #5297's regression: drop the pin in both `spack.yaml` files.
+2. When MFEM fixes PR #5297's regression: drop the pin in both `spack.yaml` files.
 
 **Open decisions for the human:** OIFS CFL 2 as the default for production runs.
 
@@ -681,31 +608,11 @@ untracked in the repo root (do not commit it; copyright).
   paper's ~32 at UΔt/D = 0.2); 11,138 steps, 69 min at np 4. Remaining −4% / +3.8% may be the
   paper's large implicit step (untested). Literature scatter (their Table 1): C_L,rms
   0.32–0.55, St 0.142–0.170.
-- **Re = 1000 — moved to HPC (human 2026-10-08: "that whole campaign will be left to the
-  hpc")**. A desktop level-1 run (tol 0.25, min size 0.1, cap 6000) was stopped at t = 20:
-  dt 1.5–4e-3 (5–9× below Re 200), 4,708 cells at t = 20 and still refining, CFL peak in the
-  near wake ((2.4, −0.3) → (9.4, −0.4)), ~0.44 s/step at np 4 → ~5 h for t = 160 at that
-  level. No public benchmark: plan = self-convergence over 2–3 AMR levels (halve
-  tolerance AND min size; track cells/unknowns, dt range, C_D, C_L,rms, St; converged when
-  < 1–2% change) + a CFL 0.5 vs 0.25 branch from the t = 90 checkpoint; check periodicity
-  (2D at Re 1000 may be irregular → batch-means error bars). Consider `-amr-start` (spin up
-  on the coarse mesh) to cut the startup cost.
 - **dt sawtooth on AMR meshes (open):** once shedding starts, every ~0.13 time units the CFL
   rate jumps ~1.5× in ONE step → the controller cuts dt ~1.9e-2 → ~1.0e-2 and regrows ×1.2.
   Forces unaffected (C_D jitter ~1e-4); ~10–20% extra steps. Likely a fast mode at its
   stability limit at CFL 0.5 on the AMR (hanging-node) mesh — conforming DFG meshes were
   stable to 0.7. Diagnose with the CFL location now printed; a 0.4 target likely removes it.
-- **Human's goal: Re = 10k and 100k on HPC** (2D on purpose; human knows it is not
-  physical). Estimates (2D: unknowns ∝ Re, dt ∝ Re^-1/2, work ∝ Re^3/2, ~30× per decade):
-  Re 10k ~1–3e6 unknowns, smallest cell ~0.02 (Q3), dt ~8e-4; Re 100k ~1–3e7, ~0.006,
-  ~2.5e-4; ~1e4 core-hours at Re 100k if the solver scales. Prerequisites agreed so far:
-  the dt-sawtooth diagnosis; GPU validation (developing.md §7.5) or a CPU strong-scaling check of the CC
-  Schur / LOR-AMG; an element-order comparison at Re 1000 (Q5–Q7 likely better per unknown
-  at high Re); OIFS (subcycled convection, CFL 2–4) before Re 100k; time-based AMR
-  scheduling (start / interval / end) in Case/Parameters for decks (now only in the
-  driver); statistics with error bars; same-np restart constrains job chaining. OIFS now
-  exists (`oifs` branch: CFL 2 within 1% of IMEX at Re 200, see above). Batch
-  scripts: submitted by the agent once the human approves the cost (changed 2026-10-10).
 - **AMR stays refinement-only (human 2026-10-08):** derefinement breaks the multistep
   history (refinement transfers every BDF/EXT level exactly; coarsening must project them),
   and single-step schemes are order-bound. For a statistically stationary turbulent wake,
