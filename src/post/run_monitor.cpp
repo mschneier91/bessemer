@@ -28,7 +28,11 @@ RunMonitor::RunMonitor(const Parameters& p, MPI_Comm comm)
       const std::string path = p.output.path + "/" + p.output.name + "_history.csv";
       const bool append = !p.restart_from.empty() && std::ifstream(path).good();
       history_.open(path, append ? std::ios::app : std::ios::trunc);
-      if (!append) { history_ << "t,dt,c_d,c_l,iterations,substeps,elements,step_wall\n"; }
+      if (!append)
+      {
+         history_ << "t,dt,c_d,c_l,iterations,substeps,elements,step_wall,"
+                  "vel_iterations,vel_cap_hits\n";
+      }
    }
 }
 
@@ -77,9 +81,11 @@ void RunMonitor::Record(const StepRecord& r)
    if (root_ && history_.is_open())
    {
       char buf[256];
-      std::snprintf(buf, sizeof(buf), "%.12g,%.6e,%.10g,%.10g,%d,%d,%lld,%.4g\n",
-                    r.t, r.dt, r.has_forces ? r.cd : NAN, r.has_forces ? r.cl : NAN,
-                    r.iterations, r.substeps, r.elements, r.step_wall);
+      std::snprintf(buf, sizeof(buf),
+                    "%.12g,%.6e,%.10g,%.10g,%d,%d,%lld,%.4g,%d,%d\n", r.t, r.dt,
+                    r.has_forces ? r.cd : NAN, r.has_forces ? r.cl : NAN,
+                    r.iterations, r.substeps, r.elements, r.step_wall,
+                    r.vel_iterations, r.vel_cap_hits);
       pending_ += buf;
    }
 }

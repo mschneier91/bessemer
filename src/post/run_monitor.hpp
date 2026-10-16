@@ -23,6 +23,11 @@ struct StepRecord
    double t = 0.0;          ///< Time after the step.
    double dt = 0.0;         ///< The step's size.
    int iterations = 0;      ///< Outer solver iterations.
+   /// Inner CG iterations of the velocity-block preconditioner (jacobi_pcg),
+   /// summed over the outer iterations of the solve `iterations` counts; 0
+   /// for a one-pass preconditioner.
+   int vel_iterations = 0;
+   int vel_cap_hits = 0;    ///< Of those inner solves, the ones at the cap.
    int substeps = 0;        ///< OIFS substeps (0 with IMEX).
    bool has_forces = false; ///< Whether cd / cl were evaluated.
    double cd = 0.0;         ///< Drag coefficient.

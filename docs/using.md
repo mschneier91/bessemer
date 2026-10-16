@@ -175,7 +175,11 @@ stability limit; pass `-dt 0.001`.)
   `case.write_summary(path, status)`.
 - **Progress lines:** `output.progress: <time interval>` prints t, dt and its range, the
   CFL number and where it peaks, forces, iterations, cells, wall time and an ETA.
-- **History:** `output.history: true` writes `<path>/<name>_history.csv`, one row per step.
+- **History:** `output.history: true` writes `<path>/<name>_history.csv`, one row per step:
+  `t, dt, c_d, c_l, iterations, substeps, elements, step_wall, vel_iterations, vel_cap_hits`.
+  `iterations` counts the outer Krylov iterations of the step's last solve;
+  `vel_iterations` the velocity block's inner CG iterations over them (`jacobi_pcg`; 0 for
+  a one-pass preconditioner) and `vel_cap_hits` the inner solves that stopped at their cap.
 - **Profile (always, unless `output.profile: off`):** `run_case` writes
   `<path>/<name>_profile.csv` at the end: every profiled region with its nesting path,
   call count and inclusive and exclusive wall seconds (max and min over the ranks). The
