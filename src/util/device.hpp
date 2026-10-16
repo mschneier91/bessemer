@@ -31,6 +31,12 @@ namespace incns
  * ...), falling back to the MPI_COMM_WORLD rank. Allocate at least as many GPUs
  * as there are ranks per node, or ranks will double up on a device.
  *
+ * On a GPU backend it also caps hypre's device memory pool (when hypre was
+ * built with it): only blocks up to 1 MiB are pooled, at most 64 MiB cached.
+ * The environment variable @c INCNS_HYPRE_POOL
+ * (@c "growth,min_bin,max_bin,cached_MiB"; @c "8,1,-1,-1" is hypre's default)
+ * overrides it.
+ *
  * @param backend The mfem::Device configuration string (default when
  *                @c INCNS_DEVICE is unset).
  */

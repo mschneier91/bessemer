@@ -2,6 +2,7 @@
 
 #include "mfem.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 
 namespace incns
@@ -64,6 +65,44 @@ int ResolveDeviceId(const std::string& backend)
    return local % ngpu;
 }
 
+/**
+ * @brief Cap hypre's GPU memory pool before its first device allocation.
+ *
+ * Spack builds hypre with its device memory pool for CUDA (without Umpire),
+ * and the pool's defaults round every allocation up to a power of 8 and keep
+ * every freed block: on Taylor-Green Q7 at ~128^3 the pressure LOR-AMG held
+ * 3.3 GB for ~0.6 GB of hierarchy. Pooling only blocks up to 1 MiB (bin growth
+ * 2) with at most 64 MiB cached cut the run's peak by 21 % with no measured
+ * cost per step (docs/gpu_memory.md). The pool's allocator is created at
+ * hypre's first device allocation, so this runs before any hypre object exists.
+ * INCNS_HYPRE_POOL="growth,min_bin,max_bin,cached_MiB" overrides it;
+ * "8,1,-1,-1" restores hypre's defaults.
+ */
+void ConfigureHyprePool(const std::string& backend)
+{
+#if defined(HYPRE_USING_DEVICE_POOL)
+   if (backend.find("cuda") == std::string::npos &&
+       backend.find("hip") == std::string::npos)
+   {
+      return;
+   }
+   mfem::Hypre::Init(); // idempotent; the pool lives in hypre's handle
+   int growth = 2, min_bin = 1, max_bin = 20;
+   long cached_mib = 64;
+   if (const char* env = std::getenv("INCNS_HYPRE_POOL"))
+   {
+      MFEM_VERIFY(std::sscanf(env, "%d,%d,%d,%ld", &growth, &min_bin, &max_bin,
+                              &cached_mib) == 4,
+                  "INCNS_HYPRE_POOL must be growth,min_bin,max_bin,cached_MiB");
+   }
+   const size_t cached = cached_mib < 0 ? static_cast<size_t>(-1)
+                         : static_cast<size_t>(cached_mib) << 20;
+   HYPRE_SetGPUMemoryPoolSize(growth, min_bin, max_bin, cached);
+#else
+   (void)backend;
+#endif
+}
+
 } // namespace
 
 void ConfigureDevice(const std::string& backend)
@@ -88,6 +127,7 @@ void ConfigureDevice(const std::string& backend)
       // Bind this rank to its own GPU; see ResolveDeviceId. On host backends,
       // and whenever there is at most one visible device, this is plain 0.
       device.Configure(want, ResolveDeviceId(want));
+      ConfigureHyprePool(want);
       configured = true;
       current = want;
    }

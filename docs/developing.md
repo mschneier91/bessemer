@@ -97,7 +97,9 @@ fully before planning a code change. The current project state and open items ar
   ranks sharing a card serialize (11× slowdown at np2, OOM at np4 measured on one H100).
   A fast-tier GPU sweep wants 4 GPUs (how to request them is on the cluster's own
   page, e.g. `docs/install/bridges2.md`). Runtime backend: `Parameters.device` or env
-  `INCNS_DEVICE=cpu|cuda|debug` (env wins).
+  `INCNS_DEVICE=cpu|cuda|debug` (env wins). On a GPU, `ConfigureDevice` also caps hypre's
+  device memory pool; env `INCNS_HYPRE_POOL=growth,min_bin,max_bin,cached_MiB` overrides
+  it (`8,1,-1,-1` is hypre's default; docs/gpu_memory.md).
 
 ## 4. What the code is
 

@@ -209,6 +209,38 @@ change I'm not really comfortable with since that is like the core mfem library"
 The upstream issue still stands: a compact storage for the scalar case in MFEM itself, the
 same report as change 2's ([upstream/mfem_vector_diffusion_diagonal.md](upstream/mfem_vector_diffusion_diagonal.md)).
 
+## hypre's device memory pool (2026-10-16)
+
+Spack's hypre recipe configures every CUDA build without Umpire with
+`--enable-device-memory-pool`. The pool's defaults (bin growth 8, no largest bin, no cache
+limit) round every hypre device allocation up to the next power of 8 and keep every freed
+block. That was most of the pressure AMG's "first-application workspace" (change 15): the
+hierarchy is built lazily in the first V-cycle, and its matrices, interpolation and setup
+temporaries all went through the pool. Taylor-Green Q7 at ~128³ (one H100, profile: sync):
+
+- hypre's defaults: AMG setup 3,284 MiB, run peak 13,089 MiB;
+- `HYPRE_SetGPUMemoryPoolSize(2, 1, 20, 64 MiB)` (only blocks up to 1 MiB pooled): AMG setup
+  594 MiB, run peak 10,371 MiB (-21 %; Q3 -680 MiB). AMG setup +5 ms at Q7, +15 ms at Q3;
+  steps unchanged (0.2546 against 0.2534 s).
+
+`ConfigureDevice` applies that cap on every GPU run; `INCNS_HYPRE_POOL` overrides it. The pool
+exists because `cudaMalloc` is slow and `cudaFree` synchronizes the device: it pays when AMG
+hierarchies are rebuilt often. Ours is built once per mesh. If a case does rebuild often
+(AMR adapting nearly every step, the velocity LOR-AMG option rebuilding on dt changes) and
+the cap costs time there, the fallbacks are (human 2026-10-16: keep them on record):
+
+- **Rebuild hypre with `--enable-device-malloc-async`** (CUDA's stream-ordered allocator:
+  cheap allocation and release without power-of-8 rounding; in hypre 2.33's configure).
+  Spack's recipe has no variant for it, so it takes a package override in our environment.
+- **Umpire** (`+umpire` builds of MFEM and hypre): one shared, coalescing pool for both
+  libraries, with per-allocator statistics. The larger change.
+
+Both are environment rebuilds (AGENTS.md rule 3). Measured alongside: MFEM's LORSolver kept
+its LOR mesh, space and batched-assembly scratch for the solver's lifetime; freeing them
+after assembly saves 460 MiB at Q3 and Q7 (6d90d0c). BoomerAMG's strength threshold 0.5 / 0.6
+grew the hierarchy (+0.4 / +1.4 GB), and one level of aggressive coarsening did not shrink it
+at Q7.
+
 ## What is left
 
 Nothing large. At 64³:
@@ -222,8 +254,9 @@ Nothing large. At 64³:
   changes the outer solver's arithmetic.
 - **Pressure AMG.** One level of aggressive coarsening (`solver.lp_agg_levels: 1`) saved
   2.1 GB at 64³ with the same outer iterations over 11 steps; the strength threshold
-  saved nothing. Its first-application workspace (5.8 GB, change 15) is the largest
-  single piece. Human: AMG options have trade-offs, "an optimization for another day".
+  saved nothing. Its first-application workspace (5.8 GB, change 15) was the largest
+  single piece: mostly hypre's pool rounding, capped since 2026-10-16 (above). Human: AMG
+  options have trade-offs, "an optimization for another day".
 - **MFEM's scratch per form:** every partially assembled form keeps two element-by-
   element vectors for the run, about 3 GB over the mass, momentum, divergence and
   convection forms. MFEM internals.

@@ -28,8 +28,9 @@ reaches 2 % by 192^3; validation on the channel at Q6.
 **GPU memory toward 100M DOFs on one H100 (2026-10-16, branch memory-audit).** The pressure
 LOR-AMG was 39 % of a Q7 run (752 B/DOF). Freeing MFEM's LOR scaffolding after assembly
 (6d90d0c) saves 460 MiB; capping hypre's device pool (it rounds every allocation up to a
-power of 8 and caches every freed block) saves 2.7 GB at Q7 128^3 with no time cost (not
-yet on main). Q7 1,946 -> 1,488 B/DOF. The audit and the remaining items: throughput.md.
+power of 8 and caches every freed block) saves 2.7 GB at Q7 128^3 with no time cost
+(ConfigureDevice; docs/gpu_memory.md). Q7 1,946 -> 1,488 B/DOF. The audit and the remaining
+items: throughput.md.
 
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be
