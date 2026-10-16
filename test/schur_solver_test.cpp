@@ -20,6 +20,12 @@
 //     the coupled velocity to 1e-6.
 //  U6 A restart of a Schur march (pressure projection in the checkpoint)
 //     matches the uninterrupted one.
+//  U7 VelocityCG (the Schur method's in-place velocity CG) takes MFEM's
+//     CGSolver's iterations and gives its solution, and leaves the residual
+//     in the right-hand side.
+//  U8 A Delta-t refresh of a Schur solver (the velocity CG re-pointed, the
+//     point-block Jacobi updated in place, no block preconditioner) gives
+//     the answer of a solver built at the new step.
 
 #include <gtest/gtest.h>
 
@@ -33,6 +39,7 @@
 #include "solver/case.hpp"
 #include "solver/schur_complement.hpp"
 #include "solver/stokes_solver.hpp"
+#include "solver/velocity_cg.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
 
@@ -226,12 +233,10 @@ TEST(SchurSolver, U1_SchurComplementIsSymmetric)
    incns::StokesOperator& op = solver.Blocks();
 
    OperatorJacobiSmoother jacobi(op.MomentumDiagonal(), op.EssentialTrueDofs());
-   CGSolver cg(MPI_COMM_WORLD);
+   incns::VelocityCG cg(MPI_COMM_WORLD, op.FullMomentum().Height());
    cg.SetOperator(op.FullMomentum());
    cg.SetPreconditioner(jacobi);
-   cg.SetAbsTol(0.0);
    cg.SetMaxIter(2000);
-   cg.SetPrintLevel(-1);
    incns::ConstantPressureProjector proj(pr.spaces->Pressure());
    incns::SchurComplementOperator S(op.Divergence(), cg, &proj);
    S.SetInnerTolerance(1e-14);
@@ -411,4 +416,97 @@ TEST(SchurSolver, U6_RestartMatchesUninterrupted)
    second.restart_from = dir;
    const Vector restarted = March(second);
    EXPECT_LE(RelDiff(ref, restarted), incns_test::ReproTol(1e-13));
+}
+
+TEST(SchurSolver, U7_VelocityCgIsMfemCg)
+{
+   Problem pr(Domain::Channel);
+   StokesSolverOptions o = BaseOptions(1.0);
+   StokesSolver solver(*pr.spaces, pr.rules, *pr.bc, o);
+   incns::StokesOperator& op = solver.Blocks();
+   const Operator& A = op.FullMomentum();
+   const int n = A.Height();
+   OperatorJacobiSmoother jacobi(op.MomentumDiagonal(), op.EssentialTrueDofs());
+
+   // A right-hand side zero on the essential rows, as the Schur method's.
+   Vector b(n);
+   b.Randomize(7 + Mpi::WorldRank());
+   b.SetSubVector(op.EssentialTrueDofs(), 0.0);
+
+   CGSolver ref(MPI_COMM_WORLD);
+   ref.SetOperator(A); // before the PC: MFEM forwards SetOperator to it
+   ref.SetPreconditioner(jacobi);
+   ref.SetRelTol(1e-9);
+   ref.SetAbsTol(0.0);
+   ref.SetMaxIter(500);
+   ref.SetPrintLevel(-1);
+   ref.iterative_mode = false;
+   Vector x_ref(n);
+   x_ref = 0.0;
+   ref.Mult(b, x_ref);
+   ASSERT_TRUE(ref.GetConverged());
+
+   incns::VelocityCG cg(MPI_COMM_WORLD, n);
+   cg.SetOperator(A);
+   cg.SetPreconditioner(jacobi);
+   cg.SetRelTol(1e-9);
+   cg.SetMaxIter(500);
+   Vector r(b), x(n);
+   x = 1.0; // ignored: the solve starts from zero
+   cg.Solve(r, x);
+   EXPECT_TRUE(cg.GetConverged());
+   EXPECT_EQ(cg.GetNumIterations(), ref.GetNumIterations());
+   EXPECT_LE(RelDiff(x_ref, x), 1e-12);
+
+   // r is b - A x (the recurrence's: equal to roundoff relative to b).
+   Vector ax(n);
+   A.Mult(x, ax);
+   Vector res(b);
+   res -= ax;
+   res -= r;
+   EXPECT_LE(Norm(res), 1e-10 * Norm(b));
+
+   // The iteration cap.
+   cg.SetMaxIter(3);
+   r = b;
+   cg.Solve(r, x);
+   EXPECT_FALSE(cg.GetConverged());
+   EXPECT_EQ(cg.GetNumIterations(), 3);
+}
+
+TEST(SchurSolver, U8_RefreshMatchesAFreshSolver)
+{
+   for (const bool pbj : {true, false})
+   {
+      const std::string pc = pbj ? "pbj" : "jacobi";
+      StokesSolverOptions o = BaseOptions(1.0);
+      o.outer = OuterMethod::Schur;
+      o.cc.a_pcg_pc = pbj ? incns::APcgPC::PointBlockJacobi
+                      : incns::APcgPC::Jacobi;
+      Problem pr(Domain::Channel);
+      StokesSolver solver(*pr.spaces, pr.rules, *pr.bc, o);
+      ParGridFunction u(&pr.spaces->Velocity()), p(&pr.spaces->Pressure());
+      u = 0.0;
+      p = 0.0;
+      solver.SolveTrue(pr.f, u, p);
+      ASSERT_TRUE(solver.Converged()) << pc;
+      solver.Refresh(80.0);
+      u = 0.0;
+      p = 0.0;
+      solver.SolveTrue(pr.f, u, p);
+      Answer got;
+      got.u.SetSize(pr.spaces->Velocity().GetTrueVSize());
+      got.p.SetSize(pr.spaces->Pressure().GetTrueVSize());
+      u.GetTrueDofs(got.u);
+      p.GetTrueDofs(got.p);
+      got.iterations = solver.Iterations();
+      got.converged = solver.Converged();
+      got.final_residual = solver.Stats().final_residual;
+      got.tolerance = solver.Stats().tolerance;
+
+      StokesSolverOptions fresh = o;
+      fresh.outer = OuterMethod::Coupled;
+      fresh.mass_coeff = 80.0;
+      ExpectSameAnswer(SolveOnce(pr, fresh), got, "refresh, a_pcg_pc " + pc);
+   }
 }

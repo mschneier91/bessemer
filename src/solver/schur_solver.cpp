@@ -27,7 +27,7 @@ SchurSolver::SchurSolver(MPI_Comm comm, const Operator& A, const Operator& B,
                          const ConstantPressureProjector* proj,
                          const SchurSolveOptions& opts)
    : comm_(comm), A_(&A), B_(B), a_pc_(&a_pc), schur_pc_(&schur_pc),
-     proj_(proj), opts_(opts),
+     proj_(proj), opts_(opts), vel_(comm, A.Height()),
      r_(B.Height()), z_(B.Height()), d_(B.Height()), q_(B.Height())
 {
    MFEM_VERIFY(opts_.max_cycles >= 1 && opts_.inner_max_iter >= 1,
@@ -37,8 +37,12 @@ SchurSolver::SchurSolver(MPI_Comm comm, const Operator& A, const Operator& B,
                "schur_solver: need 0 < eps_tight <= eps_max, eps_loose > 0, "
                "relax_c > 0");
    for (Vector* v : {&r_, &z_, &d_, &q_}) { v->UseDevice(true); }
-   BuildVelocitySolver();
-   sop_ = std::make_unique<SchurComplementOperator>(B_, *vel_, proj_);
+   vel_.SetOperator(*A_);
+   vel_.SetPreconditioner(*a_pc_);
+   vel_.SetAbsTol(0.0);
+   vel_.SetRelTol(opts_.eps_tight);
+   vel_.SetMaxIter(opts_.inner_max_iter);
+   sop_ = std::make_unique<SchurComplementOperator>(B_, vel_, proj_);
 }
 
 void SchurSolver::EnablePressureProjection(int k)
@@ -51,30 +55,15 @@ void SchurSolver::EnablePressureProjection(int k)
    }
 }
 
-void SchurSolver::BuildVelocitySolver()
-{
-   auto s = std::make_unique<CGSolver>(comm_);
-   // SetOperator before SetPreconditioner: MFEM forwards SetOperator to a PC
-   // that is already set, and the velocity PCs keep their own operator.
-   s->SetOperator(*A_);
-   s->SetPreconditioner(*a_pc_);
-   s->SetAbsTol(0.0);
-   s->SetRelTol(opts_.eps_tight);
-   s->SetMaxIter(opts_.inner_max_iter);
-   s->SetPrintLevel(-1);
-   s->iterative_mode = false;
-   // The Schur operator borrows the solver: re-point it before the old one
-   // is destroyed.
-   if (sop_) { sop_->SetVelocitySolver(*s); }
-   vel_ = std::move(s);
-}
-
 void SchurSolver::Rewire(const Operator& A, Solver& a_pc, Solver& schur_pc)
 {
    A_ = &A;
    a_pc_ = &a_pc;
    schur_pc_ = &schur_pc;
-   BuildVelocitySolver();
+   // Re-pointed, not rebuilt: no allocation, and the preconditioner's own
+   // SetOperator is not called (it was built for this operator).
+   vel_.SetOperator(A);
+   vel_.SetPreconditioner(a_pc);
 }
 
 double SchurSolver::MomentumResidual(const Vector& f, const Vector& p,
@@ -113,11 +102,10 @@ bool SchurSolver::SolveVelocity(const Vector& f, const Vector& p, Vector& u,
       // tolerance is relative to its own norm of r: half the ratio, floored).
       Vector& r = sop_->RhsWork();
       Vector& du = sop_->VelocityWork();
-      vel_->SetRelTol(std::max(kMinCorrectionTol, 0.5 * target / res));
-      du = 0.0;
-      vel_->Mult(r, du);
+      vel_.SetRelTol(std::max(kMinCorrectionTol, 0.5 * target / res));
+      vel_.Solve(r, du); // r is recomputed by the next pass
       ++stats_.velocity_solves;
-      stats_.velocity_iterations += vel_->GetNumIterations();
+      stats_.velocity_iterations += vel_.GetNumIterations();
       u += du;
    }
    stats_.velocity_time += MPI_Wtime() - t0;

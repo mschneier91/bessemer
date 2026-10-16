@@ -85,14 +85,16 @@ struct SchurSolveStats
  * the momentum block must be symmetric: not with the rotation term (the
  * rotational form uses the coupled FGMRES).
  *
- * Velocity solves use CG on the eliminated momentum block, preconditioned by the coupled path's own
- * velocity preconditioner (Jacobi, point-block Jacobi, Chebyshev or a LOR-AMG
- * V-cycle: fixed linear operators). Outside the Schur operator each solve is
- * a correction to an explicit l2 residual target, not a relative tolerance.
+ * Velocity solves use CG (VelocityCG) on the eliminated momentum block,
+ * preconditioned by the coupled path's own velocity preconditioner (Jacobi,
+ * point-block Jacobi, Chebyshev or a LOR-AMG V-cycle: fixed linear
+ * operators). Outside the Schur operator each solve is a correction to an
+ * explicit l2 residual target, not a relative tolerance.
  *
- * Memory: pressure vectors r, z, d, q, velocity vectors two in the Schur
- * operator plus the velocity CG's own three.
- * No system-sized vector.
+ * Memory: pressure vectors r, z, d, q (and 2k + 2 with the projection);
+ * four velocity vectors, two in the Schur operator and the CG's two, which
+ * every velocity solve shares and VelocityWorkD() / VelocityWorkZ() lend out
+ * between solves. No system-sized vector.
  */
 class SchurSolver
 {
@@ -117,7 +119,8 @@ public:
 
    /**
     * @brief Use a new momentum block and new preconditioners (after a
-    *        Delta-t or viscosity refresh rebuilt them).
+    *        Delta-t or viscosity refresh rebuilt them). Re-points; allocates
+    *        nothing.
     * @param A        New eliminated momentum block (borrowed).
     * @param a_pc     New velocity preconditioner (borrowed).
     * @param schur_pc New Schur approximate inverse (borrowed).
@@ -179,6 +182,14 @@ public:
     */
    void Mult(const mfem::Vector& b, mfem::Vector& x);
 
+   /// @return The velocity CG's direction vector, free outside Mult()
+   ///         (velocity-sized scratch for a preconditioner applied between
+   ///         velocity solves, such as Cahouet-Chabard's).
+   mfem::Vector& VelocityWorkD() { return vel_.WorkD(); }
+
+   /// @return The velocity CG's second work vector (see VelocityWorkD()).
+   mfem::Vector& VelocityWorkZ() { return vel_.WorkZ(); }
+
    /// @return Whether the last solve met the tolerance (true residuals).
    bool Converged() const { return converged_; }
 
@@ -189,8 +200,6 @@ public:
    const std::vector<SchurIterationRecord>& History() const { return history_; }
 
 private:
-   /// (Re)build the velocity CG for A_ and a_pc_.
-   void BuildVelocitySolver();
    /**
     * @brief u <- A^-1 (f - B^T p) to ||f - B^T p - A u|| <= target, by
     *        corrections from the warm start u (at most a few).
@@ -234,7 +243,7 @@ private:
 
    /// The velocity CG, shared by the Schur operator and System 1 / 3.
    /// Declared before sop_, which borrows it.
-   std::unique_ptr<mfem::IterativeSolver> vel_;
+   VelocityCG vel_;
    std::unique_ptr<SchurComplementOperator> sop_; ///< S = B A^-1 B^T.
    /// Pressure vectors (device): residual, preconditioned residual,
    /// direction, S times direction.
