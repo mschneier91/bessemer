@@ -54,7 +54,7 @@ itself.
 | `uzawa.inner_tolerance` | `relaxed` | Relative tolerance of the velocity solve inside S: `tight` (`eps_tight`), `loose` (`eps_loose`) or `relaxed`: min(`eps_max`, max(`eps_tight`, `relax_c` τ_p/‖r‖)). |
 | `uzawa.eps_tight` / `eps_loose` / `eps_max` / `relax_c` | 1e-10 / 1e-3 / 1e-2 / 1 | The constants above. |
 | `uzawa.inner_max_iter` | 500 | Iteration cap of each velocity solve. Hitting it is counted (`uzawa_schur_cap_hits`). |
-| `uzawa.max_cycles` | 3 | CG cycles per solve (step 6 above). |
+| `uzawa.max_cycles` | 3 | CG cycles per solve (step 6 above). A fixed `loose` inner tolerance leaves a true-residual gap of about `eps_loose` times each cycle's starting residual, so a tight `rtol` needs more cycles with it (CI, rtol 1e-10: 3 cycles fell short, 62 iterations against relaxed's 30). |
 | `uzawa.history` | false | Record every iteration (see the log below). |
 | `solver.log_interval` | 0 | Per-step solver log for either outer method (below). |
 

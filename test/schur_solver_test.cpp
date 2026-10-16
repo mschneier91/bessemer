@@ -134,10 +134,15 @@ struct Problem
          }
       }
 
+      // A solenoidal part plus grad(sin x sin y), so that the pressure is
+      // of order one on every domain (without the gradient the periodic
+      // pressure is near zero and its relative difference is noise).
       VectorFunctionCoefficient forcing(2, [](const Vector & x, Vector & g)
       {
-         g(0) = std::sin(x(0)) * std::cos(x(1)) + 0.3 * x(1);
-         g(1) = -std::cos(x(0)) * std::sin(x(1)) + 0.2 * x(0) * x(0);
+         g(0) = std::sin(x(0)) * std::cos(x(1)) + 0.3 * x(1) +
+                std::cos(x(0)) * std::sin(x(1));
+         g(1) = -std::cos(x(0)) * std::sin(x(1)) + 0.2 * x(0) * x(0) +
+                std::sin(x(0)) * std::cos(x(1));
       });
       ParLinearForm form(&spaces->Velocity());
       auto* fi = new VectorDomainLFIntegrator(forcing);
@@ -287,6 +292,11 @@ TEST(SchurSolver, U3_InnerToleranceModesAgree)
       StokesSolverOptions o = BaseOptions(1.0);
       o.outer = OuterMethod::Schur;
       o.uzawa.inner = t;
+      // A fixed loose inner tolerance leaves a true-residual gap of about
+      // eps_loose times the cycle's starting residual, so at rtol 1e-10 it
+      // needs more cycles than the default 3 (CI: 3 left 8.0e-11 against a
+      // 6.3e-11 target). Every mode gets the same cap.
+      o.uzawa.max_cycles = 10;
       const char* name = t == InnerTolerance::Tight ? "tight" :
                          t == InnerTolerance::Loose ? "loose" : "relaxed";
       ExpectSameAnswer(ref, SolveOnce(pr, o), std::string("inner ") + name);
