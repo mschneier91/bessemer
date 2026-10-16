@@ -61,8 +61,8 @@ phase2() {
    cmp coupled schur
 }
 
-# The inner (velocity) tolerance of the Schur operator, and plain CG (valid
-# only with a fixed linear Schur preconditioner: schur laplacian_legacy).
+# The inner (velocity) tolerance of the Schur operator, the relaxation
+# constant, and the legacy Laplacian Schur PC (a fixed linear one).
 inner() {
    for mode in tight loose relaxed; do
       run "schur-inner-$mode" --sizes "$N" $(schur) \
@@ -72,11 +72,9 @@ inner() {
       run "schur-relax-c$c" --sizes "$N" $(schur) --set solver.uzawa.relax_c=$c
    done
    run coupled-legacy --sizes "$N" --set solver.schur=laplacian_legacy
-   for m in cg flexible_cg fgmres; do
-      run "schur-legacy-$m" --sizes "$N" $(schur) --set solver.schur=laplacian_legacy \
-         --set solver.uzawa.method=$m --set solver.uzawa.history=true
-   done
-   for m in cg flexible_cg fgmres; do cmp coupled-legacy "schur-legacy-$m"; done
+   run schur-legacy --sizes "$N" $(schur) --set solver.schur=laplacian_legacy \
+      --set solver.uzawa.history=true
+   cmp coupled-legacy schur-legacy
 }
 
 # The initial guess: the coupled projection (2k system vectors) against the

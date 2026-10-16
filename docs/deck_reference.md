@@ -181,18 +181,15 @@ Linear solver: FGMRES on the monolithic velocity-pressure system with a block pr
 | `solver.rotation_schur.vol_on` | real | `0.001` | auto (volume_fraction): switch-on fraction. |
 | `solver.rotation_schur.vol_off` | real | `0.00025` | auto (volume_fraction): switch-off fraction. |
 | `solver.rotation_schur.inner_iterations` | int | `10` | tensor: fixed inner FGMRES iterations. |
-| `solver.outer` | coupled \| schur | `coupled` | Outer iteration. coupled: FGMRES on the velocity-pressure system with the block preconditioner. schur: Krylov on the pressure Schur complement B A^-1 B^T (Uzawa), each operator application a velocity solve; same preconditioners and the same coupled-residual stopping rule (solver.rtol, atol, tolerance_reference), a few pressure and velocity vectors instead of the coupled Krylov basis. Needs solver.schur cc or laplacian_legacy. initial_guess project then projects the pressure only. |
+| `solver.outer` | coupled \| schur | `coupled` | Outer iteration. coupled: FGMRES on the velocity-pressure system with the block preconditioner. schur: flexible CG on the pressure Schur complement B A^-1 B^T (Uzawa), each operator application a velocity solve; same preconditioners and the same coupled-residual stopping rule (solver.rtol, atol, tolerance_reference), a few pressure and velocity vectors instead of the coupled Krylov basis. Needs solver.schur cc or laplacian_legacy and a symmetric momentum block (not the rotational form). initial_guess project then projects the pressure only. |
 | `solver.log_interval` | int | `0` | Write the per-step solver log (<name>_solver.csv: iterations, inner work, timings, final coupled residual, device memory) every N steps (0 = off). |
-| `solver.uzawa.method` | flexible_cg \| cg \| fgmres | `flexible_cg` | outer schur: Krylov method on the pressure. flexible_cg: Notay's flexible CG (tolerates the Cahouet-Chabard inner CG and inexact velocity solves). cg: plain PCG (needs a fixed linear preconditioner: schur laplacian_legacy). fgmres: pressure-space FGMRES (rotational form). |
 | `solver.uzawa.inner_tolerance` | relaxed \| tight \| loose | `relaxed` | outer schur: the velocity solve inside each Schur application. relaxed: min(eps_max, max(eps_tight, relax_c tol / \|\|r\|\|)). tight: eps_tight. loose: eps_loose. |
 | `solver.uzawa.eps_tight` | real | `1e-10` | outer schur: tight inner relative tolerance (relaxed: the floor). |
 | `solver.uzawa.eps_loose` | real | `0.001` | outer schur: loose inner relative tolerance. |
 | `solver.uzawa.eps_max` | real | `0.01` | outer schur, relaxed: the loosest inner relative tolerance. |
 | `solver.uzawa.relax_c` | real | `1` | outer schur, relaxed: the constant c of the schedule. |
 | `solver.uzawa.inner_max_iter` | int | `500` | outer schur: iteration cap of each velocity solve. |
-| `solver.uzawa.inner_kdim` | int | `30` | outer schur: restart of the velocity GMRES (rotational form). |
-| `solver.uzawa.kdim` | int | `20` | outer schur, fgmres: restart length. |
-| `solver.uzawa.max_cycles` | int | `3` | outer schur: Krylov cycles, each ended by a velocity solve and a true pressure-residual check that restarts the iteration if the residual drifted above the tolerance. |
+| `solver.uzawa.max_cycles` | int | `3` | outer schur: CG cycles, each ended by a velocity solve and a true pressure-residual check that restarts the iteration if the residual drifted above the tolerance. |
 | `solver.uzawa.history` | bool | `false` | outer schur: record every iteration (recurrence residual, inner tolerance and iterations, coupled residual of the iterate: one momentum application each) for solver.log_interval. |
 
 ## `output`
