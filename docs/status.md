@@ -48,23 +48,24 @@ and 4 on the CPU (job 49277774, 72 tests each). Next: the CPU test jobs should a
 np 4 (`-R "_np4$"`).
 
 **Schur complement (Uzawa) outer method, as an option (2026-10-16, branch
-`claude/schur-cg-solver-9sf1r5`, draft PR, NOT merged). Written in a cloud session that
-cannot build: NOT compiled, NOT run, `scripts/style.sh` and `scripts/docs.sh` not run.**
+`claude/schur-cg-solver-9sf1r5`, draft PR #2, NOT merged). Written in a cloud session
+that cannot build; CI is its only build: style, `-Werror` build, Doxygen and the fast tier
+pass there (CPU, np 1/2/4; `persistent_fgmres_test`, red on `main` too, aside). Never run
+on a GPU, nothing timed.**
 Human: "implement the uzawa stuff here as an option for the solver" (the proposal is
 [design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md)); on the initial guess,
 "ok ya that makes sense" (pressure-only projection under Schur). `solver.outer: coupled |
 schur` (default coupled), `solver.uzawa.*` (flexible CG only, human: "drop both" for plain CG
 and pressure FGMRES; inner tolerance `relaxed` | `tight` | `loose`, ...; not with the
 rotational form), `solver.log_interval` (per-step solver log,
-either method, with device memory). New `SchurComplementOperator`, `SchurSolver`;
-`StokesSolver` dispatches on `outer`; the pressure projection is checkpointed. Departures
-from the proposal and the study plan: [uzawa.md](uzawa.md). **First, on a build machine:**
-build (expect compile fixes), `schur_solver_test` at np 1/2/4, the fast tier (the
-coupled default must be unchanged), `scripts/style.sh`, `scripts/docs.sh`. Then
-`bench/uzawa/study.sh` inside a GPU allocation (Phases 0, 2, 3; submits nothing). Known
-gaps: the coupled block PC and the velocity PCG's vectors are still built under Schur;
-the velocity Krylov solver is rebuilt per refresh; the Python bindings do not expose the
-new keys.
+either method, with device memory). New `SchurComplementOperator`, `SchurSolver`,
+`VelocityCG`; `StokesSolver` dispatches on `outer`; the pressure projection is
+checkpointed. Memory (human: "hyper focused on ... minimizing memory usage"): the Schur
+path builds nothing coupled-only and holds 4 velocity + 2k + 6 pressure vectors, 49
+B/vdof against 115 before the trim (counted, not measured; uzawa.md §4). Departures
+from the proposal and the study plan: [uzawa.md](uzawa.md). **Next:**
+`bench/uzawa/study.sh` inside a GPU allocation (Phases 0, 2, 3, and `capacity` for the
+memory; submits nothing). Gaps: the Python bindings do not expose the new keys.
 
 **Duplicate deck keys are an error; bench.py's `--set` replaces template keys
 (2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
