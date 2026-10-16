@@ -74,9 +74,12 @@ public:
     * @brief The guess for @p b.
     * @param b  Right-hand side.
     * @param x0 Output: X W^T b; untouched when the basis is empty.
+    * @param ax0 Optional output: its image A x0 = W W^T b (no operator
+    *            application); untouched when the basis is empty.
     * @return Whether a guess was made.
     */
-   bool Guess(const mfem::Vector& b, mfem::Vector& x0) const;
+   bool Guess(const mfem::Vector& b, mfem::Vector& x0,
+              mfem::Vector* ax0 = nullptr) const;
 
    /**
     * @brief Add a solution of the system with operator @p A.
@@ -87,6 +90,15 @@ public:
     */
    void Add(const mfem::Operator& A, const mfem::Vector& x,
             mfem::Vector* ax = nullptr);
+
+   /**
+    * @brief Add a solution whose image the caller already has (the Schur
+    *        method's pressure increments: their images come out of the
+    *        iteration, an application would be a velocity solve).
+    * @param x  The solution (copied).
+    * @param ax Its image A x (copied).
+    */
+   void AddWithImage(const mfem::Vector& x, const mfem::Vector& ax);
 
    /**
     * @brief Recompute the images with a changed operator @p A (m
