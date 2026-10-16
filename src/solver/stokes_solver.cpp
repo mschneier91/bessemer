@@ -100,6 +100,14 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
                   "stokes_solver: rotation_in_lor needs the LOR-AMG velocity PC "
                   "(solver.preconditioner: loramg, or cc a_pc LORAMG) and "
                   "rotation_pc = symmetric");
+      MFEM_VERIFY(opts.outer == OuterMethod::Coupled ||
+                  opts.schur == SchurBlockType::CahouetChabard,
+                  "stokes_solver: solver.outer schur needs the Cahouet-Chabard "
+                  "Schur preconditioner (solver.schur: cc or laplacian_legacy)");
+      MFEM_VERIFY(opts.outer == OuterMethod::Coupled || !opts.lagged_velocity,
+                  "stokes_solver: solver.outer schur needs a symmetric momentum "
+                  "block: not with the rotational form (use solver.outer: "
+                  "coupled)");
    }
 
    // Block system. Mass path (Sprint-1 default): [A, -B^T; B, 0] on physical p
@@ -193,7 +201,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    BuildVelocityPreconditioner();
 
    fgmres_.SetOperator(block_op_);
-   fgmres_.SetPreconditioner(*prec_);
+   if (prec_) { fgmres_.SetPreconditioner(*prec_); } // none under Schur
    fgmres_.SetRelTol(opts_.rtol);
    fgmres_.SetAbsTol(opts_.atol);
    fgmres_.SetMaxIter(opts_.max_iter);
@@ -286,16 +294,20 @@ void StokesSolver::BuildVelocityPreconditioner()
       const bool pbj_pc =
          opts_.cc.a_pcg_pc == APcgPC::PointBlockJacobi ||
          (opts_.cc.a_pcg_pc == APcgPC::Auto && op_.GradDivTerm());
+      // The Schur method runs its own velocity CG on vel_inner_pc_ (see
+      // SchurVelocityPreconditioner): this one, and its three velocity
+      // vectors, only for the coupled method.
+      const bool own_cg = opts_.outer == OuterMethod::Coupled;
       auto* kept_pbj = dynamic_cast<PointBlockJacobi*>(vel_inner_pc_.get());
       auto* kept_cg = dynamic_cast<CGSolver*>(vel_prec_.get());
-      if (pbj_pc && kept_pbj && kept_cg)
+      if (pbj_pc && kept_pbj && (kept_cg || !own_cg))
       {
          // A refresh (Delta-t or nu): only the diagonal moved. The grad-div
          // off-diagonals depend on neither and cost ~0.8 s to rebuild at
          // 64^3 Q3 on an H100 (2026-10-14), so the blocks are updated in
          // place and the CG re-pointed at the rebuilt momentum operator.
          kept_pbj->SetDiagonal(op_.MomentumDiagonal());
-         kept_cg->SetOperator(op_.Momentum());
+         if (kept_cg) { kept_cg->SetOperator(op_.Momentum()); }
       }
       else
       {
@@ -314,15 +326,18 @@ void StokesSolver::BuildVelocityPreconditioner()
             vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
                                op_.MomentumDiagonal(), op_.EssentialTrueDofs());
          }
-         auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
-         cg->SetOperator(op_.Momentum());
-         cg->SetPreconditioner(*vel_inner_pc_);
-         cg->SetRelTol(opts_.cc.a_pcg_rtol);
-         cg->SetAbsTol(0.0);
-         cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
-         cg->SetPrintLevel(-1);
-         cg->iterative_mode = false;
-         vel_prec_ = std::move(cg);
+         if (own_cg)
+         {
+            auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
+            cg->SetOperator(op_.Momentum());
+            cg->SetPreconditioner(*vel_inner_pc_);
+            cg->SetRelTol(opts_.cc.a_pcg_rtol);
+            cg->SetAbsTol(0.0);
+            cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
+            cg->SetPrintLevel(-1);
+            cg->iterative_mode = false;
+            vel_prec_ = std::move(cg);
+         }
       }
    }
    else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiChebyshev)
@@ -338,6 +353,21 @@ void StokesSolver::BuildVelocityPreconditioner()
    {
       vel_prec_ = std::make_unique<OperatorJacobiSmoother>(
                      op_.MomentumDiagonal(), op_.EssentialTrueDofs());
+   }
+
+   // The Schur method applies the velocity PC and the Cahouet-Chabard PC
+   // itself: no block preconditioner (it holds a velocity-sized scratch
+   // vector) and no velocity-block monitor.
+   if (opts_.outer == OuterMethod::Schur)
+   {
+      vel_mon_.reset();
+      prec_.reset();
+      if (!schur_mon_)
+      {
+         schur_mon_ = std::make_unique<MonitoredSolver>(*cc_pc_, stats_, false);
+      }
+      WireSchurSolver();
+      return;
    }
 
    // PbjOnly leaves vel_prec_ empty: point-block Jacobi is the velocity PC.
@@ -368,6 +398,45 @@ void StokesSolver::BuildVelocityPreconditioner()
    fgmres_.SetPreconditioner(*prec_);
 }
 
+Solver& StokesSolver::SchurVelocityPreconditioner()
+{
+   // JacobiPCG: its CG's preconditioner, not the CG.
+   if (opts_.cc.a_pc == APC::JacobiPCG) { return *vel_inner_pc_; }
+   return *vel_prec_; // Jacobi, Chebyshev or a LOR-AMG V-cycle
+}
+
+void StokesSolver::WireSchurSolver()
+{
+   // The Schur PC is the monitored one (counts and time in SolveStats).
+   Solver& a_pc = SchurVelocityPreconditioner();
+   if (schur_solver_)
+   {
+      schur_solver_->Rewire(op_.FullMomentum(), a_pc, *schur_mon_);
+      return;
+   }
+   if (cc_pc_->Singular()) // the CC PC's resolved null-space flag
+   {
+      schur_proj_ = std::make_unique<ConstantPressureProjector>(
+                       spaces_.Pressure());
+   }
+   schur_solver_ = std::make_unique<SchurSolver>(
+                      spaces_.Velocity().GetComm(), op_.FullMomentum(),
+                      op_.Divergence(), a_pc, *schur_mon_, schur_proj_.get(),
+                      opts_.uzawa);
+   schur_solver_->SetMaxIter(opts_.max_iter);
+   schur_solver_->SetPrintLevel(opts_.print_level);
+   // The CC PC is applied only between velocity solves: its B M_v^-1 B^T
+   // runs in the velocity CG's two work vectors instead of two of its own.
+   cc_pc_->BorrowVelocityScratch(schur_solver_->VelocityWorkD(),
+                                 schur_solver_->VelocityWorkZ());
+   // initial_guess project: the pressure-space projection, inside the Schur
+   // solver (2 projection_k + 2 pressure vectors, no system vector).
+   if (opts_.initial_guess == InitialGuess::Project)
+   {
+      schur_solver_->EnablePressureProjection(opts_.projection_k);
+   }
+}
+
 void StokesSolver::Refresh(double c0)
 {
    INCNS_PROFILE("stokes_solver::refresh");
@@ -378,6 +447,8 @@ void StokesSolver::Refresh(double c0)
    // FGMRES object all persist untouched.
    op_.SetMassCoeff(c0);
    opts_.mass_coeff = c0; // sigma of the rotation statistics / Schur update
+   // The Schur method's pressure projection holds images of the old S.
+   if (schur_solver_) { schur_solver_->ResetGuess(); }
    block_op_.SetBlock(0, 0, &op_.FullMomentum());
 
    // CC Schur block: sigma tracks the BDF factor; everything structural inside
@@ -396,11 +467,14 @@ void StokesSolver::Refresh(double c0)
                         opts_.rotation_pc != RotationVelocityPC::Symmetric;
    const bool frozen_amg = !use_pbj && lor_vel && opts_.amg_reuse;
    if (!frozen_amg) { BuildVelocityPreconditioner(); }
+   else if (schur_solver_) { WireSchurSolver(); } // the momentum block moved
 }
 
 void StokesSolver::WarmUp()
 {
-   if (warmed_up_) { return; }
+   // The Schur method has no block preconditioner, and no Krylov basis for
+   // the warm-up's measurement to size (CapKrylovDim skips it).
+   if (warmed_up_ || !prec_) { return; }
    INCNS_PROFILE("stokes_solver::warm_up");
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
    const MemoryType mt = Device::GetMemoryType();
@@ -433,6 +507,11 @@ int StokesSolver::GuessVectors() const
 void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
 {
    if (opts_.initial_guess == InitialGuess::Previous) { return; }
+   // The Schur method projects the pressure itself (SchurSolver).
+   if (schur_solver_ && opts_.initial_guess == InitialGuess::Project)
+   {
+      return;
+   }
    INCNS_PROFILE("stokes_solver::initial_guess");
    // The elimination put the Dirichlet values in x: keep them.
    const Array<int>& ess = op_.EssentialTrueDofs();
@@ -485,33 +564,42 @@ void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
 
 void StokesSolver::SetTolerance(const Vector& b, const Vector& x)
 {
+   // Step from the warm start itself: the solver's initial residual IS
+   // b - A x_prev then. So too under the Schur method with the projection,
+   // which guesses inside SchurSolver after computing that residual in its
+   // own work vectors: no system-sized residual vector, no extra apply.
    const bool step_as_initial =
       opts_.tolerance_reference == ToleranceReference::Step &&
-      opts_.initial_guess == InitialGuess::Previous;
+      (opts_.initial_guess == InitialGuess::Previous ||
+       (schur_solver_ && opts_.initial_guess == InitialGuess::Project));
    if (opts_.tolerance_reference == ToleranceReference::Rhs)
    {
       const double b_norm =
          std::sqrt(InnerProduct(spaces_.Velocity().GetComm(), b, b));
       tol_scale_ = b_norm;
-      fgmres_.SetRelTol(0.0);
-      fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * b_norm));
+      tol_rel_ = 0.0;
+      tol_abs_ = std::max(opts_.atol, opts_.rtol * b_norm);
    }
    else if (opts_.tolerance_reference == ToleranceReference::Step &&
             !step_as_initial)
    {
       const double r_norm = StepResidualNorm(b, x);
       tol_scale_ = r_norm;
-      fgmres_.SetRelTol(0.0);
-      fgmres_.SetAbsTol(std::max(opts_.atol, opts_.rtol * r_norm));
+      tol_rel_ = 0.0;
+      tol_abs_ = std::max(opts_.atol, opts_.rtol * r_norm);
    }
    else
    {
-      // InitialResidual, or Step from the warm start itself: FGMRES's initial
-      // residual IS b - A x_prev then.
+      // InitialResidual, or Step from the warm start itself (above).
       tol_scale_ = 0.0;
-      fgmres_.SetRelTol(opts_.rtol);
-      fgmres_.SetAbsTol(opts_.atol);
+      tol_rel_ = opts_.rtol;
+      tol_abs_ = opts_.atol;
    }
+   // The same rule for either outer method (the Schur one computes ||r_0||
+   // itself when tol_rel_ > 0).
+   fgmres_.SetRelTol(tol_rel_);
+   fgmres_.SetAbsTol(tol_abs_);
+   if (schur_solver_) { schur_solver_->SetTolerance(tol_rel_, tol_abs_); }
 }
 
 double StokesSolver::StepResidualNorm(const Vector& b, const Vector& x)
@@ -568,7 +656,7 @@ double StokesSolver::StepResidualNorm(const Vector& b, const Vector& x)
 void StokesSolver::RecordSolution(const Vector& x)
 {
    const double c0 = opts_.mass_coeff;
-   if (opts_.initial_guess == InitialGuess::Project)
+   if (opts_.initial_guess == InitialGuess::Project && !schur_solver_)
    {
       INCNS_PROFILE("stokes_solver::initial_guess");
       if (!projection_)
@@ -607,10 +695,15 @@ void StokesSolver::ExportGuessState(SolverGuessState& s) const
 {
    s.projection_x.clear();
    s.projection_w.clear();
-   if (projection_)
+   // The Schur method's projection is on the pressure space; it travels in
+   // the same fields, flagged (projection_pressure).
+   const SolutionProjection* proj =
+      schur_solver_ ? schur_solver_->Projection() : projection_.get();
+   s.projection_pressure = schur_solver_ != nullptr;
+   if (proj)
    {
-      const std::vector<Vector>& xs = projection_->Solutions();
-      const std::vector<Vector>& ws = projection_->Images();
+      const std::vector<Vector>& xs = proj->Solutions();
+      const std::vector<Vector>& ws = proj->Images();
       s.projection_x.resize(xs.size());
       s.projection_w.resize(ws.size());
       for (std::size_t i = 0; i < xs.size(); ++i)
@@ -641,13 +734,39 @@ void StokesSolver::ImportGuessState(SolverGuessState& s)
                   "stokes_solver: a restored guess vector holds " << v.Size()
                   << " entries, the system " << n);
    };
-   for (const Vector& v : s.projection_x) { check(v); }
-   for (const Vector& v : s.projection_w) { check(v); }
+   // The Schur method's pressure projection (see ExportGuessState).
+   SolutionProjection* pressure_proj =
+      schur_solver_ ? schur_solver_->Projection() : nullptr;
+   const int n_p = spaces_.Pressure().GetTrueVSize();
+   const bool pressure_basis = s.projection_pressure;
+   if (pressure_basis)
+   {
+      for (const Vector& v : s.projection_x)
+      {
+         MFEM_VERIFY(v.Size() == n_p, "stokes_solver: a mixed restored basis");
+      }
+      for (const Vector& v : s.projection_w)
+      {
+         MFEM_VERIFY(v.Size() == n_p, "stokes_solver: a mixed restored basis");
+      }
+   }
+   else
+   {
+      for (const Vector& v : s.projection_x) { check(v); }
+      for (const Vector& v : s.projection_w) { check(v); }
+   }
    check(s.previous_x);
    check(s.step_ax);
 
-   if (opts_.initial_guess == InitialGuess::Project &&
-       !s.projection_x.empty())
+   if (pressure_proj)
+   {
+      // A coupled run's basis does not fit the pressure projection: the
+      // restarted run starts it afresh.
+      if (pressure_basis) { pressure_proj->Restore(s.projection_x, s.projection_w); }
+      else { pressure_proj->Reset(); }
+   }
+   if (opts_.initial_guess == InitialGuess::Project && !schur_solver_ &&
+       !pressure_basis && !s.projection_x.empty())
    {
       if (!projection_)
       {
@@ -721,6 +840,9 @@ void StokesSolver::UpdateRotation()
    INCNS_PROFILE("stokes_solver::update_rotation");
    op_.Rotation()->UpdateVorticity();
    if (pbj_) { pbj_->UpdateSkew(); }
+   // S = B (A + N)^-1 B^T moved with N: the pressure projection's images are
+   // of the old one.
+   if (schur_solver_) { schur_solver_->ResetGuess(); }
    if (lor_rot_) { lor_rot_->SetOperator(op_.AssembleLorMomentum()); }
 
    // Diagnostics and the Schur mode of this step (sigma = 0, steady: none).
@@ -864,14 +986,33 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    stats_.vel_cap_hits = stats_.schur_applications = 0;
    stats_.vel_time = stats_.schur_time = 0.0;
    const double t0 = MPI_Wtime();
+   if (schur_solver_)
    {
-      INCNS_PROFILE("fgmres");
-      fgmres_.Mult(b, x);
+      // Krylov on the pressure Schur complement; same eliminated system,
+      // same warm start, same coupled-residual target.
+      schur_solver_->Mult(b, x);
+      const SchurSolveStats& s = schur_solver_->Stats();
+      iterations_ = s.iterations;
+      converged_ = schur_solver_->Converged();
+      stats_.final_residual = s.final_residual;
+      stats_.tolerance = s.tolerance;
+      stats_.schur_outer = true;
+      stats_.uzawa = s;
+   }
+   else
+   {
+      {
+         INCNS_PROFILE("fgmres");
+         fgmres_.Mult(b, x);
+      }
+      iterations_ = fgmres_.GetNumIterations();
+      converged_ = fgmres_.GetConverged();
+      stats_.final_residual = fgmres_.GetFinalNorm();
+      stats_.tolerance = std::max(tol_abs_, tol_rel_ * fgmres_.GetInitialNorm());
+      stats_.schur_outer = false;
    }
    stats_.solve_time = MPI_Wtime() - t0;
-   iterations_ = fgmres_.GetNumIterations();
    ++solves_;
-   converged_ = fgmres_.GetConverged();
    stats_.outer_iterations = iterations_;
 
    RecordSolution(x); // in the solver's variables, before the sign flip

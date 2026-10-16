@@ -57,15 +57,31 @@ void SolutionProjection::Reset()
    w_.clear();
 }
 
-bool SolutionProjection::Guess(const Vector& b, Vector& x0) const
+bool SolutionProjection::Guess(const Vector& b, Vector& x0, Vector* ax0) const
 {
    if (x_.empty()) { return false; }
    x0 = 0.0;
+   if (ax0) { *ax0 = 0.0; }
    for (std::size_t i = 0; i < x_.size(); ++i)
    {
-      x0.Add(InnerProduct(comm_, w_[i], b), x_[i]);
+      const double c = InnerProduct(comm_, w_[i], b);
+      x0.Add(c, x_[i]);
+      if (ax0) { ax0->Add(c, w_[i]); }
    }
    return true;
+}
+
+void SolutionProjection::AddWithImage(const Vector& x, const Vector& ax)
+{
+   if (Size() >= k_) { Reset(); } // full: restart from the newest
+   Vector xn, wn;
+   Take(x.Size(), xn);
+   Take(ax.Size(), wn);
+   xn = x;
+   wn = ax;
+   Append(xn, wn);
+   Give(xn); // not appended: kept for the next one
+   Give(wn);
 }
 
 void SolutionProjection::Append(Vector& x, Vector& w)

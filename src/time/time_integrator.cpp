@@ -351,6 +351,8 @@ StokesSolver& StokesTimeIntegrator::Trap()
    so.max_iter = opts_.max_iter;
    so.kdim = opts_.kdim;
    so.print_level = opts_.print_level;
+   so.outer = opts_.outer;
+   so.uzawa = opts_.uzawa;
    trap_ = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
    trap_c0_ = 1.0 / dt_;
    ApplyPendingGuess("trap", *trap_);
@@ -465,6 +467,8 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       so.max_iter = opts_.max_iter;
       so.kdim = opts_.kdim;
       so.print_level = opts_.print_level;
+      so.outer = opts_.outer;
+      so.uzawa = opts_.uzawa;
       cache.solver = std::make_unique<StokesSolver>(spaces_, rules_, bc_, so);
       cache.c0 = c0;
       ApplyPendingGuess(name, *cache.solver);
@@ -747,6 +751,8 @@ int StokesTimeIntegrator::KrylovDimForMemory(double free_bytes,
 void StokesTimeIntegrator::CapKrylovDim(StokesSolver& solver)
 {
    if (!opts_.krylov_memory_cap) { return; }
+   // The Schur outer method keeps no coupled Krylov basis to cap.
+   if (solver.UsesSchurOuter()) { return; }
    double free = 0.0, total = 0.0;
    int on_device = DeviceMemoryInfo(free, total) ? 1 : 0;
    MPI_Comm comm = spaces_.Velocity().GetComm();

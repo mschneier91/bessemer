@@ -47,6 +47,37 @@ write byte-identical checkpoints (cavity, np 2, both guesses). smoke|fast green 
 and 4 on the CPU (job 49277774, 72 tests each). Next: the CPU test jobs should also run
 np 4 (`-R "_np4$"`).
 
+**Schur complement (Uzawa) outer method, as an option (2026-10-16, branch
+`claude/schur-cg-solver-9sf1r5`, PR #2, merged 2026-10-16, human: "merge to main and
+push"). Written in a cloud session that cannot build; CI is its only build: style,
+`-Werror` build, Doxygen and the fast tier pass there (CPU, np 1/2/4, 219/219). Never run
+on a GPU, nothing timed.**
+Human: "implement the uzawa stuff here as an option for the solver" (the proposal is
+[design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md)); on the initial guess,
+"ok ya that makes sense" (pressure-only projection under Schur). `solver.outer: coupled |
+schur` (default coupled), `solver.uzawa.*` (flexible CG only, human: "drop both" for plain CG
+and pressure FGMRES; inner tolerance `relaxed` | `tight` | `loose`, ...; not with the
+rotational form), `solver.log_interval` (per-step solver log,
+either method, with device memory). New `SchurComplementOperator`, `SchurSolver`,
+`VelocityCG`; `StokesSolver` dispatches on `outer`; the pressure projection is
+checkpointed. Memory (human: "hyper focused on ... minimizing memory usage"): the Schur
+path builds nothing coupled-only and holds 4 velocity + 2k + 6 pressure vectors, 49
+B/vdof against 115 before the trim (counted, not measured; uzawa.md §4). Departures
+from the proposal and the study plan: [uzawa.md](uzawa.md). **Next:**
+`bench/uzawa/study.sh` inside a GPU allocation (Phases 0, 2, 3, and `capacity` for the
+memory; submits nothing). Gaps: the Python bindings do not expose the new keys.
+
+**CI builds bessemer for the Spack stack's target (2026-10-16, branch
+`claude/schur-cg-solver-9sf1r5`).** `persistent_fgmres_test` failed in CI at np 1 and
+4 (on `main` too): FGMRES(4) differed from MFEM's by up to 4e-13 relative against a
+1e-14 limit, and even FGMRES(50) was not bitwise (1-2e-15). The arithmetic outside
+libmfem is MFEM's own Givens rotations and back substitution, copied; MFEM is built
+by Spack with `-march=x86-64-v3` (FMA contraction), bessemer was built for the
+baseline x86-64. The build step now sets `CXXFLAGS=-march=x86-64-v3`, and the fast tier passes
+219/219 (CI run 38963922762). The differences a passing test prints are not in the CI
+log, so "bitwise" is not confirmed, only within the test's 1e-14. A desktop or cluster
+build without the stack's `-march` may show the same failure.
+
 **Duplicate deck keys are an error; bench.py's `--set` replaces template keys
 (2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
 appended `order_u: 5` after the template's `order_u: 3`, and the loader read the first

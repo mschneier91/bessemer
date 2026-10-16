@@ -16,7 +16,9 @@
 #include "precond/rotational_schur.hpp"
 #include "precond/viscous_ratio.hpp"
 #include "quadrature/rule_book.hpp"
+#include "solver/outer_solver.hpp"
 #include "solver/persistent_fgmres.hpp"
+#include "solver/schur_solver.hpp"
 #include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -111,6 +113,14 @@ struct StokesSolverOptions
    /// InitialGuess::Project: recompute the kept images once the mass factor
    /// has moved by more than this fraction since they were made.
    double projection_rebuild_threshold = 0.05;
+   /// The outer iteration: FGMRES on the coupled system (the default), or
+   /// the Schur complement (Uzawa) method, flexible CG on the pressure
+   /// equation (solver/schur_solver.hpp; the Cahouet-Chabard path, no
+   /// rotation term). Both stop on
+   /// the same coupled residual (rtol, atol, tolerance_reference above) and
+   /// use the same velocity and Schur preconditioners.
+   OuterMethod outer = OuterMethod::Coupled;
+   SchurSolveOptions uzawa; ///< Options of OuterMethod::Schur.
 };
 
 /**
@@ -128,6 +138,9 @@ struct SolverGuessState
    std::vector<mfem::Vector> projection_w; ///< See projection_x.
    double projection_c0 = 0.0;             ///< See projection_x.
    bool projection_stale = false;          ///< See projection_x.
+   /// The projection is the Schur outer method's, on the pressure space
+   /// (pressure-sized vectors, the increments and their images under S).
+   bool projection_pressure = false;
    /// InitialGuess::Extrapolate: the solution before the previous one (none
    /// before the second solve).
    mfem::Vector previous_x;
@@ -166,6 +179,13 @@ struct SolveStats
    double vhat_max = 0.0;        ///< Viscous ratio (zero if not computed).
    bool tensor_active = false;   ///< Rotational Schur in tensor mode.
    int schur_switches = 0;       ///< Rotational Schur mode switches so far.
+   /// The coupled residual ||b - K x|| at the end of the last solve (FGMRES:
+   /// its final residual norm; Schur: from true residuals) and its target.
+   double final_residual = 0.0;
+   double tolerance = 0.0;       ///< See final_residual.
+   bool schur_outer = false;     ///< The last solve used OuterMethod::Schur.
+   /// The Schur outer method's counters of the last solve (schur_outer only).
+   SchurSolveStats uzawa;
 };
 
 /**
@@ -319,8 +339,15 @@ public:
    /// @return True if the momentum block carries the rotation term.
    bool HasRotation() const { return opts_.lagged_velocity != nullptr; }
 
-   /// @return FGMRES iterations of the last Solve().
+   /// @return Outer iterations of the last Solve(): FGMRES's, or the Schur
+   ///         method's pressure iterations.
    int Iterations() const { return iterations_; }
+
+   /// @return Whether the outer iteration is the Schur complement method.
+   bool UsesSchurOuter() const { return schur_solver_ != nullptr; }
+
+   /// @return The Schur complement solver (null on the coupled path).
+   const SchurSolver* Schur() const { return schur_solver_.get(); }
 
    /// @return Whether this solver has run a solve yet (its first one also
    ///          allocates the preconditioners' solve-time workspace, unless
@@ -340,7 +367,8 @@ public:
     * allowance it replaces, 20 % of the memory in use, was 4 GB at 64^3, and
     * 86^3 ran out of memory under it, 2026-10-14.) Leaves nothing the solve
     * reads: every inner solver starts from zero. Once per solver; later calls
-    * return at once.
+    * return at once. A no-op under the Schur method (no block
+    * preconditioner, no restart length to size).
     */
    void WarmUp();
 
@@ -397,8 +425,16 @@ public:
 
 private:
    /// (Re)build the velocity preconditioner + block preconditioner and hand it
-   /// to FGMRES. Called at construction and on a non-frozen Refresh.
+   /// to FGMRES, or (OuterMethod::Schur) only what the Schur solver applies.
+   /// Called at construction and on a non-frozen Refresh.
    void BuildVelocityPreconditioner();
+   /// The Schur method's velocity preconditioner: a fixed linear operator
+   /// (the Jacobi / point-block Jacobi under JacobiPCG, else the velocity
+   /// PC itself), never an iterate-to-tolerance solver.
+   mfem::Solver& SchurVelocityPreconditioner();
+   /// Create the Schur solver, or re-point it at the current momentum block
+   /// and preconditioners (OuterMethod::Schur only).
+   void WireSchurSolver();
 
    MixedSpaces& spaces_;        ///< Mixed spaces (borrowed).
    const RuleBook& rules_;      ///< Quadrature source (borrowed).
@@ -423,7 +459,8 @@ private:
    std::unique_ptr<mfem::Solver> vel_inner_pc_;
    /// Velocity block preconditioner (Jacobi smoother, Chebyshev, PCG or
    /// LOR-AMG). Declared after op_ so it is destroyed before the momentum
-   /// matrix it may reference.
+   /// matrix it may reference. Null under the Schur method with JacobiPCG
+   /// (its CG on vel_inner_pc_ replaces this PCG).
    std::unique_ptr<mfem::Solver> vel_prec_;
    /// Point-block Jacobi (rotation_pc != Symmetric only). Owned here: with
    /// PbjKrylov vel_prec_ is the inner GMRES that borrows it.
@@ -444,14 +481,25 @@ private:
    std::unique_ptr<RotationalSchurPreconditioner> rot_schur_;
    SolveStats stats_; ///< Counters of the last solve (see Stats()).
    /// Monitoring wrappers around the velocity and Schur PCs (borrowed by
-   /// prec_; rebuilt with it).
+   /// prec_; rebuilt with it). Under the Schur method only schur_mon_, built
+   /// once (the Schur solver borrows it).
    std::unique_ptr<MonitoredSolver> vel_mon_;
    std::unique_ptr<MonitoredSolver> schur_mon_; ///< See vel_mon_.
    /// Block preconditioner: StokesBlockPreconditioner (Mass) or BlockStokesPC
-   /// (CC shapes) behind the common Solver interface.
+   /// (CC shapes) behind the common Solver interface. Null under the Schur
+   /// method.
    std::unique_ptr<mfem::Solver> prec_;
    /// Outer Krylov solver (MFEM's FGMRES, work vectors kept between solves).
    PersistentFGMRESSolver fgmres_;
+   /// OuterMethod::Schur: the constant-mode projector the Schur solver uses
+   /// on singular domains (declared first: the solver borrows it), and the
+   /// Schur complement solver. Both null on the coupled path.
+   std::unique_ptr<ConstantPressureProjector> schur_proj_;
+   std::unique_ptr<SchurSolver> schur_solver_; ///< See schur_proj_.
+   /// The outer tolerances SetTolerance chose for the solve (FGMRES's
+   /// semantics: tau = max(abs, rel ||r_0||)).
+   double tol_rel_ = 0.0;
+   double tol_abs_ = 0.0; ///< See tol_rel_.
    /// SolveTrue's block vectors, kept between solves (allocated, and freed
    /// with a device synchronization, at every solve as locals).
    mfem::BlockVector solve_x_;

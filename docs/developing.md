@@ -128,7 +128,9 @@ src/
                nullspace, lp_surrogate (LOR-AMG L_p), point_block_jacobi (nvcc),
                rotational_schur (CC/tensor/auto + RotationNumber, nvcc), viscous_ratio
   solver/      stokes_solver (one saddle-point solve; SolveStats, MonitoredSolver),
-               velocity_preconditioner (enums), case (THE driver-facing class)
+               velocity_preconditioner (enums), case (THE driver-facing class),
+               outer_solver (enums), schur_complement + schur_solver (the Uzawa
+               option, docs/uzawa.md)
   time/        multistep_coeffs, time_integrator (in-repo BDF; NOT mfem::ODESolver),
                adaptive_controller, integrator_state, cfl (nvcc)
   post/        pressure_mean, kinetic_head (nvcc), body_force (lift/drag), diagnostics,
@@ -409,8 +411,19 @@ additive term inside `StokesTimeIntegrator`.
   fluid's ν in every solver (`grad_div_nu_ref`). GPU memory record and the remaining
   opportunity (MFEM's 27-per-point vector-diffusion data; declined, human 2026-10-13):
   [gpu_memory.md](gpu_memory.md).
-- **Outer: FGMRES on the monolithic system, always** (no MINRES, no Schur-only production
-  Krylov). Block preconditioner; FGMRES is required because inner PCs are nonlinear.
+- **Outer: FGMRES on the monolithic system by default** (no MINRES). Block preconditioner;
+  FGMRES is required because inner PCs are nonlinear. **Option under study: the Schur
+  complement (Uzawa) method** (`solver.outer: schur`; human 2026-10-16; [uzawa.md](uzawa.md)):
+  flexible CG only (CC's fixed-count inner CG is nonlinear; plain CG and a pressure
+  FGMRES were dropped, human 2026-10-16; not with the rotational form, refused at setup)
+  on S = B A⁻¹ Bᵀ, each application a velocity solve to a relaxed inner tolerance,
+  same CC preconditioner and same stopping rule (the coupled residual, split τ/√2 pressure
+  + τ/√2 momentum, both true residuals). `initial_guess: project` is pressure-only there.
+  Default stays `coupled` until the study's decision rule (≤ 1.2× step time, ≥ 25 % less
+  peak memory) is measured. Under `schur` nothing coupled-only is built (no block PC,
+  coupled PCG or step-reference residual); its velocity solves share one in-place CG
+  (`VelocityCG`) whose two work vectors Cahouet-Chabard borrows: 4 velocity + 2k + 6
+  pressure vectors in all (uzawa.md §4). CI-tested on the CPU; never run on a GPU.
 - **Schur block** (`solver.schur`): **Cahouet–Chabard is the case-level default** (human
   2026-07-17); `mass` (ν M_p⁻¹, Δt-sensitive) remains, and is the LOW-LEVEL
   `StokesSolverOptions` default so solver unit tests pin what they test.
@@ -798,7 +811,8 @@ errors), Doxygen, the fast tier; the verify tier every third day (days 1, 4, 7, 
 the month), by manual dispatch (input `verify`) and on pull requests labelled `verify`,
 with the rates in the run summary and the CSVs as an artifact. The machine is
 `environments/ci` (the portable stack without the Python packages, the container's gcc
-13.3 as the external compiler, `target=x86_64_v3`). Its Spack install tree is cached
+13.3 as the external compiler, `target=x86_64_v3`; bessemer is compiled for the same
+target, `-march=x86-64-v3`, so code copied from MFEM rounds as MFEM's does). Its Spack install tree is cached
 under a key of the Spack release and the hash of `environments/ci/spack.yaml`: a change
 to either rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes,
 and ccache carries the object files between runs. GitHub evicts caches unused for 7

@@ -144,6 +144,8 @@ void Case::BuildIntegrator()
    opts.initial_guess = params_.initial_guess;
    opts.projection_k = params_.projection_k;
    opts.projection_rebuild_threshold = params_.projection_rebuild_threshold;
+   opts.outer = params_.outer;
+   opts.uzawa = params_.uzawa;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
    body_force_.reset();
@@ -340,6 +342,7 @@ void Case::Step()
       INCNS_PROFILE("case::forces");
       MaybeLogForces();
       MaybeLogRotation(integrator_->Time() - t_prev, step_wall);
+      MaybeLogSolver(integrator_->Time() - t_prev, step_wall);
    }
    // An adaptation event comes BEFORE output and checkpoint: both then see the
    // refined mesh with the (exactly transferred) state. The rebuilt integrator
@@ -741,6 +744,76 @@ void Case::MaybeLogRotation(double dt, double step_wall)
      << s.vel_inner_iterations << "," << s.vel_cap_hits << ","
      << s.schur_applications << "," << s.schur_time << "," << s.vel_time
      << "," << s.solve_time << "," << step_wall << "\n";
+}
+
+void Case::MaybeLogSolver(double dt, double step_wall)
+{
+   if (params_.solver_log_interval == 0 ||
+       cycle_ % params_.solver_log_interval != 0) { return; }
+   const StokesSolver* solver = integrator_->LastSolver();
+   if (!solver) { return; }
+   // Device memory in use: the largest over the ranks (collective, before
+   // the rank-0 return). -1 on host backends.
+   double free = 0.0, total = 0.0;
+   double used = DeviceMemoryInfo(free, total) ? total - free : -1.0;
+   MPI_Allreduce(MPI_IN_PLACE, &used, 1, MPI_DOUBLE, MPI_MAX,
+                 mesh_.GetComm());
+   const SolveStats& s = solver->Stats();
+   const SchurSolveStats& z = s.uzawa;
+   if (!Mpi::Root()) { return; }
+   const std::string base = params_.output.path + "/" + params_.output.name;
+   const bool fresh = !solver_log_started_;
+   if (fresh) { std::filesystem::create_directories(params_.output.path); }
+   {
+      std::ofstream f(base + "_solver.csv", fresh ? std::ios::trunc
+                      : std::ios::app);
+      if (fresh)
+      {
+         f << "step,t,dt,outer,converged,outer_iterations,final_residual,"
+           "tolerance,vel_applications,vel_inner_iterations,vel_cap_hits,"
+           "vel_time,schur_applications,schur_time,uzawa_cycles,"
+           "uzawa_vel_solves,uzawa_vel_iterations,uzawa_vel_time,"
+           "uzawa_schur_applications,uzawa_schur_inner_iterations,"
+           "uzawa_schur_cap_hits,uzawa_schur_inner_time,uzawa_projected,"
+           "uzawa_start_residual,uzawa_guess_residual,solve_time,step_time,"
+           "device_used_gb\n";
+      }
+      // On the Schur path the velocity work is in the uzawa_ columns (the
+      // coupled block preconditioner's velocity PC is not applied).
+      f << std::setprecision(10) << cycle_ << "," << integrator_->Time() << ","
+        << dt << "," << (s.schur_outer ? "schur" : "coupled") << ","
+        << (solver->Converged() ? 1 : 0) << "," << s.outer_iterations << ","
+        << s.final_residual << "," << s.tolerance << ","
+        << s.vel_applications << "," << s.vel_inner_iterations << ","
+        << s.vel_cap_hits << "," << s.vel_time << ","
+        << s.schur_applications << "," << s.schur_time << ","
+        << z.cycles << "," << z.velocity_solves << ","
+        << z.velocity_iterations << "," << z.velocity_time << ","
+        << z.schur_applications << "," << z.schur_inner_iterations << ","
+        << z.schur_cap_hits << "," << z.schur_inner_time << ","
+        << (z.projected ? 1 : 0) << "," << z.start_residual << ","
+        << z.guess_residual << "," << s.solve_time << "," << step_wall << ","
+        << (used >= 0.0 ? used / 1073741824.0 : -1.0) << "\n";
+   }
+   const SchurSolver* schur = solver->Schur();
+   if (schur && params_.uzawa.history)
+   {
+      std::ofstream h(base + "_uzawa_history.csv", fresh ? std::ios::trunc
+                      : std::ios::app);
+      if (fresh)
+      {
+         h << "step,cycle,iteration,residual,coupled_residual,"
+           "inner_tolerance,inner_iterations\n";
+      }
+      h << std::setprecision(10);
+      for (const SchurIterationRecord& r : schur->History())
+      {
+         h << cycle_ << "," << r.cycle << "," << r.iteration << ","
+           << r.residual << "," << r.coupled_residual << ","
+           << r.inner_tolerance << "," << r.inner_iterations << "\n";
+      }
+   }
+   solver_log_started_ = true;
 }
 
 void Case::WriteCheckpoint(const std::string& dir)

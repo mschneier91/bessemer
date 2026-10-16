@@ -140,6 +140,8 @@ incns_add_mpi_test(directional_do_nothing_test directional_do_nothing_test.cpp)
 incns_add_mpi_test(oifs_test oifs_test.cpp)
 incns_add_mpi_test(oifs_convection_test oifs_convection_test.cpp)
 incns_add_mpi_test(persistent_fgmres_test persistent_fgmres_test.cpp)
+# The Schur complement (Uzawa) outer method against the coupled FGMRES one.
+incns_add_mpi_test(schur_solver_test schur_solver_test.cpp)
 incns_add_mpi_test(solution_projection_test solution_projection_test.cpp)
 incns_add_mpi_test(step_retry_test step_retry_test.cpp)
 # The DFG 2D-1 benchmark (c_D, c_L, dp vs John's reference values): `slow`

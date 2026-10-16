@@ -51,6 +51,13 @@ PHASES = {
                 "stokes_solver::velocity_pc", "time_integrator::adopt_solver",
                 "cc::weighted_mass_setup"],
     "diagnostics_io": ["case::diagnostics", "case::record_step", "case::forces"],
+    # The coupled FGMRES's Gram-Schmidt (inside fgmres_glue before
+    # 2026-10-16), and the Schur (Uzawa) outer method's pieces
+    # (solver.outer: schur; docs/uzawa.md).
+    "gram_schmidt": ["fgmres::orthogonalize"],
+    "schur_velocity_solves": ["schur_solver::velocity_solve",
+                              "schur_operator::velocity_solve"],
+    "schur_glue": ["schur_solver", "schur_solver::cg", "schur_operator::apply"],
 }
 
 
@@ -292,7 +299,42 @@ def one_run(args, case, n, rep, outdir):
         "setup_s": float(flatten(summ.get("profile", {}).get("regions", {})).get(
             "case::setup.seconds", 0.0)),
     })
+    rec.update(solver_log(os.path.join(rundir, name + "_solver.csv"),
+                          args.warmup, args.measure))
     return rec
+
+
+def solver_log(path, warmup, measure):
+    """Means over the measured steps of the per-step solver log
+    (solver.log_interval 1, which study.sh sets; absent otherwise): the work inside the solve, the
+    final coupled residual against its tolerance, and the device memory in
+    use after the step (the largest over the ranks)."""
+    try:
+        rows = read_csv(path)
+    except OSError:
+        return {}
+    rows = rows[warmup:warmup + measure]  # one row per step, as the history
+    if not rows:
+        return {}
+
+    def mean(key):
+        return statistics.mean(float(r[key]) for r in rows)
+
+    out = {"solver": {
+        "outer": rows[-1]["outer"],
+        "converged_all": all(r["converged"] == "1" for r in rows),
+        "residual_over_tolerance_max": max(
+            float(r["final_residual"]) / float(r["tolerance"])
+            for r in rows if float(r["tolerance"]) > 0) if any(
+                float(r["tolerance"]) > 0 for r in rows) else None,
+        "device_used_gb_max": max(float(r["device_used_gb"]) for r in rows),
+    }}
+    for key in ("outer_iterations", "vel_inner_iterations", "schur_applications",
+                "uzawa_cycles", "uzawa_vel_solves", "uzawa_vel_iterations",
+                "uzawa_schur_applications", "uzawa_schur_inner_iterations",
+                "uzawa_schur_cap_hits", "solve_time"):
+        out["solver"][key + "_mean"] = mean(key)
+    return out
 
 
 def cmd_run(args):

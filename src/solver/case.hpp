@@ -330,6 +330,19 @@ private:
     */
    void MaybeLogRotation(double dt, double step_wall);
    bool rotation_log_started_ = false; ///< Header written (file truncated).
+
+   /**
+    * @brief Append the step's solver statistics to
+    *        `<output.path>/<output.name>_solver.csv` every
+    *        solver.log_interval steps, either outer method, and with
+    *        solver.uzawa.history the Schur method's iterations to
+    *        `<output.name>_uzawa_history.csv` (rank 0 writes; the device
+    *        memory is the largest over the ranks).
+    * @param dt        Size of the step just taken.
+    * @param step_wall Wall time of the step [s].
+    */
+   void MaybeLogSolver(double dt, double step_wall);
+   bool solver_log_started_ = false; ///< Header written (files truncated).
    /// amr.write_indicator: piecewise-constant space and fields for the
    /// indicator and the refinement depth (rebuilt after each event).
    std::unique_ptr<mfem::L2_FECollection> amr_fec_;

@@ -260,6 +260,18 @@ public:
     */
    void ReleasePlainMass();
 
+   /**
+    * @brief Run B M_v^-1 B^T in two borrowed velocity-sized vectors from now
+    *        on and free its own two (MixedPoissonOperator::BorrowScratch).
+    *        The caller guarantees they are idle whenever this PC is applied.
+    * @param a Scratch (borrowed, velocity true-dof sized, device-aware).
+    * @param b A second one (borrowed).
+    */
+   void BorrowVelocityScratch(mfem::Vector& a, mfem::Vector& b)
+   {
+      bmb_->BorrowScratch(a, b);
+   }
+
    /// @return The inner Poisson preconditioner (LOR-AMG V-cycle on the
    ///         UNSCALED L_p; for the rotational Schur preconditioner).
    LpSurrogate& Laplacian() const { return *lp_; }

@@ -119,6 +119,15 @@ jobs:
 
       - name: Build (cpu preset, warnings are errors)
         id: build
+        env:
+          # The target the Spack stack is built for (environments/ci/spack.yaml):
+          # Spack's compiler wrapper builds MFEM with -march=x86-64-v3, so its
+          # GCC contracts a*b + c into FMAs. Built for the baseline x86-64,
+          # bessemer's copies of MFEM code (PersistentFGMRESSolver's Givens
+          # rotations and back substitution) rounded differently, and
+          # persistent_fgmres_test, which compares them with MFEM's to 1e-14,
+          # failed where restarted FGMRES amplifies the last bits.
+          CXXFLAGS: -march=x86-64-v3
         run: |
           scripts/build.sh cpu
           ccache --show-stats || true
