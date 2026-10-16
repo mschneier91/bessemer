@@ -6,7 +6,7 @@ follows the maintainer's throughput plan (tiers 0 to 5), adapted to bessemer (be
 Headline metric: **DOF-steps per second per GPU** (velocity plus pressure true dofs times
 steps, per second of step wall time) on one H100 80 GB, Bridges-2, CUDA backend.
 
-## Where it stands (2026-10-15, 22:30)
+## Where it stands (2026-10-16)
 
 One H100. Taylor-Green 32^3 Q3/Q2 from t = 0 (IMEX; 20 + 50 or 10 + 30 steps, 3 repeats)
 and the turbulent channel at Re_tau 180 replayed from t = 60 (OIFS CFL 2, 3 + 30 steps),
@@ -23,13 +23,15 @@ each row adding to the previous one:
 | + fused kernel with a thread per point, host overhead | **0.043** | **33.8x** | 0.058 | 16.5x |
 | + `time.oifs_cfl: 1.5` (opt-in substep CFL) | | | 0.050 | 19.2x |
 | + `n_inner` 2, host overhead round 2 (7d880f0, a173072) | 0.0381 | 37.8x | 0.0435 | 22.1x |
-| + the constant-pressure projection on the device (747a294) | **0.0339** | **42.5x** | **0.0382** | **25.2x** |
+| + the constant-pressure projection on the device (747a294) | 0.0339 | 42.5x | 0.0382 | 25.2x |
+| + step-relative `rtol` 1e-3 (b1bc283; the decks, 4440522), the CFL rate once per level (eb328eb), a new dt re-assembles only the mass term (9a36852) | **0.0314** | **45.9x** | **0.0259** | **37.1x** |
 
-The solver settings and `time.oifs_cfl` are opt-in deck keys (the defaults are unchanged,
-pending the human; **the fast tolerance is not safe for every case**, see "The fast settings on
-the other benchmarks"); everything else is code. A production channel run (CFL-controlled
-steps, statistics every 5 steps) costs **0.0434 s of wall time per step** (job 49266911),
-the spin-up's 7 h 15 min about 21 min. Gates: the expensive Taylor-Green gate passes
+The solver settings and `time.oifs_cfl` are deck keys, set by the Taylor-Green and channel
+decks (4440522); the case-level defaults are unchanged, pending the human (see "Restarts with
+the projected guess"); `rtol` depends on the problem (see "The step-relative tolerance").
+Everything else is code. A production channel run (CFL-controlled steps, statistics every 5
+steps) from t = 0 to 120 costs **0.0289 s of wall time per step**: the spin-up's 7 h 15 min
+is **13.8 min** (job 49270033; "Final runs"). Gates: the expensive Taylor-Green gate passes
 after every kernel change (the dissipation curve to t = 20 within 5.9e-5 of the default
 run's peak with all of it; that run takes 127 s against 3,390 s); the channel statistics
 gate passes for the solver settings (t = 60 to 120) and every OIFS change was checked from
@@ -42,10 +44,18 @@ run of 2026-10-14 (`runs/tgv_re1600/tgv_n64_1gpu`):
 | | Wall time | Outer its/step | s/step | Peak dissipation |
 |---|---|---|---|---|
 | 2026-10-14, main | 12 h 44 min (45,847 s) | 13.7 | 13.9 | 3.10846 at t = 8.892 |
-| now, `n_inner` 3, `rtol` 1e-6, project k 8, rhs | **1 h 01 min** (3,672 s) | 1.8 | 1.07 | 3.10843 at t = 8.892 |
+| `n_inner` 3, `rtol` 1e-6, project k 8, rhs (2026-10-15) | 1 h 01 min (3,672 s) | 1.8 | 1.07 | 3.10843 at t = 8.892 |
+| **the deck** (step `rtol` 1e-3, project k 8, `n_inner` 2, CFL 0.25; 2026-10-16, job 49270034) | **17.8 min** (1,065 s) | 1.48 | 0.271 | 3.10643 at t = 8.892 |
 
-12.5x; the dissipation curve within 2.4e-4 of its peak, the energy at t = 20 within 1.7e-4
-(`runs/tgv_re1600/tgv_n64_fast`).
+12.5x, then **43.0x**. The rhs 1e-6 run's dissipation curve is within 2.4e-4 of its peak and the
+energy at t = 20 within 1.7e-4 (`runs/tgv_re1600/tgv_n64_fast`); the deck's within 5.8e-3 and
+4.6e-4, and against the 512^3 DNS as close as main's run (peak error 2.60 % against 2.54 %;
+"Final runs").
+
+**The polynomial order** (Taylor-Green, Q2 to Q6 at N ~ 96, 128 and 192 nodes per direction;
+"The polynomial order" below): Q3 is the fastest per DOF and step; Q4 and Q5 reach a given
+accuracy fastest and in the least memory (2.5 % peak-dissipation error: Q5 at 130^3 nodes in
+356 s and 13.8 GiB, Q3 at 192^3 in 1,056 s and 36.3 GiB); memory per DOF falls with p.
 
 ## Adaptations of the plan (2026-10-14)
 
@@ -824,3 +834,163 @@ The velocity block is 15.0 of TGV 32^3's 42.6 ms per step (job 49255498's profil
 1.8 ms, mostly the ~30 dot-product round trips per step. A fused, one-reduction CG would
 recover ~1.2 ms: ~3 % of TGV, ~1 % of the channel. MFEM's vector mass in the same block is
 already near its shared-memory bound. Not worth another copy of MFEM's code now.
+
+## The step-relative tolerance (b1bc283; the decks: 4440522)
+
+`solver.tolerance_reference: step` stops FGMRES at ||r|| <= rtol ||b - A x_prev||, x_prev the
+previous solution: the residual of "nothing changed", which scales with what the step has to
+move. The rhs reference (rtol ||b||) is loose at a small dt, where ||b|| is mostly c0 M u^n:
+it was wrong on DFG 2D-3 and 3D-3Z and made the error-controlled DFG 2D-1 and 3D-1Z abort
+(above). With `initial_guess: project` the reference costs no operator application: the
+projection keeps A x_prev from when it recorded the solution, and a new mass factor adds
+(c0 - c0_prev) M x_u on the free velocity rows. The other references are unchanged (CPU final
+checkpoints byte-identical; job 49268547).
+
+| Step-relative, projected guess, `n_inner` 2 (jobs 49268547, 49268551, 49269400) | wall | against |
+|---|---|---|
+| DFG 2D-1, `rtol` 1e-6 | 25 s | the deck 160 s; c_D, c_L, Delta p the deck's to ~1e-4 |
+| DFG 2D-3, `rtol` 1e-6 | 29 s | 242 s; c_D,max, c_L,max the deck's |
+| DFG 3D-1Z, `rtol` 1e-6 | 114 s | 937 s |
+| DFG 3D-3Z, `rtol` 1e-6 / 1e-4 / 1e-3 | 186 / 171 / 171 s | 557 s; c_D,max 3.21116 / 3.21132 / 3.21223 (deck 3.21116; rhs 1e-6: 3.30849) |
+| TGV 32^3, `rtol` 1e-3 | 0.0314 s/step, gate 82 s | rhs 1e-6: 0.0339 s/step; dissipation within 1.7e-4 of the peak |
+| channel replay, `rtol` 1e-3 | 0.0259 s/step | rhs 1e-6: 0.0377 s/step |
+| channel production, t = 60..120, `rtol` 1e-3 | 0.0317 s wall/step | 0.0434; Re_tau 178.34, max U+ error 7.60 % (the sampling noise) |
+
+The TGV and channel decks set it explicitly (`rtol` 1e-3, project k 8, `n_inner` 2; the
+channel decks `time.oifs_cfl` 1.5). `rtol` still depends on the problem: 1e-3 where dt is
+CFL-limited near 1-2, 1e-6 where a small fixed dt or an error controller sets it (DFG).
+
+## The CFL rate once per history level (eb328eb)
+
+A production channel step evaluated the CFL rate twice for the same velocity (the step
+choice, then OIFS's substep count with the two older levels), each time recomputing the
+Jacobians at the GLL nodes. `ConvectiveCfl::MaxRateAt` keeps each level's rate keyed by its
+time; the step choice goes through the advector's cache. Bitwise (cfl_test C6; CPU
+checkpoints and channel statistics byte-identical, job 49268350). Production channel wall per
+step 0.0439 -> 0.0434 s (job 49268351).
+
+## A new dt re-assembles only the mass term (9a36852)
+
+`StokesOperator::SetMassCoeff` rebuilt the whole momentum form at every step-size change
+(every integrator's partial-assembly data, the fusion, the true-dof and constrained
+operators): ~1.3 ms per change on the channel, whose CFL-controlled steps change dt at ~75 %
+of the steps. Only c0 M depends on dt; the mass integrator's AssemblePA alone recomputes it,
+and the diagonal is c0 mass_diag + rest_diag as before. Bitwise (CPU production channel and
+DFG 2D-1's 3,116 error-controlled steps; job 49268935). Production channel 0.0425 -> 0.0413 s
+wall per step (job 49269819).
+
+## The projection's rebuild threshold (8f7c7c2)
+
+The projected guess recomputes its kept images (k operator applications and a Gram-Schmidt)
+once c0 = beta0 / dt has moved 5 % since they were made; `solver.projection_rebuild_threshold`
+(default 0.05, human 2026-10-15) sets it. Keeping M x for each kept solution would make a
+rebuild k vector additions (~2 % more on the production channel, estimated) for k more
+velocity-size vectors (1.4 GB at 64^3); not done (human: memory weighs more). Batching the
+Gram-Schmidt's inner products (one reduction per pass) gave nothing measurable (production
+channel 0.0413 -> 0.0418 s, job 49269460) and was dropped.
+
+## Restarts with the projected guess (the defaults: held)
+
+With `initial_guess: project`, a restart matches the uninterrupted run only to the solver
+tolerance (relative differences 1e-10 to 4e-7 in checkpoint_test and channel_statistics_test
+S5): the projection's kept solutions and images, and the step reference's A x_prev, are not
+checkpointed. The decks set the fast configuration explicitly; the case-level defaults stay
+as they were until the human chooses: (a) checkpoint the projection state (exact restarts,
+2k extra system-size vectors per checkpoint), (b) accept tolerance-level restart
+differences, or (c) default to `initial_guess: previous` with the rest of the configuration.
+
+## Final runs (2026-10-16; one H100, the 4440522 binary, the committed decks)
+
+| | Before | Now | Speed-up |
+|---|---|---|---|
+| Channel Re_tau 180, t = 0 to 120 (spin-up and statistics) | 7 h 15 min, 28,628 steps (a6870f8, defaults, 2026-10-14) | **13.8 min** (826 s), 28,567 steps, 2.30 its/step, 0.0289 s wall/step (job 49270033) | **31.6x** |
+| Taylor-Green 64^3 Q3/Q2, t = 0 to 20 | 12 h 44 min (45,847 s), 3,284 steps, 13.7 its/step (main, 2026-10-14) | **17.8 min** (1,065 s), 3,927 steps, 1.48 its/step (job 49270034) | **43.0x** |
+
+The channel's statistics over t = 60 to 120: Re_tau 178.22 (DNS 178.12), max U+ error 8.02 %
+(y+ >= 5), largest absolute differences u_rms 0.166, v_rms 0.095, w_rms 0.093, u'v' 0.063 (wall
+units): the sampling noise of the earlier gates (7.4 to 9.0 %). Taylor-Green against the
+512^3 DNS: peak dissipation error 2.60 % (main's run 2.54 %), largest |eps - ref| 3.23 % of
+the peak (3.16 %). Against main's run the curve is within 1e-3 of the peak to t = 12 and
+5.8e-3 at t = 15.4, in the turbulent decay (the deck's CFL 0.25 against main's 0.3 differs
+too; the rhs 1e-6 run was within 2.4e-4); the gate (0.02) passes.
+
+## Orders 5 and 6: compile-time kernels (c521d65; human 2026-10-16, before the order study)
+
+Velocity orders 5 and 6 ran MFEM's runtime-size kernels (arrays for 14 points per
+direction) for the vector mass, the 3D divergence and its transpose, the IMEX nonlinear
+convection and the diagnostics' flow sums. They are registered at those sizes now
+(`kernel_specializations.cpp`, `flow_sums.cpp`). At Q1D >= 7 nvcc stops unrolling MFEM's
+`Grad3d` loop over directions, and kernels holding 3 x 3 x Q1D gradient arrays put them on
+the stack (1.0-1.2 KB per thread, ptxas): the 3D divergence (K >= 5) and the viscous-only
+kernel (Q1D >= 7) work one velocity component at a time (`operators/component_kernels.hpp`;
+same arithmetic, no stack). The fused viscous + grad-div kernel at (7, 8) keeps its column
+variant: a two-pass one-component version (no stack, 255 registers, the gradients twice)
+was slower.
+
+| Per apply, one H100 (jobs 49270936, 49271021) | Q5 (19^3) before | after | Q6 (16^3) before | after |
+|---|---|---|---|---|
+| flow sums (every diagnostics step) | 24.5 ms | 1.10 ms | 53.5 ms | 1.33 ms |
+| vector mass | 0.40 ms | 0.26 ms | 0.39 ms | 0.25 ms |
+| divergence / transpose | 0.79 / 0.76 ms | 0.28 / 0.32 ms | 0.53 / 0.48 ms | 0.26 / 0.34 ms |
+| nonlinear convection (IMEX) | 1.03 ms | 0.87 ms | 1.38 ms | 1.23 ms |
+| viscous only (grad-div off) | 0.87 ms | 0.50 ms | 0.65 ms | 0.53 ms |
+| fused viscous + grad-div (two-pass, rejected) | | | 0.87 ms | 1.01 ms |
+
+Kernel time of 13-step runs, setup included: Q5 1.59 -> 0.98 s, Q6 2.90 -> ~1.8 s. Still on
+the stack at these sizes, MFEM's own kernels (fixes held for MFEM 4.10): the vector mass at
+Q1D 5-7 (240-336 bytes) and the convection apply at (6, 8), (7, 10) (1.5-1.9 KB), and the
+fused kernel's column variant at (7, 8) (1.2 KB). Setup at Q6 also costs: the viscous
+diagonal 0.16 s and grad-div's nodal off-diagonal blocks 0.31 s (once per run).
+
+## The polynomial order: time to solution and memory (human 2026-10-15; jobs 49271024, 49271184)
+
+Taylor-Green Re 1600 from t = 0 to 20 on one H100 with the n32 deck's settings (IMEX, CFL
+0.25, step `rtol` 1e-3, project k 8, `n_inner` 2, grad-div on) and Q_p / Q_{p-1} at about the
+same number of velocity nodes per direction, N = n p; compile-time kernels at every order
+(c521d65). Peak memory: `nvidia-smi` every 250 ms (the process, CUDA context included; the
+profiler's gauge needs `profile: sync`, which would slow the runs). The dissipation's error
+against the 512^3 DNS (`plot.py`): at its peak, and the largest over t <= 20, as a fraction
+of the peak.
+
+| p | elements | N | DOFs | steps | its/step | wall to t = 20 | DOF-steps/s | peak memory | bytes/DOF | peak error | largest error |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2 | 48^3 | 96 | 2.76M | 1,595 | 1.59 | 87 s | 5.09e7 | 7.0 GiB | 2,732 | 34.4 % | 37.2 % |
+| 3 | 32^3 | 96 | 2.92M | 1,928 | 1.53 | **79 s** | **7.09e7** | 6.3 GiB | 2,336 | 15.6 % | 16.8 % |
+| 4 | 24^3 | 96 | 3.03M | 2,262 | 1.48 | 102 s | 6.72e7 | 6.5 GiB | 2,299 | 7.0 % | 8.8 % |
+| 5 | 19^3 | 95 | 3.01M | 2,790 | 1.47 | 141 s | 5.95e7 | 6.2 GiB | 2,206 | **4.8 %** | 9.3 % |
+| 6 | 16^3 | 96 | 3.17M | 2,809 | 1.46 | 169 s | 5.25e7 | 6.4 GiB | 2,172 | 7.3 % | 8.5 % |
+| 2 | 64^3 | 128 | 6.55M | 2,223 | 1.53 | 250 s | 5.84e7 | 13.5 GiB | 2,209 | 24.7 % | 24.7 % |
+| 3 | 42^3 | 126 | 6.59M | 2,539 | 1.52 | **218 s** | **7.67e7** | 11.1 GiB | 1,808 | 12.3 % | 14.0 % |
+| 4 | 32^3 | 128 | 7.18M | 2,970 | 1.45 | 287 s | 7.42e7 | 14.0 GiB | 2,090 | 4.6 % | 9.2 % |
+| 5 | 26^3 | 130 | 7.72M | 3,418 | 1.43 | 356 s | 7.41e7 | 13.8 GiB | 1,923 | **2.5 %** | 7.6 % |
+| 6 | 21^3 | 126 | 7.16M | 4,118 | 1.40 | 456 s | 6.46e7 | 13.0 GiB | 1,950 | 3.5 % | 4.9 % |
+| 2 | 96^3 | 192 | 22.12M | 3,306 | 1.48 | 1,166 s | 6.27e7 | 41.9 GiB | 2,034 | 10.7 % | 12.4 % |
+| 3 | 64^3 | 192 | 23.33M | 3,926 | 1.48 | **1,056 s** | **8.67e7** | 36.3 GiB | 1,670 | 2.6 % | 3.2 % |
+| 4 | 48^3 | 192 | 24.22M | 4,614 | 1.41 | 1,357 s | 8.24e7 | 37.4 GiB | 1,656 | 1.9 % | 3.9 % |
+| 5 | 38^3 | 190 | 24.09M | 5,270 | 1.38 | 1,532 s | 8.29e7 | 35.3 GiB | 1,573 | **0.18 %** | 3.3 % |
+| 6 | 32^3 | 192 | 25.33M | 6,024 | 1.36 | 2,345 s | 6.51e7 | 36.3 GiB | 1,538 | 1.1 % | 3.5 % |
+
+- **Per DOF and step, Q3 is the fastest** at every size (7.1, 7.7 and 8.7e7 DOF-steps/s at
+  N ~ 96, 128, 192), Q4 and Q5 3 to 16 % below it, Q2 and Q6 the slowest (Q6 25 % below Q3 at
+  N = 192: its fused (7, 8) column kernel and MFEM's convection at (7, 10) keep stack arrays).
+- **Steps grow with p at a fixed N.** The CFL limit is taken at the GLL nodes, whose spacing
+  near the element faces shrinks faster than h / p: at N = 192 Q6 takes 6,024 steps, Q3
+  3,926, Q2 3,306. That is most of Q6's cost (its time per step is 1.45x Q3's).
+- **Iterations per step** fall slightly with p (1.48 to 1.36 at N = 192).
+- **Memory carries no high-order penalty.** Bytes per DOF fall with p (at N = 192: 2,034 for Q2,
+  1,670 for Q3, 1,538 for Q6, the CUDA context included). Q2 needs the most: 41.9 GiB at 22M DOFs.
+- **Accuracy at a fixed N rises steeply with p** (the peak-dissipation error, Q2 to Q6):
+  34 / 16 / 7.0 / 4.8 / 7.3 % at N ~ 96, 25 / 12 / 4.6 / 2.5 / 3.5 % at N ~ 128, and
+  10.7 / 2.6 / 1.9 / 0.18 / 1.1 % at N ~ 192. Q6 trails Q5 at every N: its elements are
+  larger (16^3 against 19^3 elements at N ~ 96).
+- **Time to an accuracy favours Q4 and Q5.** About 2.5 % peak error: Q5 at N = 130 takes 356 s
+  and 13.8 GiB, Q3 at N = 192 1,056 s and 36.3 GiB (3.0x the time, 2.6x the memory). About
+  5 %: Q5 at N = 95 takes 141 s and 6.2 GiB, Q4 at N = 128 287 s. Q2 at N = 192 (10.7 %, 1,166 s)
+  is less accurate than Q4 at N = 96 (7.0 %, 102 s).
+- **The largest error over t <= 20 levels off at 3.2 to 3.9 % of the peak at N = 192 for every
+  p >= 3.** Each run's dissipation peaks about 0.09 early (t = 8.83-8.89 against the DNS's
+  8.97), so past N ~ 128 at Q5 the spatial resolution no longer sets this error. The time step
+  (CFL 0.25, BDF2) or the step tolerance (1e-3) would; they were not separated here.
+- **On this flow, Q4 and Q5 give the best time and memory to a given accuracy.** Q3 is the
+  fastest per DOF. Q2 is dominated everywhere. Q6 pays 1.5x Q3's steps at the same N, and its
+  kernels are the least tuned.
