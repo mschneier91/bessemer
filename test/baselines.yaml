@@ -178,10 +178,13 @@ verification:
     levels: [2, 4, 8]
   # Kovasznay flow, default orders and time scheme; level n = 3n x 4n elements
   # on [1.5 x 2]. March until the velocity error changes by < steady_tol over
-  # check_every time units twice in a row (fails if not by t_max).
+  # check_every time units twice in a row (fails if not by t_max). Levels
+  # [1, 2, 4] since the Q6 default (human 2026-10-16): at Q6 [2, 4, 8] put the
+  # finest level on the ~1e-10 round-off floor (u_l2 4.8e-9 -> 1.7e-10, p_l2
+  # 1.4e-10 -> 3.5e-10 from level 4 to 8, after rates 7.0 / 7.4 from 2 to 4).
   kovasznay:
     re: 40.0
-    levels: [2, 4, 8]
+    levels: [1, 2, 4]
     dt: 0.01        # first step; the default CFL control takes over
     t_max: 40.0
     check_every: 1.0
