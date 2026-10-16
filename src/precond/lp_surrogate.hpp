@@ -14,6 +14,7 @@
 
 #include "precond/hypre_device.hpp"
 #include "precond/nullspace.hpp"
+#include "util/profiler.hpp"
 #include "mfem.hpp"
 
 #include <memory>
@@ -34,13 +35,20 @@ enum class LpBC
  * @brief Fixed V-cycle(s) of BoomerAMG on the low-order-refined pressure
  *        Laplacian -- a fixed, SYMMETRIC linear operator (CG-legal).
  *
- * The high-order Diffusion form on the pressure space is handed to
- * mfem::LORSolver<HypreBoomerAMG> (Q1-on-GLL-nodes rediscretization, the same
- * machinery as the H5 velocity block). CG legality of the inner solve demands
- * a symmetric application, so the relaxation is SET explicitly (l1 hybrid
- * symmetric Gauss-Seidel on a host, l1-Jacobi on a GPU: SymmetricAmgSmoother;
- * matched single pre/post sweeps) rather than trusting library defaults. On singular (all-Neumann) operators the application is
- * wrapped in DeviceOrthoSolver (precond/nullspace.hpp) so iterates never accumulate the constant mode.
+ * The high-order Diffusion form on the pressure space is rediscretized by
+ * mfem::ParLORDiscretization (Q1 on the GLL nodes, the same machinery as the
+ * H5 velocity block) and BoomerAMG is set up on the assembled matrix. Only the
+ * matrix and the hierarchy are kept: the discretization's LOR mesh, space and
+ * batched-assembly scratch (27 doubles per element dof) are freed once the
+ * matrix is assembled, where mfem::LORSolver would keep them for its lifetime.
+ * L_p does not depend on dt or nu, so it is never reassembled.
+ *
+ * CG legality of the inner solve demands a symmetric application, so the
+ * relaxation is SET explicitly (l1 hybrid symmetric Gauss-Seidel on a host,
+ * l1-Jacobi on a GPU: SymmetricAmgSmoother; matched single pre/post sweeps)
+ * rather than trusting library defaults. On singular (all-Neumann) operators
+ * the application is wrapped in DeviceOrthoSolver (precond/nullspace.hpp) so
+ * iterates never accumulate the constant mode.
  *
  * MEASURED DECISION (deviation from the spec's par.4 suggestion): the spec
  * proposes forcing a smoother-only coarsest solve on the singular operator.
@@ -131,11 +139,22 @@ public:
 
       // --- LOR L_p: DiffusionIntegrator on the HO pressure space ------------
       form_.AddDomainIntegrator(new mfem::DiffusionIntegrator);
-      lor_ = std::make_unique<mfem::LORSolver<mfem::HypreBoomerAMG>>(
-                form_, ess_tdofs);
+      {
+         INCNS_PROFILE("lp::lor_assemble");
+         auto lor =
+            std::make_unique<mfem::ParLORDiscretization>(form_, ess_tdofs);
+         mfem::OperatorHandle& a = lor->GetAssembledSystem();
+         a.SetOperatorOwner(false); // the matrix outlives the discretization
+         A_.reset(a.As<mfem::HypreParMatrix>());
+         {
+            INCNS_PROFILE("lp::lor_release");
+            lor.reset();
+         }
+      }
+      amg_ = std::make_unique<mfem::HypreBoomerAMG>(*A_);
 
       // --- CG legality + singular-safety knobs, set EXPLICITLY --------------
-      mfem::HypreBoomerAMG& amg = lor_->GetSolver();
+      mfem::HypreBoomerAMG& amg = *amg_;
       amg.SetPrintLevel(print_level);
       amg.iterative_mode = false;
       amg.SetMaxIter(vcycles); // n V-cycles from zero guess: still a fixed op
@@ -159,9 +178,21 @@ public:
       }
       // On a GPU every option above must be one hypre runs there, fast.
       VerifyHypreAmgOnDevice(amg, "lp_surrogate: the pressure LOR-AMG");
+      {
+         // Build the hierarchy now rather than in the first application
+         // (MFEM sets hypre up lazily), so setup is charged its memory and
+         // time. The right-hand side does not enter the setup.
+         INCNS_PROFILE("lp::amg_setup");
+         mfem::Vector b(A_->Height()), x(A_->Height());
+         b.UseDevice(true);
+         x.UseDevice(true);
+         b = 0.0;
+         x = 0.0;
+         amg.Setup(b, x);
+      }
 
       singular_ = singular;
-      if (singular_) { ortho_.SetSolver(*lor_); }
+      if (singular_) { ortho_.SetSolver(amg); }
    }
 
    /**
@@ -172,7 +203,7 @@ public:
    void Mult(const mfem::Vector& x, mfem::Vector& y) const override
    {
       if (singular_) { ortho_.Mult(x, y); }
-      else { lor_->Mult(x, y); }
+      else { amg_->Mult(x, y); }
    }
 
    /// Required by mfem::Solver; fixed at construction.
@@ -188,8 +219,10 @@ public:
 private:
    mfem::Array<int> ess_tdofs_;  ///< Dirichlet true dofs of L_p.
    mfem::ParBilinearForm form_;  ///< HO Diffusion form (LOR source; owned).
-   /// LOR-AMG on the rediscretized L_p (owned; must outlive applications).
-   std::unique_ptr<mfem::LORSolver<mfem::HypreBoomerAMG>> lor_;
+   /// The LOR L_p (owned). Declared before amg_, which references it.
+   std::unique_ptr<mfem::HypreParMatrix> A_;
+   /// BoomerAMG on A_ (owned; must outlive applications).
+   std::unique_ptr<mfem::HypreBoomerAMG> amg_;
    mutable DeviceOrthoSolver ortho_; ///< Constant-mode wrap (singular only).
    bool singular_ = false;           ///< Ortho-wrapped?
 };
