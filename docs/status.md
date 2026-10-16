@@ -48,9 +48,9 @@ and 4 on the CPU (job 49277774, 72 tests each). Next: the CPU test jobs should a
 np 4 (`-R "_np4$"`).
 
 **Schur complement (Uzawa) outer method, as an option (2026-10-16, branch
-`claude/schur-cg-solver-9sf1r5`, draft PR #2, NOT merged). Written in a cloud session
-that cannot build; CI is its only build: style, `-Werror` build, Doxygen and the fast tier
-pass there (CPU, np 1/2/4; `persistent_fgmres_test`, red on `main` too, aside). Never run
+`claude/schur-cg-solver-9sf1r5`, PR #2, merged 2026-10-16, human: "merge to main and
+push"). Written in a cloud session that cannot build; CI is its only build: style,
+`-Werror` build, Doxygen and the fast tier pass there (CPU, np 1/2/4, 219/219). Never run
 on a GPU, nothing timed.**
 Human: "implement the uzawa stuff here as an option for the solver" (the proposal is
 [design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md)); on the initial guess,
@@ -73,9 +73,10 @@ memory; submits nothing). Gaps: the Python bindings do not expose the new keys.
 1e-14 limit, and even FGMRES(50) was not bitwise (1-2e-15). The arithmetic outside
 libmfem is MFEM's own Givens rotations and back substitution, copied; MFEM is built
 by Spack with `-march=x86-64-v3` (FMA contraction), bessemer was built for the
-baseline x86-64. The build step now sets `CXXFLAGS=-march=x86-64-v3`. The cause is
-inferred from the code and flags; the CI run on this change is the check. A desktop
-or cluster build without the stack's `-march` may show the same failure.
+baseline x86-64. The build step now sets `CXXFLAGS=-march=x86-64-v3`, and the fast tier passes
+219/219 (CI run 38963922762). The differences a passing test prints are not in the CI
+log, so "bitwise" is not confirmed, only within the test's 1e-14. A desktop or cluster
+build without the stack's `-march` may show the same failure.
 
 **Duplicate deck keys are an error; bench.py's `--set` replaces template keys
 (2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
