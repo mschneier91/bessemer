@@ -114,8 +114,9 @@ struct StokesSolverOptions
    /// has moved by more than this fraction since they were made.
    double projection_rebuild_threshold = 0.05;
    /// The outer iteration: FGMRES on the coupled system (the default), or
-   /// the Schur complement (Uzawa) method, Krylov on the pressure equation
-   /// (solver/schur_solver.hpp; the Cahouet-Chabard path only). Both stop on
+   /// the Schur complement (Uzawa) method, flexible CG on the pressure
+   /// equation (solver/schur_solver.hpp; the Cahouet-Chabard path, no
+   /// rotation term). Both stop on
    /// the same coupled residual (rtol, atol, tolerance_reference above) and
    /// use the same velocity and Schur preconditioners.
    OuterMethod outer = OuterMethod::Coupled;
@@ -426,9 +427,8 @@ private:
    /// to FGMRES. Called at construction and on a non-frozen Refresh.
    void BuildVelocityPreconditioner();
    /// The Schur method's velocity preconditioner: a fixed linear operator
-   /// (the Jacobi / point-block Jacobi under JacobiPCG, point-block Jacobi
-   /// with the rotation term, else the velocity PC itself), never an
-   /// iterate-to-tolerance solver.
+   /// (the Jacobi / point-block Jacobi under JacobiPCG, else the velocity
+   /// PC itself), never an iterate-to-tolerance solver.
    mfem::Solver& SchurVelocityPreconditioner();
    /// Create the Schur solver, or re-point it at the current momentum block
    /// and preconditioners (OuterMethod::Schur only).

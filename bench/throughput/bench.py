@@ -57,8 +57,7 @@ PHASES = {
     "gram_schmidt": ["fgmres::orthogonalize"],
     "schur_velocity_solves": ["schur_solver::velocity_solve",
                               "schur_operator::velocity_solve"],
-    "schur_glue": ["schur_solver", "schur_solver::cg", "schur_solver::fgmres",
-                   "schur_operator::apply"],
+    "schur_glue": ["schur_solver", "schur_solver::cg", "schur_operator::apply"],
 }
 
 
