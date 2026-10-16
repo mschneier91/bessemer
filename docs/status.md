@@ -20,10 +20,10 @@ on a key a map sets twice, naming the key, the section and the lines
 no effect when the template set that `discretization` or `time` key, or when it named any
 other section the template has (`physics`, `mesh`, `output`, ...: a second section);
 `solver.*` and new `discretization` / `time` keys worked.
-Verified on the CPU (job 49276422: smoke|fast at np 1 and 2). Not yet on a GPU: in job
-49276461 `run_case_rejects_duplicate_key` failed because `build/cuda_kf` held a stale
-`parameters.cpp.o` (the source had been copied in with an older mtime; touched since);
-re-run it there. `scripts/docs.sh` not run (no doxygen on Bridges-2).
+Verified on the CPU (job 49276422: smoke|fast at np 1 and 2) and on two H100s (job 49277617:
+`deck_test` and `run_case_rejects_duplicate_key` at np 1 and 2; `bench.py` runs with
+`--set discretization.order_u=5` and `--set mesh.elements=...` ran at the overridden order
+and mesh). `scripts/docs.sh` not run (no doxygen on Bridges-2).
 
 **Throughput merged into main; new solver defaults (2026-10-16).** The `throughput` branch
 (2026-10-14 to 16; record and decision log: [throughput.md](throughput.md)) is in `main`.
