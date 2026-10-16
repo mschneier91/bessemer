@@ -1,5 +1,7 @@
 #include "solver/persistent_fgmres.hpp"
 
+#include "util/profiler.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -97,8 +99,9 @@ void PersistentFGMRESSolver::ReleaseWork() const
 }
 
 // mfem::FGMRESSolver::Mult (linalg/solvers.cpp, MFEM 1c19aba) with the
-// residual, v[i] and z[i] taken from the kept pools instead of new / delete.
-// Everything else, the arithmetic included, is MFEM's.
+// residual, v[i] and z[i] taken from the kept pools instead of new / delete,
+// and a profiler region around the orthogonalization. Everything else, the
+// arithmetic included, is MFEM's.
 void PersistentFGMRESSolver::Mult(const Vector& b, Vector& x) const
 {
    DenseMatrix H(m + 1, m);
@@ -210,13 +213,18 @@ void PersistentFGMRESSolver::Mult(const Vector& b, Vector& x) const
          }
          oper->Mult(*z[i], r);
 
-         for (k = 0; k <= i; k++)
          {
-            H(k, i) = Dot(r, *v[k]); // H(k,i) = r * v[k]
-            r.Add(-H(k, i), (*v[k])); // r -= H(k,i) * v[k]
-         }
+            // Modified Gram-Schmidt, timed on its own: the cost the Schur
+            // outer method removes.
+            INCNS_PROFILE("fgmres::orthogonalize");
+            for (k = 0; k <= i; k++)
+            {
+               H(k, i) = Dot(r, *v[k]); // H(k,i) = r * v[k]
+               r.Add(-H(k, i), (*v[k])); // r -= H(k,i) * v[k]
+            }
 
-         H(i + 1, i) = Norm(r); // H(i+1,i) = ||r||
+            H(i + 1, i) = Norm(r); // H(i+1,i) = ||r||
+         }
          if (v[i + 1] == NULL)
          {
             v[i + 1] = Work(v_, i + 1, b.Size());

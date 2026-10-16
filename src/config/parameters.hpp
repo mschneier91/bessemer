@@ -16,6 +16,7 @@
 #include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/rotational_schur.hpp"
+#include "solver/outer_solver.hpp"
 #include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
 #include "time/adaptive_controller.hpp"
@@ -435,6 +436,20 @@ struct Parameters
    /// `<output.path>/<output.name>_rotation.csv` every this many steps (deck
    /// `solver.rotation_log_interval`; 0 = off).
    int rotation_log_interval = 0;
+   /// The outer iteration (deck `solver.outer: coupled | schur`): FGMRES on
+   /// the coupled system, or the Schur complement (Uzawa) method. Default
+   /// coupled; schur is an option under study (human 2026-10-16: "implement
+   /// the uzawa stuff here as an option for the solver").
+   OuterMethod outer = OuterMethod::Coupled;
+   /// Options of the Schur method (deck `solver.uzawa.*`).
+   SchurSolveOptions uzawa;
+   /// Write the per-step solver log (outer iterations, velocity and Schur
+   /// preconditioner work, timings, the final coupled residual, device memory
+   /// in use) to `<output.path>/<output.name>_solver.csv` every this many
+   /// steps, for either outer method (deck `solver.log_interval`; 0 = off).
+   /// With solver.uzawa.history the Schur method's per-iteration record goes
+   /// to `<output.name>_uzawa_history.csv` on the same steps.
+   int solver_log_interval = 0;
    /// Pressure Schur block (deck `solver.schur: mass|cc|laplacian_legacy`).
    /// DEFAULT: CahouetChabard (human decision, 2026-07-17) -- Delta-t-robust,
    /// the right default for the adaptive-primary workflow. `mass` remains

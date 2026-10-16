@@ -212,6 +212,7 @@ void Checkpoint::Write(const std::string& dir,
             meta << "  " << name << ": {projection: " << g.projection_x.size()
                  << ", projection_c0: " << g.projection_c0
                  << ", projection_stale: " << (g.projection_stale ? 1 : 0)
+                 << ", projection_pressure: " << (g.projection_pressure ? 1 : 0)
                  << ", previous_x: " << (g.has_previous_x ? 1 : 0)
                  << ", previous_c0: " << g.previous_c0
                  << ", step_ax: " << (g.has_step_ax ? 1 : 0)
@@ -299,14 +300,19 @@ void Checkpoint::Read(const std::string& dir, StokesTimeIntegrator& integrator)
          const std::string base = "guess_" + name + "_";
          SolverGuessState& s = guesses[name];
          const int m = g["projection"].as<int>();
+         // The Schur outer method's projection is on the pressure space
+         // (key absent before 2026-10-16: a coupled one).
+         s.projection_pressure = g["projection_pressure"] &&
+                                 g["projection_pressure"].as<int>() != 0;
+         const int n_proj = s.projection_pressure ? n_p : n_sys;
          s.projection_x.resize(m);
          s.projection_w.resize(m);
          for (int i = 0; i < m; ++i)
          {
             ReadVector(BinPath(dir, base + "x" + std::to_string(i), rank),
-                       n_sys, s.projection_x[i]);
+                       n_proj, s.projection_x[i]);
             ReadVector(BinPath(dir, base + "w" + std::to_string(i), rank),
-                       n_sys, s.projection_w[i]);
+                       n_proj, s.projection_w[i]);
          }
          s.projection_c0 = g["projection_c0"].as<double>();
          s.projection_stale = g["projection_stale"].as<int>() != 0;
