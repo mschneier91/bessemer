@@ -201,7 +201,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    BuildVelocityPreconditioner();
 
    fgmres_.SetOperator(block_op_);
-   fgmres_.SetPreconditioner(*prec_);
+   if (prec_) { fgmres_.SetPreconditioner(*prec_); } // none under Schur
    fgmres_.SetRelTol(opts_.rtol);
    fgmres_.SetAbsTol(opts_.atol);
    fgmres_.SetMaxIter(opts_.max_iter);
@@ -294,16 +294,20 @@ void StokesSolver::BuildVelocityPreconditioner()
       const bool pbj_pc =
          opts_.cc.a_pcg_pc == APcgPC::PointBlockJacobi ||
          (opts_.cc.a_pcg_pc == APcgPC::Auto && op_.GradDivTerm());
+      // The Schur method runs its own velocity CG on vel_inner_pc_ (see
+      // SchurVelocityPreconditioner): this one, and its three velocity
+      // vectors, only for the coupled method.
+      const bool own_cg = opts_.outer == OuterMethod::Coupled;
       auto* kept_pbj = dynamic_cast<PointBlockJacobi*>(vel_inner_pc_.get());
       auto* kept_cg = dynamic_cast<CGSolver*>(vel_prec_.get());
-      if (pbj_pc && kept_pbj && kept_cg)
+      if (pbj_pc && kept_pbj && (kept_cg || !own_cg))
       {
          // A refresh (Delta-t or nu): only the diagonal moved. The grad-div
          // off-diagonals depend on neither and cost ~0.8 s to rebuild at
          // 64^3 Q3 on an H100 (2026-10-14), so the blocks are updated in
          // place and the CG re-pointed at the rebuilt momentum operator.
          kept_pbj->SetDiagonal(op_.MomentumDiagonal());
-         kept_cg->SetOperator(op_.Momentum());
+         if (kept_cg) { kept_cg->SetOperator(op_.Momentum()); }
       }
       else
       {
@@ -322,15 +326,18 @@ void StokesSolver::BuildVelocityPreconditioner()
             vel_inner_pc_ = std::make_unique<OperatorJacobiSmoother>(
                                op_.MomentumDiagonal(), op_.EssentialTrueDofs());
          }
-         auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
-         cg->SetOperator(op_.Momentum());
-         cg->SetPreconditioner(*vel_inner_pc_);
-         cg->SetRelTol(opts_.cc.a_pcg_rtol);
-         cg->SetAbsTol(0.0);
-         cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
-         cg->SetPrintLevel(-1);
-         cg->iterative_mode = false;
-         vel_prec_ = std::move(cg);
+         if (own_cg)
+         {
+            auto cg = std::make_unique<CGSolver>(spaces_.Velocity().GetComm());
+            cg->SetOperator(op_.Momentum());
+            cg->SetPreconditioner(*vel_inner_pc_);
+            cg->SetRelTol(opts_.cc.a_pcg_rtol);
+            cg->SetAbsTol(0.0);
+            cg->SetMaxIter(opts_.cc.a_pcg_max_iter);
+            cg->SetPrintLevel(-1);
+            cg->iterative_mode = false;
+            vel_prec_ = std::move(cg);
+         }
       }
    }
    else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiChebyshev)
@@ -346,6 +353,21 @@ void StokesSolver::BuildVelocityPreconditioner()
    {
       vel_prec_ = std::make_unique<OperatorJacobiSmoother>(
                      op_.MomentumDiagonal(), op_.EssentialTrueDofs());
+   }
+
+   // The Schur method applies the velocity PC and the Cahouet-Chabard PC
+   // itself: no block preconditioner (it holds a velocity-sized scratch
+   // vector) and no velocity-block monitor.
+   if (opts_.outer == OuterMethod::Schur)
+   {
+      vel_mon_.reset();
+      prec_.reset();
+      if (!schur_mon_)
+      {
+         schur_mon_ = std::make_unique<MonitoredSolver>(*cc_pc_, stats_, false);
+      }
+      WireSchurSolver();
+      return;
    }
 
    // PbjOnly leaves vel_prec_ empty: point-block Jacobi is the velocity PC.
@@ -374,7 +396,6 @@ void StokesSolver::BuildVelocityPreconditioner()
                  spaces_.BlockTrueOffsets(), *vel_mon_, *schur_mon_);
    }
    fgmres_.SetPreconditioner(*prec_);
-   if (opts_.outer == OuterMethod::Schur) { WireSchurSolver(); }
 }
 
 Solver& StokesSolver::SchurVelocityPreconditioner()
@@ -404,6 +425,10 @@ void StokesSolver::WireSchurSolver()
                       opts_.uzawa);
    schur_solver_->SetMaxIter(opts_.max_iter);
    schur_solver_->SetPrintLevel(opts_.print_level);
+   // The CC PC is applied only between velocity solves: its B M_v^-1 B^T
+   // runs in the velocity CG's two work vectors instead of two of its own.
+   cc_pc_->BorrowVelocityScratch(schur_solver_->VelocityWorkD(),
+                                 schur_solver_->VelocityWorkZ());
    // initial_guess project: the pressure-space projection, inside the Schur
    // solver (2 projection_k + 2 pressure vectors, no system vector).
    if (opts_.initial_guess == InitialGuess::Project)
@@ -447,7 +472,9 @@ void StokesSolver::Refresh(double c0)
 
 void StokesSolver::WarmUp()
 {
-   if (warmed_up_) { return; }
+   // The Schur method has no block preconditioner, and no Krylov basis for
+   // the warm-up's measurement to size (CapKrylovDim skips it).
+   if (warmed_up_ || !prec_) { return; }
    INCNS_PROFILE("stokes_solver::warm_up");
    const Array<int>& offsets = spaces_.BlockTrueOffsets();
    const MemoryType mt = Device::GetMemoryType();
@@ -537,9 +564,14 @@ void StokesSolver::PrepareGuess(const Vector& b, BlockVector& x)
 
 void StokesSolver::SetTolerance(const Vector& b, const Vector& x)
 {
+   // Step from the warm start itself: the solver's initial residual IS
+   // b - A x_prev then. So too under the Schur method with the projection,
+   // which guesses inside SchurSolver after computing that residual in its
+   // own work vectors: no system-sized residual vector, no extra apply.
    const bool step_as_initial =
       opts_.tolerance_reference == ToleranceReference::Step &&
-      opts_.initial_guess == InitialGuess::Previous;
+      (opts_.initial_guess == InitialGuess::Previous ||
+       (schur_solver_ && opts_.initial_guess == InitialGuess::Project));
    if (opts_.tolerance_reference == ToleranceReference::Rhs)
    {
       const double b_norm =
@@ -558,8 +590,7 @@ void StokesSolver::SetTolerance(const Vector& b, const Vector& x)
    }
    else
    {
-      // InitialResidual, or Step from the warm start itself: FGMRES's initial
-      // residual IS b - A x_prev then.
+      // InitialResidual, or Step from the warm start itself (above).
       tol_scale_ = 0.0;
       tol_rel_ = opts_.rtol;
       tol_abs_ = opts_.atol;
