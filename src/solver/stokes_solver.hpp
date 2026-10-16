@@ -367,7 +367,8 @@ public:
     * allowance it replaces, 20 % of the memory in use, was 4 GB at 64^3, and
     * 86^3 ran out of memory under it, 2026-10-14.) Leaves nothing the solve
     * reads: every inner solver starts from zero. Once per solver; later calls
-    * return at once.
+    * return at once. A no-op under the Schur method (no block
+    * preconditioner, no restart length to size).
     */
    void WarmUp();
 
@@ -424,7 +425,8 @@ public:
 
 private:
    /// (Re)build the velocity preconditioner + block preconditioner and hand it
-   /// to FGMRES. Called at construction and on a non-frozen Refresh.
+   /// to FGMRES, or (OuterMethod::Schur) only what the Schur solver applies.
+   /// Called at construction and on a non-frozen Refresh.
    void BuildVelocityPreconditioner();
    /// The Schur method's velocity preconditioner: a fixed linear operator
    /// (the Jacobi / point-block Jacobi under JacobiPCG, else the velocity
@@ -457,7 +459,8 @@ private:
    std::unique_ptr<mfem::Solver> vel_inner_pc_;
    /// Velocity block preconditioner (Jacobi smoother, Chebyshev, PCG or
    /// LOR-AMG). Declared after op_ so it is destroyed before the momentum
-   /// matrix it may reference.
+   /// matrix it may reference. Null under the Schur method with JacobiPCG
+   /// (its CG on vel_inner_pc_ replaces this PCG).
    std::unique_ptr<mfem::Solver> vel_prec_;
    /// Point-block Jacobi (rotation_pc != Symmetric only). Owned here: with
    /// PbjKrylov vel_prec_ is the inner GMRES that borrows it.
@@ -478,11 +481,13 @@ private:
    std::unique_ptr<RotationalSchurPreconditioner> rot_schur_;
    SolveStats stats_; ///< Counters of the last solve (see Stats()).
    /// Monitoring wrappers around the velocity and Schur PCs (borrowed by
-   /// prec_; rebuilt with it).
+   /// prec_; rebuilt with it). Under the Schur method only schur_mon_, built
+   /// once (the Schur solver borrows it).
    std::unique_ptr<MonitoredSolver> vel_mon_;
    std::unique_ptr<MonitoredSolver> schur_mon_; ///< See vel_mon_.
    /// Block preconditioner: StokesBlockPreconditioner (Mass) or BlockStokesPC
-   /// (CC shapes) behind the common Solver interface.
+   /// (CC shapes) behind the common Solver interface. Null under the Schur
+   /// method.
    std::unique_ptr<mfem::Solver> prec_;
    /// Outer Krylov solver (MFEM's FGMRES, work vectors kept between solves).
    PersistentFGMRESSolver fgmres_;
