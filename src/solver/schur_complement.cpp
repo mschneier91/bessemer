@@ -7,9 +7,9 @@ namespace incns
 
 using namespace mfem;
 
-SchurComplementOperator::SchurComplementOperator(const Operator& B,
-                                                 IterativeSolver& a_inv,
-                                                 const ConstantPressureProjector* proj)
+SchurComplementOperator::SchurComplementOperator(
+   const Operator& B, IterativeSolver& a_inv,
+   const ConstantPressureProjector* proj)
    : Operator(B.Height()), B_(B), a_inv_(&a_inv), proj_(proj),
      w_(B.Width()), v_(B.Width())
 {
