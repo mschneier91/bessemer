@@ -114,7 +114,7 @@ int main(int argc, char* argv[])
       [] MFEM_HOST_DEVICE(const tensor<real_t, DIM>& u,
                           const tensor<real_t, DIM, DIM>& J, const real_t& w)
    {
-      return tuple{u * (w * det(J))};
+      return tuple{u* (w * det(J))};
    };
    Array<int> all_attr(pmesh.attributes.Max());
    all_attr = 1;
