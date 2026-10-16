@@ -384,7 +384,7 @@ void OifsAdvector::Advect(const std::vector<double>& c,
    std::vector<const Vector*> wind(n);
    for (int l = 0; l < n; ++l) { wind[l] = &hist[l]; }
    const std::vector<double> wind_times(times.begin(), times.begin() + n);
-   AdvectImpl(wind, wind_times, c, hist, times, t_new, phi);
+   AdvectImpl(wind, wind_times, c, hist, times, t_new, phi, true);
 }
 
 void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
@@ -396,7 +396,7 @@ void OifsAdvector::AdvectWith(const std::deque<Vector>& wind,
 {
    std::vector<const Vector*> w(wind.size());
    for (std::size_t l = 0; l < wind.size(); ++l) { w[l] = &wind[l]; }
-   AdvectImpl(w, wind_times, c, hist, times, t_new, phi);
+   AdvectImpl(w, wind_times, c, hist, times, t_new, phi, false);
 }
 
 void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
@@ -404,7 +404,7 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
                               const std::vector<double>& c,
                               const std::deque<Vector>& hist,
                               const std::deque<double>& times, double t_new,
-                              Vector& phi)
+                              Vector& phi, bool history_winds)
 {
    const int k = static_cast<int>(c.size()) - 1;
    MFEM_VERIFY(k >= 1 && static_cast<int>(hist.size()) >= k,
@@ -433,7 +433,10 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
       INCNS_PROFILE("oifs::rate");
       std::vector<const ParGridFunction*> us(n_ext_);
       for (int l = 0; l < n_ext_; ++l) { us[l] = vel_[l].get(); }
-      rate = cfl_->MaxRate(us); // one evaluation of the Jacobians
+      // History winds: each level's rate once in its lifetime (the step
+      // choice usually computed the newest already); otherwise all of them,
+      // with one evaluation of the Jacobians.
+      rate = history_winds ? cfl_->MaxRateAt(us, wind_times) : cfl_->MaxRate(us);
       RequireFiniteRate(rate, times.front());
    }
    for (int l = 0; l < n_ext_; ++l)

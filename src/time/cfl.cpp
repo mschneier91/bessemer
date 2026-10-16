@@ -187,6 +187,88 @@ const
    return global;
 }
 
+void ConvectiveCfl::Rates(const std::vector<const ParGridFunction*>& us,
+                          std::vector<double>& rates) const
+{
+   // MaxRate's evaluation, keeping each velocity's maximum apart.
+   rates.assign(us.size(), 0.0);
+   if (ne_ > 0)
+   {
+      Vector ue(restr_->Height());
+      ue.UseDevice(true);
+      const GeometricFactors geom(*vfes_.GetParMesh()->GetNodes(), *ir_,
+                                  GeometricFactors::JACOBIANS,
+                                  Device::GetDeviceMemoryType());
+      for (std::size_t l = 0; l < us.size(); ++l)
+      {
+         const ParGridFunction& u = *us[l];
+         MFEM_VERIFY(u.ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+         restr_->Mult(u, ue);
+         if (nodal_gll_)
+         {
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, ue, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         else
+         {
+            Vector uq(ir_->GetNPoints() * dim_ * ne_);
+            uq.UseDevice(true);
+            qi_->SetOutputLayout(QVectorLayout::byNODES);
+            qi_->Values(ue, uq);
+            cfl_kernels::ElementRates(ne_, order_ + 1, dim_, uq, geom.J,
+                                      inv_dxi_, rate_);
+         }
+         rates[l] = std::max(0.0, rate_.Max());
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, rates.data(), static_cast<int>(rates.size()),
+                 MPI_DOUBLE, MPI_MAX, vfes_.GetComm());
+}
+
+double ConvectiveCfl::MaxRateAt(const std::vector<const ParGridFunction*>& us,
+                                const std::vector<double>& times) const
+{
+   MFEM_VERIFY(!us.empty() && us.size() == times.size(),
+               "cfl: one time per velocity");
+   if (level_seq_ != vfes_.GetSequence())
+   {
+      level_rates_.clear();
+      level_seq_ = vfes_.GetSequence();
+   }
+   double global = 0.0;
+   std::vector<const ParGridFunction*> todo;
+   std::vector<double> todo_t;
+   for (std::size_t i = 0; i < us.size(); ++i)
+   {
+      const auto it = std::find_if(level_rates_.begin(), level_rates_.end(),
+                                   [&](const std::pair<double, double>& p)
+      { return p.first == times[i]; });
+      if (it != level_rates_.end()) { global = std::max(global, it->second); }
+      else
+      {
+         todo.push_back(us[i]);
+         todo_t.push_back(times[i]);
+      }
+   }
+   if (!todo.empty()) // the same on every rank: the keys are global
+   {
+      std::vector<double> r;
+      Rates(todo, r);
+      for (std::size_t k = 0; k < todo.size(); ++k)
+      {
+         global = std::max(global, r[k]);
+         level_rates_.emplace_back(todo_t[k], r[k]);
+      }
+      // Keep the newest few levels (OIFS uses up to three).
+      while (level_rates_.size() > 8)
+      {
+         level_rates_.erase(std::min_element(
+                               level_rates_.begin(), level_rates_.end()));
+      }
+   }
+   return global;
+}
+
 double ConvectiveCfl::RateAndLocation(const ParGridFunction& u,
                                       Vector& where) const
 {

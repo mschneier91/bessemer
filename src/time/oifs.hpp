@@ -133,15 +133,30 @@ public:
                    const std::deque<double>& field_times, double t_new,
                    mfem::Vector& phi);
 
+   /**
+    * @brief The CFL rate of @p u, the solution at time @p t, through the
+    *        advector's per-level cache (ConvectiveCfl::MaxRateAt): the step
+    *        size is chosen from it, and the substeps then find the newest
+    *        level's rate there (and the older levels' from earlier steps).
+    * @param u Velocity on the velocity space.
+    * @param t Its time.
+    * @return The rate (the same value as ConvectiveCfl::Rate); collective.
+    */
+   double RateAt(const mfem::ParGridFunction& u, double t) const
+   {
+      return cfl_->MaxRateAt({&u}, {t});
+   }
+
 private:
    /// AdvectWith() on borrowed winds (Advect() passes the history itself:
-   /// no copies of it per step).
+   /// no copies of it per step). @p history_winds: the winds are the
+   /// solution at @p wind_times, so their rates may come from the cache.
    void AdvectImpl(const std::vector<const mfem::Vector*>& wind,
                    const std::vector<double>& wind_times,
                    const std::vector<double>& c,
                    const std::deque<mfem::Vector>& fields,
                    const std::deque<double>& field_times, double t_new,
-                   mfem::Vector& phi);
+                   mfem::Vector& phi, bool history_winds);
 
 public:
    /// @return RK4 substeps taken by the last Advect().

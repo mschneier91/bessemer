@@ -267,7 +267,10 @@ void StokesTimeIntegrator::ChooseCflStep()
    INCNS_PROFILE("time_integrator::cfl_step");
    MFEM_VERIFY(cfl_rate_, "time_integrator: CFL-controlled steps need "
                "SetCflRate");
-   const double c = cfl_rate_();
+   // With OIFS, through the advector's per-level cache (the same rate, same
+   // definition and space): the substeps then reuse it instead of evaluating
+   // this velocity again.
+   const double c = oifs_ ? oifs_->RateAt(u_, t_) : cfl_rate_();
    RequireFiniteRate(c, t_);
    double dt = dt_;
    const double dt_cfl = (c > 0.0) ? opts_.cfl_target / c

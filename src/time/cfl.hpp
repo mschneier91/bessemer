@@ -9,6 +9,7 @@
 #include "quadrature/rule_book.hpp"
 #include "mfem.hpp"
 
+#include <utility>
 #include <vector>
 
 namespace incns
@@ -72,6 +73,20 @@ public:
    double MaxRate(const std::vector<const mfem::ParGridFunction*>& us) const;
 
    /**
+    * @brief MaxRate of velocities that are the solution at @p times (a step's
+    *        history levels), each time's rate kept and reused while the space
+    *        is unchanged (its sequence number): a level is evaluated once --
+    *        by the step-size choice, or the first OIFS step that sees it --
+    *        instead of at every step it stays in the history. The max of the
+    *        levels' maxima is MaxRate's value exactly.
+    * @param us    The velocities.
+    * @param times Their times: the keys, one velocity per time.
+    * @return The largest rate; collective.
+    */
+   double MaxRateAt(const std::vector<const mfem::ParGridFunction*>& us,
+                    const std::vector<double>& times) const;
+
+   /**
     * @brief Rate() and where it peaks (collective; diagnostics): the centre
     *        of the element with the largest rate, on every rank.
     * @param u     Velocity on the space given at construction.
@@ -103,6 +118,13 @@ private:
    /// values at the GLL points and nothing is interpolated.
    bool nodal_gll_ = false;
    mutable mfem::Vector rate_; ///< Per-element rate.
+   /// The rate of each of @p us (each a max over the ranks), with one
+   /// evaluation of the Jacobians for all of them.
+   void Rates(const std::vector<const mfem::ParGridFunction*>& us,
+              std::vector<double>& rates) const;
+   /// (time, rate) of the levels MaxRateAt has seen, newest few kept.
+   mutable std::vector<std::pair<double, double>> level_rates_;
+   mutable long level_seq_ = -1; ///< The space sequence they belong to.
 };
 
 } // namespace incns
