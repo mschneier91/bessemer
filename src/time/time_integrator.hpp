@@ -147,6 +147,10 @@ struct TimeIntegratorOptions
    int max_iter = 2000;          ///< FGMRES iteration cap.
    int kdim = 200;               ///< FGMRES restart size.
    int print_level = -1;         ///< Solver print level.
+   /// The outer iteration (StokesSolverOptions::outer): coupled FGMRES or
+   /// the Schur complement method.
+   OuterMethod outer = OuterMethod::Coupled;
+   SchurSolveOptions uzawa; ///< Options of OuterMethod::Schur.
 };
 
 /**
