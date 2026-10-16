@@ -35,6 +35,50 @@ std::pair<std::string, std::string> SplitPath(const std::string& path)
    if (dot == std::string::npos) { return {"", path}; }
    return {path.substr(0, dot), path.substr(dot + 1)};
 }
+
+// Append to out the keys that a map in node (at dotted path path, nested
+// maps and list entries included) sets more than once.
+void FindDuplicates(const YAML::Node& node, const std::string& path,
+                    std::vector<std::string>& out)
+{
+   if (node.IsSequence())
+   {
+      std::size_t i = 0;
+      for (const auto& item : node)
+      {
+         FindDuplicates(item, path + "[" + std::to_string(i++) + "]", out);
+      }
+      return;
+   }
+   if (!node.IsMap()) { return; }
+   std::vector<std::pair<std::string, std::vector<int>>> keys; // deck order
+   for (const auto& kv : node)
+   {
+      if (!kv.first.IsScalar()) { continue; }
+      const std::string key = kv.first.Scalar();
+      std::size_t j = 0;
+      while (j < keys.size() && keys[j].first != key) { ++j; }
+      if (j == keys.size()) { keys.push_back({key, {}}); }
+      keys[j].second.push_back(kv.first.Mark().line + 1); // 0-based, or -1
+      FindDuplicates(kv.second, path.empty() ? key : path + "." + key, out);
+   }
+   for (const auto& [key, lines] : keys)
+   {
+      if (lines.size() < 2) { continue; }
+      std::string where = path.empty() ? std::string(" at the top level") :
+                          " in section '" + path + "'";
+      if (lines.front() > 0)
+      {
+         where += " (lines";
+         for (std::size_t i = 0; i < lines.size(); ++i)
+         {
+            where += (i ? ", " : " ") + std::to_string(lines[i]);
+         }
+         where += ")";
+      }
+      out.push_back("'" + key + "'" + where);
+   }
+}
 } // namespace
 
 DeckReader::DeckReader(YAML::Node root) : root_(std::move(root))
@@ -150,6 +194,13 @@ std::vector<std::string> DeckReader::UnknownKeys() const
 {
    std::vector<std::string> out;
    if (root_ && root_.IsMap()) { Walk(root_, "", out); }
+   return out;
+}
+
+std::vector<std::string> DeckReader::DuplicateKeys() const
+{
+   std::vector<std::string> out;
+   if (root_) { FindDuplicates(root_, "", out); }
    return out;
 }
 

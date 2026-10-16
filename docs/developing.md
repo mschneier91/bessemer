@@ -753,7 +753,8 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   `run_monitor_test` (R1 force statistics on a synthetic shedding signal, R2 JSON, R3
   time-based AMR events, R4 the summary is valid JSON), `deck_boundary_test` (B1 box
   coverage, B2 cylinder geometries and names, B3 a deck velocity is imposed), the
-  `run_case_cavity` / `run_case_rejects_missing_bcs` driver tests,
+  `run_case_cavity` / `run_case_rejects_missing_bcs` / `run_case_rejects_duplicate_key`
+  driver tests,
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
   square-cylinder domain's area, boundary lengths, grading), `deck_test`,

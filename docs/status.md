@@ -9,6 +9,22 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Duplicate deck keys are an error; bench.py's `--set` replaces template keys
+(2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
+appended `order_u: 5` after the template's `order_u: 3`, and the loader read the first
+(job 49270645 ran at order 3). Now `write_deck` replaces a key the template sets (any
+section, nested keys too) and adds the rest at the end of their section; the loader aborts
+on a key a map sets twice, naming the key, the section and the lines
+(`DeckReader::DuplicateKeys`; tests `Deck.DuplicateKeysAreReported`,
+`Deck.EveryCaseDeckLoads`, `run_case_rejects_duplicate_key`). Before this, a `--set` had
+no effect when the template set that `discretization` or `time` key, or when it named any
+other section the template has (`physics`, `mesh`, `output`, ...: a second section);
+`solver.*` and new `discretization` / `time` keys worked.
+Verified on the CPU (job 49276422: smoke|fast at np 1 and 2). Not yet on a GPU: in job
+49276461 `run_case_rejects_duplicate_key` failed because `build/cuda_kf` held a stale
+`parameters.cpp.o` (the source had been copied in with an older mtime; touched since);
+re-run it there. `scripts/docs.sh` not run (no doxygen on Bridges-2).
+
 **Throughput merged into main; new solver defaults (2026-10-16).** The `throughput` branch
 (2026-10-14 to 16; record and decision log: [throughput.md](throughput.md)) is in `main`.
 One H100 against main of 2026-10-14: Taylor-Green 64^3 Q3/Q2 to t = 20 in **17.8 min instead

@@ -543,7 +543,8 @@ struct Parameters
     * @brief Load a YAML deck, overriding the defaults field by field, and
     *        Normalize() the result.
     * @param path Path to the YAML file.
-    * @return The populated, normalized parameters (throws on malformed input).
+    * @return The populated, normalized parameters (throws on malformed input;
+    *         aborts on an unknown key or a key a section sets twice).
     */
    static Parameters LoadYAML(const std::string& path);
 

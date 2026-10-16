@@ -22,6 +22,7 @@ import csv
 import datetime
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -83,15 +84,100 @@ def checkpoint_meta(path):
     return float(meta["t"]), float(meta["next_dt"])
 
 
+def parse_sets(sets):
+    """--set section.key=value overrides as {("section", "key"): "value"}
+    (any depth; a bare key is a top-level one); a later --set of a key wins."""
+    out = {}
+    for s in sets:
+        key, eq, value = s.partition("=")
+        path = tuple(key.split("."))
+        if not eq or not all(path):
+            sys.exit("bench.py: --set %r is not section.key=value" % s)
+        out[path] = value
+    for p in out:
+        for q in out:
+            if len(q) > len(p) and q[:len(p)] == p:
+                sys.exit("bench.py: --set %s conflicts with --set %s"
+                         % (".".join(p), ".".join(q)))
+    return out
+
+
+def apply_sets(text, sets):
+    """The deck text with the overrides of parse_sets() applied. A key the
+    deck already sets has its line replaced: a second line would be a
+    duplicate key, which bessemer rejects (YAML readers keep only one of the
+    two). A key the deck lacks goes at the end of its section, and a section
+    the deck lacks at the end of the deck. Block-style decks only (the case
+    templates): one key per line, nesting by indentation."""
+    todo = dict(sets)
+    lines = text.rstrip("\n").split("\n")
+    stack = []    # (indent, key) of the sections enclosing the current line
+    maps = {}     # section path -> {"indent": of its keys, "last": line, "seq"}
+    scalars = set()
+    for i, line in enumerate(lines):
+        body = line.lstrip(" ")
+        if not body or body.startswith("#"):
+            continue
+        indent = len(line) - len(body)
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        for d in range(1, len(stack) + 1):  # the line extends its sections
+            maps[tuple(k for _, k in stack[:d])]["last"] = i
+        if stack:
+            parent = maps[tuple(k for _, k in stack)]
+            parent["indent"] = parent["indent"] or indent
+            parent["seq"] = parent["seq"] or body.startswith("-")
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$", body)
+        if not m:
+            continue
+        path = tuple(k for _, k in stack) + (m.group(1),)
+        if not m.group(2) or m.group(2).startswith("#"):  # opens a section
+            if path in todo:
+                sys.exit("bench.py: --set %s: a section, not a key" % ".".join(path))
+            stack.append((indent, m.group(1)))
+            maps[path] = {"indent": 0, "last": i, "seq": False, "at": indent}
+        else:
+            scalars.add(path)
+            if path in todo:
+                lines[i] = " " * indent + "%s: %s" % (m.group(1), todo.pop(path))
+    inserts = {}  # deepest existing section -> {key: value or {key: ...}}
+    for path, value in todo.items():
+        d = len(path) - 1
+        while d and path[:d] not in maps:
+            d -= 1
+        base = path[:d]
+        if path[:d + 1] in scalars:
+            sys.exit("bench.py: --set %s: %s is a key, not a section"
+                     % (".".join(path), ".".join(path[:d + 1])))
+        if base and maps[base]["seq"]:
+            sys.exit("bench.py: --set %s: %s is a list" % (".".join(path), ".".join(base)))
+        tree = inserts.setdefault(base, {})
+        for k in path[d:-1]:
+            tree = tree.setdefault(k, {})
+        tree[path[-1]] = value
+
+    def render(tree, indent):
+        out = []
+        for k, v in tree.items():
+            if isinstance(v, dict):
+                out += [" " * indent + k + ":"] + render(v, indent + 2)
+            else:
+                out.append(" " * indent + "%s: %s" % (k, v))
+        return out
+    # Bottom-up, so that earlier line numbers stay valid; a section before a
+    # subsection ending on the same line, so that the subsection's new keys
+    # land inside it; new top-level keys last, at the end.
+    for base in sorted((b for b in inserts if b),
+                       key=lambda b: (-maps[b]["last"], len(b))):
+        s = maps[base]
+        lines[s["last"] + 1:s["last"] + 1] = render(inserts[base],
+                                                    s["indent"] or s["at"] + 2)
+    lines += render(inserts.get((), {}), 0)
+    return "\n".join(lines) + "\n"
+
+
 def write_deck(case, n, steps, path, profile, sets, restart=None):
     tmpl = open(os.path.join(CASES, case, "deck.yaml.in")).read()
-    groups = {}
-    for s in sets:
-        key, value = s.split("=", 1)
-        section, name = key.split(".", 1)
-        groups.setdefault(section, []).append((name, value))
-    def block(section):
-        return "\n".join("  %s: %s" % kv for kv in groups.pop(section, []))
     t0, dt = 0.0, 0.5 / n
     if restart:
         t0, dt = checkpoint_meta(restart)
@@ -100,15 +186,11 @@ def write_deck(case, n, steps, path, profile, sets, restart=None):
             .replace("{TFINAL}", repr(t0 + dt * steps * (1.0 + 1e-9)))
             .replace("{STEPS}", str(steps))
             .replace("{PATH}", path)
-            .replace("{PROFILE}", profile)
-            .replace("{EXTRA_DISC}", block("discretization"))
-            .replace("{EXTRA_TIME}", block("time")))
-    extra = []
-    for section, kvs in groups.items():
-        extra.append(section + ":\n" + "\n".join("  %s: %s" % kv for kv in kvs))
+            .replace("{PROFILE}", profile))
+    overrides = parse_sets(sets)
     if restart:
-        extra.append("restart: " + os.path.abspath(restart))
-    return text.replace("{EXTRA}", "\n".join(extra)) + "\n"
+        overrides[("restart",)] = os.path.abspath(restart)
+    return apply_sets(text, overrides)
 
 
 def read_csv(path):
@@ -148,11 +230,10 @@ def phases_from_profile(path):
     return {}
 
 
-def output_name(case):
-    """The output.name of a case's deck template (its CSV and JSON prefix)."""
-    import re
-    m = re.search(r"^  name: (\S+)$", open(os.path.join(CASES, case, "deck.yaml.in")).read(),
-                  flags=re.M)
+def output_name(deck):
+    """The output.name of a written deck (its CSV and JSON prefix; a --set
+    may have changed the template's)."""
+    m = re.search(r"^  name: (\S+)$", open(deck).read(), flags=re.M)
     return m.group(1) if m else "tgv"
 
 
@@ -173,7 +254,7 @@ def one_run(args, case, n, rep, outdir):
                              timeout=args.timeout)
     wall = time.time() - t0
     rec = {"size": n, "repeat": rep, "exit": rc, "wall_s": wall, "dir": rundir}
-    name = output_name(case)
+    name = output_name(deck)
     try:
         hist = read_csv(os.path.join(rundir, name + "_history.csv"))
         summ = json.load(open(os.path.join(rundir, name + "_summary.json")))
@@ -305,7 +386,8 @@ def main():
     r.add_argument("--device", default="cuda")
     r.add_argument("--profile", default="wall", choices=["off", "wall", "sync"])
     r.add_argument("--set", action="append", default=[],
-                   help="section.key=value, e.g. solver.rtol=1e-8")
+                   help="section.key=value, e.g. solver.rtol=1e-8: replaces the "
+                        "case template's value of the key, or adds the key")
     r.add_argument("--bin", default=os.path.join(REPO, "build", "cuda", "apps",
                                                  "run_case"))
     r.add_argument("--outroot", default=os.path.join(

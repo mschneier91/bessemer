@@ -826,6 +826,19 @@ void VerifyNoUnknownKeys(const DeckReader& r, const std::string& where)
               "run_case --deck-reference)");
 }
 
+// Abort with every key a map of the deck sets twice: only the first would be
+// read, and the later value silently ignored.
+void VerifyNoDuplicateKeys(const DeckReader& r, const std::string& where)
+{
+   const std::vector<std::string> dups = r.DuplicateKeys();
+   if (dups.empty()) { return; }
+   std::string list;
+   for (const std::string& d : dups) { list += "\n  " + d; }
+   MFEM_ABORT("parameters: duplicate key(s) in " << where << ":" << list
+              << "\n(a key may be set once per section; YAML would keep "
+              "only the first value)");
+}
+
 Parameters FromYAML(const YAML::Node& root, const std::string& where);
 } // namespace
 
@@ -862,11 +875,12 @@ std::string Parameters::DeckReferenceMarkdown()
 
 namespace
 {
-// Read, check for unknown keys, validate, normalize.
+// Check for duplicate keys, read, check for unknown keys, validate, normalize.
 Parameters FromYAML(const YAML::Node& root, const std::string& where)
 {
    Parameters p;
    DeckReader r(root);
+   VerifyNoDuplicateKeys(r, where);
    FillFromDeck(r, p);
    VerifyNoUnknownKeys(r, where);
 

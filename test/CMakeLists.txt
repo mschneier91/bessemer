@@ -220,6 +220,14 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   set_tests_properties(run_case_rejects_missing_bcs_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "declares no boundary_conditions")
+  # A deck that sets a key twice must be refused, not run with the first value.
+  add_test(NAME run_case_rejects_duplicate_key_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_CURRENT_SOURCE_DIR}/decks/duplicate_key.yaml
+            --summary run_case_rejects_duplicate_np${np}_summary.json)
+  set_tests_properties(run_case_rejects_duplicate_key_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "'order_u' in section 'discretization' \\(lines 8, 10\\)")
   add_test(NAME taylor_green_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:taylor_green>)
   set_tests_properties(taylor_green_np${np} PROPERTIES
