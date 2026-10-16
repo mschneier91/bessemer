@@ -13,6 +13,7 @@
 #pragma once
 
 #include "precond/hypre_device.hpp"
+#include "precond/nullspace.hpp"
 #include "mfem.hpp"
 
 #include <memory>
@@ -39,7 +40,7 @@ enum class LpBC
  * a symmetric application, so the relaxation is SET explicitly (l1 hybrid
  * symmetric Gauss-Seidel on a host, l1-Jacobi on a GPU: SymmetricAmgSmoother;
  * matched single pre/post sweeps) rather than trusting library defaults. On singular (all-Neumann) operators the application is
- * wrapped in mfem::OrthoSolver so iterates never accumulate the constant mode.
+ * wrapped in DeviceOrthoSolver (precond/nullspace.hpp) so iterates never accumulate the constant mode.
  *
  * MEASURED DECISION (deviation from the spec's par.4 suggestion): the spec
  * proposes forcing a smoother-only coarsest solve on the singular operator.
@@ -189,7 +190,7 @@ private:
    mfem::ParBilinearForm form_;  ///< HO Diffusion form (LOR source; owned).
    /// LOR-AMG on the rediscretized L_p (owned; must outlive applications).
    std::unique_ptr<mfem::LORSolver<mfem::HypreBoomerAMG>> lor_;
-   mutable mfem::OrthoSolver ortho_; ///< Constant-mode wrap (singular only).
+   mutable DeviceOrthoSolver ortho_; ///< Constant-mode wrap (singular only).
    bool singular_ = false;           ///< Ortho-wrapped?
 };
 

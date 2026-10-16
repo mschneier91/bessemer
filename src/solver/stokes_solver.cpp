@@ -102,8 +102,8 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    block_op_.SetBlock(1, 0, &op_.Divergence());
 
    // With the constant null space, the pressure block is P * S^{-1} * P
-   // (mfem::OrthoSolver): iterates never accumulate the constant mode. The
-   // Sprint-1 Schur block is Delta-t independent, so it too is built once.
+   // (DeviceOrthoSolver, precond/nullspace.hpp): iterates never accumulate
+   // the constant mode. The Sprint-1 Schur block is Delta-t independent, so it too is built once.
    // (Mass path only; the CC PC owns its own nullspace treatment.)
    if (!cc_mode_)
    {

@@ -11,6 +11,7 @@
 #include "post/pressure_mean.hpp"
 #include "precond/block_stokes_pc.hpp"
 #include "precond/cahouet_chabard.hpp"
+#include "precond/nullspace.hpp"
 #include "precond/point_block_jacobi.hpp"
 #include "precond/rotational_schur.hpp"
 #include "precond/viscous_ratio.hpp"
@@ -173,7 +174,7 @@ private:
  * block-diagonal preconditioner diag(Jacobi(nu*K), nu*M_p^{-1}) -- the Sprint-1
  * pressure-mass Schur block. When the BC set implies the constant pressure
  * null space (no outflow -- fully periodic or fully enclosed), the Schur block
- * is wrapped in an mfem::OrthoSolver (P * S^{-1} * P with P the zero-sum
+ * is wrapped in a DeviceOrthoSolver (P * S^{-1} * P with P the zero-sum
  * projection) and the output pressure is normalized to zero mass-weighted
  * mean by the post-processor. The pressure is never pinned. (The constraint
  * RHS needs no projection: it is compatible to roundoff by construction, and
@@ -353,7 +354,7 @@ private:
    std::unique_ptr<PressureMassSchur> schur_;
    /// Wraps schur_ as P*S^{-1}*P (P = zero-sum projection) when the constant
    /// pressure null space exists -- orthogonalization, never pinning.
-   mfem::OrthoSolver ortho_schur_;
+   DeviceOrthoSolver ortho_schur_;
    /// Active pressure block (schur_ or ortho_schur_); set once at construction.
    mfem::Solver* pressure_block_ = nullptr;
    /// Inner preconditioner of an iterative velocity PC (the Jacobi of
