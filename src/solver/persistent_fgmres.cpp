@@ -101,7 +101,9 @@ void PersistentFGMRESSolver::ReleaseWork() const
 // mfem::FGMRESSolver::Mult (linalg/solvers.cpp, MFEM 1c19aba) with the
 // residual, v[i] and z[i] taken from the kept pools instead of new / delete,
 // and a profiler region around the orthogonalization. Everything else, the
-// arithmetic included, is MFEM's.
+// arithmetic included, is MFEM's: the iterates are MFEM's bit for bit when
+// this file is compiled for the same target as MFEM (FMA contraction of the
+// scalar Givens and back-substitution arithmetic follows -march).
 void PersistentFGMRESSolver::Mult(const Vector& b, Vector& x) const
 {
    DenseMatrix H(m + 1, m);

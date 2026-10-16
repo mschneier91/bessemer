@@ -2,8 +2,11 @@
 // as mfem::FGMRESSolver -- a sequence of solves of a nonsymmetric
 // (convection-diffusion-reaction) system with a Jacobi preconditioner,
 // different right-hand sides and initial guesses, without and with restarts:
-// the same iteration counts and the same solutions (bitwise on the CPU), with
-// the work vectors kept between the solves and released on request.
+// the same iteration counts and the same solutions (bitwise on the CPU when
+// bessemer is compiled for the same target as MFEM: with FMA in one and not
+// the other the Givens rotations round differently, and FGMRES(4)'s restarts
+// amplify that past the tolerance), with the work vectors kept between the
+// solves and released on request.
 
 #include <gtest/gtest.h>
 
@@ -88,7 +91,8 @@ TEST(PersistentFgmres, SameIteratesAsMfem)
                       << "difference " << diff << " (of " << size << "), kept "
                       << kept.KeptBytes() / 1024.0 << " KiB" << std::endl;
          }
-         // Bitwise on the CPU; on a GPU the same kernels on the same data.
+         // Bitwise on the CPU (same target as MFEM); on a GPU the same kernels
+         // on the same data.
          EXPECT_LE(diff, 1e-14 * size);
          EXPECT_GT(kept.KeptBytes(), 0.0);
       }
