@@ -994,3 +994,11 @@ of the peak.
 - **On this flow, Q4 and Q5 give the best time and memory to a given accuracy.** Q3 is the
   fastest per DOF. Q2 is dominated everywhere. Q6 pays 1.5x Q3's steps at the same N, and its
   kernels are the least tuned.
+
+## Two GPUs (job 49271026, c521d65)
+
+The GPU tests at 2 MPI ranks, one H100 per rank: the fast tier passes (68 tests; without
+nse_mms and tgv_nse, which time out on GPUs at any rank count). Taylor-Green 64^3 Q3/Q2
+(23.3M DOFs) from t = 0, 5 + 20 steps, the decks' configuration: 0.219 s per step on one
+H100, 0.157 s on two (1.40x, 70 % parallel efficiency), 1.20 against 1.25 iterations per
+step.
