@@ -67,6 +67,16 @@ from the proposal and the study plan: [uzawa.md](uzawa.md). **Next:**
 `bench/uzawa/study.sh` inside a GPU allocation (Phases 0, 2, 3, and `capacity` for the
 memory; submits nothing). Gaps: the Python bindings do not expose the new keys.
 
+**CI builds bessemer for the Spack stack's target (2026-10-16, branch
+`claude/schur-cg-solver-9sf1r5`).** `persistent_fgmres_test` failed in CI at np 1 and
+4 (on `main` too): FGMRES(4) differed from MFEM's by up to 4e-13 relative against a
+1e-14 limit, and even FGMRES(50) was not bitwise (1-2e-15). The arithmetic outside
+libmfem is MFEM's own Givens rotations and back substitution, copied; MFEM is built
+by Spack with `-march=x86-64-v3` (FMA contraction), bessemer was built for the
+baseline x86-64. The build step now sets `CXXFLAGS=-march=x86-64-v3`. The cause is
+inferred from the code and flags; the CI run on this change is the check. A desktop
+or cluster build without the stack's `-march` may show the same failure.
+
 **Duplicate deck keys are an error; bench.py's `--set` replaces template keys
 (2026-10-16, branch `throughput`).** `bench.py run --set discretization.order_u=5` had
 appended `order_u: 5` after the template's `order_u: 3`, and the loader read the first
