@@ -743,7 +743,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "time, ETA.");
    r.Read(output, "history", p.output.history,
           "Write a per-step <path>/<name>_history.csv (t, dt, c_d, c_l, "
-          "iterations, cells, step wall time).");
+          "iterations, OIFS substeps, cells, step wall time, velocity-block "
+          "inner iterations, inner solves at their cap).");
    r.ReadEnum(output, "profile", p.output.profile,
    {
       {"off", ProfileOutput::Off}, {"wall", ProfileOutput::Wall},

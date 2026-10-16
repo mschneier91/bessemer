@@ -944,6 +944,11 @@ void Case::RecordStep(double t_prev, double step_wall)
    r.t = integrator_->Time();
    r.dt = r.t - t_prev;
    r.iterations = integrator_->LastIterations();
+   if (const StokesSolver* s = integrator_->LastSolver())
+   {
+      r.vel_iterations = s->Stats().vel_inner_iterations;
+      r.vel_cap_hits = s->Stats().vel_cap_hits;
+   }
    r.substeps = integrator_->LastOifsSubsteps();
    r.elements = ne_;
    r.step_wall = step_wall;
