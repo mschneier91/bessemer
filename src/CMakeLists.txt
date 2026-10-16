@@ -39,6 +39,7 @@ add_library(incns STATIC
   solver/solution_projection.cpp
   solver/schur_complement.cpp
   solver/schur_solver.cpp
+  solver/velocity_cg.cpp
   solver/stokes_solver.cpp
   time/multistep_coeffs.cpp
   time/time_integrator.cpp

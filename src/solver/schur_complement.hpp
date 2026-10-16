@@ -7,6 +7,7 @@
 #pragma once
 
 #include "precond/nullspace.hpp"
+#include "solver/velocity_cg.hpp"
 #include "mfem.hpp"
 
 namespace incns
@@ -24,12 +25,13 @@ namespace incns
  * term), with the constant pressures as its null space on enclosed and
  * periodic domains.
  *
- * The velocity solve is an iterative solver started from zero to the inner
+ * The velocity solve is a VelocityCG started from zero to the inner
  * tolerance of SetInnerTolerance(); a loose one makes S an inexact, slightly
  * varying operator, which plain CG does not tolerate (SchurSolver uses
  * flexible CG). The velocity of the last application is kept
  * (LastVelocity()): the outer iteration updates u with it alongside p, so
- * that u stays A^-1 (f - B^T p).
+ * that u stays A^-1 (f - B^T p). Memory: two velocity vectors, B^T d (which
+ * the CG overwrites with its residual) and v.
  */
 class SchurComplementOperator : public mfem::Operator
 {
@@ -37,13 +39,13 @@ public:
    /**
     * @brief Wire the operator (everything borrowed).
     * @param B     Eliminated divergence (pressure rows, velocity columns).
-    * @param a_inv Velocity solver on the eliminated momentum block; its
-    *              iterative_mode is set to false here (zero start).
+    * @param a_inv Velocity CG on the eliminated momentum block (zero
+    *              start).
     * @param proj  Constant-mode projector when the pressure null space
     *              exists (the output is projected), else null.
     */
    SchurComplementOperator(const mfem::Operator& B,
-                           mfem::IterativeSolver& a_inv,
+                           VelocityCG& a_inv,
                            const ConstantPressureProjector* proj);
 
    /**
@@ -52,10 +54,6 @@ public:
     * @param q Its image.
     */
    void Mult(const mfem::Vector& d, mfem::Vector& q) const override;
-
-   /// @param a_inv The velocity solver to use from now on (after a refresh
-   ///              rebuilt it; borrowed).
-   void SetVelocitySolver(mfem::IterativeSolver& a_inv);
 
    /// @param rel Relative tolerance of the next applications' velocity solve.
    void SetInnerTolerance(double rel)
@@ -96,10 +94,11 @@ public:
 
 private:
    const mfem::Operator& B_;                 ///< Divergence (borrowed).
-   mfem::IterativeSolver* a_inv_;            ///< Velocity solver (borrowed).
+   VelocityCG* a_inv_;                  ///< Velocity CG (borrowed).
    const ConstantPressureProjector* proj_;   ///< Projector or null (borrowed).
    double rel_ = 1e-10;                      ///< Inner relative tolerance.
-   mutable mfem::Vector w_;                  ///< B^T d (device).
+   /// B^T d, then the velocity CG's residual (device).
+   mutable mfem::Vector w_;
    mutable mfem::Vector v_;                  ///< A^-1 B^T d (device).
    mutable int last_iterations_ = 0;         ///< See LastIterations().
    mutable int applications_ = 0;            ///< See Applications().

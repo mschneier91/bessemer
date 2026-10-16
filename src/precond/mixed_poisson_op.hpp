@@ -54,10 +54,28 @@ public:
     */
    MixedPoissonOperator(const mfem::Operator& B, const mfem::Operator& mv_inv)
       : mfem::Operator(B.Height()), B_(B), mv_inv_(mv_inv),
-        vu_(B.Width()), vu2_(B.Width())
+        own_vu_(B.Width()), own_vu2_(B.Width())
    {
-      vu_.UseDevice(true);
-      vu2_.UseDevice(true);
+      own_vu_.UseDevice(true);
+      own_vu2_.UseDevice(true);
+   }
+
+   /**
+    * @brief Use two borrowed velocity-sized vectors as the scratch from now
+    *        on, and free the own two. For a caller with velocity vectors
+    *        that are idle whenever this operator runs (the Schur method's
+    *        velocity CG: StokesSolver).
+    * @param a Scratch (borrowed; device-aware, size B.Width()).
+    * @param b A second one, distinct from @p a (borrowed).
+    */
+   void BorrowScratch(mfem::Vector& a, mfem::Vector& b)
+   {
+      MFEM_VERIFY(a.Size() == B_.Width() && b.Size() == B_.Width() && &a != &b,
+                  "mixed_poisson_op: the borrowed scratch does not fit");
+      vu_ = &a;
+      vu2_ = &b;
+      own_vu_.Destroy();
+      own_vu2_.Destroy();
    }
 
    /**
@@ -67,16 +85,18 @@ public:
     */
    void Mult(const mfem::Vector& x, mfem::Vector& y) const override
    {
-      B_.MultTranspose(x, vu_);   // B^T: pressure -> velocity (PA gradient)
-      mv_inv_.Mult(vu_, vu2_);    // M_v^-1: fixed diagonal / Chebyshev
-      B_.Mult(vu2_, y);           // B: velocity -> pressure (PA divergence)
+      B_.MultTranspose(x, *vu_);  // B^T: pressure -> velocity (PA gradient)
+      mv_inv_.Mult(*vu_, *vu2_);  // M_v^-1: fixed diagonal / Chebyshev
+      B_.Mult(*vu2_, y);          // B: velocity -> pressure (PA divergence)
    }
 
 private:
    const mfem::Operator& B_;      ///< Eliminated divergence block (borrowed).
    const mfem::Operator& mv_inv_; ///< Fixed velocity mass inverse (borrowed).
-   mutable mfem::Vector vu_;      ///< Velocity-sized scratch (device).
-   mutable mfem::Vector vu2_;     ///< Velocity-sized scratch (device).
+   mfem::Vector own_vu_;          ///< Velocity-sized scratch (device).
+   mfem::Vector own_vu2_;         ///< Velocity-sized scratch (device).
+   mfem::Vector* vu_ = &own_vu_;   ///< The scratch in use (own or borrowed).
+   mfem::Vector* vu2_ = &own_vu2_; ///< The second one (see vu_).
 };
 
 } // namespace incns

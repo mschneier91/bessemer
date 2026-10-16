@@ -8,21 +8,13 @@ namespace incns
 using namespace mfem;
 
 SchurComplementOperator::SchurComplementOperator(
-   const Operator& B, IterativeSolver& a_inv,
+   const Operator& B, VelocityCG& a_inv,
    const ConstantPressureProjector* proj)
    : Operator(B.Height()), B_(B), a_inv_(&a_inv), proj_(proj),
      w_(B.Width()), v_(B.Width())
 {
    w_.UseDevice(true);
    v_.UseDevice(true);
-   a_inv_->iterative_mode = false;
-   a_inv_->SetRelTol(rel_);
-}
-
-void SchurComplementOperator::SetVelocitySolver(IterativeSolver& a_inv)
-{
-   a_inv_ = &a_inv;
-   a_inv_->iterative_mode = false;
    a_inv_->SetRelTol(rel_);
 }
 
@@ -36,11 +28,10 @@ void SchurComplementOperator::Mult(const Vector& d, Vector& q) const
 {
    INCNS_PROFILE("schur_operator::apply");
    B_.MultTranspose(d, w_);
-   v_ = 0.0;
    const double t0 = MPI_Wtime();
    {
       INCNS_PROFILE("schur_operator::velocity_solve");
-      a_inv_->Mult(w_, v_);
+      a_inv_->Solve(w_, v_); // w_ becomes the residual: no copy of B^T d
    }
    inner_time_ += MPI_Wtime() - t0;
    last_iterations_ = a_inv_->GetNumIterations();

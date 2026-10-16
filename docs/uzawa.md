@@ -7,8 +7,10 @@ implements is [design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md) (hu
 method stays the default. Whether Schur should replace it is the study at the end of this
 page, which needs GPU runs.
 
-**State (2026-10-16): written, NOT compiled, NOT run.** Nothing on this page has been
-measured. The code was written in a cloud session that cannot build Bessemer.
+**State (2026-10-16): builds and passes its tests in CI (GitHub Actions, CPU, np 1/2/4);
+never run on a GPU.** Nothing on this page has been timed, and the memory figures in §4
+are counts of the vectors the code allocates, not measurements. The code was written in a
+cloud session that cannot build Bessemer: CI is its only build so far.
 
 ## 1. What it solves
 
@@ -41,10 +43,11 @@ r = B u - g with u = A^-1 (f - B^T p).
 
 Velocity solves outside S (Systems 1 and 3) are explicit corrections du = A^-1 r of the
 true momentum residual. At most 4 passes are made, each to max(1e-13, ½ target/‖r‖)
-relative, until ‖r‖ ≤ τ/√2. They use CG with the velocity preconditioner. The
-preconditioner is the fixed linear one inside the coupled path's velocity PCG: Jacobi or
-point-block Jacobi under `a_pc: jacobi_pcg`, and otherwise the coupled path's velocity PC
-itself.
+relative, until ‖r‖ ≤ τ/√2. Every velocity solve, inside S or outside, uses one CG
+(`VelocityCG`, `src/solver/velocity_cg.hpp`): MFEM's CG algorithm and stopping test, but
+working in its right-hand side (§4). Its preconditioner is the fixed linear one inside the
+coupled path's velocity PCG: Jacobi or point-block Jacobi under `a_pc: jacobi_pcg`, and
+otherwise the coupled path's velocity PC itself.
 
 ## 2. Options (deck `solver.outer`, `solver.uzawa.*`)
 
@@ -92,19 +95,50 @@ The `solver.max_iter` cap applies to the Schur iterations summed over the cycles
 
 ## 4. Memory
 
-The Schur path holds 4 pressure vectors (r, z, d, q). It adds 2 more for the projection's
-start state plus its 2k basis vectors. On the velocity side it
-holds 2 vectors in the Schur operator and 3 for the velocity CG. **Not yet removed under
-`outer: schur`:**
+Memory is the reason for this method (human 2026-10-16: "the whole point of moving to
+this is to optimize memory usage"), so the Schur path allocates only what it applies.
+Units as in `/mnt/project-files/memory/gpu_dof_ceiling.md`: B per velocity DOF, double
+precision. At 64^3 Q3/Q2 (21.2 M velocity, 2.1 M pressure DOFs) a velocity vector is
+8 B/vdof, a pressure vector 0.79, a system vector 8.8; 1 GB is 47 B/vdof.
 
-- The coupled block preconditioner and the coupled FGMRES object. The FGMRES object
-  allocates its basis only on its first Mult, which never happens here.
-- The coupled velocity PCG's 3 vectors.
-- With `tolerance_reference: step`, one coupled operator application per step and a
-  system-sized `step_r_`. This is the step reference's norm, as on the coupled path.
+What the Schur path holds besides the state, the operators and the preconditioners
+themselves (case defaults: Cahouet-Chabard, `jacobi_pcg` with point-block Jacobi, the
+projection at k = 8, `tolerance_reference: step`):
 
-The velocity CG is rebuilt at every refresh, which is a GPU allocation each
-time.
+| Vectors | Count | B/vdof |
+|---|---|---|
+| Pressure: r, z, d, q of the flexible CG | 4 p | 3.2 |
+| Pressure projection: 2k basis vectors, p_n, r_n | 18 p | 14.2 |
+| Schur operator: B^T d (the CG's residual), v = A^-1 B^T d | 2 u | 16 |
+| Velocity CG: direction, P r / A d (also Cahouet-Chabard's B M_v^-1 B^T scratch) | 2 u | 16 |
+| **Total** | | **49** |
+
+Before this was trimmed (5b55bf9) the same path held 115 B/vdof, and 139 for a moment at
+every refresh. What went:
+
+| Removed under `outer: schur` | B/vdof |
+|---|---|
+| The coupled velocity PCG (3 velocity vectors; the Schur method runs its own CG on the PCG's preconditioner) | 24 |
+| The block preconditioner (a velocity and a pressure scratch vector) and the velocity-block monitor | 8.8 |
+| The step reference's system-sized residual, and its operator application every step: under Schur with `previous` or `project` the reference is the Schur solver's own initial residual, computed in the vectors above | 8.8 |
+| One of the velocity CG's three vectors: `VelocityCG` overwrites its right-hand side, the Schur operator's B^T d, with the residual (MFEM's CG copies it) | 8 |
+| Cahouet-Chabard's own two velocity vectors for B M_v^-1 B^T: it runs between velocity solves, so it borrows the velocity CG's two (`CahouetChabardSchurPC::BorrowVelocityScratch`) | 16 |
+| A new velocity CG at every refresh, built before the old one was freed: the CG is now re-pointed, not rebuilt | 24 at that moment |
+
+Four velocity vectors is the floor for a nested preconditioned CG that carries u along
+(the CG's residual, direction and P r, and v for the update of u). With
+`initial_guess: extrapolate` the coupled path's two system vectors (x_{n-1}, and a
+temporary each solve) and the step reference's residual remain; it is not the default.
+
+For comparison, the coupled method holds for the same roles its FGMRES basis (105-282
+B/vdof by `gpu_dof_ceiling.md`, from fast settings to the full restart length), the
+projection's 2k system vectors (141 at k = 8), and 66 B/vdof of velocity PCG, block
+preconditioner, Cahouet-Chabard scratch and the step reference's two system vectors
+(`step_ax_`, `step_r_`). So the Schur method should save roughly 260-440 B/vdof against
+the coupled method with the projection, about 18-29 % of today's measured 1,500 B/vdof
+(5.6-9.3 GB at 64^3). That is arithmetic, not a measurement: `study.sh capacity` measures it.
+Everything else (form data, the pressure AMG, the velocity PC, the history) is the same
+for both methods, and is where the rest of the memory is.
 
 ## 5. The solver log
 
@@ -131,7 +165,7 @@ A restart truncates both files (a new process starts them again). The coupled FG
 Gram-Schmidt now has its own profiler region (`fgmres::orthogonalize`), shown as
 `bench.py`'s `gram_schmidt` phase.
 
-## 6. Tests (`test/schur_solver_test.cpp`; NOT yet run)
+## 6. Tests (`test/schur_solver_test.cpp`; pass in CI at np 1, 2 and 4)
 
 - **U1**: S is symmetric and its output is orthogonal to the constants.
 - **U2**: Schur = coupled to 1e-6 in u and p. The domains are enclosed, periodic, and a
@@ -144,6 +178,10 @@ Gram-Schmidt now has its own profiler region (`fgmres::orthogonalize`), shown as
   coupled.
 - **U6**: a restart with the checkpointed pressure basis matches the uninterrupted run
   (`ReproTol`).
+- **U7**: `VelocityCG` takes MFEM's `CGSolver`'s iterations and gives its solution, and
+  leaves the residual in its right-hand side.
+- **U8**: a Δt refresh of a Schur solver (CG re-pointed, point-block Jacobi updated in
+  place) gives a fresh solver's answer, with point-block and scalar Jacobi.
 
 ## 7. The study (needs GPU runs; nothing measured yet)
 
