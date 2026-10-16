@@ -23,27 +23,11 @@ enum class OuterMethod
    /// FGMRES on the whole coupled system, block-triangular preconditioner
    /// (the default). Its basis holds two system-sized vectors per iteration.
    Coupled,
-   /// Krylov on the pressure Schur complement S = B A^-1 B^T, each operator
-   /// application a velocity solve (SchurSolver). A few pressure- and
-   /// velocity-sized vectors in place of the coupled basis.
+   /// Flexible CG on the pressure Schur complement S = B A^-1 B^T, each
+   /// operator application a velocity solve (SchurSolver). A few pressure-
+   /// and velocity-sized vectors in place of the coupled basis. Symmetric
+   /// momentum block only: not with the rotational form.
    Schur
-};
-
-/// Krylov method on the pressure Schur complement (deck
-/// `solver.uzawa.method`).
-enum class SchurKrylov
-{
-   /// Preconditioned CG. Needs a fixed linear operator and preconditioner:
-   /// with Bessemer's Cahouet-Chabard (a fixed-count inner CG, nonlinear in
-   /// its input) that holds only for `solver.schur: laplacian_legacy`.
-   CG,
-   /// Flexible CG (Notay 2000; Polak-Ribiere beta): tolerates a variable
-   /// preconditioner and inexact operator applications, one more pressure
-   /// vector. The default.
-   FlexibleCG,
-   /// Flexible GMRES on the pressure space, restart `solver.uzawa.kdim`:
-   /// for a nonsymmetric S (the rotational form, the Olshanskii Schur PC).
-   FGMRES
 };
 
 /// How tightly the velocity solve inside each Schur operator application is
@@ -51,7 +35,7 @@ enum class SchurKrylov
 enum class InnerTolerance
 {
    Tight,  ///< eps_tight relative, every application: S is effectively exact.
-   Loose,  ///< eps_loose relative: breaks plain CG's conjugacy.
+   Loose,  ///< eps_loose relative, every application.
    /// eps_k = min(eps_max, max(eps_tight, relax_c * tol / ||r_{k-1}||)):
    /// tight early, loose late (van den Eshof and Sleijpen 2004; Simoncini and
    /// Szyld 2003). The default.
@@ -67,7 +51,6 @@ enum class InnerTolerance
  */
 struct SchurSolveOptions
 {
-   SchurKrylov method = SchurKrylov::FlexibleCG; ///< Outer Krylov method.
    InnerTolerance inner = InnerTolerance::Relaxed; ///< Inner tolerance mode.
    double eps_tight = 1e-10; ///< Tight inner relative tolerance; Relaxed's floor.
    double eps_loose = 1e-3;  ///< Loose inner relative tolerance.
@@ -76,9 +59,6 @@ struct SchurSolveOptions
    /// Iteration cap of each velocity solve (the System 1 and System 3 solves
    /// and every Schur operator application).
    int inner_max_iter = 500;
-   /// Restart of the velocity GMRES (nonsymmetric momentum block only).
-   int inner_kdim = 30;
-   int kdim = 20;            ///< FGMRES: restart on the pressure space.
    /// Outer cycles: after each, the velocity is re-solved from the pressure
    /// and the TRUE pressure residual checked; a residual that drifted above
    /// the tolerance starts another cycle from the current iterate.

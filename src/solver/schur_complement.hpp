@@ -26,9 +26,10 @@ namespace incns
  *
  * The velocity solve is an iterative solver started from zero to the inner
  * tolerance of SetInnerTolerance(); a loose one makes S an inexact, slightly
- * varying operator, which plain CG does not tolerate (see SchurKrylov). The
- * velocity of the last application is kept (LastVelocity()): the outer
- * iteration updates u with it alongside p, so that u stays A^-1 (f - B^T p).
+ * varying operator, which plain CG does not tolerate (SchurSolver uses
+ * flexible CG). The velocity of the last application is kept
+ * (LastVelocity()): the outer iteration updates u with it alongside p, so
+ * that u stays A^-1 (f - B^T p).
  */
 class SchurComplementOperator : public mfem::Operator
 {

@@ -1,6 +1,6 @@
 /**
  * @file schur_solver.hpp
- * @brief The Schur complement (Uzawa) outer iteration: Krylov on the
+ * @brief The Schur complement (Uzawa) outer iteration: flexible CG on the
  *        pressure equation S p = B A^-1 f - g, S = B A^-1 B^T, in place of
  *        FGMRES on the coupled system (deck `solver.outer: schur`).
  */
@@ -8,7 +8,6 @@
 
 #include "precond/nullspace.hpp"
 #include "solver/outer_solver.hpp"
-#include "solver/persistent_fgmres.hpp"
 #include "solver/schur_complement.hpp"
 #include "solver/solution_projection.hpp"
 #include "mfem.hpp"
@@ -26,9 +25,8 @@ struct SchurIterationRecord
    int iteration = 0;          ///< Outer iteration, counted over all cycles.
    double residual = 0.0;      ///< ||r||: the recurrence's pressure residual.
    /// The coupled residual ||b - K x|| of the iterate (u, p), u carried
-   /// along with p; -1 where not computed (FGMRES, which does not form the
-   /// iterate until it stops).
-   double coupled_residual = -1.0;
+   /// along with p.
+   double coupled_residual = 0.0;
    double inner_tolerance = 0.0; ///< Relative tolerance of its velocity solve.
    int inner_iterations = 0;     ///< Iterations of its velocity solve.
 };
@@ -37,7 +35,7 @@ struct SchurIterationRecord
 struct SchurSolveStats
 {
    int iterations = 0;           ///< Outer iterations, all cycles.
-   int cycles = 0;               ///< Outer cycles run (Krylov restarts + 1).
+   int cycles = 0;               ///< Outer cycles run (CG restarts + 1).
    /// Velocity solves outside the Schur operator (System 1, System 3 and
    /// their corrections), their iterations, and their wall time [s].
    int velocity_solves = 0;
@@ -51,7 +49,7 @@ struct SchurSolveStats
    double momentum_residual = 0.0; ///< ||f - A u - B^T p|| at exit.
    double pressure_residual = 0.0; ///< ||g - B u|| at exit.
    double final_residual = 0.0;  ///< The coupled residual at exit.
-   bool breakdown = false;       ///< CG met (d, S d) <= 0.
+   bool breakdown = false;       ///< The CG met (d, S d) <= 0.
    /// Pressure projection: whether it made a guess, and the pressure
    /// residual before it (after System 1) and after it.
    bool projected = false;
@@ -61,8 +59,8 @@ struct SchurSolveStats
 
 /**
  * @brief Solves the eliminated saddle-point system [A B^T; B 0] [u; p~] =
- *        [f; g] (StokesSolver's Cahouet-Chabard path, p~ = -p) by a Krylov
- *        iteration on the pressure Schur complement.
+ *        [f; g] (StokesSolver's Cahouet-Chabard path, p~ = -p) by flexible
+ *        CG on the pressure Schur complement.
  *
  * Per solve, with the incoming (u, p) as the warm start:
  *  - System 1: u = A^-1 (f - B^T p) (the spec's System 1 with the warm-start
@@ -81,14 +79,19 @@ struct SchurSolveStats
  * and ||f - A u - B^T p|| <= tau/sqrt2, both checked on true residuals, so
  * Converged() means the coupled residual is below tau.
  *
- * Velocity solves use CG (symmetric A) or GMRES (with the rotation term) on
- * the eliminated momentum block, preconditioned by the coupled path's own
+ * Flexible CG (Notay 2000) and not plain CG: Cahouet-Chabard's Poisson term
+ * is a fixed-count inner CG, not a fixed linear operator, and S is applied
+ * inexactly. S must be symmetric positive definite on the pressure space, so
+ * the momentum block must be symmetric: not with the rotation term (the
+ * rotational form uses the coupled FGMRES).
+ *
+ * Velocity solves use CG on the eliminated momentum block, preconditioned by the coupled path's own
  * velocity preconditioner (Jacobi, point-block Jacobi, Chebyshev or a LOR-AMG
  * V-cycle: fixed linear operators). Outside the Schur operator each solve is
  * a correction to an explicit l2 residual target, not a relative tolerance.
  *
- * Memory: pressure vectors r, z, d, q (+ 2 kdim for FGMRES), velocity vectors
- * two in the Schur operator plus the velocity Krylov solver's own (3 for CG).
+ * Memory: pressure vectors r, z, d, q, velocity vectors two in the Schur
+ * operator plus the velocity CG's own three.
  * No system-sized vector.
  */
 class SchurSolver
@@ -98,19 +101,17 @@ public:
     * @brief Wire the solver (operators and preconditioners borrowed).
     * @param comm     Communicator.
     * @param A        Eliminated momentum block (constrained: identity rows on
-    *                 the essential velocity dofs); with a rotation term the
-    *                 full nonsymmetric one.
+    *                 the essential velocity dofs); symmetric.
     * @param B        Eliminated divergence; B^T through MultTranspose.
     * @param a_pc     Preconditioner of the velocity solves (a fixed linear
     *                 operator: not an iterate-to-tolerance solver).
-    * @param symmetric_a A is symmetric (CG velocity solves; else GMRES).
     * @param schur_pc Positive Schur approximate inverse P_S^-1 (CC).
     * @param proj     Constant-mode projector when the pressure null space
     *                 exists, else null.
-    * @param opts     Method and inner-tolerance options.
+    * @param opts     Inner-tolerance and cycle options.
     */
    SchurSolver(MPI_Comm comm, const mfem::Operator& A, const mfem::Operator& B,
-               mfem::Solver& a_pc, bool symmetric_a, mfem::Solver& schur_pc,
+               mfem::Solver& a_pc, mfem::Solver& schur_pc,
                const ConstantPressureProjector* proj,
                const SchurSolveOptions& opts);
 
@@ -188,7 +189,7 @@ public:
    const std::vector<SchurIterationRecord>& History() const { return history_; }
 
 private:
-   /// (Re)build the velocity Krylov solver for A_ and a_pc_.
+   /// (Re)build the velocity CG for A_ and a_pc_.
    void BuildVelocitySolver();
    /**
     * @brief u <- A^-1 (f - B^T p) to ||f - B^T p - A u|| <= target, by
@@ -210,11 +211,9 @@ private:
                            mfem::Vector& r) const;
    /// The Relaxed / Tight / Loose inner tolerance after residual @p rnorm.
    double InnerRelTol(double rnorm, double tau_p) const;
-   /// One CG / flexible CG cycle from (u, p) with pressure residual r_.
+   /// One flexible CG cycle from (u, p) with pressure residual r_.
    void CgCycle(mfem::Vector& u, mfem::Vector& p, double rnorm,
                 double tau_p, const mfem::Vector& f, int cycle);
-   /// One pressure-space FGMRES cycle: p += S^-1 r_ (u is not carried).
-   void FgmresCycle(mfem::Vector& p, double tau_p, int cycle);
    /// Dot product over the communicator.
    double Dot(const mfem::Vector& a, const mfem::Vector& b) const
    {
@@ -225,7 +224,6 @@ private:
    const mfem::Operator* A_;             ///< Momentum block (borrowed).
    const mfem::Operator& B_;             ///< Divergence (borrowed).
    mfem::Solver* a_pc_;                  ///< Velocity PC (borrowed).
-   bool symmetric_a_;                    ///< CG (true) or GMRES velocity solves.
    mfem::Solver* schur_pc_;              ///< P_S^-1 (borrowed).
    const ConstantPressureProjector* proj_; ///< Projector or null (borrowed).
    SchurSolveOptions opts_;              ///< Options.
@@ -234,19 +232,10 @@ private:
    int max_iter_ = 2000;                 ///< See SetMaxIter.
    int print_level_ = -1;                ///< See SetPrintLevel.
 
-   /// The velocity Krylov solver (CG or GMRES), shared by the Schur
-   /// operator and System 1 / 3. Declared before sop_, which borrows it.
+   /// The velocity CG, shared by the Schur operator and System 1 / 3.
+   /// Declared before sop_, which borrows it.
    std::unique_ptr<mfem::IterativeSolver> vel_;
    std::unique_ptr<SchurComplementOperator> sop_; ///< S = B A^-1 B^T.
-   /// Pressure-space FGMRES (SchurKrylov::FGMRES only; built on first use).
-   std::unique_ptr<PersistentFGMRESSolver> fgmres_;
-   /// FGMRES's monitor: records the history and sets the next application's
-   /// inner tolerance from the residual FGMRES reports.
-   std::unique_ptr<mfem::IterativeSolverMonitor> monitor_;
-   int fg_cycle_ = 0;           ///< FGMRES: the cycle being run.
-   int fg_base_ = 0;            ///< FGMRES: outer iterations before it.
-   double fg_tau_p_ = 0.0;      ///< FGMRES: the pressure-residual target.
-   double fg_inner_tol_ = 0.0;  ///< FGMRES: the inner tolerance in use.
    /// Pressure vectors (device): residual, preconditioned residual,
    /// direction, S times direction.
    mfem::Vector r_, z_, d_, q_;

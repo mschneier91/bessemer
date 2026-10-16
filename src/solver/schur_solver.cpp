@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <utility>
 
 namespace incns
@@ -21,40 +20,18 @@ constexpr int kMaxCorrections = 4;
 // solver.
 constexpr double kMinCorrectionTol = 1e-13;
 
-// Hands an iterative solver's residual norms, as it reports them after each
-// iteration (and at the start), to a callback.
-class ResidualHook : public IterativeSolverMonitor
-{
-public:
-   explicit ResidualHook(std::function<void(int, double)> f)
-      : f_(std::move(f)) {}
-
-   void MonitorResidual(int it, real_t norm, const Vector&, bool final) override
-   {
-      if (!final) { f_(it, norm); }
-   }
-
-private:
-   std::function<void(int, double)> f_;
-};
 } // namespace
 
 SchurSolver::SchurSolver(MPI_Comm comm, const Operator& A, const Operator& B,
-                         Solver& a_pc, bool symmetric_a, Solver& schur_pc,
+                         Solver& a_pc, Solver& schur_pc,
                          const ConstantPressureProjector* proj,
                          const SchurSolveOptions& opts)
-   : comm_(comm), A_(&A), B_(B), a_pc_(&a_pc), symmetric_a_(symmetric_a),
-     schur_pc_(&schur_pc), proj_(proj), opts_(opts),
+   : comm_(comm), A_(&A), B_(B), a_pc_(&a_pc), schur_pc_(&schur_pc),
+     proj_(proj), opts_(opts),
      r_(B.Height()), z_(B.Height()), d_(B.Height()), q_(B.Height())
 {
-   MFEM_VERIFY(opts_.method == SchurKrylov::FGMRES || symmetric_a_,
-               "schur_solver: with the rotation term S is nonsymmetric: "
-               "solver.uzawa.method fgmres (cg and flexible_cg need a "
-               "symmetric momentum block)");
-   MFEM_VERIFY(opts_.max_cycles >= 1 && opts_.inner_max_iter >= 1 &&
-               opts_.kdim >= 1 && opts_.inner_kdim >= 1,
-               "schur_solver: max_cycles, inner_max_iter, kdim and inner_kdim "
-               "must be >= 1");
+   MFEM_VERIFY(opts_.max_cycles >= 1 && opts_.inner_max_iter >= 1,
+               "schur_solver: max_cycles and inner_max_iter must be >= 1");
    MFEM_VERIFY(opts_.eps_tight > 0.0 && opts_.eps_tight <= opts_.eps_max &&
                opts_.eps_loose > 0.0 && opts_.relax_c > 0.0,
                "schur_solver: need 0 < eps_tight <= eps_max, eps_loose > 0, "
@@ -76,14 +53,7 @@ void SchurSolver::EnablePressureProjection(int k)
 
 void SchurSolver::BuildVelocitySolver()
 {
-   std::unique_ptr<IterativeSolver> s;
-   if (symmetric_a_) { s = std::make_unique<CGSolver>(comm_); }
-   else
-   {
-      auto g = std::make_unique<GMRESSolver>(comm_);
-      g->SetKDim(opts_.inner_kdim);
-      s = std::move(g);
-   }
+   auto s = std::make_unique<CGSolver>(comm_);
    // SetOperator before SetPreconditioner: MFEM forwards SetOperator to a PC
    // that is already set, and the velocity PCs keep their own operator.
    s->SetOperator(*A_);
@@ -105,7 +75,6 @@ void SchurSolver::Rewire(const Operator& A, Solver& a_pc, Solver& schur_pc)
    a_pc_ = &a_pc;
    schur_pc_ = &schur_pc;
    BuildVelocitySolver();
-   if (fgmres_) { fgmres_->SetPreconditioner(*schur_pc_); }
 }
 
 double SchurSolver::MomentumResidual(const Vector& f, const Vector& p,
@@ -178,7 +147,6 @@ void SchurSolver::CgCycle(Vector& u, Vector& p, double rnorm, double tau_p,
                           const Vector& f, int cycle)
 {
    INCNS_PROFILE("schur_solver::cg");
-   const bool flexible = (opts_.method == SchurKrylov::FlexibleCG);
    const bool root = Mpi::Root();
    // z = P_S^-1 r. On singular domains CC projects its inner solve, not its
    // mass term: project z too, so the directions carry no constant.
@@ -197,7 +165,7 @@ void SchurSolver::CgCycle(Vector& u, Vector& p, double rnorm, double tau_p,
          stats_.breakdown = true;
          if (root && print_level_ >= 0)
          {
-            mfem::out << "[incns] schur_solver: CG breakdown, (d, S d) = "
+            mfem::out << "[incns] schur_solver: FCG breakdown, (d, S d) = "
                       << dq << std::endl;
          }
          break;
@@ -226,7 +194,7 @@ void SchurSolver::CgCycle(Vector& u, Vector& p, double rnorm, double tau_p,
       }
       if (root && print_level_ >= 1)
       {
-         mfem::out << "   Schur " << (flexible ? "FCG" : "CG") << " cycle "
+         mfem::out << "   Schur FCG cycle "
                    << cycle << " iteration " << stats_.iterations
                    << "  ||r|| = " << rnorm << "  inner tol " << eps << " ("
                    << sop_->LastIterations() << " its)" << std::endl;
@@ -235,61 +203,15 @@ void SchurSolver::CgCycle(Vector& u, Vector& p, double rnorm, double tau_p,
 
       schur_pc_->Mult(r_, z_);
       if (proj_) { proj_->Project(z_); }
-      const double rz_new = Dot(r_, z_);
-      // Plain CG: Fletcher-Reeves (r_new, z_new) / (r, z). Flexible CG
-      // (Notay): Polak-Ribiere (z_new, r_new - r) / (r, z), with
-      // r_new - r = -gamma q: no extra vector.
-      const double beta = flexible ? -gamma * Dot(z_, q_) / rz : rz_new / rz;
+      // Flexible CG (Notay 2000): Polak-Ribiere beta = (z_new, r_new - r) /
+      // (r, z), with r_new - r = -gamma q: no extra vector. It reduces to
+      // plain CG's Fletcher-Reeves beta when P_S^-1 is fixed and linear, and
+      // tolerates CC's fixed-count inner CG and the inexact S.
+      const double beta = -gamma * Dot(z_, q_) / rz;
       d_ *= beta;
       d_ += z_;
-      rz = rz_new;
+      rz = Dot(r_, z_);
    }
-}
-
-void SchurSolver::FgmresCycle(Vector& p, double tau_p, int cycle)
-{
-   INCNS_PROFILE("schur_solver::fgmres");
-   if (!fgmres_)
-   {
-      fgmres_ = std::make_unique<PersistentFGMRESSolver>(comm_);
-      // After each iteration: record it, and set the next application's
-      // inner tolerance from the residual FGMRES reports.
-      monitor_ = std::make_unique<ResidualHook>([this](int it, double norm)
-      {
-         if (it > 0 && opts_.history)
-         {
-            SchurIterationRecord rec;
-            rec.cycle = fg_cycle_;
-            rec.iteration = fg_base_ + it;
-            rec.residual = norm;
-            rec.inner_tolerance = fg_inner_tol_;
-            rec.inner_iterations = sop_->LastIterations();
-            history_.push_back(rec);
-         }
-         fg_inner_tol_ = InnerRelTol(norm, fg_tau_p_);
-         sop_->SetInnerTolerance(fg_inner_tol_);
-      });
-      fgmres_->SetOperator(*sop_);
-      fgmres_->SetPreconditioner(*schur_pc_);
-      fgmres_->SetMonitor(*monitor_);
-      fgmres_->SetPrintLevel(-1);
-      fgmres_->iterative_mode = false;
-   }
-   fgmres_->SetKDim(opts_.kdim);
-   fgmres_->SetRelTol(0.0);
-   fgmres_->SetAbsTol(tau_p);
-   fgmres_->SetMaxIter(std::max(1, max_iter_ - stats_.iterations));
-   if (print_level_ >= 1) { fgmres_->SetPrintLevel(1); }
-   fg_cycle_ = cycle;
-   fg_base_ = stats_.iterations;
-   fg_tau_p_ = tau_p;
-   fg_inner_tol_ = InnerRelTol(std::sqrt(Dot(r_, r_)), tau_p);
-   sop_->SetInnerTolerance(fg_inner_tol_);
-   // S dp = r: dp in d_ (zero start), then p += dp.
-   d_ = 0.0;
-   fgmres_->Mult(r_, d_);
-   p += d_;
-   stats_.iterations += fgmres_->GetNumIterations();
 }
 
 void SchurSolver::Mult(const Vector& b, Vector& x)
@@ -366,14 +288,7 @@ void SchurSolver::Mult(const Vector& b, Vector& x)
       // the velocity is left to solve.
       if (rnorm > tau_p)
       {
-         if (opts_.method == SchurKrylov::FGMRES)
-         {
-            FgmresCycle(p, tau_p, cycle);
-         }
-         else
-         {
-            CgCycle(u, p, rnorm, tau_p, f, cycle);
-         }
+         CgCycle(u, p, rnorm, tau_p, f, cycle);
       }
       // System 3: u = A^-1 (f - B^T p), from the carried u.
       vel_ok = SolveVelocity(f, p, u, tau_u, res_u);

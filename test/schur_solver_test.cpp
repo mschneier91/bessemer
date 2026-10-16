@@ -1,17 +1,17 @@
 // The Schur complement (Uzawa) outer method (solver/schur_solver.hpp,
 // StokesSolverOptions::outer = OuterMethod::Schur) against the coupled FGMRES
 // path. Both solve the same eliminated system; the answer must agree to the
-// solver tolerance, whatever the Krylov method, inner tolerance mode or
-// initial guess. Nothing here pins a case-level default: the low-level tests
+// solver tolerance, whatever the Schur preconditioner, inner tolerance mode
+// or initial guess. Nothing here pins a case-level default: the low-level tests
 // set what they compare, and U5/U6 run the Parameters defaults of the day with
 // only the outer method changed.
 //  U1 S = B A^-1 B^T is symmetric (tight inner solves) and its image carries
 //     no constant pressure on an enclosed box.
 //  U2 One unsteady Stokes solve, Schur vs coupled, on an enclosed box (null
 //     space), a periodic box (null space) and a channel with an outflow (none),
-//     with and without grad-div: flexible CG, plain CG (laplacian_legacy:
-//     a fixed linear Schur PC) and pressure FGMRES give the coupled u and p
-//     to 1e-6, and the coupled residual they report meets the tolerance.
+//     with and without grad-div, under the Cahouet-Chabard and the legacy
+//     Laplacian Schur PC: flexible CG gives the coupled u and p to 1e-6,
+//     and the coupled residual it reports meets the tolerance.
 //  U3 The inner tolerance modes (tight, loose, relaxed) give the same answer.
 //  U4 The pressure projection: after a solve, the same system with the
 //     right-hand side scaled is guessed exactly (its increment is in the
@@ -48,7 +48,6 @@ using incns::MakeBoxMesh;
 using incns::MixedSpaces;
 using incns::OuterMethod;
 using incns::RuleBook;
-using incns::SchurKrylov;
 using incns::StokesSolver;
 using incns::StokesSolverOptions;
 
@@ -261,27 +260,19 @@ TEST(SchurSolver, U2_MatchesTheCoupledSolve)
       {
          Problem pr(dom.d);
          const Answer ref = SolveOnce(pr, BaseOptions(gd));
-         for (SchurKrylov m : {SchurKrylov::FlexibleCG, SchurKrylov::FGMRES})
-         {
-            StokesSolverOptions o = BaseOptions(gd);
-            o.outer = OuterMethod::Schur;
-            o.uzawa.method = m;
-            const std::string what = std::string(dom.name) + " gd " +
-                                     std::to_string(gd) +
-                                     (m == SchurKrylov::FGMRES ? " fgmres" : " fcg");
-            ExpectSameAnswer(ref, SolveOnce(pr, o), what);
-         }
-         // Plain CG needs a fixed linear Schur preconditioner: the legacy
-         // Laplacian model (one V-cycle, no inner CG). Compare with the
-         // coupled solve under the same preconditioner.
+         const std::string what = std::string(dom.name) + " gd " +
+                                  std::to_string(gd);
+         StokesSolverOptions o = BaseOptions(gd);
+         o.outer = OuterMethod::Schur;
+         ExpectSameAnswer(ref, SolveOnce(pr, o), what);
+         // The legacy Laplacian model (one V-cycle, no inner CG: a fixed
+         // linear Schur PC). Compare with the coupled solve under the same
+         // preconditioner.
          StokesSolverOptions legacy = BaseOptions(gd);
          legacy.cc.schur_model = incns::SchurModel::LaplacianLegacy;
          const Answer ref_legacy = SolveOnce(pr, legacy);
          legacy.outer = OuterMethod::Schur;
-         legacy.uzawa.method = SchurKrylov::CG;
-         ExpectSameAnswer(ref_legacy, SolveOnce(pr, legacy),
-                          std::string(dom.name) + " gd " + std::to_string(gd) +
-                          " cg legacy");
+         ExpectSameAnswer(ref_legacy, SolveOnce(pr, legacy), what + " legacy");
       }
    }
 }
@@ -295,7 +286,6 @@ TEST(SchurSolver, U3_InnerToleranceModesAgree)
    {
       StokesSolverOptions o = BaseOptions(1.0);
       o.outer = OuterMethod::Schur;
-      o.uzawa.method = SchurKrylov::FlexibleCG;
       o.uzawa.inner = t;
       const char* name = t == InnerTolerance::Tight ? "tight" :
                          t == InnerTolerance::Loose ? "loose" : "relaxed";
