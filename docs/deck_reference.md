@@ -26,6 +26,9 @@ Physical parameters.
 | `physics.grad_div_nu` | real | `0` | Grad-div: the part of gamma proportional to the viscosity (see grad_div_h). |
 | `physics.convective_form` | convective \| rotational | `convective` | Nonlinear term: explicit (u.grad)u, or the semi-implicit rotational form (the pressure becomes the Bernoulli head). |
 | `physics.outflow` | directional \| classical | `directional` | Condition on outflow boundaries: Braack-Mucha directional do-nothing (stable under backflow) or classical do-nothing. |
+| `physics.subgrid.model` | none \| constant \| wale \| sigma | `none` | Subgrid-scale model of a large-eddy simulation, an eddy viscosity nu_t in the explicit stress term (2 nu_t S(u), S(v)) beside the convection (navier_stokes, convective form only; docs/les.md). sigma: Nicoud et al. 2011 (recommended; zero in pure shear, solid rotation and two-component flow). wale: Nicoud & Ducros 1999. constant: nu_t = coefficient everywhere (verification). none: DNS. |
+| `physics.subgrid.coefficient` | real | `-1` | The model constant: C_sigma (sigma), C_w (wale) or nu_t itself (constant). < 0: the model's published value, 1.35 for sigma and 0.5 for wale. |
+| `physics.subgrid.filter_width` | real | `1` | Filter width as a multiple of the element's node spacing: Delta_K = filter_width * h_K / order_u. |
 
 ## `nondimensionalization`
 
