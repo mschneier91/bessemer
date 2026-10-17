@@ -4,10 +4,34 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-16)
+## Where development left off (2026-10-17)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Large-eddy simulation: the sigma and WALE subgrid models (2026-10-17, branch
+`claude/project-thread-jjlvl5`, written in a cloud session that cannot build; CI is the
+first build).** Human (2026-10-16): "alright why don't you go put in the LES model you
+reccomended", "don't forget the symmetric gradient!"; in the project chat: wall-resolved
+LES makes sense to have, and for a high-order code that is probably the top of the
+fidelity stack. The memo it follows recommended holding off on LES for the DNS roadmap
+and, when needed, one explicit subgrid term with the sigma model first and WALE behind
+the same key. Landed ([les.md](les.md), developing.md §5.8): `physics.subgrid.model:
+none | constant | wale | sigma` (+ `coefficient`, `filter_width`), the explicit stress
+term `(2 ν_t S(u), S(v))` with the symmetric gradient on the convection's explicit path
+(IMEX: with N; OIFS: in the BDF step with the outflow term, `SubtractOifsExplicitTerms`,
+which replaces `SubtractOifsDirectionalDoNothing`), `operators/subgrid_model.hpp`
+(pointwise models), `operators/subgrid_stress.{hpp,cpp}` (two device kernels, an nvcc
+TU; no per-step state, ~150 B per velocity dof of scratch inside an apply, 8 B per element
+kept), `summary.json` `subgrid` section. Found while writing it: Cardano's formula for
+the singular values (Nicoud et al.'s appendix) loses σ₃ near walls (0 at y = 1e-3 where
+the truth is 2e-9), so `SingularValues3` uses one-sided Jacobi. Tests `subgrid_test`
+S1-S5 (models, operator = elasticity(λ = 0, μ = ν_t) to 1e-12, dissipation identity,
+explicit constant ν_t → implicit at order 2 under IMEX and OIFS, sigma through `Case`).
+**Not done:** a turbulent validation (TGV Re 1600 on a coarse mesh against the DNS
+dissipation curve is the first candidate), any GPU run or timing (the kernels interpolate
+directly, O(k⁶) per element; sum factorization if a profile asks), the Python bindings.
+Defaults unchanged (model off); bitwise neutral with the model off.
 
 **Defaults: Q6/Q5, grad-div gamma = 6 h_K / k_u, OIFS at CFL 2 (2026-10-16, human: "go with
 p=6 and your grad-div scaling recommendation", "make oifs the default it honestly seems to

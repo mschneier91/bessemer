@@ -291,6 +291,10 @@ struct Parameters
    /// (deck `physics.outflow: directional|classical`; default directional,
    /// human decision 2026-10-08). The rotational form ignores it (classical).
    OutflowCondition outflow = OutflowCondition::Directional;
+   /// Large-eddy simulation: the subgrid model (deck section
+   /// `physics.subgrid`; off by default). An explicit stress term beside the
+   /// convection: Navier-Stokes with the convective form only (docs/les.md).
+   SubgridOptions subgrid;
 
    /// Input scaling: mode + reference scales (see nondimensionalization.hpp).
    Nondimensionalization nondim;

@@ -71,6 +71,32 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    },
    "Condition on outflow boundaries: Braack-Mucha directional do-nothing "
    "(stable under backflow) or classical do-nothing.");
+   {
+      const DeckSection sg = r.Section(physics, "subgrid",
+                                       "Large-eddy simulation: the subgrid model.");
+      r.ReadEnum(sg, "model", p.subgrid.model,
+      {
+         {"none", SubgridModel::None},
+         {"constant", SubgridModel::Constant},
+         {"wale", SubgridModel::Wale},
+         {"sigma", SubgridModel::Sigma}
+      },
+      "Subgrid-scale model of a large-eddy simulation, an eddy viscosity "
+      "nu_t in the explicit stress term (2 nu_t S(u), S(v)) beside the "
+      "convection (navier_stokes, convective form only; docs/les.md). sigma: "
+      "Nicoud et al. 2011 (recommended; zero in pure shear, solid rotation "
+      "and two-component flow). wale: Nicoud & Ducros 1999. constant: nu_t "
+      "= coefficient everywhere (verification). none: DNS.");
+      r.Read(sg, "coefficient", p.subgrid.coefficient,
+             "The model constant: C_sigma (sigma), C_w (wale) or nu_t itself "
+             "(constant). < 0: the model's published value, 1.35 for sigma "
+             "and 0.5 for wale.");
+      r.Read(sg, "filter_width", p.subgrid.filter_width,
+             "Filter width as a multiple of the element's node spacing: "
+             "Delta_K = filter_width * h_K / order_u.");
+      MFEM_VERIFY(p.subgrid.filter_width > 0.0,
+                  "parameters: physics.subgrid.filter_width must be > 0");
+   }
 
    const DeckSection nd = r.Section(root, "nondimensionalization",
                                     "Input scaling: dimensionless (default) or "
@@ -969,6 +995,11 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(p.time_order == 0 || p.time_order == 2 || p.time_order == 3,
                "parameters: time.order must be 2, 3 or 0 (auto)");
    MFEM_VERIFY(p.oifs_cfl > 0.0, "parameters: time.oifs_cfl must be > 0");
+   MFEM_VERIFY(!p.subgrid.Enabled() ||
+               (p.equation == Equation::NavierStokes &&
+                p.convective_form == ConvectiveForm::Convective),
+               "parameters: physics.subgrid.model needs equation "
+               "navier_stokes and physics.convective_form convective");
    MFEM_VERIFY(p.convection_treatment != ConvectionTreatment::Oifs ||
                (p.equation == Equation::NavierStokes &&
                 p.convective_form == ConvectiveForm::Convective &&
@@ -1035,6 +1066,12 @@ void Parameters::Normalize()
       dt_max *= U_over_L;
       retry_dt_min *= U_over_L;
       nu = 1.0 / nondim.Re;
+      // A constant eddy viscosity carries nu's units; the model constants
+      // (C_sigma, C_w) and the filter-width multiple are dimensionless.
+      if (subgrid.model == SubgridModel::Constant && subgrid.coefficient > 0.0)
+      {
+         subgrid.coefficient /= nondim.U_ref * nondim.L_ref;
+      }
       controller.atol /= nondim.U_ref; // the LTE norm carries velocity units
       MFEM_VERIFY(geometry == MeshGeometry::Box, "parameters: the cylinder "
                   "and file geometries are nondimensional (mode dimensionless)");

@@ -91,14 +91,19 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       oifs_walls_ = (walls != 0);
       if (oifs_walls_) { oifs_conv_ = std::make_unique<Convection>(spaces_, rules_); }
       // Directional do-nothing: explicit and extrapolated in the BDF step,
-      // exactly as IMEX treats it (SubtractOifsDirectionalDoNothing). Inside
+      // exactly as IMEX treats it (SubtractOifsExplicitTerms). Inside
       // the substeps it is consistent but stiff at backflow nodes (rate
       // ~6|u.n|/h): Braack & Mucha's square at CFL 2 gave j1 2.3% off the
       // paper, converging only as CFL -> 0.25 (measured 2026-10-09).
-      if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
+      // The subgrid stress of a large-eddy simulation is treated the same
+      // way (SubgridStress): explicit in the BDF step, never in the substeps.
+      const bool ddn =
+         opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow();
+      if (ddn || opts_.subgrid.Enabled())
       {
-         oifs_ddn_ = std::make_unique<Convection>(spaces_, rules_);
-         oifs_ddn_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
+         oifs_explicit_ = std::make_unique<Convection>(spaces_, rules_);
+         if (ddn) { oifs_explicit_->EnableDirectionalDoNothing(bc_.OutflowAttributes()); }
+         if (opts_.subgrid.Enabled()) { oifs_explicit_->EnableSubgrid(opts_.subgrid); }
       }
    }
    else if (opts_.convection && !rotational_)
@@ -111,6 +116,14 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       {
          convection_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
       }
+      // Large-eddy simulation: the subgrid stress, explicit with N.
+      if (opts_.subgrid.Enabled()) { convection_->EnableSubgrid(opts_.subgrid); }
+   }
+   else
+   {
+      MFEM_VERIFY(!opts_.subgrid.Enabled(), "time_integrator: a subgrid "
+                  "model needs Navier-Stokes with the convective form (it is "
+                  "an explicit term beside the convection)");
    }
    // The lagged velocity exists for the rotational form only.
    if (rotational_) { w_star_ = 0.0; }
@@ -570,7 +583,7 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
       OifsBoundaryValues(c, t_new, combo);
       PlainMass().Mult(combo, tmp);
       b -= tmp;
-      SubtractOifsDirectionalDoNothing(t_new, b);
+      SubtractOifsExplicitTerms(t_new, b);
       return;
    }
    combo = 0.0;
@@ -625,10 +638,10 @@ void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
    phi.SetSubVector(imp, vals);
 }
 
-void StokesTimeIntegrator::SubtractOifsDirectionalDoNothing(double t_new,
-      Vector& b)
+void StokesTimeIntegrator::SubtractOifsExplicitTerms(double t_new, Vector& b)
 {
-   if (!oifs_ddn_) { return; }
+   if (!oifs_explicit_) { return; }
+   INCNS_PROFILE("time_integrator::oifs_explicit_terms");
    // EXT of the history the step has (EXT1 on the starter).
    const std::size_t m = ExtrapolationOrder();
    std::vector<double> times(hist_times_.begin(), hist_times_.begin() + m);
@@ -636,9 +649,26 @@ void StokesTimeIntegrator::SubtractOifsDirectionalDoNothing(double t_new,
    Vector y;
    for (std::size_t l = 0; l < m; ++l)
    {
-      oifs_ddn_->MultDirectionalDoNothing(hist_[l], y);
+      oifs_explicit_->MultExplicitTerms(hist_[l], y);
       b.Add(-g[l], y);
    }
+}
+
+const SubgridStress* StokesTimeIntegrator::Subgrid() const
+{
+   if (convection_) { return convection_->Subgrid(); }
+   if (oifs_explicit_) { return oifs_explicit_->Subgrid(); }
+   return nullptr;
+}
+
+SubgridStress::Values StokesTimeIntegrator::SubgridStatistics()
+{
+   const SubgridStress* sgs = Subgrid();
+   MFEM_VERIFY(sgs, "time_integrator: no subgrid model");
+   Vector ut;
+   ut.UseDevice(true);
+   u_.GetTrueDofs(ut);
+   return sgs->Statistics(ut);
 }
 
 void StokesTimeIntegrator::SubtractConvection(double t_new, Vector& b, int ext)
@@ -881,7 +911,7 @@ bool StokesTimeIntegrator::StepStartup()
       // -- otherwise step 1 would silently solve Stokes and cost the march its
       // temporal order. Only one history entry exists, so this is EXT1.
       SubtractConvection(t_new, b);
-      SubtractOifsDirectionalDoNothing(t_new, b); // OIFS: EXT1 here
+      SubtractOifsExplicitTerms(t_new, b); // OIFS: EXT1 here
       // The starter's momentum block is (1/dt) M + (nu/2) K; refresh it if the
       // first step is (re)tried at a different dt (adaptive rejection).
       if (std::abs(trap_c0_ - 1.0 / dt_) > 1e-12 / dt_)
