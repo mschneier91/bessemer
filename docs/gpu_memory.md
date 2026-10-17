@@ -87,6 +87,21 @@ mass CG and a Chebyshev mass inverse (+1.5–3 GiB). Roughly 1,100 B/DOF Schur a
 coupled at 57.3M against 963 and 1,153 conforming; the shared scratch (next) and phase 2
 apply in full. To measure: Taylor–Green with a refined band (as oifs_test O3).
 
+**The IMEX route** (human 2026-10-17: "do all the same type of stuff for the IMEX route
+too ... we want to be able to fit just as large of problems on that too"). Taylor–Green
+Q6, IMEX at CFL 0.5, 57.3M DOFs, one H100:
+
+| | Coupled (FGMRES) | Schur |
+|---|---|---|
+| changes 17-20 (job 49346223) | 57,483 MiB (1,052 B/DOF) | 44,465 MiB (814 B/DOF) |
+| + changes 22-25 (job 49347319) | 44,745 MiB (819 B/DOF) | 32,165 MiB (589 B/DOF) |
+
+The IMEX ledger had the dealiased convection's 10,190 MiB (W adj(J) and cached Jacobians
+at the 10³ rule) and the Gauss mass's cached Jacobians (1.7 GiB) where OIFS has its wind
+data: changes 24 and 25. What is left particular to IMEX: the Chebyshev velocity mass
+inverse of the Schur PC (1.5 GiB of work vectors; the tabled work pool) and the
+convection history (two vectors, inherent to EXT).
+
 **Phase 2: a small time cost possible; measure.**
 
 - **Done, change 20: the divergence from the cached Jacobians.** 2,606 MiB less in both
@@ -417,6 +432,18 @@ and merge it when its working". Measured at Q6 (the working list above).
     (change 19: 4.54), the gradient 7.65 → 6.98 ms (6.56); the step 1,263 → 1,245 ms
     (coupled) and 1,349 → 1,344 ms (Schur), within noise of change 19. Memory
     unchanged. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
+
+24. **IMEX's convection on the fly** (results change at roundoff). IMEX evaluates N(u)
+    once per step through MFEM's partially assembled `VectorConvectionNLFIntegrator`,
+    which kept W adj(J) at the dealiased 10³ points and the mesh's cached Jacobians there
+    (10,190 MiB at 57.3M, job 49346223) plus its element vectors. On straight-sided
+    elements at orders 6 and 7 `Convection` now computes N(u) = C(u) u with change 21's
+    on-the-fly kernel, the wind being u itself (`OifsConvection::MultSelf`): nothing kept
+    per point, and once per step the extra arithmetic costs little (unlike OIFS's
+    substeps). The OIFS wall-node convection uses it too. New test: MFEM's term at the
+    same rule, orders 6 and 7, within 1e-12. CPU: Taylor–Green Q6 IMEX within 5.6e-12.
+    IMEX Q6 Taylor–Green at 57.3M (job 49347319 against 49346223): the convection
+    10,190 → 28 MiB and its first apply 2,268 → 368 MiB. Tests (changes 21, 24 and 25 together): CPU smoke/fast at np 1, 2 and 4, 75/75 each; GPU smoke/fast at np 1 and 2, 73/73 each.
 
 ## Where the memory is now (64³, one H100, after change 15)
 

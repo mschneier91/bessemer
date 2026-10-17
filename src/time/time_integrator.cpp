@@ -89,7 +89,10 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       MPI_Allreduce(MPI_IN_PLACE, &walls, 1, MPI_INT, MPI_MAX,
                     spaces_.Velocity().GetComm());
       oifs_walls_ = (walls != 0);
-      if (oifs_walls_) { oifs_conv_ = std::make_unique<Convection>(spaces_, rules_); }
+      if (oifs_walls_)
+      {
+         oifs_conv_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get());
+      }
       // Directional do-nothing: explicit and extrapolated in the BDF step,
       // exactly as IMEX treats it (SubtractOifsDirectionalDoNothing). Inside
       // the substeps it is consistent but stiff at backflow nodes (rate
@@ -97,14 +100,14 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       // paper, converging only as CFL -> 0.25 (measured 2026-10-09).
       if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
       {
-         oifs_ddn_ = std::make_unique<Convection>(spaces_, rules_);
+         oifs_ddn_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get());
          oifs_ddn_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
       }
    }
    else if (opts_.convection && !rotational_)
    {
       INCNS_PROFILE("time_integrator::convection_setup");
-      convection_ = std::make_unique<Convection>(spaces_, rules_);
+      convection_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get());
       // Directional do-nothing: the boundary part of the convective flux on
       // the outflow, explicit and extrapolated together with N.
       if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())

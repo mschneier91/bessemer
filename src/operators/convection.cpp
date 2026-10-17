@@ -1,13 +1,17 @@
 #include "operators/convection.hpp"
 
 #include "operators/directional_do_nothing.hpp"
+#include "time/oifs_convection.hpp"
 
 namespace incns
 {
 
 using namespace mfem;
 
-Convection::Convection(MixedSpaces& spaces, const RuleBook& rules)
+Convection::~Convection() = default;
+
+Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
+                       ElementScratch* scratch)
    : spaces_(spaces), rules_(rules)
 {
    // Quad/hex only, same as every other operator here (StokesOperator does the
@@ -22,6 +26,18 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules)
    // so this rule is honored under partial assembly rather than silently
    // replaced by the integrator's default.
    rule_ = &rules_.Get(geom, DealiasedOrder(spaces_.OrderU()));
+
+   // Straight-sided elements at velocity orders 6 and 7: the same term,
+   // C(u) u, through the OIFS on-the-fly kernel, which keeps nothing per point.
+   // Applied once per step here (IMEX's explicit term; OIFS's wall nodes), so
+   // the on-the-fly kernel's extra arithmetic costs little -- unlike the OIFS
+   // substeps (time.oifs_on_the_fly).
+   if (OifsConvection::OnTheFlyEligible(spaces_.Velocity(), *rule_))
+   {
+      fly_ = std::make_unique<OifsConvection>(spaces_.Velocity(), *rule_,
+                                              scratch, /*on_the_fly=*/true);
+      return;
+   }
 
    form_ = std::make_unique<ParNonlinearForm>(&spaces_.Velocity());
    // No coefficient: the integrator returns +(u.grad)u, and the sign stays with
@@ -66,7 +82,13 @@ void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
 
 void Convection::Mult(const Vector& u, Vector& y) const
 {
-   form_->Mult(u, y);
+   if (fly_)
+   {
+      y.SetSize(spaces_.Velocity().GetTrueVSize());
+      y.UseDevice(true);
+      fly_->MultSelf(u, y);
+   }
+   else { form_->Mult(u, y); }
    if (!ddn_form_) { return; }
    MultDirectionalDoNothing(u, ddn_true_);
    y += ddn_true_;

@@ -1028,4 +1028,47 @@ void OifsConvection::Mult(const std::vector<double>& w, const Vector& x,
    }
 }
 
+void OifsConvection::MultSelf(const Vector& x, Vector& y)
+{
+   MFEM_VERIFY(fly_, "oifs_convection: MultSelf needs the on-the-fly path "
+               "(OnTheFlyEligible(), on_the_fly)");
+   const Vector* xl = &x;
+   if (prolong_)
+   {
+      prolong_->Mult(x, xl_);
+      xl = &xl_;
+   }
+   if (ne_ > 0)
+   {
+      restr_->Mult(*xl, xe_);
+      // The wind is the input itself, read from its local dofs.
+      if (q1_ == 10)
+      {
+         oifsconv::Apply3DColumnsFly<7, 10>(ne_, 1, 1.0, 0.0, 0.0, *gather_,
+                                            ndofs_, *xl, *xl, *xl, xn_,
+                                            nmaps_->B, nmaps_->G,
+                                            ir_.GetWeights(), maps_->B,
+                                            maps_->G, maps_->Bt, xe_, ye_);
+      }
+      else
+      {
+         oifsconv::Apply3DColumnsFly<8, 11>(ne_, 1, 1.0, 0.0, 0.0, *gather_,
+                                            ndofs_, *xl, *xl, *xl, xn_,
+                                            nmaps_->B, nmaps_->G,
+                                            ir_.GetWeights(), maps_->B,
+                                            maps_->G, maps_->Bt, xe_, ye_);
+      }
+   }
+   else { ye_ = 0.0; }
+   if (prolong_)
+   {
+      restr_->MultTranspose(ye_, yl_);
+      prolong_->MultTranspose(yl_, y);
+   }
+   else
+   {
+      restr_->MultTranspose(ye_, y);
+   }
+}
+
 } // namespace incns

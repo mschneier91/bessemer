@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "operators/convection.hpp"
+#include "time/oifs_convection.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -161,6 +162,48 @@ TEST_P(ConvectionExactness, OverIntegratedIsExactAndCollocatedIsNot)
 INSTANTIATE_TEST_SUITE_P(
    DimOrder, ConvectionExactness,
    ::testing::Combine(::testing::Values(2, 3), ::testing::Values(2, 3, 4)));
+
+// Velocity orders 6 and 7 on straight-sided elements: the operator takes the
+// OIFS on-the-fly path (no MFEM form), and must give MFEM's term at the same
+// rule. Non-affine (vertices moved), so the Jacobian varies inside elements.
+TEST(Convection, OnTheFlyMatchesMfemAtOrders6And7)
+{
+   for (int k = 6; k <= 7; ++k)
+   {
+      SCOPED_TRACE(testing::Message() << "k " << k);
+      Mesh serial = MakeAffineMesh(3, 2);
+      serial.Transform([](const Vector & x, Vector & y)
+      {
+         y = x;
+         for (int d = 0; d < 3; ++d)
+         {
+            y(d) += 0.07 * x((d + 1) % 3) * x(d) * (1.0 - x(d));
+         }
+      });
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      RuleBook rules;
+      MixedSpaces spaces(mesh, k, k - 1);
+      ParGridFunction u_gf(&spaces.Velocity());
+      VectorFunctionCoefficient u_coeff(3, [](const Vector & x, Vector & v)
+      {
+         v(0) = std::sin(2.0 * x(1)) + 0.3 * x(2);
+         v(1) = std::cos(1.5 * x(0)) * x(2);
+         v(2) = x(0) * x(1) - 0.2 * std::sin(x(2));
+      });
+      u_gf.ProjectCoefficient(u_coeff);
+      Vector u_true(spaces.Velocity().GetTrueVSize());
+      u_gf.GetTrueDofs(u_true);
+
+      Convection conv(spaces, rules);
+      EXPECT_TRUE(incns::OifsConvection::OnTheFlyEligible(spaces.Velocity(),
+                  conv.Rule()));
+      Vector got(u_true.Size()), ref;
+      conv.Mult(u_true, got);
+      WeakConvection(spaces.Velocity(), u_true, conv.Rule(), ref);
+      ASSERT_GT(ref.Norml2(), 0.0);
+      EXPECT_LT(RelDiff(got, ref), 1e-12);
+   }
+}
 
 // The rule the operator actually selected is part of the contract: a silent
 // downgrade to the default rule is exactly the regression this guards.

@@ -93,6 +93,15 @@ public:
    void Mult(const std::vector<double>& w, const mfem::Vector& x,
              mfem::Vector& y);
 
+   /**
+    * @brief y := C(x) x: the dealiased (x . grad) x tested with v, the
+    *        convective term N(x) of the IMEX scheme. The wind is the input's
+    *        own local dofs; no SetWind() needed. On-the-fly path only.
+    * @param x Input, velocity true dofs.
+    * @param y Output, velocity true dofs (overwritten).
+    */
+   void MultSelf(const mfem::Vector& x, mfem::Vector& y);
+
 private:
    mfem::ParFiniteElementSpace& vfes_;       ///< Velocity space (borrowed).
    const mfem::IntegrationRule& ir_;         ///< Rule (borrowed).

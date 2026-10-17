@@ -11,6 +11,9 @@
 namespace incns
 {
 
+class ElementScratch;
+class OifsConvection;
+
 /**
  * @brief How the nonlinear term of the momentum equation is treated
  *        (deck `physics.convective_form: convective|rotational`).
@@ -104,10 +107,15 @@ class Convection
 public:
    /**
     * @brief Build the dealiased convection form on the velocity space.
-    * @param spaces Mixed velocity/pressure spaces (borrowed, must outlive this).
-    * @param rules  Quadrature source (borrowed, must outlive this).
+    * @param spaces  Mixed velocity/pressure spaces (borrowed, must outlive
+    *                this).
+    * @param rules   Quadrature source (borrowed, must outlive this).
+    * @param scratch Element-vector buffers for the on-the-fly path (borrowed;
+    *                must outlive this); null: its own.
     */
-   Convection(MixedSpaces& spaces, const RuleBook& rules);
+   Convection(MixedSpaces& spaces, const RuleBook& rules,
+              ElementScratch* scratch = nullptr);
+   ~Convection();
 
    /**
     * @brief Apply @c y = N(u) = (u . grad)u on true dofs.
@@ -167,8 +175,14 @@ private:
    const RuleBook& rules_; ///< Quadrature source (borrowed).
    /// Non-owning; owned by the RuleBook, which outlives this object.
    const mfem::IntegrationRule* rule_ = nullptr;
-   /// The nonlinear form carrying VectorConvectionNLFIntegrator.
+   /// The nonlinear form carrying VectorConvectionNLFIntegrator (null on
+   /// the on-the-fly path).
    std::unique_ptr<mfem::ParNonlinearForm> form_;
+   /// On-the-fly path (OifsConvection::OnTheFlyEligible(): straight-sided
+   /// elements, velocity orders 6 and 7): N(u) = C(u) u by the OIFS kernel, which keeps
+   /// nothing per point (MFEM's form keeps W adj(J) and the mesh's cached
+   /// Jacobians at the 3k rule: 11 GiB at Q6 on 42^3 elements).
+   std::unique_ptr<OifsConvection> fly_;
    /// Outflow marker of the directional do-nothing term (per attribute).
    mfem::Array<int> ddn_marker_;
    /// The velocity the boundary term is evaluated at (set in Mult).
