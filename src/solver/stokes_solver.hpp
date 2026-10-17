@@ -34,6 +34,8 @@ struct StokesSolverOptions
 {
    double nu = 1.0;              ///< Kinematic viscosity.
    bool collocated_mass = false; ///< GLL collocated mass option (see 1.4).
+   /// Shared element-vector buffers (StokesOperatorOptions::scratch).
+   ElementScratch* scratch = nullptr;
    /// Momentum-block mass factor (beta0/dt); 0 = steady.
    double mass_coeff = 0.0;
    /// Grad-div scale c_gd; 0 = off. Never enters the Schur block.

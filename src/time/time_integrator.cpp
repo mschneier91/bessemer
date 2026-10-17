@@ -33,6 +33,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
      dt_(opts.dt)
 {
    INCNS_PROFILE("time_integrator::setup");
+   scratch_ = std::make_unique<ElementScratch>(spaces.Velocity());
 
    MFEM_VERIFY(opts_.dt > 0.0, "time_integrator: dt must be positive");
    MFEM_VERIFY(opts_.order == 2 || opts_.order == 3,
@@ -133,7 +134,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       // aborts if its inverse does not reproduce it.
       oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_,
                                              opts_.oifs_cfl, Trap().Blocks().Mass(),
-                                             Trap().Blocks().MassDiagonal());
+                                             Trap().Blocks().MassDiagonal(),
+                                             scratch_.get());
    }
 
    if (opts_.adaptive)
@@ -323,6 +325,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    StokesSolverOptions so;
    so.nu = 0.5 * opts_.nu;
    so.collocated_mass = opts_.collocated_mass;
+   so.scratch = scratch_.get();
    so.grad_div = opts_.grad_div;
    so.grad_div_scale = opts_.grad_div_scale;
    so.grad_div_nu = opts_.grad_div_nu;
@@ -441,6 +444,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       StokesSolverOptions so;
       so.nu = opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
+      so.scratch = scratch_.get();
       so.grad_div = opts_.grad_div;
       so.grad_div_scale = opts_.grad_div_scale;
       so.grad_div_nu = opts_.grad_div_nu;

@@ -463,7 +463,8 @@ bool OifsConvection::Supported(const ParFiniteElementSpace& vfes,
 }
 
 OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
-                               const IntegrationRule& ir)
+                               const IntegrationRule& ir,
+                               ElementScratch* scratch)
    : vfes_(vfes), ir_(ir)
 {
    MFEM_VERIFY(Supported(vfes, ir), "oifs_convection: no kernel for this "
@@ -516,11 +517,22 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
       v->UseDevice(true);
    }
    op_.SetSize(3 * 3 * nq * ne_);
-   ue_.SetSize(restr_->Height());
+   if (scratch)
+   {
+      // The wind's element vector is read only inside SetWind, the input's
+      // only inside Mult: both can use the input-side buffer.
+      scratch->Lend(0, restr_->Height(), ue_);
+      scratch->Lend(0, restr_->Height(), xe_);
+      scratch->Lend(1, restr_->Height(), ye_);
+   }
+   else
+   {
+      ue_.SetSize(restr_->Height());
+      xe_.SetSize(restr_->Height());
+      ye_.SetSize(restr_->Height());
+   }
    uq_.SetSize(3 * nq * ne_);
    if (prolong_) { xl_.SetSize(vfes.GetVSize()); }
-   xe_.SetSize(restr_->Height());
-   ye_.SetSize(restr_->Height());
    if (prolong_) { yl_.SetSize(vfes.GetVSize()); }
 }
 

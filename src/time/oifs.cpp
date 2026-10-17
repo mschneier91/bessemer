@@ -14,7 +14,8 @@ using namespace mfem;
 
 OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc, double sub_cfl,
-                           Operator& mass, const Vector& mass_diag)
+                           Operator& mass, const Vector& mass_diag,
+                           ElementScratch* scratch)
    : spaces_(spaces), rules_(rules), bc_(bc), sub_cfl_(sub_cfl), mass_(mass)
 {
    MFEM_VERIFY(sub_cfl > 0.0, "oifs: the substep CFL number must be positive");
@@ -34,7 +35,7 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
       const IntegrationRule& ir = rules_.Get(Geometry::CUBE, 3 * spaces_.OrderU());
       if (OifsConvection::Supported(V, ir))
       {
-         combo_ = std::make_unique<OifsConvection>(V, ir);
+         combo_ = std::make_unique<OifsConvection>(V, ir, scratch);
       }
    }
    bd_ = std::make_unique<ParGridFunction>(&V);

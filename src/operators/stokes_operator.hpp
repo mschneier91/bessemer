@@ -5,8 +5,10 @@
  */
 #pragma once
 
+#include "operators/element_scratch.hpp"
 #include "operators/grad_div_integrator.hpp"
 #include "operators/lean_vector_diffusion.hpp"
+#include "operators/pa_operator.hpp"
 #include "operators/grad_div_scale.hpp"
 #include "operators/rotational_convection.hpp"
 #include "quadrature/rule_book.hpp"
@@ -26,6 +28,10 @@ struct StokesOperatorOptions
    /// Use the collocated Gauss-Lobatto mass rule (diagonal, SEM lumping)
    /// instead of the default Gauss-Legendre rule.
    bool collocated_mass = false;
+   /// Element-vector buffers lent to the partially assembled blocks
+   /// (borrowed; operators/element_scratch.hpp); null: the operator makes
+   /// its own pair.
+   ElementScratch* scratch = nullptr;
    /// Coefficient of the mass term in the momentum block:
    /// @c A = mass_coeff * M + nu * K. Zero (the default) gives the steady
    /// block; the unsteady stepper passes the BDF factor @c beta0/dt.
@@ -335,7 +341,8 @@ private:
     * @return The grad-div integrator added to @p form (owned by the form), or
     *         null when none was.
     */
-   GradDivIntegrator* AddMomentumIntegrators(mfem::ParBilinearForm& form,
+   template <class Form>
+   GradDivIntegrator* AddMomentumIntegrators(Form& form,
          bool include_mass,
          bool include_grad_div,
          mfem::Coefficient* gamma = nullptr,
@@ -393,7 +400,12 @@ private:
    /// pinned); a member for the same MakeRef lifetime reason.
    mfem::Array<int> ess_p_tdofs_;
 
-   mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
+   /// Its own element-vector buffers when opts_.scratch is null. Declared
+   /// before the blocks that borrow them: destroyed after.
+   std::unique_ptr<ElementScratch> own_scratch_;
+   ElementScratch* scratch_ = nullptr; ///< The buffers the blocks borrow.
+   /// Velocity vector mass (null when the mass is applied as its diagonal).
+   std::unique_ptr<PaOperator> mass_form_;
    /// The collocated mass on a conforming space: exactly diagonal on true
    /// dofs, so applied as its diagonal. With hanging nodes it is not (P^T D P
    /// couples them to the nodes they are constrained by): the form stays.
@@ -418,15 +430,15 @@ private:
                                mfem::OperatorPtr& out);
    /// Momentum block form (mass + diffusion [+ grad-div]); rebuilt by
    /// BuildMomentum on each mass-factor change, hence held by pointer.
-   std::unique_ptr<mfem::ParBilinearForm> momentum_form_;
+   std::unique_ptr<PaOperator> momentum_form_;
    /// HO source form for the LOR AMG velocity block (built only for AMG).
    /// Frozen: c0_ref*M + nu*K (+ grad-div), built once. Non-frozen: c0*M + nu*K
    /// (+ grad-div), rebuilt with the momentum block.
    std::unique_ptr<mfem::ParBilinearForm> lor_form_;
    /// Pure viscous form (unconstrained); null until ViscousUnconstrained()
    /// builds it, and again after ReleaseViscousUnconstrained().
-   std::unique_ptr<mfem::ParBilinearForm> viscous_form_;
-   mfem::ParMixedBilinearForm div_form_;  ///< Mixed divergence form.
+   std::unique_ptr<PaOperator> viscous_form_;
+   std::unique_ptr<PaMixedOperator> div_form_; ///< Mixed divergence block.
 
    mfem::OperatorPtr M_; ///< True-dof mass operator.
    /// True-dof momentum operator: a ConstrainedOperator over Aunc_ (the

@@ -94,11 +94,14 @@ public:
     * @param mass    The BDF step's velocity mass @f$ M @f$ on true dofs
     *                (StokesOperator::Mass()); borrowed, must outlive this.
     * @param mass_diag Its assembled diagonal (StokesOperator::MassDiagonal()).
+    * @param scratch   Element-vector buffers for the convection kernel
+    *                  (borrowed; must outlive this); null: its own.
     * @pre Aborts if the substeps' inverse does not reproduce @p mass.
     */
    OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
                 BoundaryConditions& bc, double sub_cfl, mfem::Operator& mass,
-                const mfem::Vector& mass_diag);
+                const mfem::Vector& mass_diag,
+                ElementScratch* scratch = nullptr);
 
    /**
     * @brief The advected BDF history combination.

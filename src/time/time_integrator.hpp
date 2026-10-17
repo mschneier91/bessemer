@@ -584,6 +584,10 @@ private:
    mfem::VectorCoefficient& forcing_; ///< Momentum forcing (borrowed).
    TimeIntegratorOptions opts_;       ///< Options.
 
+   /// Element-vector buffers lent to the solvers' partially assembled
+   /// blocks and the OIFS convection kernel (operators/element_scratch.hpp).
+   /// Declared before them: destroyed after every borrower.
+   std::unique_ptr<ElementScratch> scratch_;
    /// Trapezoidal starter solver: built by Trap() on first use, then handed
    /// to the BDF steps (AdoptSolver) -- or, where that is not possible,
    /// released before the first BDF solver is built -- so two solvers

@@ -26,6 +26,8 @@ add_library(incns STATIC
   bc/deck_boundary.cpp
   operators/stokes_operator.cpp
   operators/collocated_mass.cpp
+  operators/element_scratch.cpp
+  operators/pa_operator.cpp
   operators/convection.cpp
   operators/directional_do_nothing.cpp
   time/oifs.cpp

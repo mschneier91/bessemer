@@ -35,8 +35,9 @@ power of 8 and caches every freed block) saves 2.7 GB at Q7 128^3 with no time c
 measured ledger at 57.3M, the phases, the held items): gpu_memory.md, "Q6: toward 100M DOFs".
 Change 17 (no RAP over identity prolongations, three kept copies dropped) saves 3.6 GiB at
 57.3M in both methods, bitwise unchanged; change 18 (the collocated mass as its diagonal)
-3.2 GiB more, at roundoff and 10–14 % faster. Peak at 57.3M: coupled 63,029 MiB, Schur
-53,203 MiB (974 B/DOF).
+3.2 GiB more, at roundoff and 10–14 % faster; change 19 (our own PA blocks from MFEM's
+public pieces, shared element vectors) 2.8 GiB more, bitwise unchanged. Peak at 57.3M:
+coupled 61,955 MiB, Schur 48,127 MiB (881 B/DOF).
 
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be

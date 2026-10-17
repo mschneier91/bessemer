@@ -52,9 +52,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                                const StokesOperatorOptions& opts,
                                const Array<int>* ess_tdofs)
    : spaces_(spaces), rules_(rules), opts_(opts), nu_(opts.nu),
-     mass_coeff_(opts.mass_coeff),
-     mass_form_(&spaces.Velocity()),
-     div_form_(&spaces.Velocity(), &spaces.Pressure())
+     mass_coeff_(opts.mass_coeff)
 {
    INCNS_PROFILE("stokes_operator::assemble");
    AddKernelSpecializations(); // MFEM's kernels at our sizes, before any apply
@@ -66,6 +64,14 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
                "stokes_operator: the grad_div scales must be non-negative");
    ParMesh& mesh = *spaces_.Velocity().GetParMesh();
    AssertTensorProductGeometry(mesh);
+   // The element vectors of every partially assembled block: lent by one pair
+   // of buffers, the time integrator's when it shares them.
+   if (opts_.scratch) { scratch_ = opts_.scratch; }
+   else
+   {
+      own_scratch_ = std::make_unique<ElementScratch>(spaces_.Velocity());
+      scratch_ = own_scratch_.get();
+   }
 
    dim_ = spaces_.Dim();
    geom_ = (dim_ == 3) ? Geometry::CUBE : Geometry::SQUARE;
@@ -158,16 +164,27 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       }
       else
       {
+         // The diagonal through MFEM's form (its parallel and hanging-node
+         // assembly), which is freed after; the operator from the same
+         // integrator in a PaOperator.
+         {
+            ParBilinearForm diag_form(&spaces_.Velocity());
+            auto* mi = new VectorMassIntegrator;
+            mi->SetIntRule(mass_rule_);
+            diag_form.AddDomainIntegrator(mi);
+            diag_form.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+            diag_form.Assemble();
+            mass_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+            diag_form.AssembleDiagonal(mass_diag_);
+         }
+         mass_form_ = std::make_unique<PaOperator>(spaces_.Velocity(), *scratch_);
          auto* mi = new VectorMassIntegrator;
          mi->SetIntRule(mass_rule_);
-         mass_form_.AddDomainIntegrator(mi);
-         mass_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-         mass_form_.Assemble();
+         mass_form_->AddDomainIntegrator(mi);
+         mass_form_->Assemble();
          // Unconstrained: no ConstrainedOperator wrapper (two vectors saved).
-         TrueDofOperator(mass_form_.GetProlongation(), mass_form_,
-                         mass_form_.GetProlongation(), M_);
-         mass_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-         mass_form_.AssembleDiagonal(mass_diag_);
+         TrueDofOperator(mass_form_->GetProlongation(), *mass_form_,
+                         mass_form_->GetProlongation(), M_);
       }
    }
 
@@ -181,14 +198,15 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       INCNS_PROFILE("divergence");
       auto* di = new VectorDivergenceIntegrator;
       di->SetIntRule(&rules.Get(geom_, 2 * ku_ + 2));
-      div_form_.AddDomainIntegrator(di);
-      div_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      div_form_.Assemble();
+      div_form_ = std::make_unique<PaMixedOperator>(spaces_.Velocity(),
+                  spaces_.Pressure(), *scratch_);
+      div_form_->AddDomainIntegrator(di);
+      div_form_->Assemble();
       // One P_p^T B P_u for both: unconstrained as it is (reactions), and
       // wrapped with the constraints -- what FormRectangularSystemMatrix
       // builds, without a second RAP and its work vectors.
-      TrueDofOperator(div_form_.GetProlongation(), div_form_,
-                      div_form_.GetOutputProlongation(), Bunc_);
+      TrueDofOperator(div_form_->GetProlongation(), *div_form_,
+                      div_form_->GetOutputProlongation(), Bunc_);
       B_.Reset(new RectangularConstrainedOperator(Bunc_.Ptr(), ess_tdofs_,
                ess_p_tdofs_, false), true);
    }
@@ -256,8 +274,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    BuildMomentum();
 }
 
+template <class Form>
 GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
-   ParBilinearForm& form, bool include_mass, bool include_grad_div,
+   Form& form, bool include_mass, bool include_grad_div,
    Coefficient* gamma, BilinearFormIntegrator** diffusion,
    BilinearFormIntegrator** mass)
 {
@@ -307,9 +326,9 @@ Operator& StokesOperator::ViscousUnconstrained()
       INCNS_PROFILE("viscous_unconstrained");
       auto* kui = new LeanVectorDiffusionIntegrator(nu_, DiffusionStorage());
       kui->SetIntRule(&rules_.Get(geom_, 2 * ku_ + dim_ - 1));
-      viscous_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+      viscous_form_ = std::make_unique<PaOperator>(spaces_.Velocity(),
+                      *scratch_);
       viscous_form_->AddDomainIntegrator(kui);
-      viscous_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
       viscous_form_->Assemble();
       TrueDofOperator(viscous_form_->GetProlongation(), *viscous_form_,
                       viscous_form_->GetProlongation(), Kunc_);
@@ -370,7 +389,8 @@ void StokesOperator::BuildMomentum()
    // recomputes only the coefficient*geometry PA data (mesh geometric factors
    // are cached), so it is cheap -- much cheaper than a full solver rebuild --
    // and it hands us the new diagonal for free.
-   momentum_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
+   momentum_form_ = std::make_unique<PaOperator>(spaces_.Velocity(),
+                    *scratch_);
    BilinearFormIntegrator* diffusion = nullptr;
    mass_integ_ = nullptr;
    // The diagonal mass enters as a diagonal shift instead (below).
@@ -379,7 +399,6 @@ void StokesOperator::BuildMomentum()
                      /*include_grad_div=*/true, nullptr, &diffusion,
                      &mass_integ_);
    momentum_stale_ = false;
-   momentum_form_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
    {
       INCNS_PROFILE("momentum::assemble");
       momentum_form_->Assemble();

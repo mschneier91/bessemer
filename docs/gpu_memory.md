@@ -27,6 +27,7 @@ H100, `profile: sync`, 42³ elements = 57.3M DOFs (48.0M velocity, 9.3M pressure
 | main aa6aa7e (job 49342093) | 71,781 MiB (1,314 B/DOF) | 58,463 MiB (1,070 B/DOF) |
 | + change 17 (job 49343807) | 66,311 MiB (1,214 B/DOF) | 56,485 MiB (1,034 B/DOF) |
 | + change 18 (job 49345234) | 63,029 MiB (1,153 B/DOF) | 53,203 MiB (974 B/DOF) |
+| + change 19 (job 49345424) | 61,955 MiB (1,134 B/DOF) | 48,127 MiB (881 B/DOF) |
 
 100M DOFs fit only below about 850 B/DOF (the card's 81,559 MiB over 100M), less headroom.
 Last measured capacity (before change 17): coupled 57.3M runs and 70.4M does not; Schur
@@ -65,12 +66,13 @@ up to the region within 1 %; otherwise the split is an estimate.
 - **Done, change 18:** the collocated mass applied as its diagonal on conforming spaces,
   without the mesh's GLL-rule Jacobians; the momentum block's c0 M as a diagonal shift. 3,282 MiB less in both
   methods, results within roundoff, and the steps 10–14 % faster.
-- **Then: shared scratch.** The OIFS kernel's E-vectors (1,746) and the divergence's input
-  E-vector (582) are used only while the momentum form's pair is idle; one pool for them.
-  Estimated 1.5–2.3 GiB; bitwise unchanged if right, but aliasing bugs are the risk.
+- **Done, change 19:** our own partially assembled blocks from MFEM's public pieces, their
+  element vectors (and the OIFS kernel's) lent by one shared pair. 2,820 MiB less in both
+  methods, bitwise unchanged, no time cost.
 - The pressure preconditioner's reciprocal mass diagonal and OIFS's hold the same values
   (366 MiB): share them where the lifetimes allow.
-- **Full-size work vectors where the prolongation is not the identity** (hanging nodes, or
+- **Tabled (human 2026-10-17): full-size work vectors.** Where the prolongation is not the
+  identity (hanging nodes, or
   two or more ranks): the RAP wrappers' pairs (about 1.9 GiB at 57.3M), the OIFS mass CG and
   the Cahouet–Chabard Chebyshev mass inverse (both only when the mass is not diagonal) are
   never in use at the same time either: one pool of full-size vectors.
@@ -327,6 +329,26 @@ and merge it when its working". Measured at Q6 (the working list above).
     53,203 MiB. Steps 3–25 took 25.4 s instead of 28.3 (coupled, −10 %) and 29.0 s instead of
     33.6 (Schur, −14 %): the mass apply is now a multiply (the same to 0.1 s in a second
     run, job 49344488). Tests: CPU smoke/fast at np 1, 2 and 4, 73/73 each; GPU at np 1 and 2, 71/71 each.
+
+19. **Partially assembled blocks from MFEM's public pieces, with shared element vectors**
+    (bitwise unchanged). MFEM's forms keep a pair of element vectors each for the run (its
+    mixed form also a full-size vector for adding its result), with no way to hand them a
+    workspace. The mass (when it is not diagonal), momentum, divergence and starter viscous
+    blocks are now `PaOperator` / `PaMixedOperator` (`src/operators/pa_operator.*`): the
+    integrators' public `AssemblePA` / `AddMultPA` and the element restrictions, step for
+    step as MFEM's form does them, with the element vectors lent by one `ElementScratch`
+    pair (`src/operators/element_scratch.*`) that the time integrator owns and the OIFS
+    convection kernel borrows too (its wind, input and output element vectors). No apply
+    runs inside another, so one pair serves them all. A non-diagonal mass still gets its
+    diagonal from MFEM's form (a temporary one), for its parallel and hanging-node
+    assembly. A first version re-pointed MFEM's protected members instead; rejected in
+    favour of public pieces only (human: "what you just proposed is much better"). CPU job
+    49345423: change 18 and change 19 byte-identical on the four decks at np 1 and 2. Q6
+    Taylor–Green at 57.3M DOFs (job 49345424 against 49345234): 2,820 MiB less of the
+    per-region growth in both methods (the divergence's first-apply vectors, the OIFS
+    element vectors, a momentum-form pair); peak coupled 63,029 → 61,955 MiB and Schur
+    53,203 → 48,127 MiB (the peaks fall at different points of the run; the per-region sum
+    is the like-for-like figure). Steps unchanged (25.3 and 28.7 s for steps 3–25). Tests: CPU smoke/fast at np 1, 2 and 4, 73/73 each; GPU at np 1 and 2, 71/71 each.
 
 ## Where the memory is now (64³, one H100, after change 15)
 

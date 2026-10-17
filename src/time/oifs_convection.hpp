@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "operators/element_scratch.hpp"
 #include "mfem.hpp"
 
 #include <vector>
@@ -48,11 +49,15 @@ public:
 
    /**
     * @brief Bind to the velocity space and the rule (Supported() must hold).
-    * @param vfes Velocity space (borrowed).
-    * @param ir   Quadrature rule (borrowed).
+    * @param vfes    Velocity space (borrowed).
+    * @param ir      Quadrature rule (borrowed).
+    * @param scratch Element-vector buffers for the wind, input and output
+    *                element vectors (borrowed; must outlive this); null:
+    *                its own.
     */
    OifsConvection(mfem::ParFiniteElementSpace& vfes,
-                  const mfem::IntegrationRule& ir);
+                  const mfem::IntegrationRule& ir,
+                  ElementScratch* scratch = nullptr);
 
    /**
     * @brief Set advecting velocity @p l: its quadrature data.
