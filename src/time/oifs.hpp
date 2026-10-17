@@ -75,6 +75,14 @@ namespace incns
  * (in the substeps it is stiff at backflow nodes and biased the steady state
  * at CFL 2; measured 2026-10-09).
  *
+ * Boundary data per stage: constant data (no-slip walls) is projected once
+ * per space; data separable in time (the deck's velocity conditions,
+ * u_D = s(t) g) has its shapes projected once per space and scaled by s(t)
+ * on the device at each stage; any other data is projected at each stage on
+ * the host, in a host-only vector, and only its values on the imposed dofs
+ * travel to the device. Nothing of the boundary data lives on the device
+ * beyond the imposed and Dirichlet dofs' values.
+ *
  * Accuracy: the BDF order, but the time error is the BDF's ALONG
  * TRAJECTORIES (@f$ D^3u/Dt^3 @f$ for BDF2), where IMEX's is that of the
  * Eulerian field (plus the extrapolation's); hence BDF3 for OIFS. Where fluid crosses a nearly fixed pattern quickly
@@ -215,32 +223,44 @@ private:
     */
    void SetDirichlet(double s, double weight, mfem::Vector& phi);
    /**
-    * @brief The Dirichlet data u_D(s) on @p dofs (true dofs; a projection on
-    *        the host, so a device round trip of the velocity on a GPU).
+    * @brief The Dirichlet data u_D(s) on the imposed dofs, for data neither
+    *        constant nor separable: projected on the host into the host-only
+    *        bd_; only the imposed values travel to the device. Collective.
     * @param s    Time of the data.
-    * @param dofs True dofs to read.
-    * @param vals Output: the values, in the order of @p dofs.
+    * @param vals Output: the values, in the order of imposed_.
     */
-   void DirichletValues(double s, const mfem::Array<int>& dofs,
-                        mfem::Vector& vals);
+   void DirichletValues(double s, mfem::Vector& vals);
    /**
-    * @brief Whether the Dirichlet data on @p dofs is the same at three times
-    *        spanning [s0, s1] (exactly; collective).
-    * @param dofs True dofs to compare.
+    * @brief Whether the Dirichlet data on the imposed dofs is the same at
+    *        three times spanning [s0, s1] (exactly; collective).
     * @param s0   Window start.
     * @param s1   Window end.
     * @param vals Output: the data at s0.
     * @return True when it is: the substeps can then reuse @p vals instead of
-    *         projecting at every stage (no-slip walls, constant inflow).
+    *         projecting at every stage.
     */
-   bool StaticDirichlet(const mfem::Array<int>& dofs, double s0, double s1,
-                        mfem::Vector& vals);
+   bool StaticDirichlet(double s0, double s1, mfem::Vector& vals);
+   /**
+    * @brief The true-dof values of a host-only local vector (bd_ or a scratch
+    *        like it) on the Dirichlet true dofs, as GetTrueDofs gives them: the
+    *        value of each true dof's local dof (ess_ldof_).
+    * @param x    Local (L-) vector, valid on the host.
+    * @param vals Output, in the order of BoundaryConditions::EssentialTrueDofs().
+    */
+   void EssentialValues(const mfem::Vector& x, mfem::Vector& vals) const;
+   /// Caches ess_ldof_: the local dof whose value each Dirichlet true dof
+   /// takes (one per row of R, a selection; on a conforming space found from
+   /// the true-dof numbering without building R).
+   void CacheEssentialLocalDofs();
    /**
     * @brief imposed_ := the Dirichlet true dofs where the wind enters or is
     *        tangential (outward normal from the adjacent element;
     *        collective). Deterministic: a node is free (outflow) only when
     *        its outward normal velocity exceeds 1e-10 of the largest wind on
     *        the boundary, so a no-slip wall (zero wind) is imposed everywhere.
+    *        Only the boundary nodes' wind and the Dirichlet dofs' flags cross
+    *        between device and host (nodal boundary elements). Also sets
+    *        imposed_pos_.
     * @param w The wind (the newest velocity).
     */
    void ClassifyBoundary(const mfem::ParGridFunction& w);
@@ -282,9 +302,15 @@ private:
    std::unique_ptr<OifsConvection> combo_;
    std::vector<double> times_ext_;  ///< Times of the advecting velocities.
    int n_ext_ = 0;                  ///< Advecting velocities in use.
-   std::unique_ptr<mfem::ParGridFunction> bd_; ///< Dirichlet projection scratch.
-   std::unique_ptr<mfem::ParGridFunction> flag_; ///< Inflow flags (scratch).
+   /// Dirichlet projection scratch, host-only (never on the device).
+   std::unique_ptr<mfem::ParGridFunction> bd_;
    mfem::Array<int> imposed_;       ///< Dirichlet tdofs imposed in the substeps.
+   /// Their positions in BoundaryConditions::EssentialTrueDofs()
+   /// (device-usable: the gathers of the per-space data run there).
+   mfem::Array<int> imposed_pos_;
+   /// Per Dirichlet true dof, the local dof GetTrueDofs reads (host).
+   std::vector<int> ess_ldof_;
+   long ess_seq_ = -1;        ///< Velocity-space sequence of ess_ldof_.
    /// The nodes of the boundary elements, for ClassifyBoundary: per node its
    /// dim_ local vdofs (component-major), outward normal, boundary element
    /// and node index. Cached per velocity-space sequence (the geometry does
@@ -296,12 +322,28 @@ private:
    long bnode_seq_ = -1;      ///< Velocity-space sequence of the cache.
    bool bnode_nodal_ = false; ///< Nodal boundary elements: w(node) = dofs.
    std::vector<double> bnode_w_; ///< The wind at the nodes (scratch).
-   /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant), true
-   /// dofs, projected once per velocity-space sequence (bd_const_seq_).
-   mfem::Vector bd_const_true_;
-   long bd_const_seq_ = -1;   ///< Velocity-space sequence of bd_const_true_.
+   /// bnode_vdofs_ as a device-usable index list (the wind's gather).
+   mfem::Array<int> bnode_gather_;
+   mfem::Vector bnode_wd_;    ///< The gathered wind (device, then host).
+   mfem::Array<int> flag_idx_; ///< Local dofs flagged imposed (scratch).
+   /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant) on
+   /// the Dirichlet true dofs, projected once per velocity-space sequence
+   /// (bd_const_seq_).
+   mfem::Vector bd_const_ess_;
+   long bd_const_seq_ = -1;   ///< Velocity-space sequence of bd_const_ess_.
    bool bd_const_zero_ = false; ///< ... and zero on every Dirichlet dof.
-   mfem::Vector bd_true_;           ///< Its true dofs.
+   /// Separable data (BoundaryConditions::DirichletIsSeparable): the shapes
+   /// and their entries on the Dirichlet true dofs, projected once per
+   /// velocity-space sequence (bd_shape_seq_).
+   mfem::Vector bd_shape_ess_;
+   mfem::Vector bd_entry_ess_; ///< Entry indices (whole numbers).
+   long bd_shape_seq_ = -1;   ///< Velocity-space sequence of the shapes.
+   bool bd_sep_ = false;      ///< This window scales the shapes per stage.
+   mfem::Vector bd_shape_;    ///< The shapes on imposed_ (device).
+   mfem::Vector bd_entry_;    ///< Their entries on imposed_ (device).
+   mfem::Vector bd_fac_;      ///< The entries' time factors (scratch).
+   /// The fallback's local dofs of imposed_ (DirichletValues; host).
+   std::vector<int> imposed_ldof_;
    mfem::Vector bd_vals_;           ///< Values on the Dirichlet dofs.
    /// The Dirichlet data on imposed_, when it does not change over the
    /// current Advect() window (bd_static_valid_): reused at every stage.

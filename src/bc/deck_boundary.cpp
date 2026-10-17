@@ -29,6 +29,28 @@ double TimeFactor(const BcSpec& s, double t)
    }
    return 1.0;
 }
+
+// u = sc g(x) of a deck-given boundary velocity, sc multiplied first (as the
+// data always was): sc = 1 gives the shape g bit for bit.
+void Profile(const BcSpec& spec, int dim, const Vector& x, double sc, Vector& u)
+{
+   u = 0.0;
+   if (spec.profile == BcProfile::Constant)
+   {
+      for (int d = 0; d < dim; ++d) { u(d) = sc * spec.value[d]; }
+   }
+   else
+   {
+      const double h = spec.height, y = x(1);
+      u(0) = sc * 4.0 * spec.u_max * y * (h - y) / (h * h);
+      if (dim == 3)
+      {
+         // The DFG 3D inflow: a product of parabolas in y and z.
+         const double w = (spec.width > 0.0) ? spec.width : h;
+         u(0) *= 4.0 * x(2) * (w - x(2)) / (w * w);
+      }
+   }
+}
 } // namespace
 
 DeckBoundaryConditions::DeckBoundaryConditions(const Parameters& p,
@@ -132,27 +154,18 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
          case BcType::Velocity:
          {
             const BcSpec spec = s; // the coefficient keeps its own copy
-            coeffs_.push_back(std::make_unique<VectorFunctionCoefficient>(
-                                 dim, [spec, dim](const Vector & x, double t, Vector & u)
+            // s(t) g(x): the OIFS substeps project g once and scale it.
+            coeffs_.push_back(std::make_unique<SeparableVectorCoefficient>(
+                                 dim,
+                                 [spec, dim](const Vector & x, double t, Vector & u)
             {
-               const double sc = TimeFactor(spec, t);
-               u = 0.0;
-               if (spec.profile == BcProfile::Constant)
-               {
-                  for (int d = 0; d < dim; ++d) { u(d) = sc * spec.value[d]; }
-               }
-               else
-               {
-                  const double h = spec.height, y = x(1);
-                  u(0) = sc * 4.0 * spec.u_max * y * (h - y) / (h * h);
-                  if (dim == 3)
-                  {
-                     // The DFG 3D inflow: a product of parabolas in y and z.
-                     const double w = (spec.width > 0.0) ? spec.width : h;
-                     u(0) *= 4.0 * x(2) * (w - x(2)) / (w * w);
-                  }
-               }
-            }));
+               Profile(spec, dim, x, TimeFactor(spec, t), u);
+            },
+            [spec, dim](const Vector & x, Vector & u)
+            {
+               Profile(spec, dim, x, 1.0, u);
+            },
+            [spec](double t) { return TimeFactor(spec, t); }));
             for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *coeffs_.back()); }
             break;
          }

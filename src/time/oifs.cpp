@@ -7,10 +7,50 @@
 #include <cmath>
 #include <vector>
 
+// The boundary-data kernels must be compiled by nvcc in a CUDA build, or they
+// run on the host while the data is on the device: see the nvcc TU list in
+// src/CMakeLists.txt.
+#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)
+#error "oifs.cpp must be compiled by nvcc -- see the nvcc TU list in src/CMakeLists.txt"
+#endif
+
 namespace incns
 {
 
 using namespace mfem;
+
+// Device kernels live in free functions in a NAMED namespace: nvcc rejects
+// extended lambdas in private members.
+namespace oifsbc
+{
+
+// vals[j] = s_e(j) g(j), times the weight: the separable data on the imposed
+// dofs (fac: the entries' factors; entry: each dof's entry, a whole number).
+void ScaleShapes(const Vector& fac, const Vector& shape, const Vector& entry,
+                 const double w, Vector& vals)
+{
+   const int n = shape.Size();
+   vals.SetSize(n);
+   const auto F = fac.Read();
+   const auto G = shape.Read();
+   const auto E = entry.Read();
+   auto U = vals.Write();
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int j)
+   {
+      const double u = F[static_cast<int>(E[j])] * G[j];
+      U[j] = u * w;
+   });
+}
+
+// flag[idx[j]] = 1 (duplicates write the same value).
+void SetFlags(const Array<int>& idx, Vector& flag)
+{
+   const auto I = idx.Read();
+   auto F = flag.ReadWrite();
+   mfem::forall(idx.Size(), [ = ] MFEM_HOST_DEVICE(int j) { F[I[j]] = 1.0; });
+}
+
+} // namespace oifsbc
 
 OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc, double sub_cfl,
@@ -39,10 +79,16 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
          combo_ = std::make_unique<OifsConvection>(V, ir, scratch, on_the_fly);
       }
    }
+   // Host-only: the projections run on the host (MFEM's boundary loop), and
+   // only values on the Dirichlet dofs travel to the device.
    bd_ = std::make_unique<ParGridFunction>(&V);
-   bd_true_.SetSize(V.GetTrueVSize());
-   bd_vals_.UseDevice(true);
-   bd_static_.UseDevice(true);
+   bd_->UseDevice(false);
+   for (Vector* v : {&bd_vals_, &bd_static_, &bd_shape_, &bd_entry_})
+   {
+      v->UseDevice(true);
+   }
+   bd_fac_.UseDevice(true);
+   bnode_wd_.UseDevice(true);
    tmp_s_.SetSize(n_s_);
    tmp_s_.UseDevice(true);
    for (Vector* v : {&k1_, &k2_, &k3_, &k4_, &y_})
@@ -240,23 +286,79 @@ void OifsAdvector::CacheBoundaryNodes()
          bnode_k_.push_back(k);
       }
    }
+   bnode_gather_.SetSize(static_cast<int>(bnode_vdofs_.size()));
+   int* g = bnode_gather_.HostWrite();
+   for (std::size_t i = 0; i < bnode_vdofs_.size(); ++i) { g[i] = bnode_vdofs_[i]; }
+   bnode_gather_.GetMemory().UseDevice(true);
    bnode_seq_ = V.GetSequence();
+}
+
+void OifsAdvector::CacheEssentialLocalDofs()
+{
+   ParFiniteElementSpace& V = spaces_.Velocity();
+   // GetTrueDofs applies R, one unit entry per row: each true dof takes the
+   // value of one local dof. On a conforming space that is the owned local
+   // dof of its true-dof number (R is the transpose of P's diagonal block),
+   // found here without building R and P; otherwise R is read.
+   std::vector<int> t2l(V.GetTrueVSize(), -1);
+   if (V.Conforming())
+   {
+      for (int l = 0; l < V.GetVSize(); ++l)
+      {
+         const int t = V.GetLocalTDofNumber(l);
+         if (t >= 0) { t2l[t] = l; }
+      }
+   }
+   else
+   {
+      const SparseMatrix* R = V.GetRestrictionMatrix();
+      const int* ri = R->HostReadI();
+      const int* rj = R->HostReadJ();
+      const real_t* ra = R->HostReadData();
+      for (int t = 0; t < R->Height(); ++t)
+      {
+         MFEM_VERIFY(ri[t + 1] - ri[t] == 1 && ra[ri[t]] == 1.0, "oifs: the "
+                     "restriction is not a selection");
+         t2l[t] = rj[ri[t]];
+      }
+   }
+   const Array<int>& ess = bc_.EssentialTrueDofs();
+   const int* e = ess.HostRead();
+   ess_ldof_.resize(ess.Size());
+   for (int k = 0; k < ess.Size(); ++k)
+   {
+      ess_ldof_[k] = t2l[e[k]];
+      MFEM_VERIFY(ess_ldof_[k] >= 0, "oifs: a true dof without a local dof");
+   }
+   ess_seq_ = V.GetSequence();
+}
+
+void OifsAdvector::EssentialValues(const Vector& x, Vector& vals) const
+{
+   // A copy, as GetTrueDofs on one rank (the sum of R's single product
+   // elsewhere: the same values, a zero's sign aside).
+   const double* xh = x.HostRead();
+   vals.SetSize(static_cast<int>(ess_ldof_.size()));
+   double* v = vals.HostWrite();
+   for (std::size_t k = 0; k < ess_ldof_.size(); ++k) { v[k] = xh[ess_ldof_[k]]; }
 }
 
 void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
 {
    ParFiniteElementSpace& V = spaces_.Velocity();
    if (bnode_seq_ != V.GetSequence()) { CacheBoundaryNodes(); }
-   if (!flag_) { flag_ = std::make_unique<ParGridFunction>(&V); }
-   ParGridFunction& flag = *flag_;
-   flag = 0.0; // device-aware; take the host pointer only afterwards
-   double* fl = flag.HostReadWrite();
-   const double* wh = w.HostRead();
    ParMesh& mesh = *V.GetParMesh();
    const int n_nodes = static_cast<int>(bnode_be_.size());
    // The wind at every boundary node: a nodal element's value at its node is
-   // that node's dofs (exactly zero on a no-slip wall); otherwise evaluated
-   // through the element.
+   // that node's dofs (exactly zero on a no-slip wall), gathered on the
+   // device so that only these values come to the host; otherwise evaluated
+   // through the element (on the host).
+   const double* wg = nullptr;
+   if (bnode_nodal_)
+   {
+      w.GetSubVector(bnode_gather_, bnode_wd_); // -1-v reads -w[v], as below
+      wg = bnode_wd_.HostRead();
+   }
    bnode_w_.resize(static_cast<std::size_t>(n_nodes) * dim_);
    double w_max = 0.0;
    {
@@ -264,14 +366,10 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
       ElementTransformation* T = nullptr;
       for (int i = 0; i < n_nodes; ++i)
       {
-         const int* v = &bnode_vdofs_[i * dim_];
          double* wi = &bnode_w_[i * dim_];
          if (bnode_nodal_)
          {
-            for (int d = 0; d < dim_; ++d)
-            {
-               wi[d] = (v[d] >= 0) ? wh[v[d]] : -wh[-1 - v[d]];
-            }
+            for (int d = 0; d < dim_; ++d) { wi[d] = wg[i * dim_ + d]; }
          }
          else
          {
@@ -297,6 +395,7 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
    // included, is imposed. (Until 2026-10-15 the test was relative to the
    // node's own |w|, with w evaluated through the element: on a wall that w
    // is roundoff, and its sign decided whether the node was imposed.)
+   std::vector<int> flagged;
    for (int i = 0; i < n_nodes; ++i)
    {
       const int* v = &bnode_vdofs_[i * dim_];
@@ -312,26 +411,57 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
       {
          for (int d = 0; d < dim_; ++d)
          {
-            fl[v[d] >= 0 ? v[d] : -1 - v[d]] = 1.0;
+            flagged.push_back(v[d] >= 0 ? v[d] : -1 - v[d]);
          }
       }
    }
-   Vector ft(V.GetTrueVSize());
-   flag.ParallelAssemble(ft); // shared boundary dofs: any rank's inflow counts
-   const double* f = ft.HostRead();
-   std::vector<int> list;
-   for (int i : bc_.EssentialTrueDofs())
+   // The flags as a local vector on the device (transient: nothing of it
+   // stays allocated), summed over the ranks sharing a dof -- any rank's
+   // inflow counts -- and read back on the Dirichlet dofs only.
+   flag_idx_.SetSize(static_cast<int>(flagged.size()));
    {
-      if (f[i] > 0.0) { list.push_back(i); }
+      int* fi = flag_idx_.HostWrite();
+      for (std::size_t j = 0; j < flagged.size(); ++j) { fi[j] = flagged[j]; }
    }
-   // A device-usable list: Get/SetSubVector pick host or device from the
+   flag_idx_.GetMemory().UseDevice(true);
+   const Array<int>& ess = bc_.EssentialTrueDofs();
+   Vector fe;
+   fe.UseDevice(true);
+   {
+      ParGridFunction flag(&V);
+      flag = 0.0;
+      oifsbc::SetFlags(flag_idx_, flag);
+      Vector ft(V.GetTrueVSize());
+      ft.UseDevice(true);
+      flag.ParallelAssemble(ft);
+      ft.GetSubVector(ess, fe);
+   }
+   const double* f = fe.HostRead();
+   const int* e = ess.HostRead();
+   std::vector<int> list, pos;
+   for (int k = 0; k < ess.Size(); ++k)
+   {
+      if (f[k] > 0.0)
+      {
+         list.push_back(e[k]);
+         pos.push_back(k);
+      }
+   }
+   // Device-usable lists: Get/SetSubVector pick host or device from the
    // index array, and a host one would drag phi back to the host at every
    // RK stage. Rebuilt through an explicit host write (never Append onto a
    // possibly device-valid buffer).
    imposed_.SetSize(static_cast<int>(list.size()));
+   imposed_pos_.SetSize(static_cast<int>(pos.size()));
    int* d = imposed_.HostWrite();
-   for (std::size_t k = 0; k < list.size(); ++k) { d[k] = list[k]; }
+   int* p = imposed_pos_.HostWrite();
+   for (std::size_t k = 0; k < list.size(); ++k)
+   {
+      d[k] = list[k];
+      p[k] = pos[k];
+   }
    imposed_.GetMemory().UseDevice(true);
+   imposed_pos_.GetMemory().UseDevice(true);
 }
 
 void OifsAdvector::SetDirichlet(double s, double weight, Vector& phi)
@@ -340,9 +470,8 @@ void OifsAdvector::SetDirichlet(double s, double weight, Vector& phi)
    if (bd_static_valid_)
    {
       // The data does not change over this window: no projection (a host
-      // loop over the boundary and, on a GPU, a round trip of the whole
-      // velocity, at every RK stage). bd_static_valid_ is the same on every
-      // rank (StaticDirichlet reduces it).
+      // pass over the whole local vector at every RK stage). bd_static_valid_
+      // is the same on every rank (StaticDirichlet reduces it).
       if (imposed_.Size() > 0 && bd_zero_) { phi.SetSubVector(imposed_, 0.0); }
       else if (imposed_.Size() > 0)
       {
@@ -352,31 +481,45 @@ void OifsAdvector::SetDirichlet(double s, double weight, Vector& phi)
       }
       return;
    }
+   if (bd_sep_)
+   {
+      // Separable data: the projected shapes scaled by their entries' time
+      // factors, on the device -- s_e(s) g, then the weight, as the projected
+      // data would be (exactly where s_e = 1). No projection, no collective.
+      const int ne = bc_.NumDirichlet();
+      bd_fac_.SetSize(ne);
+      double* fh = bd_fac_.HostWrite();
+      for (int e = 0; e < ne; ++e) { fh[e] = bc_.DirichletFactor(e, s); }
+      oifsbc::ScaleShapes(bd_fac_, bd_shape_, bd_entry_, weight, bd_vals_);
+      phi.SetSubVector(imposed_, bd_vals_);
+      return;
+   }
    // Every rank takes the same path (the projection may communicate).
-   DirichletValues(s, imposed_, bd_vals_);
+   DirichletValues(s, bd_vals_);
    bd_vals_ *= weight;
    phi.SetSubVector(imposed_, bd_vals_);
 }
 
-void OifsAdvector::DirichletValues(double s, const Array<int>& dofs,
-                                   Vector& vals)
+void OifsAdvector::DirichletValues(double s, Vector& vals)
 {
    bc_.SetTime(s);
-   *bd_ = 0.0;
+   *bd_ = 0.0; // host-only
    bc_.ProjectDirichlet(*bd_);
-   bd_->GetTrueDofs(bd_true_);
-   bd_true_.GetSubVector(dofs, vals);
+   // The imposed true dofs' values, as GetTrueDofs gives them (EssentialValues).
+   const double* b = bd_->HostRead();
+   vals.SetSize(static_cast<int>(imposed_ldof_.size()));
+   double* v = vals.HostWrite();
+   for (std::size_t j = 0; j < imposed_ldof_.size(); ++j) { v[j] = b[imposed_ldof_[j]]; }
 }
 
-bool OifsAdvector::StaticDirichlet(const Array<int>& dofs, double s0,
-                                   double s1, Vector& vals)
+bool OifsAdvector::StaticDirichlet(double s0, double s1, Vector& vals)
 {
    // Three times, the middle one irregular (a periodic signal is unlikely to
    // repeat there); equal values at all three mean time-independent data.
    Vector mid, end;
-   DirichletValues(s0, dofs, vals);
-   DirichletValues(s0 + 0.37 * (s1 - s0), dofs, mid);
-   DirichletValues(s1, dofs, end);
+   DirichletValues(s0, vals);
+   DirichletValues(s0 + 0.37 * (s1 - s0), mid);
+   DirichletValues(s1, end);
    double diff = 0.0;
    if (vals.Size() > 0)
    {
@@ -478,19 +621,41 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
    {
       INCNS_PROFILE("oifs::classify");
       const Array<int>& ess = bc_.EssentialTrueDofs();
-      const bool constant = bc_.DirichletIsConstant(); // same on every rank
+      if (ess_seq_ != V.GetSequence()) { CacheEssentialLocalDofs(); }
+      // Both the same on every rank (the coefficients' types).
+      const bool constant = bc_.DirichletIsConstant();
+      const bool separable = !constant && bc_.DirichletIsSeparable();
       if (constant && bd_const_seq_ != V.GetSequence())
       {
-         // Constant data (no-slip walls): projected once per space.
+         // Constant data (no-slip walls): projected once per space, on the
+         // host; only its values on the Dirichlet dofs are kept.
          *bd_ = 0.0;
          bc_.ProjectDirichlet(*bd_);
-         bd_->GetTrueDofs(bd_const_true_);
-         Vector e;
-         bd_const_true_.GetSubVector(ess, e);
-         double m = (e.Size() > 0) ? e.Normlinf() : 0.0;
+         EssentialValues(*bd_, bd_const_ess_);
+         double m = (bd_const_ess_.Size() > 0) ? bd_const_ess_.Normlinf() : 0.0;
          MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, V.GetComm());
          bd_const_zero_ = (m == 0.0);
          bd_const_seq_ = V.GetSequence();
+      }
+      if (separable && bd_shape_seq_ != V.GetSequence())
+      {
+         // Separable data (the deck's velocity conditions, u_D = s(t) g):
+         // the shapes projected once per space, on the host; the substeps
+         // scale them (SetDirichlet).
+         ParGridFunction entry(&V);
+         entry.UseDevice(false);
+         *bd_ = 0.0;
+         entry = -1.0;
+         bc_.ProjectDirichletShapes(*bd_, entry);
+         EssentialValues(*bd_, bd_shape_ess_);
+         EssentialValues(entry, bd_entry_ess_);
+         const double* en = bd_entry_ess_.HostRead();
+         for (int k = 0; k < bd_entry_ess_.Size(); ++k)
+         {
+            MFEM_VERIFY(en[k] >= 0.0 && en[k] < bc_.NumDirichlet(), "oifs: a "
+                        "Dirichlet dof without a projected shape");
+         }
+         bd_shape_seq_ = V.GetSequence();
       }
       // Zero data and a wind that is zero on every Dirichlet dof (the history
       // satisfies the data): ClassifyBoundary would impose them all, so skip
@@ -508,27 +673,47 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
       if (all_imposed)
       {
          imposed_.SetSize(ess.Size());
+         imposed_pos_.SetSize(ess.Size());
          const int* e = ess.HostRead();
          int* d = imposed_.HostWrite();
-         for (int i = 0; i < ess.Size(); ++i) { d[i] = e[i]; }
+         int* p = imposed_pos_.HostWrite();
+         for (int i = 0; i < ess.Size(); ++i)
+         {
+            d[i] = e[i];
+            p[i] = i;
+         }
          imposed_.GetMemory().UseDevice(true);
+         imposed_pos_.GetMemory().UseDevice(true);
       }
       else
       {
          ClassifyBoundary(*vel_[0]); // the newest wind decides in/outflow
       }
-      // Data that does not change over the window (no-slip walls, a
-      // constant inflow): the substeps reuse it instead of projecting it at
-      // every stage.
+      // Data that does not change over the window (no-slip walls): the
+      // substeps reuse it instead of projecting it at every stage; separable
+      // data: they scale its shapes.
+      bd_sep_ = false;
       if (constant)
       {
-         bd_const_true_.GetSubVector(imposed_, bd_static_);
+         bd_const_ess_.GetSubVector(imposed_pos_, bd_static_);
          bd_static_valid_ = true;
+      }
+      else if (separable)
+      {
+         bd_shape_ess_.GetSubVector(imposed_pos_, bd_shape_);
+         bd_entry_ess_.GetSubVector(imposed_pos_, bd_entry_);
+         bd_static_valid_ = false;
+         bd_sep_ = true;
       }
       else
       {
-         bd_static_valid_ = StaticDirichlet(imposed_, times[k - 1], t_new,
-                                            bd_static_);
+         const int* p = imposed_pos_.HostRead();
+         imposed_ldof_.resize(imposed_pos_.Size());
+         for (int j = 0; j < imposed_pos_.Size(); ++j)
+         {
+            imposed_ldof_[j] = ess_ldof_[p[j]];
+         }
+         bd_static_valid_ = StaticDirichlet(times[k - 1], t_new, bd_static_);
       }
       bd_zero_ = false;
       if (bd_static_valid_)

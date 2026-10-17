@@ -102,6 +102,50 @@ bool BoundaryConditions::DirichletIsConstant() const
    return true;
 }
 
+bool BoundaryConditions::DirichletIsSeparable() const
+{
+   for (const auto& entry : dirichlet_)
+   {
+      if (!dynamic_cast<const VectorConstantCoefficient*>(entry.second) &&
+          !dynamic_cast<const SeparableVectorCoefficient*>(entry.second))
+      {
+         return false;
+      }
+   }
+   return true;
+}
+
+double BoundaryConditions::DirichletFactor(int e, double t) const
+{
+   MFEM_ASSERT(e >= 0 && e < NumDirichlet(),
+               "BoundaryConditions: Dirichlet entry out of range");
+   const auto* s = dynamic_cast<const SeparableVectorCoefficient*>(
+                      dirichlet_[e].second);
+   return s ? s->TimeFactor(t) : 1.0;
+}
+
+void BoundaryConditions::ProjectDirichletShapes(ParGridFunction& g,
+      ParGridFunction& entry) const
+{
+   MFEM_VERIFY(DirichletIsSeparable(), "BoundaryConditions: the Dirichlet "
+               "data is not separable in time");
+   Array<int> marker(max_attr_);
+   Vector id(vfes_.GetVDim());
+   for (std::size_t e = 0; e < dirichlet_.size(); ++e)
+   {
+      marker = 0;
+      marker[dirichlet_[e].first - 1] = 1;
+      VectorCoefficient* c = dirichlet_[e].second;
+      auto* s = dynamic_cast<SeparableVectorCoefficient*>(c);
+      g.ProjectBdrCoefficient(s ? s->Shape() : *c, marker);
+      // The same projection of the index: an average of equal whole
+      // numbers, exact.
+      id = static_cast<double>(e);
+      VectorConstantCoefficient ec(id);
+      entry.ProjectBdrCoefficient(ec, marker);
+   }
+}
+
 void BoundaryConditions::SetTime(double t)
 {
    for (auto& entry : dirichlet_) { entry.second->SetTime(t); }

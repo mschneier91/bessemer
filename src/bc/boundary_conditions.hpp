@@ -6,11 +6,55 @@
 
 #include "mfem.hpp"
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 namespace incns
 {
+
+/**
+ * @brief Velocity data separable in time, @f$ u_D(x, t) = s(t)\,g(x) @f$: the
+ *        deck's velocity conditions (a constant or parabolic profile g,
+ *        optionally ramped or modulated by s).
+ *
+ * Eval() is the data itself, exactly as the given function computes it.
+ * TimeFactor() and Shape() expose s and g, so that the OIFS substeps project
+ * g once and scale it at every RK stage instead of projecting the data
+ * (OifsAdvector). The function must equal s(t) g(x) to roundoff, and exactly
+ * where s(t) = 1.
+ */
+class SeparableVectorCoefficient : public mfem::VectorFunctionCoefficient
+{
+public:
+   /// The data u_D(x, t).
+   using Function =
+      std::function<void(const mfem::Vector&, double, mfem::Vector&)>;
+   /// The shape g(x).
+   using ShapeFunction = std::function<void(const mfem::Vector&, mfem::Vector&)>;
+   /// The time factor s(t).
+   using Factor = std::function<double(double)>;
+
+   /**
+    * @param dim   Vector dimension.
+    * @param f     The data.
+    * @param g     Its shape.
+    * @param s     Its time factor.
+    */
+   SeparableVectorCoefficient(int dim, Function f, ShapeFunction g, Factor s)
+      : mfem::VectorFunctionCoefficient(dim, std::move(f)),
+        shape_(dim, std::move(g)), factor_(std::move(s)) {}
+
+   /// @return s(t).
+   double TimeFactor(double t) const { return factor_(t); }
+
+   /// @return The shape g as a coefficient (for projections).
+   mfem::VectorCoefficient& Shape() { return shape_; }
+
+private:
+   mfem::VectorFunctionCoefficient shape_; ///< g.
+   Factor factor_;                         ///< s.
+};
 
 /**
  * @brief Velocity boundary conditions, assigned per boundary attribute.
@@ -70,6 +114,41 @@ public:
     * @return True when they all are (also when there are none).
     */
    bool DirichletIsConstant() const;
+
+   /**
+    * @brief Whether every Dirichlet coefficient is separable in time: a
+    *        constant (factor 1) or a SeparableVectorCoefficient (the deck's
+    *        velocity conditions).
+    * @return True when they all are (also when there are none).
+    */
+   bool DirichletIsSeparable() const;
+
+   /// @return The Dirichlet entries: one per attribute, in the order
+   ///         ProjectDirichlet() applies them (the last one wins at boundary
+   ///         dofs that attributes share).
+   int NumDirichlet() const { return static_cast<int>(dirichlet_.size()); }
+
+   /**
+    * @brief The time factor of Dirichlet entry @p e (separable data).
+    * @param e Entry, 0 <= e < NumDirichlet().
+    * @param t Time.
+    * @return s(t) of its SeparableVectorCoefficient; 1 for a constant.
+    */
+   double DirichletFactor(int e, double t) const;
+
+   /**
+    * @brief Separable data (DirichletIsSeparable()): the shapes g projected
+    *        as ProjectDirichlet() projects the data -- attribute by attribute,
+    *        averaged over the boundary elements (and ranks) that share a dof,
+    *        the last entry winning -- and that entry's index at each dof. The
+    *        data at time t is then s_e(t) g there: exactly where s_e(t) = 1,
+    *        to roundoff otherwise (the projection averages s_e(t) g).
+    *        Collective.
+    * @param g     Receives the shapes on the Dirichlet boundary.
+    * @param entry Receives the entry index (a whole number) there.
+    */
+   void ProjectDirichletShapes(mfem::ParGridFunction& g,
+                               mfem::ParGridFunction& entry) const;
 
    /**
     * @brief Advance every Dirichlet coefficient to time @p t.

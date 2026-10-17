@@ -11,12 +11,15 @@
 //     2026-10-09). Measured 2026-10-09: IMEX 0.097 (38 steps); OIFS 0.074
 //     (11) / 0.072 (9); with the consistent BDF mass 0.085 / 0.079; BDF2 +
 //     consistent mass was 0.164 / 0.204 (its trajectory error at steps 4-8x
-//     larger).
+//     larger);
+//  O3 hanging nodes, and O4 boundary data separable in time (below).
 
 #include <gtest/gtest.h>
 
 #include "amr_test_util.hpp"
 #include "bc/boundary_conditions.hpp"
+#include "bc/boundary_names.hpp"
+#include "bc/deck_boundary.hpp"
 #include "mesh/periodic_box.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -28,8 +31,10 @@
 #include "solver/case.hpp"
 #include "mfem.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
+#include <string>
 #include <vector>
 
 using namespace mfem;
@@ -307,4 +312,92 @@ TEST(Oifs, O3_NonconformingAdvection)
    }
    EXPECT_LT(err[1], 1.1 * err[0]);
    EXPECT_LT(err[2], 1.1 * err[0]);
+}
+
+// O4 separable boundary data: the DFG 2D channel's parabolic inflow (walls
+// and cylinder no-slip), the history carried by that profile over t in
+// [1, 1.05]. The deck's coefficient is separable (u_D = s(t) g): the
+// substeps scale its shapes, projected once. The same data as a plain
+// function coefficient is projected at every stage (host-only, only the
+// imposed values gathered). The two advected fields agree to roundoff under
+// the 2D-3 sine (the projection averages s g where the shapes are averaged,
+// then scaled), and bit for bit with a constant time profile (s = 1).
+TEST(Oifs, O4_SeparableInflowMatchesTheProjection)
+{
+   for (const bool sine : {true, false})
+   {
+      const incns::Parameters p = incns::Parameters::LoadYAMLString(
+                                     std::string("equation: navier_stokes\nphysics:\n  nu: 0.001\n"
+                                        "mesh:\n  dim: 2\n  geometry: cylinder_channel\n"
+                                        "boundary_conditions:\n"
+                                        "  - {select: [inflow], type: velocity, profile: parabolic, "
+                                        "u_max: 1.5, height: 0.41") +
+                                     (sine ? ", time_profile: sine, time_scale: 8.0" : "") +
+                                     "}\n"
+                                     "  - {select: [walls, cylinder], type: no_slip}\n"
+                                     "  - {select: [outflow], type: outflow}\n");
+      incns::RuleBook rules; // before the mesh (rule-keyed caches)
+      auto mesh = incns::MakeCaseMesh(p);
+      incns::MixedSpaces spaces(*mesh, 3, 2);
+      ParFiniteElementSpace& V = spaces.Velocity();
+      incns::BoundaryConditions bc_sep(V);
+      incns::DeckBoundaryConditions deck(p, *mesh);
+      deck.Apply(bc_sep, nullptr, true);
+      // The deck's formula as a plain coefficient, the entries in the deck's
+      // order (the last wins where they meet).
+      VectorFunctionCoefficient inflow(2, [sine](const Vector & x, double t,
+                                       Vector & u)
+      {
+         const double sc = sine ? std::sin(M_PI * t / 8.0) : 1.0;
+         const double h = 0.41, y = x(1);
+         u = 0.0;
+         u(0) = sc * 4.0 * 1.5 * y * (h - y) / (h * h);
+      });
+      incns::BoundaryConditions bc_plain(V);
+      bc_plain.AddVelocityDirichlet(incns::NamedBoundaryAttribute(p, *mesh, "inflow"),
+                                    inflow);
+      bc_plain.AddNoSlip(incns::NamedBoundaryAttribute(p, *mesh, "walls"));
+      bc_plain.AddNoSlip(incns::NamedBoundaryAttribute(p, *mesh, "cylinder"));
+      bc_plain.AddOutflow(incns::NamedBoundaryAttribute(p, *mesh, "outflow"));
+      ASSERT_TRUE(bc_sep.DirichletIsSeparable());
+      ASSERT_FALSE(bc_plain.DirichletIsSeparable());
+
+      VectorFunctionCoefficient profile(2, [](const Vector & x, Vector & w)
+      {
+         const double h = 0.41, y = x(1);
+         w(0) = 4.0 * 1.5 * y * (h - y) / (h * h);
+         w(1) = 0.0;
+      });
+      ParGridFunction g(&V);
+      g.ProjectCoefficient(profile);
+      Vector w0(V.GetTrueVSize());
+      g.GetTrueDofs(w0);
+      const std::deque<Vector> wind = {w0};
+      incns::StokesOperatorOptions mo;
+      mo.nu = 1.0;
+      mo.collocated_mass = true;
+      incns::StokesOperator blocks(spaces, rules, mo);
+      Vector phi[2];
+      int imposed[2] = {0, 0};
+      for (int k : {0, 1})
+      {
+         incns::OifsAdvector adv(spaces, rules, k == 0 ? bc_sep : bc_plain, 0.5,
+                                 blocks.Mass(), blocks.MassDiagonal());
+         adv.AdvectWith(wind, {1.0}, {0.0, 1.0}, wind, {1.0}, 1.05, phi[k]);
+         imposed[k] = adv.ImposedDofs().Size();
+      }
+      EXPECT_EQ(imposed[0], imposed[1]);
+      phi[1] -= phi[0];
+      double v[2] = {phi[1].Normlinf(), phi[0].Normlinf()};
+      MPI_Allreduce(MPI_IN_PLACE, v, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      if (Mpi::Root())
+      {
+         mfem::out << "[oifs O4] " << (sine ? "sine" : "constant")
+                   << " inflow: max |separable - projected| " << v[0]
+                   << " (max |phi| " << v[1] << ")\n";
+      }
+      EXPECT_GT(v[1], 0.5);
+      if (sine) { EXPECT_LE(v[0], 1e-13 * v[1]); }
+      else { EXPECT_EQ(v[0], 0.0); }
+   }
 }

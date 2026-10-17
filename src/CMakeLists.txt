@@ -113,6 +113,7 @@ if(USE_CUDA)
                               post/channel_statistics.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
+                              time/oifs.cpp
                               time/oifs_convection.cpp
                               precond/rotational_schur.cpp
                               util/device_sync.cpp
