@@ -107,6 +107,7 @@ incns_add_mpi_test(grad_div_test grad_div_test.cpp)
 incns_add_mpi_test(grad_div_integrator_test grad_div_integrator_test.cpp)
 incns_add_mpi_test(lean_vector_diffusion_test lean_vector_diffusion_test.cpp)
 incns_add_mpi_test(lean_vector_divergence_test lean_vector_divergence_test.cpp)
+incns_add_mpi_test(lean_vector_mass_test lean_vector_mass_test.cpp)
 incns_add_mpi_test(kernel_specializations_test kernel_specializations_test.cpp)
 # Self-contained: MFEM + the integrator header only.
 incns_add_mpi_test(grad_div_integrator_elasticity_test grad_div_integrator_elasticity_test.cpp)

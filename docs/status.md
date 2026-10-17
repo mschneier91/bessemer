@@ -39,7 +39,10 @@ Change 17 (no RAP over identity prolongations, three kept copies dropped) saves 
 public pieces, shared element vectors) 2.8 GiB more, bitwise unchanged. Peak at 57.3M:
 coupled 61,955 MiB, Schur 48,127 MiB (881 B/DOF); change 20 (the divergence from the
 cached Jacobians, phase 2) 2.6 GiB more at 0.5–1.4 % per step: coupled 57,603 MiB, Schur
-46,031 MiB (842 B/DOF).
+46,031 MiB (842 B/DOF); changes 21-25 (OIFS keeps only its combined wind data,
+the on-the-fly OIFS apply as an opt-in, IMEX's convection on the fly, the lean vector
+mass): OIFS coupled 50,465 MiB, Schur 40,351 MiB (738 B/DOF); IMEX coupled 44,745 MiB,
+Schur 32,165 MiB (589 B/DOF).
 
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be

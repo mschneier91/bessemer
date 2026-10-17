@@ -2,6 +2,7 @@
 
 #include "operators/collocated_mass.hpp"
 #include "operators/lean_vector_divergence.hpp"
+#include "operators/lean_vector_mass.hpp"
 
 #include "operators/convection.hpp" // DealiasedOrder
 #include "operators/grad_div_integrator.hpp"
@@ -170,12 +171,15 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       }
       else
       {
+         // W det J at the mass rule, kept (one number per point) for every
+         // mass integrator here, instead of the mesh's cached Jacobians.
+         MassWeightDet(spaces_.Velocity(), *mass_rule_, mass_wdet_);
          // The diagonal through MFEM's form (its parallel and hanging-node
          // assembly), which is freed after; the operator from the same
          // integrator in a PaOperator.
          {
             ParBilinearForm diag_form(&spaces_.Velocity());
-            auto* mi = new VectorMassIntegrator;
+            auto* mi = new LeanVectorMassIntegrator(mass_wdet_);
             mi->SetIntRule(mass_rule_);
             diag_form.AddDomainIntegrator(mi);
             diag_form.SetAssemblyLevel(AssemblyLevel::PARTIAL);
@@ -184,7 +188,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
             diag_form.AssembleDiagonal(mass_diag_);
          }
          mass_form_ = std::make_unique<PaOperator>(spaces_.Velocity(), *scratch_);
-         auto* mi = new VectorMassIntegrator;
+         auto* mi = new LeanVectorMassIntegrator(mass_wdet_);
          mi->SetIntRule(mass_rule_);
          mass_form_->AddDomainIntegrator(mi);
          mass_form_->Assemble();
@@ -301,7 +305,12 @@ GradDivIntegrator* StokesOperator::AddMomentumIntegrators(
    if (diffusion) { *diffusion = ki; }
    if (include_mass && opts_.mass_coeff > 0.0)
    {
-      auto* mmi = new VectorMassIntegrator(mass_coeff_);
+      // The kept W det J when there is one (a non-diagonal mass): no cached
+      // Jacobians at the mass rule, here or at a new mass factor.
+      BilinearFormIntegrator* mmi = (mass_wdet_.Size() > 0)
+                                    ? static_cast<BilinearFormIntegrator*>(
+                                       new LeanVectorMassIntegrator(mass_wdet_, mass_coeff_))
+                                    : new VectorMassIntegrator(mass_coeff_);
       mmi->SetIntRule(mass_rule_);
       form.AddDomainIntegrator(mmi);
       if (mass) { *mass = mmi; }

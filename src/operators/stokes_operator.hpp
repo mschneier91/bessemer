@@ -485,6 +485,9 @@ private:
    std::unique_ptr<mfem::ParGridFunction> w_lor_;
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
    mfem::Vector mass_diag_inv_; ///< 1 / mass_diag_ (diagonal mass only).
+   /// W det J at the mass rule, (nq, ne), for the mass integrators of a
+   /// non-diagonal mass (LeanVectorMassIntegrator); empty otherwise.
+   mfem::Vector mass_wdet_;
    mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).
    /// Diagonal of the Delta-t independent rest of the momentum block, nu*K
    /// (+ grad-div), true dofs: momentum_diag_ = mass_coeff * mass_diag_ +

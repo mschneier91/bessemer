@@ -445,6 +445,18 @@ and merge it when its working". Measured at Q6 (the working list above).
     IMEX Q6 Taylor–Green at 57.3M (job 49347319 against 49346223): the convection
     10,190 → 28 MiB and its first apply 2,268 → 368 MiB. Tests (changes 21, 24 and 25 together): CPU smoke/fast at np 1, 2 and 4, 75/75 each; GPU smoke/fast at np 1 and 2, 73/73 each.
 
+25. **The vector mass keeps W det J** (bitwise unchanged). For a mass that is not
+    diagonal (IMEX's Gauss mass; the collocated mass with hanging nodes) MFEM's
+    `VectorMassIntegrator` asked the mesh for the Jacobians at the mass rule, cached for
+    the run (9 numbers per point), and formed C W det J from them at every assembly (a
+    new mass factor in the momentum block). `LeanVectorMassIntegrator`
+    (`src/operators/lean_vector_mass.*`) keeps W det J (one number per point), computed
+    once with MFEM's expressions from Jacobians computed for the call, and forms the same
+    PA data from it; MFEM's apply and diagonal kernels unchanged. CPU job 49346901:
+    byte-identical to change 22 on six decks at np 1 and 2; new test against MFEM's
+    integrator (2D, 3D, a coefficient) at the bit. IMEX Q6 Taylor–Green at 57.3M (job
+    49347319): the mass 2,562 → 1,010 MiB. Tests (changes 21, 24 and 25 together): CPU smoke/fast at np 1, 2 and 4, 75/75 each; GPU smoke/fast at np 1 and 2, 73/73 each.
+
 ## Where the memory is now (64³, one H100, after change 15)
 
 From the profiler gauge (job 49215743); the peak is in the FGMRES solve of a BDF2 step.
