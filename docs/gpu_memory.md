@@ -1,14 +1,106 @@
 # GPU memory: what was recovered, and what is left
 
-The record of the 2026-10-13 and 2026-10-14 memory work: each change, numbered, with what
-it saved, and what is left. Measurements are Taylor–Green (Re 1600) with the case defaults
+The record of the GPU memory work: each change, numbered, with what it saved, and what is
+left. **The current working list (Q6, toward 100M DOFs on one H100) is the next section.**
+Rounds one to three (2026-10-13 and 14) were measured on Taylor–Green (Re 1600) with the case defaults
 (Q3/Q2, IMEX BDF2, grad-div γ = 2h, Cahouet–Chabard Schur PC, PCG with point-block Jacobi
 on the velocity block), about ten steps per run, one NVIDIA H100 80 GB on Bridges-2, CUDA
 backend. Memory is the device's peak in use (`nvidia-smi`, and the profiler gauge of
 change 1), in units of 1000 MiB; step times are the mean from step 3 on, with the
 synchronizing profiler on.
 
-## Result
+## Q6: toward 100M DOFs on one H100 (the working list)
+
+Human 2026-10-16: the goal is 100M DOFs on one 80 GB H100, and this section is the place
+to refer to while working toward it ("where is a central file which we can refer to as we
+work through memory optimization?"). Phases (human): first the items with no expected time
+cost, each measured and merged when it works; then those that may cost a little or must be
+measured; those that could cost meaningful throughput or change the answer are recorded
+here and held. Single-precision AMG is held because it changes the answer (human).
+
+**Where it stands.** Taylor–Green Re 1600, Q6/Q5, OIFS at CFL 2, ~25 steps, one rank on one
+H100, `profile: sync`, 42³ elements = 57.3M DOFs (48.0M velocity, 9.3M pressure). Peak is
+`nvidia-smi`'s; B/DOF divides it by all 57.3M DOFs.
+
+| | Coupled (FGMRES) | Schur (`solver.outer: schur`) |
+|---|---|---|
+| main aa6aa7e (job 49342093) | 71,781 MiB (1,314 B/DOF) | 58,463 MiB (1,070 B/DOF) |
+| + change 17 (job 49343807) | 66,311 MiB (1,214 B/DOF) | 56,485 MiB (1,034 B/DOF) |
+
+100M DOFs fit only below about 850 B/DOF (the card's 81,559 MiB over 100M), less headroom.
+Last measured capacity (before change 17): coupled 57.3M runs and 70.4M does not; Schur
+70.4M runs and 85.5M does not. GPU iteration counts vary from run to run, and the coupled
+peak moves with the largest solve's FGMRES iterations: about 0.85 GiB per iteration (two
+system-sized vectors of 437 MiB).
+
+**The ledger at 57.3M** (main aa6aa7e, job 49342093; each region's own growth, MiB). A
+velocity vector is 366 MiB, a velocity element vector (E-vector) 582, a pressure vector 71;
+the 3k rule of OIFS has 10³ points per element (74.1M points), the momentum and divergence
+rule 8³ (37.9M), the collocated mass rule 7³ (25.4M). "Accounted" means the listed arrays add
+up to the region within 1 %; otherwise the split is an estimate.
+
+| Piece | MiB | What it holds | |
+|---|---|---|---|
+| OIFS stepper setup | 5,087 + 1,249 | the Jacobians at the 10³ points (9 numbers per point; computed by `OifsConvection` because MFEM's interpolator stops at 8 points), plus u, p, p_static and the mass diagonal and its reciprocal | accounted (`time_integrator::setup`) |
+| OIFS wind data | 7,366 | per-wind quadrature data (3 winds × 3 numbers per point, 5,087), the winds at the points to build it (1,696), the wind E-vector (582) | accounted (`oifs::setup`) |
+| OIFS apply scratch | 2,268 | two E-vectors, two local-dof vectors (removed by change 17), the mass right-hand side | accounted (`oifs::rhs`) |
+| Divergence | 5,212 | MFEM's PA data W adj(J) (9 per point at 8³, 2,602) and the mesh's cached Jacobians at 8³ (2,602; grad-div reads them at apply, change 13) | accounted |
+| Mass | 3,158 | the PA form's E-vector pair (1,164), PA data (194), the diagonal (366), the mesh's Jacobians at the GLL rule (1,746) | sum 3,470: not reconciled |
+| Momentum | 2,222 + first apply 2,776 | compact diffusion metric (6 per point at 8³, 1,735), grad-div α; first apply: an identity RAP pair (732, removed by change 17), 2,044 not identified | partly |
+| Pressure LOR-AMG | 4,122 + 242 | hierarchy and matrix (hypre pool capped) | |
+| Cahouet–Chabard | 1,784 + 1,040 + 736 | velocity mass inverse (an identity RAP pair, removed by change 17; reciprocal diagonal 366, the same values as OIFS's; 686 not identified), inner CG, B M⁻¹ Bᵀ vectors | partly |
+| Velocity PC + diagonal | 1,542 + 736 | Jacobi-PCG work vectors, momentum diagonal and the kept part | |
+| Time integrator | 2,208 + 736 + 1,444 + 1,472 | BDF right-hand side, commit, forcing (708 removed by change 17), OIFS advection stages | |
+| Coupled only | 8,800 + 7,446 + 1,174 | FGMRES V and Z (~20 system vectors at 437), the projection basis (16 system vectors), step_reference | |
+| Coupled warm-up | 6,654 | first applies of the block operator and preconditioner; moved, not added (Schur allocates the same at its first solve, in `solve_true/rhs`) | probe 49342945 |
+| Schur only | 1,392 + ~1,280 | velocity CG vectors; the pressure projection basis (18 pressure vectors) | |
+| Not in any region | 3,216 Schur / 8,200 coupled, + 1,482 | `case::run`'s own growth, and `step`'s | unknown |
+
+**Phase 1: no time cost expected.**
+
+- **Done, change 17:** no RAP over identity prolongations, no OIFS local-dof copies at one
+  rank, no kept copy of OIFS's mass diagonal, no kept zero forcing. 3,724 MiB less in both
+  methods, every result bitwise unchanged.
+- **Next: the collocated mass as a diagonal.** Under OIFS the velocity mass is exactly
+  diagonal (GLL nodes and rule). Apply it as an element-wise multiply by its assembled
+  diagonal, drop the PA form (E-vector pair, PA data) and the mesh's GLL-rule Jacobians once
+  nothing re-assembles from them (the momentum form's mass term reads them at every Δt
+  refresh, so it moves to the diagonal too). Region 3,158 MiB; estimated 1.5–2.7 GiB.
+  Results change at roundoff ((d₁ + d₂) x instead of d₁ x + d₂ x); the apply gets cheaper.
+- **Then: shared scratch.** The OIFS kernel's E-vectors (1,746) and the divergence's input
+  E-vector (582) are used only while the momentum form's pair is idle; one pool for them.
+  Estimated 1.5–2.3 GiB; bitwise unchanged if right, but aliasing bugs are the risk.
+- The pressure preconditioner's reciprocal mass diagonal and OIFS's hold the same values
+  (366 MiB): share them where the lifetimes allow.
+
+**Phase 2: a small time cost possible; measure.**
+
+- **Divergence from the cached Jacobians**, as change 13 did for grad-div: drops MFEM's W
+  adj(J) (2,602 MiB). Change 13 cost 5 % on the velocity-block apply; the divergence runs in
+  every inner CG iteration of the Schur preconditioner, so perhaps 1–3 % per step.
+- **OIFS winds combined inside the apply kernel**: drops the per-wind data and its build
+  array (6,783 MiB). The apply would read about one number per point instead of nine and
+  interpolate the wind itself: expected neutral or faster, but measure.
+
+**Held: could cost meaningful throughput, or change the answer.**
+
+| Item | Saving | Why held |
+|---|---|---|
+| OIFS Jacobians on the fly from the mesh nodes | 5,087 MiB | cheap on straight-sided meshes; roughly doubles the substep interpolation on curved ones |
+| ... or stored in single precision | 2,543 MiB | no time cost; changes the answer (~1e-7 relative in the convection) |
+| Geometry on the fly in the momentum and divergence operators | cached Jacobians 2,602 + diffusion metric 1,735 | the velocity solve is the hottest kernel: perhaps 5–15 % |
+| FGMRES basis in single precision | ~4.3 GiB | cheaper per iteration, but iteration counts may grow; the answer moves within the tolerance |
+| Projection basis in single precision | coupled 3.6 GiB, Schur ~0.6 | a different initial guess: the answer moves within the tolerance |
+| Schur projection with the solutions only (S-orthonormal basis) | ~0.6 GiB | the same: a different guess |
+| `projection_k` 8 → 4 | coupled 3.6 GiB | more iterations per step |
+| Single-precision AMG | ~2 GiB | changes the answer (human 2026-10-16); the single-precision plan comes after all other work |
+| One level of aggressive AMG coarsening | 2.1 GB at Q3 64³ | AMG settings are the human's call ("an optimization for another day") |
+
+**Next measurement:** the 3.2–8.2 GiB that no region claims. An allocation census (Nsight
+Systems with CUDA memory backtraces, one short run at 21³) would name every device
+allocation and its call site; to try before guessing at it.
+
+## Result (rounds one to three, Q3)
 
 | | Largest mesh on one H100 | Velocity dofs | Peak at 32³ | Peak at 64³ |
 |---|---|---|---|---|
@@ -183,6 +275,28 @@ and make that CFL change" (16).
     collocated mass (BDF3, OIFS) the mass form caches the same Jacobians and nothing is
     saved. (`src/time/cfl.*`)
 
+### Fourth round (2026-10-16, Q6)
+
+Human: "lets phase this ... do the no cost expected items see where that gets us and commit
+and merge it when its working". Measured at Q6 (the working list above).
+
+17. **No copies through identity prolongations; three kept copies dropped** (bitwise
+    unchanged). On one rank MFEM's prolongation is an `IdentityOperator`, and
+    `StokesOperator::TrueDofOperator` still wrapped the mass, divergence, momentum and
+    viscous operators in a `RAPOperator` over it: two velocity-sized work vectors per
+    operator, allocated on the device at its first apply, only to copy. It now returns the
+    form itself, as MFEM's `FormSystemMatrix` does. Likewise the OIFS convection kernel
+    skips its local-dof copies at one rank, `OifsAdvector` keeps the reciprocal of the mass
+    diagonal but not a copy of the diagonal, and a zero body force (the default) is no
+    longer assembled and kept. CPU job 49343803 ran main and the change on Taylor–Green (Q6
+    OIFS, Q3 IMEX), the channel (walls, forcing, OIFS) and DFG 3D (inflow, outflow, error
+    control) at np 1 and 2: every output byte-identical. Q6 Taylor–Green at 57.3M DOFs
+    (job 49343807 against 49342093): 3,724 MiB less of the profiler's per-region growth in
+    each method; peak 71,781 → 66,311 MiB coupled (about 1.7 GiB of it two fewer FGMRES
+    iterations in the largest solve, run-to-run variation on the GPU) and 58,463 → 56,485
+    MiB Schur. Two or more ranks: unchanged (the prolongation is not the identity there).
+    Tests: CPU smoke/fast at np 1, 2 and 4, 73/73 each; GPU at np 1 and 2, 71/71 each.
+
 ## Where the memory is now (64³, one H100, after change 15)
 
 From the profiler gauge (job 49215743); the peak is in the FGMRES solve of a BDF2 step.
@@ -246,9 +360,9 @@ after assembly saves 460 MiB at Q3 and Q7 (6d90d0c). BoomerAMG's strength thresh
 grew the hierarchy (+0.4 / +1.4 GB), and one level of aggressive coarsening did not shrink it
 at Q7.
 
-## What is left
+## What was left at Q3
 
-Nothing large. At 64³:
+Superseded by the Q6 working list above; kept for the record. Nothing large at the time. At 64³:
 
 - **The mass operator on the 5-point rule** (its Jacobians shared with the other
   forms, which all use that rule; after change 16 the mass's 4-point rule is the only

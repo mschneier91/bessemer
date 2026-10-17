@@ -248,8 +248,8 @@ private:
    std::unique_ptr<mfem::ParFiniteElementSpace> sfes_;
    mfem::Operator& mass_;       ///< The BDF step's velocity mass (borrowed).
    bool mass_diagonal_ = false; ///< mass_ is exactly diagonal.
-   mfem::Vector mass_diag_;     ///< Diagonal of mass_ (true dofs).
-   mfem::Vector inv_mass_diag_; ///< 1 / mass_diag_ (the diagonal inverse).
+   /// 1 / (the diagonal of mass_), true dofs: the diagonal inverse.
+   mfem::Vector inv_mass_diag_;
    long mass_iterations_ = 0;   ///< CG iterations of the mass solves.
    /// CG on mass_ (non-diagonal mass only).
    std::unique_ptr<mfem::CGSolver> mass_cg_;

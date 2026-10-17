@@ -311,15 +311,19 @@ LeanVectorDiffusionIntegrator::Storage StokesOperator::DiffusionStorage() const
 void StokesOperator::TrueDofOperator(const Operator* Pin, Operator& A,
                                      const Operator* Pout, OperatorPtr& out)
 {
-   if (Pin && Pout)
+   if (IsIdentityProlongation(Pin) && IsIdentityProlongation(Pout))
+   {
+      // One rank, conforming: MFEM's prolongation is an IdentityOperator, and
+      // a RAPOperator over it would only copy, through two work vectors it
+      // keeps on the device for the run (a velocity-sized pair per operator).
+      // MFEM's own FormSystemMatrix skips the identity the same way.
+      out.Reset(&A, false);
+   }
+   else if (Pin && Pout)
    {
       // Pout^T A Pin; MFEM's SetupRAP builds the same (RAPOperator when
       // the two are one object, the triple product otherwise).
       out.Reset(new RAPOperator(*Pout, A, *Pin), true);
-   }
-   else if (!Pin && !Pout)
-   {
-      out.Reset(&A, false);
    }
    else
    {

@@ -396,6 +396,7 @@ private:
     * @brief P^T A P on true dofs, as MFEM's FormSystemMatrix builds it but
     *        without the ConstrainedOperator wrapper (and its two work
     *        vectors): the caller wraps it when it needs constraints.
+    *        Identity prolongations (one rank) give @p A itself.
     * @param Pin  Prolongation of the input space (null: identity).
     * @param A    The L-vector operator (a form, or its extension).
     * @param Pout Prolongation of the output space (null: identity).

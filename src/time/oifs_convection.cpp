@@ -506,7 +506,10 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
       geom_ = mesh.GetGeometricFactors(ir, GeometricFactors::JACOBIANS);
       j_ = &geom_->J;
    }
-   prolong_ = vfes.GetProlongationMatrix();
+   // One rank: the prolongation is the identity, and the local-dof copies
+   // (xl_, yl_) would only copy.
+   prolong_ = IsIdentityProlongation(vfes.GetProlongationMatrix())
+              ? nullptr : vfes.GetProlongationMatrix();
    const int nq = ir.GetNPoints();
    for (Vector* v : {&op_, &ue_, &uq_, &xl_, &xe_, &ye_, &yl_})
    {
@@ -515,10 +518,10 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
    op_.SetSize(3 * 3 * nq * ne_);
    ue_.SetSize(restr_->Height());
    uq_.SetSize(3 * nq * ne_);
-   xl_.SetSize(vfes.GetVSize());
+   if (prolong_) { xl_.SetSize(vfes.GetVSize()); }
    xe_.SetSize(restr_->Height());
    ye_.SetSize(restr_->Height());
-   yl_.SetSize(vfes.GetVSize());
+   if (prolong_) { yl_.SetSize(vfes.GetVSize()); }
 }
 
 void OifsConvection::SetWind(int l, const ParGridFunction& u)

@@ -103,13 +103,12 @@ void OifsAdvector::SetupMass(const Vector& mass_diag)
    MFEM_VERIFY(mass_.Height() == n && mass_.Width() == n &&
                mass_diag.Size() == n, "oifs: the mass must act on the "
                "velocity true dofs");
-   mass_diag_.SetSize(n);
-   mass_diag_.UseDevice(true);
-   mass_diag_ = mass_diag;
+   // Its diagonal is needed only here: the check below and the inverse (the
+   // Jacobi smoother keeps its own reciprocal), so no copy is kept.
    inv_mass_diag_.SetSize(n);
    inv_mass_diag_.UseDevice(true);
    {
-      const double* d = mass_diag_.HostRead(); // setup only
+      const double* d = mass_diag.HostRead(); // setup only
       double* id = inv_mass_diag_.HostWrite();
       for (int i = 0; i < n; ++i)
       {
@@ -140,7 +139,7 @@ void OifsAdvector::SetupMass(const Vector& mass_diag)
    }
    mass_.Mult(z, mz);
    r = z;
-   r *= mass_diag_;
+   r *= mass_diag;
    r -= mz;
    mass_diagonal_ = norm(r) <= 1e-13 * norm(mz);
 
@@ -148,7 +147,7 @@ void OifsAdvector::SetupMass(const Vector& mass_diag)
    {
       // SetOperator before SetPreconditioner: MFEM forwards SetOperator to
       // the PC, which would rebuild the Jacobi diagonal.
-      mass_jacobi_ = std::make_unique<OperatorJacobiSmoother>(mass_diag_,
+      mass_jacobi_ = std::make_unique<OperatorJacobiSmoother>(mass_diag,
                      no_dofs_);
       mass_cg_ = std::make_unique<CGSolver>(comm);
       mass_cg_->SetOperator(mass_);
