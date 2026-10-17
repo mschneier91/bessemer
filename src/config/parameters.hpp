@@ -171,6 +171,13 @@ enum class VelocityMass
    Consistent  ///< Exact (Gauss) quadrature.
 };
 
+/// The collocated mass at hanging nodes (deck `discretization.hanging_mass`).
+enum class HangingMass
+{
+   Lumped, ///< Its row sums b = P^T d: diagonal (the default; amr.nc_limit 1).
+   Exact   ///< P^T D P: a mass solve wherever its inverse is needed.
+};
+
 /// The case geometry (deck `mesh.geometry`); MakeCaseMesh builds it.
 enum class MeshGeometry
 {
@@ -304,6 +311,9 @@ struct Parameters
    /// Velocity mass matrix (deck `discretization.mass`); Auto resolves by the
    /// convection treatment: read it through CollocatedMass().
    VelocityMass mass = VelocityMass::Auto;
+   /// The collocated mass at hanging nodes (deck
+   /// `discretization.hanging_mass`): lumped (default) or exact.
+   HangingMass hanging_mass = HangingMass::Lumped;
    /// Vector-diffusion storage (deck `discretization.vector_diffusion`):
    /// compact (default; 6 numbers per point in 3D) or MFEM's (27).
    VectorDiffusionStorage vector_diffusion = VectorDiffusionStorage::Compact;

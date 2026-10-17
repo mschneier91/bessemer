@@ -233,12 +233,14 @@ TEST(Oifs, O3_NonconformingAdvection)
       f(0) = std::sin(2.0 * M_PI * X) * std::cos(2.0 * M_PI * Y);
       f(1) = 0.5 * std::cos(2.0 * M_PI * X) * std::sin(4.0 * M_PI * Y);
    };
-   double err[2] = {0.0, 0.0};
-   for (int mode : {0, 1}) // 0 conforming, 1 a band refined (hanging nodes)
+   // 0 conforming; a band refined (hanging nodes) with the collocated mass
+   // 1 lumped (the default: diagonal, b = P^T d) or 2 exact (P^T D P, CG).
+   double err[3] = {0.0, 0.0, 0.0};
+   for (int mode : {0, 1, 2})
    {
       incns::RuleBook rules;
       Mesh serial = incns::MakeBoxMesh(PeriodicUnitBox(12));
-      if (mode == 1)
+      if (mode >= 1)
       {
          serial.EnsureNCMesh();
          Array<int> els;
@@ -267,24 +269,29 @@ TEST(Oifs, O3_NonconformingAdvection)
       VectorFunctionCoefficient fT_c(2, [&](const Vector & x, Vector & f) { field(x, T, f, wx, wy); });
       const std::deque<Vector> wind = {to_true(wind_c)};
       const std::deque<Vector> fields = {to_true(f0_c)};
-      // The BDF step's collocated mass: diagonal on the conforming mesh;
-      // P^T D P, NOT diagonal, with hanging nodes -- there the substeps
-      // solve with it (CG) rather than lump it.
+      // The BDF step's collocated mass: diagonal on the conforming mesh and,
+      // lumped at the hanging nodes (the default), on the refined one; the
+      // exact P^T D P is not, and the substeps then solve with it (CG).
       incns::StokesOperatorOptions mo;
       mo.nu = 1.0;
       mo.collocated_mass = true;
+      mo.lumped_hanging_mass = (mode != 2);
       incns::StokesOperator blocks(spaces, rules, mo);
       incns::OifsAdvector adv(spaces, rules, bc, 0.05, blocks.Mass(),
-                              blocks.MassDiagonal());
-      EXPECT_EQ(adv.MassIsDiagonal(), mode == 0);
+                              blocks.MassDiagonal(),
+                              nullptr, blocks.MassDiagonalInverse());
+      EXPECT_EQ(adv.MassIsDiagonal(), mode != 2);
       Vector phi;
       adv.AdvectWith(wind, {0.0}, {0.0, 1.0}, fields, {0.0}, T, phi);
-      if (mode == 1 && Mpi::Root())
+      if (mode >= 1 && Mpi::Root())
       {
-         mfem::out << "[oifs O3] hanging nodes: " << adv.MassSolveIterations()
-                   << " mass-CG iterations over " << 4 * adv.LastSubsteps()
-                   << " RK stages\n";
+         mfem::out << "[oifs O3] hanging nodes, mass "
+                   << (mode == 1 ? "lumped" : "exact") << ": "
+                   << adv.MassSolveIterations() << " mass-CG iterations over "
+                   << 4 * adv.LastSubsteps() << " RK stages\n";
       }
+      if (mode == 1) { EXPECT_EQ(adv.MassSolveIterations(), 0); }
+      if (mode == 2) { EXPECT_GT(adv.MassSolveIterations(), 0); }
       ParGridFunction g(&V);
       g.SetFromTrueDofs(phi);
       const IntegrationRule* irs[Geometry::NumGeom] = {};
@@ -295,7 +302,9 @@ TEST(Oifs, O3_NonconformingAdvection)
    if (Mpi::Root())
    {
       mfem::out << "[oifs O3] translation L2 error: conforming " << err[0]
-                << ", band refined (nonconforming) " << err[1] << "\n";
+                << ", band refined (hanging nodes) with the mass lumped "
+                << err[1] << ", exact " << err[2] << "\n";
    }
    EXPECT_LT(err[1], 1.1 * err[0]);
+   EXPECT_LT(err[2], 1.1 * err[0]);
 }

@@ -333,6 +333,7 @@ StokesSolver& StokesTimeIntegrator::Trap()
    StokesSolverOptions so;
    so.nu = 0.5 * opts_.nu;
    so.collocated_mass = opts_.collocated_mass;
+   so.lumped_hanging_mass = opts_.lumped_hanging_mass;
    so.scratch = scratch_.get();
    so.grad_div = opts_.grad_div;
    so.grad_div_scale = opts_.grad_div_scale;
@@ -452,6 +453,7 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
       StokesSolverOptions so;
       so.nu = opts_.nu;
       so.collocated_mass = opts_.collocated_mass;
+      so.lumped_hanging_mass = opts_.lumped_hanging_mass;
       so.scratch = scratch_.get();
       so.grad_div = opts_.grad_div;
       so.grad_div_scale = opts_.grad_div_scale;

@@ -31,6 +31,7 @@ static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
    StokesOperatorOptions so;
    so.nu = o.nu;
    so.collocated_mass = o.collocated_mass;
+   so.lumped_hanging_mass = o.lumped_hanging_mass;
    so.scratch = o.scratch;
    so.mass_coeff = o.mass_coeff;
    so.grad_div = o.grad_div;

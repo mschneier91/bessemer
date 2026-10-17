@@ -156,12 +156,38 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       INCNS_PROFILE("mass");
       if (DiagonalMass())
       {
-         // Exactly diagonal (GLL nodes and rule, conforming), so the operator
-         // is its diagonal, assembled without the mesh's cached Jacobians at
-         // the GLL points (operators/collocated_mass.hpp); mass_form_ stays
-         // empty.
+         // Exactly diagonal (GLL nodes and rule, conforming) or lumped at
+         // hanging nodes, so the operator is its diagonal, assembled without
+         // the mesh's cached Jacobians at the GLL points
+         // (operators/collocated_mass.hpp); mass_form_ stays empty.
          AssembleCollocatedMassDiagonal(spaces_.Velocity(), *mass_rule_,
                                         mass_diag_);
+         if (!spaces_.Velocity().Conforming())
+         {
+            // Hanging nodes: the row sums b = P^T d, checked against the
+            // conforming weight. b >= ref with one hanging level on elements
+            // whose |J| is a low-degree polynomial (the solver enforces
+            // amr.nc_limit 1); this rejects whatever is not covered.
+            const double ratio =
+               LumpedMassRatio(spaces_.Velocity(), *mass_rule_, mass_diag_);
+            MFEM_VERIFY(ratio >= kMinLumpedMassRatio, "stokes_operator: the "
+                        "collocated mass lumped at hanging nodes is too small "
+                        "or negative somewhere (min b / ref = " << ratio
+                        << " < " << kMinLumpedMassRatio << "): the mesh has "
+                        "hanging-node patches the lumping does not cover -- "
+                        "more than one hanging level with very different "
+                        "element thicknesses across a hanging face, or "
+                        "strongly distorted refined elements. Use amr.nc_limit "
+                        "1, improve the mesh, or set "
+                        "discretization.hanging_mass: exact");
+            if (ratio < kWarnLumpedMassRatio && Mpi::Root())
+            {
+               mfem::out << "[incns] warning: the collocated mass lumped at "
+                         "hanging nodes is below its conforming weight "
+                         "somewhere (min b / ref = " << ratio << "): a "
+                         "hanging-node patch outside the proved regime" << std::endl;
+            }
+         }
          // Its reciprocal, once, for the OIFS substeps and the Schur PC.
          mass_diag_inv_.UseDevice(true);
          mass_diag_inv_.SetSize(mass_diag_.Size());

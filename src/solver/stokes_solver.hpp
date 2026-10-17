@@ -34,6 +34,8 @@ struct StokesSolverOptions
 {
    double nu = 1.0;              ///< Kinematic viscosity.
    bool collocated_mass = false; ///< GLL collocated mass option (see 1.4).
+   /// Lump it at hanging nodes (StokesOperatorOptions::lumped_hanging_mass).
+   bool lumped_hanging_mass = true;
    /// Shared element-vector buffers (StokesOperatorOptions::scratch).
    ElementScratch* scratch = nullptr;
    /// Momentum-block mass factor (beta0/dt); 0 = steady.

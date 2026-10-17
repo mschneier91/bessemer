@@ -128,6 +128,16 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "then invert it pointwise). consistent: exact quadrature (under OIFS, a "
    "mass solve per substep stage). OIFS's substeps always invert this same "
    "mass.");
+   r.ReadEnum(disc, "hanging_mass", p.hanging_mass,
+   {
+      {"lumped", HangingMass::Lumped}, {"exact", HangingMass::Exact}
+   },
+   "The collocated mass at hanging nodes (AMR), where it is not diagonal. "
+   "lumped: its row sums (Nek5000's non-conforming lumping), so it stays "
+   "diagonal; with one hanging level at least the conforming weight on "
+   "straight-sided and low-order-geometry elements, hence amr.nc_limit 1 is "
+   "required; checked at every assembly (the run aborts if a patch is not "
+   "covered). exact: P^T D P, with a mass solve per OIFS substep stage.");
 
    const DeckSection mesh = r.Section(root, "mesh",
                                       "Box mesh (quads/hexes) for apps/run_case.");
@@ -982,6 +992,12 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();
+   MFEM_VERIFY(!p.amr.enabled || !p.CollocatedMass() ||
+               p.hanging_mass != HangingMass::Lumped || p.amr.nc_limit == 1,
+               "parameters: the collocated mass is lumped at hanging nodes "
+               "(discretization.hanging_mass: lumped, the default), which is "
+               "guaranteed for one hanging level: set amr.nc_limit: 1, or "
+               "discretization.hanging_mass: exact");
    MFEM_VERIFY(!p.forces.enabled || !p.forces.attributes.empty() ||
                !p.forces.boundaries.empty(),
                "parameters: forces.enabled needs forces.attributes or "

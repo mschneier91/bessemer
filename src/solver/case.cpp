@@ -121,6 +121,7 @@ void Case::BuildIntegrator()
    opts.adaptive = (params_.step_control == StepControl::Error);
    opts.controller = params_.controller;
    opts.collocated_mass = params_.CollocatedMass();
+   opts.lumped_hanging_mass = params_.hanging_mass == HangingMass::Lumped;
    opts.compact_diffusion =
       params_.vector_diffusion == VectorDiffusionStorage::Compact;
    opts.fuse_grad_div = params_.fuse_grad_div;

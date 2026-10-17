@@ -27,8 +27,13 @@ void AddScaledProduct(real_t c, const Vector& d, const Vector& x, Vector& y)
 
 } // namespace
 
-void AssembleCollocatedMassDiagonal(ParFiniteElementSpace& vfes,
-                                    const IntegrationRule& ir, Vector& diag)
+namespace
+{
+
+// d on local dofs: W det J at each GLL node, summed over the elements that
+// share it.
+void LocalCollocatedMass(ParFiniteElementSpace& vfes, const IntegrationRule& ir,
+                         Vector& dl)
 {
    ParMesh& mesh = *vfes.GetParMesh();
    const int ne = mesh.GetNE();
@@ -62,14 +67,71 @@ void AssembleCollocatedMassDiagonal(ParFiniteElementSpace& vfes,
          for (int c = 0; c < vdim; ++c) { D(q, c, e) = m; }
       });
    }
-   Vector dl(vfes.GetVSize());
    dl.UseDevice(true);
+   dl.SetSize(vfes.GetVSize());
    restr->MultTranspose(de, dl);
+}
+
+} // namespace
+
+void AssembleCollocatedMassDiagonal(ParFiniteElementSpace& vfes,
+                                    const IntegrationRule& ir, Vector& diag)
+{
+   Vector dl;
+   LocalCollocatedMass(vfes, ir, dl);
    diag.UseDevice(true);
    diag.SetSize(vfes.GetTrueVSize());
    const Operator* P = vfes.GetProlongationMatrix();
    if (IsIdentityProlongation(P)) { diag = dl; }
    else { P->MultTranspose(dl, diag); }
+}
+
+double LumpedMassRatio(ParFiniteElementSpace& vfes, const IntegrationRule& ir,
+                       const Vector& b)
+{
+   double local = 1.0;
+   const Operator* P = vfes.GetProlongationMatrix();
+   if (!vfes.Conforming() && !IsIdentityProlongation(P))
+   {
+      const auto* hP = dynamic_cast<const HypreParMatrix*>(P);
+      MFEM_VERIFY(hP, "collocated_mass: a non-conforming space's prolongation "
+                  "is a HypreParMatrix");
+      Vector dl;
+      LocalCollocatedMass(vfes, ir, dl);
+      // m d: the local weights of the dofs whose prolongation row is a unit
+      // vector (one entry, 1), on either side (diag or offd) of P.
+      SparseMatrix pd, po;
+      HYPRE_BigInt* cmap = nullptr;
+      hP->GetDiag(pd);
+      hP->GetOffd(po, cmap);
+      const int* di = pd.HostReadI();
+      const real_t* dv = pd.HostReadData();
+      const int* oi = po.HostReadI();
+      const real_t* ov = po.HostReadData();
+      const real_t* dlh = dl.HostRead();
+      Vector md(dl.Size());
+      real_t* mdh = md.HostWrite();
+      for (int j = 0; j < dl.Size(); ++j)
+      {
+         const int nd = di[j + 1] - di[j];
+         const int no = (po.Height() > 0) ? oi[j + 1] - oi[j] : 0;
+         const real_t v = (nd == 1) ? dv[di[j]] : (no == 1) ? ov[oi[j]] : 0.0;
+         mdh[j] = (nd + no == 1 && v == 1.0) ? dlh[j] : 0.0;
+      }
+      md.UseDevice(true);
+      Vector ref(b.Size()), r(b.Size());
+      ref.UseDevice(true);
+      r.UseDevice(true);
+      hP->MultTranspose(md, ref);
+      const auto B = b.Read();
+      const auto F = ref.Read();
+      auto R = r.Write();
+      mfem::forall(b.Size(), [ = ] MFEM_HOST_DEVICE(int i) { R[i] = B[i] / F[i]; });
+      if (b.Size() > 0) { local = r.Min(); }
+   }
+   double global = 1.0;
+   MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_MIN, vfes.GetComm());
+   return global;
 }
 
 DiagonalOperator::DiagonalOperator(const Vector& d)

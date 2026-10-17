@@ -49,6 +49,7 @@ Finite element orders and mass.
 | `discretization.fuse_grad_div` | bool | `true` | Apply the grad-div term with the viscous term in one kernel (the velocity gradients once per apply; compact vector_diffusion only). false: two kernels. |
 | `discretization.vector_diffusion` | compact \| mfem | `compact` | Storage of the viscous term's partial-assembly data. compact: one symmetric matrix per quadrature point shared by the velocity components (6 numbers in 3D). mfem: MFEM's VectorDiffusionIntegrator, one per component (27); the same operator to roundoff. |
 | `discretization.mass` | auto \| collocated \| consistent | `auto` | Velocity mass matrix. auto: collocated under OIFS, consistent under IMEX. collocated: GLL quadrature, diagonal on conforming meshes (OIFS's substeps then invert it pointwise). consistent: exact quadrature (under OIFS, a mass solve per substep stage). OIFS's substeps always invert this same mass. |
+| `discretization.hanging_mass` | lumped \| exact | `lumped` | The collocated mass at hanging nodes (AMR), where it is not diagonal. lumped: its row sums (Nek5000's non-conforming lumping), so it stays diagonal; with one hanging level at least the conforming weight on straight-sided and low-order-geometry elements, hence amr.nc_limit 1 is required; checked at every assembly (the run aborts if a patch is not covered). exact: P^T D P, with a mass solve per OIFS substep stage. |
 
 ## `mesh`
 

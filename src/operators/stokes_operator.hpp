@@ -28,6 +28,11 @@ struct StokesOperatorOptions
    /// Use the collocated Gauss-Lobatto mass rule (diagonal, SEM lumping)
    /// instead of the default Gauss-Legendre rule.
    bool collocated_mass = false;
+   /// With hanging nodes, lump the collocated mass by its row sums
+   /// (b = P^T d, Nek5000's non-conforming lumping) so it stays diagonal; false
+   /// keeps the exact P^T D P (a mass solve wherever its inverse is needed).
+   /// The lump is checked at assembly (LumpedMassRatio).
+   bool lumped_hanging_mass = true;
    /// Element-vector buffers lent to the partially assembled blocks
    /// (borrowed; operators/element_scratch.hpp); null: the operator makes
    /// its own pair.
@@ -419,12 +424,14 @@ private:
    ElementScratch* scratch_ = nullptr; ///< The buffers the blocks borrow.
    /// Velocity vector mass (null when the mass is applied as its diagonal).
    std::unique_ptr<PaOperator> mass_form_;
-   /// The collocated mass on a conforming space: exactly diagonal on true
-   /// dofs, so applied as its diagonal. With hanging nodes it is not (P^T D P
-   /// couples them to the nodes they are constrained by): the form stays.
+   /// The collocated mass applied as its diagonal: exactly diagonal on true
+   /// dofs of a conforming space; with hanging nodes (P^T D P couples them to
+   /// the nodes they are constrained by) its row sums, b = P^T d, unless
+   /// lumped_hanging_mass is off (then the form stays).
    bool DiagonalMass() const
    {
-      return opts_.collocated_mass && spaces_.Velocity().Conforming();
+      return opts_.collocated_mass &&
+             (spaces_.Velocity().Conforming() || opts_.lumped_hanging_mass);
    }
    /// The diffusion storage (opts_.compact_diffusion).
    LeanVectorDiffusionIntegrator::Storage DiffusionStorage() const;

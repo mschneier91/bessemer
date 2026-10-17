@@ -126,6 +126,8 @@ struct TimeIntegratorOptions
    /// step (StokesSolverOptions::rotation_diagnostics).
    bool rotation_diagnostics = false;
    bool collocated_mass = false; ///< GLL collocated mass option.
+   /// Lump it at hanging nodes (StokesOperatorOptions::lumped_hanging_mass).
+   bool lumped_hanging_mass = true;
    double grad_div = 0.0;   ///< Grad-div scale c_gd; 0 = off.
    /// Grad-div scaling mode (OrderH default; OrderNu = c_gd*nu).
    GradDivScale grad_div_scale = GradDivScale::OrderH;
