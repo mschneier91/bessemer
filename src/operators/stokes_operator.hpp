@@ -90,9 +90,12 @@ struct StokesOperatorOptions
  *
  * Blocks (all partial assembly, AssemblyLevel::PARTIAL, acting on true dofs):
  *  - @b Mass:       velocity vector mass @c M (GL rule, or collocated GLL when
- *    StokesOperatorOptions::collocated_mass is set -- then @c M is diagonal);
+ *    StokesOperatorOptions::collocated_mass is set -- then @c M is diagonal,
+ *    and on a conforming space applied as its diagonal:
+ *    operators/collocated_mass.hpp);
  *  - @b Momentum:   @c A = mass_coeff*M + nu*K (VectorMass + VectorDiffusion;
- *    the steady block when @c mass_coeff = 0);
+ *    the steady block when @c mass_coeff = 0; with the collocated mass,
+ *    mass_coeff times the diagonal is added at each apply instead);
  *  - @b Divergence: @c B = (div u, q) mapping velocity to pressure;
  *    @c B^T (the pressure gradient block) is its MultTranspose.
  *
@@ -368,7 +371,8 @@ private:
    /// form; null when grad-div is off). Replaced by every BuildMomentum().
    GradDivIntegrator* grad_div_integ_ = nullptr;
    /// The mass integrator of the current momentum form (owned by that form;
-   /// null when c0 = 0). A new c0 re-assembles only its data (SetMassCoeff).
+   /// null when c0 = 0 or the mass is collocated). A new c0 re-assembles only
+   /// its data (SetMassCoeff).
    mfem::BilinearFormIntegrator* mass_integ_ = nullptr;
    /// The viscosity changed since BuildMomentum: the next SetMassCoeff
    /// rebuilds the whole form.
@@ -390,6 +394,13 @@ private:
    mfem::Array<int> ess_p_tdofs_;
 
    mfem::ParBilinearForm mass_form_;      ///< Velocity vector mass form.
+   /// The collocated mass on a conforming space: exactly diagonal on true
+   /// dofs, so applied as its diagonal. With hanging nodes it is not (P^T D P
+   /// couples them to the nodes they are constrained by): the form stays.
+   bool DiagonalMass() const
+   {
+      return opts_.collocated_mass && spaces_.Velocity().Conforming();
+   }
    /// The diffusion storage (opts_.compact_diffusion).
    LeanVectorDiffusionIntegrator::Storage DiffusionStorage() const;
    /**
@@ -425,6 +436,9 @@ private:
    /// True-dof divergence operator: a RectangularConstrainedOperator over
    /// Bunc_ (one shared P^T B P).
    mfem::OperatorPtr B_;
+   /// Collocated mass only: nu K (+ grad-div) on true dofs, under Aunc_'s
+   /// diagonal shift.
+   mfem::OperatorPtr Arest_;
    mfem::OperatorPtr Aunc_; ///< Momentum block, unconstrained (reactions).
    mfem::OperatorPtr Bunc_; ///< Divergence block, unconstrained.
    /// Rotation-term PA form (lagged velocity only); Delta-t independent, so

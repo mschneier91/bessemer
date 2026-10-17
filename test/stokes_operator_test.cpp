@@ -130,6 +130,70 @@ void CheckCollocatedDiagonality(int dim)
                1e-12 * dim);
 }
 
+// A curved, non-affine box: det J varies inside each element.
+Mesh CurvedBox(int dim, int n, int order)
+{
+   Mesh serial = MakeBoxMesh(UnitBox(dim, n));
+   serial.SetCurvature(order);
+   serial.Transform([](const Vector & x, Vector & y)
+   {
+      y = x;
+      for (int d = 0; d < x.Size(); ++d)
+      {
+         y(d) += 0.04 * std::sin(M_PI * x((d + 1) % x.Size())) * x(d);
+      }
+   });
+   return serial;
+}
+
+// The collocated mass operator and its diagonal (assembled without MFEM's
+// form) against MFEM's partial assembly of the same mass on the GLL rule.
+void CheckCollocatedAgainstPa(int dim)
+{
+   const int ku = (dim == 3) ? 3 : 4;
+   Mesh serial = CurvedBox(dim, 3, ku);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   MixedSpaces spaces(mesh, ku, ku - 1);
+   RuleBook rules;
+   StokesOperatorOptions gll;
+   gll.collocated_mass = true;
+   StokesOperator op(spaces, rules, gll);
+
+   ParFiniteElementSpace& vfes = spaces.Velocity();
+   const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+   ParBilinearForm ref(&vfes);
+   auto* mi = new VectorMassIntegrator;
+   mi->SetIntRule(&rules.CollocatedMass(geom, ku));
+   ref.AddDomainIntegrator(mi);
+   ref.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   ref.Assemble();
+   Vector dref(vfes.GetTrueVSize());
+   dref.UseDevice(true);
+   ref.AssembleDiagonal(dref);
+   OperatorPtr Mref;
+   Array<int> none;
+   ref.FormSystemMatrix(none, Mref);
+
+   const MPI_Comm comm = vfes.GetComm();
+   Vector diff(dref.Size());
+   diff.UseDevice(true);
+   subtract(op.MassDiagonal(), dref, diff);
+   const double scale = std::sqrt(InnerProduct(comm, dref, dref));
+   ASSERT_GT(scale, 0.0);
+   EXPECT_LE(std::sqrt(InnerProduct(comm, diff, diff)), 1e-14 * scale);
+
+   Vector x(dref.Size()), y(dref.Size()), yref(dref.Size());
+   x.UseDevice(true);
+   y.UseDevice(true);
+   yref.UseDevice(true);
+   x.Randomize(7 + vfes.GetMyRank());
+   op.Mass().Mult(x, y);
+   Mref->Mult(x, yref);
+   subtract(y, yref, diff);
+   EXPECT_LE(std::sqrt(InnerProduct(comm, diff, diff)),
+             1e-13 * std::sqrt(InnerProduct(comm, yref, yref)));
+}
+
 // Max |A_jj - d_j| over all global true dofs j, A_jj probed with unit vectors
 // (global reduction, identical on every rank).
 double ProbeDiagonalError(Operator& A, const Vector& d,
@@ -161,7 +225,7 @@ double ProbeDiagonalError(Operator& A, const Vector& d,
 // MomentumDiagonal() -- c0 times the mass diagonal plus the kept diagonal of
 // nu K + grad-div -- is the diagonal of the momentum operator, after mass
 // factor and viscosity changes.
-void CheckMomentumDiagonal(int dim)
+void CheckMomentumDiagonal(int dim, bool collocated = false)
 {
    Mesh serial = MakeBoxMesh(UnitBox(dim, 2));
    ParMesh mesh(MPI_COMM_WORLD, serial);
@@ -172,6 +236,7 @@ void CheckMomentumDiagonal(int dim)
    opts.nu = 0.05;
    opts.mass_coeff = 3.0;
    opts.grad_div = 2.0; // gamma = 2 h_K
+   opts.collocated_mass = collocated;
    StokesOperator op(spaces, rules, opts);
    ASSERT_NE(op.GradDivTerm(), nullptr);
 
@@ -201,6 +266,20 @@ TEST(StokesOperator, MomentumDiagonalAfterRefreshes2D) { CheckMomentumDiagonal(2
 TEST(StokesOperator, MomentumDiagonalAfterRefreshes3D) { CheckMomentumDiagonal(3); }
 
 TEST(StokesOperator, CollocatedMassDiagonal2D) { CheckCollocatedDiagonality(2); }
+
+TEST(StokesOperator, CollocatedMomentumDiagonalAfterRefreshes2D)
+{
+   CheckMomentumDiagonal(2, true);
+}
+
+TEST(StokesOperator, CollocatedMomentumDiagonalAfterRefreshes3D)
+{
+   CheckMomentumDiagonal(3, true);
+}
+
+TEST(StokesOperator, CollocatedMassMatchesPartialAssembly2D) { CheckCollocatedAgainstPa(2); }
+
+TEST(StokesOperator, CollocatedMassMatchesPartialAssembly3D) { CheckCollocatedAgainstPa(3); }
 
 TEST(StokesOperator, CollocatedMassDiagonal3D) { CheckCollocatedDiagonality(3); }
 

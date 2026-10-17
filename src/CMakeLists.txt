@@ -25,6 +25,7 @@ add_library(incns STATIC
   bc/boundary_names.cpp
   bc/deck_boundary.cpp
   operators/stokes_operator.cpp
+  operators/collocated_mass.cpp
   operators/convection.cpp
   operators/directional_do_nothing.cpp
   time/oifs.cpp
@@ -96,6 +97,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # The other entries open with the #error guard (CLAUDE.md).
 if(USE_CUDA)
   set_source_files_properties(operators/grad_div_integrator.cpp
+                              operators/collocated_mass.cpp
                               operators/lean_vector_diffusion.cpp
                               operators/kernel_specializations.cpp
                               operators/rotational_convection.cpp

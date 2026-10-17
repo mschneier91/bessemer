@@ -26,6 +26,7 @@ H100, `profile: sync`, 42³ elements = 57.3M DOFs (48.0M velocity, 9.3M pressure
 |---|---|---|
 | main aa6aa7e (job 49342093) | 71,781 MiB (1,314 B/DOF) | 58,463 MiB (1,070 B/DOF) |
 | + change 17 (job 49343807) | 66,311 MiB (1,214 B/DOF) | 56,485 MiB (1,034 B/DOF) |
+| + change 18 (job 49345234) | 63,029 MiB (1,153 B/DOF) | 53,203 MiB (974 B/DOF) |
 
 100M DOFs fit only below about 850 B/DOF (the card's 81,559 MiB over 100M), less headroom.
 Last measured capacity (before change 17): coupled 57.3M runs and 70.4M does not; Schur
@@ -61,17 +62,25 @@ up to the region within 1 %; otherwise the split is an estimate.
 - **Done, change 17:** no RAP over identity prolongations, no OIFS local-dof copies at one
   rank, no kept copy of OIFS's mass diagonal, no kept zero forcing. 3,724 MiB less in both
   methods, every result bitwise unchanged.
-- **Next: the collocated mass as a diagonal.** Under OIFS the velocity mass is exactly
-  diagonal (GLL nodes and rule). Apply it as an element-wise multiply by its assembled
-  diagonal, drop the PA form (E-vector pair, PA data) and the mesh's GLL-rule Jacobians once
-  nothing re-assembles from them (the momentum form's mass term reads them at every Δt
-  refresh, so it moves to the diagonal too). Region 3,158 MiB; estimated 1.5–2.7 GiB.
-  Results change at roundoff ((d₁ + d₂) x instead of d₁ x + d₂ x); the apply gets cheaper.
+- **Done, change 18:** the collocated mass applied as its diagonal on conforming spaces,
+  without the mesh's GLL-rule Jacobians; the momentum block's c0 M as a diagonal shift. 3,282 MiB less in both
+  methods, results within roundoff, and the steps 10–14 % faster.
 - **Then: shared scratch.** The OIFS kernel's E-vectors (1,746) and the divergence's input
   E-vector (582) are used only while the momentum form's pair is idle; one pool for them.
   Estimated 1.5–2.3 GiB; bitwise unchanged if right, but aliasing bugs are the risk.
 - The pressure preconditioner's reciprocal mass diagonal and OIFS's hold the same values
   (366 MiB): share them where the lifetimes allow.
+- **Full-size work vectors where the prolongation is not the identity** (hanging nodes, or
+  two or more ranks): the RAP wrappers' pairs (about 1.9 GiB at 57.3M), the OIFS mass CG and
+  the Cahouet–Chabard Chebyshev mass inverse (both only when the mass is not diagonal) are
+  never in use at the same time either: one pool of full-size vectors.
+
+**Meshes with hanging nodes (estimate, not measured).** Changes 17 and 18 rest on an
+identity prolongation and a diagonal true-dof mass, which hanging nodes break: about 0.7 GiB
+of change 17 applies there and none of change 18, and the non-diagonal mass adds the OIFS
+mass CG and a Chebyshev mass inverse (+1.5–3 GiB). Roughly 1,100 B/DOF Schur and 1,350
+coupled at 57.3M against 963 and 1,153 conforming; the shared scratch (next) and phase 2
+apply in full. To measure: Taylor–Green with a refined band (as oifs_test O3).
 
 **Phase 2: a small time cost possible; measure.**
 
@@ -296,6 +305,28 @@ and merge it when its working". Measured at Q6 (the working list above).
     iterations in the largest solve, run-to-run variation on the GPU) and 58,463 → 56,485
     MiB Schur. Two or more ranks: unchanged (the prolongation is not the identity there).
     Tests: CPU smoke/fast at np 1, 2 and 4, 73/73 each; GPU at np 1 and 2, 71/71 each.
+
+18. **The collocated mass applied as its diagonal** (results change at roundoff). Under
+    OIFS (and BDF3) the velocity mass is collocated, GLL nodes and rule, so exactly
+    diagonal; it was still a partially assembled form: an element-vector pair, PA data and,
+    through the mesh's cache, the Jacobians at the GLL points (9 numbers per point) for the
+    run, read again by the momentum form's mass term at every Δt change. Now `M` is a
+    `DiagonalOperator` over its diagonal, which `AssembleCollocatedMassDiagonal` computes
+    from MFEM's det J at the GLL points without the cache, and the momentum block's c0 M is
+    a diagonal shift added at each apply with c0 read then (`DiagonalShiftOperator`), so a
+    new Δt re-assembles nothing (`src/operators/collocated_mass.*`). Only on a conforming
+    space: with hanging nodes the true-dof mass P^T D P couples them to the nodes they are
+    constrained by, and the form stays (oifs_test O3 caught a first version that did not
+    check). Nothing caches the GLL Jacobians now, so change 16 holds with the collocated
+    mass too. Against MFEM's partial
+    assembly on a curved mesh: the diagonal within 1e-14 and the apply within 1e-13 (new
+    StokesOperator tests, 2D and 3D, plus the momentum diagonal after refreshes). CPU job 49345233 ran main and the change at np 1 and 2: Taylor–Green Q6 OIFS within 4e-13 relative and the channel within 4e-14, iteration counts unchanged; Taylor–Green Q3 IMEX and DFG 3D byte-identical.
+    Q6 Taylor–Green at 57.3M DOFs (job 49345234 against 49343807): 3,282 MiB less of the
+    per-region growth in both methods (mass 3,158 → 592; the CC mass inverse's setup 680;
+    the momentum form's mass data 194); peak coupled 66,311 → 63,029 MiB, Schur 56,485 →
+    53,203 MiB. Steps 3–25 took 25.4 s instead of 28.3 (coupled, −10 %) and 29.0 s instead of
+    33.6 (Schur, −14 %): the mass apply is now a multiply (the same to 0.1 s in a second
+    run, job 49344488). Tests: CPU smoke/fast at np 1, 2 and 4, 73/73 each; GPU at np 1 and 2, 71/71 each.
 
 ## Where the memory is now (64³, one H100, after change 15)
 

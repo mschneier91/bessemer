@@ -1,5 +1,7 @@
 #include "operators/stokes_operator.hpp"
 
+#include "operators/collocated_mass.hpp"
+
 #include "operators/convection.hpp" // DealiasedOrder
 #include "operators/grad_div_integrator.hpp"
 #include "operators/kernel_specializations.hpp"
@@ -144,16 +146,29 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // --- velocity mass M ------------------------------------------------------
    {
       INCNS_PROFILE("mass");
-      auto* mi = new VectorMassIntegrator;
-      mi->SetIntRule(mass_rule_);
-      mass_form_.AddDomainIntegrator(mi);
-      mass_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
-      mass_form_.Assemble();
-      // Unconstrained: no ConstrainedOperator wrapper (two vectors saved).
-      TrueDofOperator(mass_form_.GetProlongation(), mass_form_,
-                      mass_form_.GetProlongation(), M_);
-      mass_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
-      mass_form_.AssembleDiagonal(mass_diag_);
+      if (DiagonalMass())
+      {
+         // Exactly diagonal (GLL nodes and rule, conforming), so the operator
+         // is its diagonal, assembled without the mesh's cached Jacobians at
+         // the GLL points (operators/collocated_mass.hpp); mass_form_ stays
+         // empty.
+         AssembleCollocatedMassDiagonal(spaces_.Velocity(), *mass_rule_,
+                                        mass_diag_);
+         M_.Reset(new DiagonalOperator(mass_diag_), true);
+      }
+      else
+      {
+         auto* mi = new VectorMassIntegrator;
+         mi->SetIntRule(mass_rule_);
+         mass_form_.AddDomainIntegrator(mi);
+         mass_form_.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+         mass_form_.Assemble();
+         // Unconstrained: no ConstrainedOperator wrapper (two vectors saved).
+         TrueDofOperator(mass_form_.GetProlongation(), mass_form_,
+                         mass_form_.GetProlongation(), M_);
+         mass_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+         mass_form_.AssembleDiagonal(mass_diag_);
+      }
    }
 
    // The pure viscous nu*K (unconstrained) is assembled on first use
@@ -358,8 +373,9 @@ void StokesOperator::BuildMomentum()
    momentum_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
    BilinearFormIntegrator* diffusion = nullptr;
    mass_integ_ = nullptr;
+   // The diagonal mass enters as a diagonal shift instead (below).
    grad_div_integ_ = AddMomentumIntegrators(*momentum_form_,
-                     /*include_mass=*/true,
+                     /*include_mass=*/!DiagonalMass(),
                      /*include_grad_div=*/true, nullptr, &diffusion,
                      &mass_integ_);
    momentum_stale_ = false;
@@ -381,8 +397,20 @@ void StokesOperator::BuildMomentum()
       // the one the solver applies: one RAP and its work vectors, not two.
       // The old K_ wraps the old Aunc_: release it first.
       K_.Clear();
-      TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
-                      momentum_form_->GetProlongation(), Aunc_);
+      if (DiagonalMass())
+      {
+         // c0 M is c0 times the mass diagonal, added at every apply with c0
+         // read then: a new mass factor re-assembles nothing.
+         TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
+                         momentum_form_->GetProlongation(), Arest_);
+         Aunc_.Reset(new DiagonalShiftOperator(*Arest_.Ptr(), mass_diag_,
+                                               opts_.mass_coeff), true);
+      }
+      else
+      {
+         TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
+                         momentum_form_->GetProlongation(), Aunc_);
+      }
       K_.Reset(new ConstrainedOperator(Aunc_.Ptr(), ess_tdofs_, false), true);
    }
    {
@@ -454,6 +482,15 @@ void StokesOperator::SetMassCoeff(double c0)
    const double c0_old = opts_.mass_coeff;
    mass_coeff_.constant = c0;
    opts_.mass_coeff = c0;
+   if (DiagonalMass() && momentum_form_ && !momentum_stale_)
+   {
+      // The diagonal c0 M is the momentum operator's diagonal shift, which
+      // reads c0 at each apply: only the diagonal (and an LOR source) change.
+      INCNS_PROFILE("momentum::mass_coeff");
+      UpdateMomentumDiagonal();
+      BuildLorSource();
+      return;
+   }
    if (momentum_form_ && mass_integ_ && !momentum_stale_ && c0_old > 0.0 &&
        c0 > 0.0)
    {
