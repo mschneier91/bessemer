@@ -37,7 +37,9 @@ Change 17 (no RAP over identity prolongations, three kept copies dropped) saves 
 57.3M in both methods, bitwise unchanged; change 18 (the collocated mass as its diagonal)
 3.2 GiB more, at roundoff and 10–14 % faster; change 19 (our own PA blocks from MFEM's
 public pieces, shared element vectors) 2.8 GiB more, bitwise unchanged. Peak at 57.3M:
-coupled 61,955 MiB, Schur 48,127 MiB (881 B/DOF).
+coupled 61,955 MiB, Schur 48,127 MiB (881 B/DOF); change 20 (the divergence from the
+cached Jacobians, phase 2) 2.6 GiB more at 0.5–1.4 % per step: coupled 57,603 MiB, Schur
+46,031 MiB (842 B/DOF).
 
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be

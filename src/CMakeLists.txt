@@ -35,6 +35,7 @@ add_library(incns STATIC
   operators/grad_div_integrator.cpp
   operators/kernel_specializations.cpp
   operators/lean_vector_diffusion.cpp
+  operators/lean_vector_divergence.cpp
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
@@ -101,6 +102,7 @@ if(USE_CUDA)
   set_source_files_properties(operators/grad_div_integrator.cpp
                               operators/collocated_mass.cpp
                               operators/lean_vector_diffusion.cpp
+                              operators/lean_vector_divergence.cpp
                               operators/kernel_specializations.cpp
                               operators/rotational_convection.cpp
                               precond/point_block_jacobi.cpp

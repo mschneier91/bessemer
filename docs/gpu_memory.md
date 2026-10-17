@@ -28,6 +28,7 @@ H100, `profile: sync`, 42³ elements = 57.3M DOFs (48.0M velocity, 9.3M pressure
 | + change 17 (job 49343807) | 66,311 MiB (1,214 B/DOF) | 56,485 MiB (1,034 B/DOF) |
 | + change 18 (job 49345234) | 63,029 MiB (1,153 B/DOF) | 53,203 MiB (974 B/DOF) |
 | + change 19 (job 49345424) | 61,955 MiB (1,134 B/DOF) | 48,127 MiB (881 B/DOF) |
+| + change 20 (job 49345599) | 57,603 MiB (1,054 B/DOF) | 46,031 MiB (842 B/DOF) |
 
 100M DOFs fit only below about 850 B/DOF (the card's 81,559 MiB over 100M), less headroom.
 Last measured capacity (before change 17): coupled 57.3M runs and 70.4M does not; Schur
@@ -86,9 +87,9 @@ apply in full. To measure: Taylor–Green with a refined band (as oifs_test O3).
 
 **Phase 2: a small time cost possible; measure.**
 
-- **Divergence from the cached Jacobians**, as change 13 did for grad-div: drops MFEM's W
-  adj(J) (2,602 MiB). Change 13 cost 5 % on the velocity-block apply; the divergence runs in
-  every inner CG iteration of the Schur preconditioner, so perhaps 1–3 % per step.
+- **Done, change 20: the divergence from the cached Jacobians.** 2,606 MiB less in both
+  methods; the divergence and gradient applies 15–17 % slower, the step 0.5–1.4 %.
+  **Follow-up:** W adj(J) once per element in shared memory, to win the kernel time back.
 - **OIFS winds combined inside the apply kernel**: drops the per-wind data and its build
   array (6,783 MiB). The apply would read about one number per point instead of nine and
   interpolate the wind itself: expected neutral or faster, but measure.
@@ -349,6 +350,25 @@ and merge it when its working". Measured at Q6 (the working list above).
     element vectors, a momentum-form pair); peak coupled 63,029 → 61,955 MiB and Schur
     53,203 → 48,127 MiB (the peaks fall at different points of the run; the per-region sum
     is the like-for-like figure). Steps unchanged (25.3 and 28.7 s for steps 3–25). Tests: CPU smoke/fast at np 1, 2 and 4, 73/73 each; GPU at np 1 and 2, 71/71 each.
+
+20. **The divergence reads the mesh's cached Jacobians** (phase 2; results change at
+    roundoff). MFEM's partial assembly of `VectorDivergenceIntegrator` stored W adj(J) at
+    every point (9 numbers at the 2k + 2 rule), next to the mesh's cached Jacobians at the
+    same rule, which grad-div reads at every apply (change 13). `LeanVectorDivergenceIntegrator`
+    (`src/operators/lean_vector_divergence.*`) keeps only a pointer to that cache and forms
+    W adj(J) in its kernels (those of `kernel_specializations.cpp`, MFEM's, with the
+    components unrolled) with MFEM's expressions; 3D, orders 2 to 7, else MFEM's path. New
+    test against MFEM (orders 2 to 7, both kernel variants, a constant coefficient, the 2D
+    fallback): within 1e-13. CPU job 49345598: Taylor–Green Q6 within 3.4e-13 of change 19;
+    the Q3 cases byte-identical. Q6 Taylor–Green at 57.3M DOFs (job 49345599 against
+    49345424): 2,606 MiB less in both methods (the divergence region 5,212 → 2,606: what is
+    left is the shared Jacobian cache); peak coupled 61,955 → 57,603 MiB, Schur 48,127 →
+    46,031 MiB. **The cost:** the divergence apply 4.54 → 5.23 ms and the gradient 6.56 →
+    7.65 ms (+15 % and +17 %): at Q6 the kernel goes one velocity component at a time
+    (register pressure) and reads 6 of the 9 Jacobian entries per component, 18 reads per
+    point against 9 stored values. Per step +0.5 % (coupled) and +1.4 % (Schur); steps 3–25
+    25.3 → 25.8 s and 28.7 → 29.1 s. To win it back: form W adj(J) once per element in
+    shared memory (37 KB at Q6) before the component loop. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
 
 ## Where the memory is now (64³, one H100, after change 15)
 

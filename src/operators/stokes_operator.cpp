@@ -1,6 +1,7 @@
 #include "operators/stokes_operator.hpp"
 
 #include "operators/collocated_mass.hpp"
+#include "operators/lean_vector_divergence.hpp"
 
 #include "operators/convection.hpp" // DealiasedOrder
 #include "operators/grad_div_integrator.hpp"
@@ -196,7 +197,9 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // 2*(trial order) + 2 = 2*k_u + 2 -------------------------------------------
    {
       INCNS_PROFILE("divergence");
-      auto* di = new VectorDivergenceIntegrator;
+      // Its kernels read the mesh's cached Jacobians at this rule (the
+      // grad-div form's), not a W adj(J) of its own per point.
+      auto* di = new LeanVectorDivergenceIntegrator;
       di->SetIntRule(&rules.Get(geom_, 2 * ku_ + 2));
       div_form_ = std::make_unique<PaMixedOperator>(spaces_.Velocity(),
                   spaces_.Pressure(), *scratch_);
