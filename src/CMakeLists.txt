@@ -27,6 +27,7 @@ add_library(incns STATIC
   operators/stokes_operator.cpp
   operators/convection.cpp
   operators/directional_do_nothing.cpp
+  operators/subgrid_stress.cpp
   time/oifs.cpp
   time/oifs_convection.cpp
   operators/grad_div_integrator.cpp
@@ -82,7 +83,9 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # time/cfl.cpp -- the per-element directional convective CFL rate;
 # post/channel_statistics.cpp -- the plane averages' per-element line sums;
 # precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
-# points and the rotation-number statistics; util/device_sync.cpp -- no kernel,
+# points and the rotation-number statistics; operators/subgrid_stress.cpp --
+# the LES subgrid stress at the quadrature points and its contraction with
+# the test functions; util/device_sync.cpp -- no kernel,
 # but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
@@ -99,6 +102,7 @@ if(USE_CUDA)
                               operators/lean_vector_diffusion.cpp
                               operators/kernel_specializations.cpp
                               operators/rotational_convection.cpp
+                              operators/subgrid_stress.cpp
                               precond/point_block_jacobi.cpp
                               post/kinetic_head.cpp
                               post/flow_sums.cpp

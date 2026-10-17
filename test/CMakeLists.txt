@@ -200,6 +200,7 @@ incns_add_mpi_test(mesh_census_test mesh_census_test.cpp)
 incns_add_mpi_test(benchmark_setup_test benchmark_setup_test.cpp
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 incns_add_mpi_test(empty_partition_test empty_partition_test.cpp)
+incns_add_mpi_test(subgrid_test subgrid_test.cpp)
 # The benchmark comparison scripts against their own reference data
 # (benchmarks/*/plot.py --selftest; standard library only).
 foreach(_bench tgv_re1600 channel dfg_3d)
