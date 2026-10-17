@@ -136,8 +136,12 @@ the model's point near walls; S1 pins it at y = 1e-2, 1e-3, 1e-4.
   and is positive (the term does nonnegative work); the statistics are the same on every
   rank.
 - S4 a constant `nu_t` carried explicitly converges to the implicit run at `nu + nu_t`
-  at second order in dt on the 2D Taylor-Green vortex, under IMEX and under OIFS (the
-  exact TGV is divergence-free, so there the stress term IS `nu_t lap u`).
+  at second order in dt on the 2D Taylor-Green vortex, under IMEX and under OIFS. The
+  implicit reference carries grad-div with `gamma = nu_t`: on a periodic H1 space
+  `(2 S(u), S(v)) = (grad u, grad v) + (div u, div v)` exactly, and the discrete
+  Taylor-Hood velocity is not exactly divergence-free, so a constant `nu_t` in the stress
+  form is `nu_t` in the Laplacian form plus a grad-div term `gamma = nu_t` (without it
+  the two runs differed by 7.5e-5 at every dt).
 - S5 the sigma model through `Case` and `Parameters` on the 3D Taylor-Green vortex:
   steps, finite statistics, `nu_t` small against `nu` on the two-component initial
   field.

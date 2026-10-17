@@ -18,9 +18,9 @@
 //     statistics agree across ranks.
 //  S4 marching: a constant nu_t carried EXPLICITLY (the model's path) on the
 //     2D Taylor-Green vortex converges to the IMPLICIT run at viscosity
-//     nu + nu_t at second order in dt (the exact solution is the TGV at the
-//     total viscosity because it is divergence-free, so the stress term IS
-//     nu_t times the Laplacian there), under IMEX and under OIFS.
+//     nu + nu_t plus grad-div gamma = nu_t (what the stress form adds to the
+//     Laplacian on a periodic space) at second order in dt, under IMEX and
+//     under OIFS.
 //  S5 through Case and Parameters: the sigma model on the 3D Taylor-Green
 //     vortex steps, writes finite statistics, and nu_t stays small against
 //     nu (the initial field is two-component, where sigma is zero).
@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include "bc/boundary_conditions.hpp"
+#include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "exact/tgv2d.hpp"
 #include "mesh/case_mesh.hpp"
@@ -298,6 +299,12 @@ constexpr double kTFinalS4 = 0.2; ///< S4: short, the difference is in dt.
 // S4: the 2D TGV on an 8x8 Q3/Q2 periodic box, fixed-step BDF2, to t = 0.2;
 // returns the velocity true dofs. explicit_part = 0: the whole viscosity
 // implicit; > 0: that part carried by the constant subgrid model.
+//
+// The implicit reference carries grad-div with gamma = kNuT. On a periodic
+// H1 space (2 S(u), S(v)) = (grad u, grad v) + (div u, div v) exactly, and
+// the discrete Taylor-Hood velocity is not exactly divergence-free, so
+// without that term the two runs differ in space by a dt-independent amount
+// (7.5e-5 here, measured in CI) and the splitting error never shows.
 Vector MarchTgv(incns::ConvectionTreatment conv, double dt,
                 double explicit_part)
 {
@@ -329,6 +336,10 @@ Vector MarchTgv(incns::ConvectionTreatment conv, double dt,
    {
       opts.subgrid.model = SubgridModel::Constant;
       opts.subgrid.coefficient = explicit_part;
+   }
+   else
+   {
+      opts.grad_div_nu = kNuT / kNuTotal; // gamma = kNuT (see above)
    }
    incns::StokesTimeIntegrator stepper(spaces, rules, bc, zero_forcing, opts);
    VectorFunctionCoefficient u0(2, [](const Vector & x, double t, Vector & u)
@@ -402,21 +413,27 @@ TEST(Subgrid, S5_SigmaModelThroughCase)
    EXPECT_EQ(p.subgrid.Coefficient(), 1.35);
    auto mesh = incns::MakeCaseMesh(p);
    incns::Case flow(*mesh, p);
+   // Case does not apply the named initial condition; the driver does.
+   auto u0 = incns::MakeInitialVelocity(p);
+   flow.SetInitialVelocity(*u0);
    int steps = 0;
    while (!flow.Done()) { flow.Step(); ++steps; }
    EXPECT_EQ(steps, 3);
    ASSERT_NE(flow.Integrator().Subgrid(), nullptr);
    const SubgridStress::Values v = flow.Integrator().SubgridStatistics();
+   const double ke = flow.KineticEnergy(); // collective: every rank
    if (Mpi::Root())
    {
       mfem::out << "[subgrid S5] sigma on TGV 3D 4^3: nu_t max " << v.nu_t_max
                 << " (" << v.nu_t_max / p.nu << " nu), mean " << v.nu_t_mean
-                << ", dissipation " << v.dissipation << ", KE "
-                << flow.KineticEnergy() << "\n";
+                << ", dissipation " << v.dissipation << ", KE " << ke << "\n";
    }
    EXPECT_TRUE(std::isfinite(v.nu_t_max) && std::isfinite(v.dissipation));
-   EXPECT_GE(v.nu_t_max, 0.0);
    EXPECT_GE(v.dissipation, 0.0);
+   // The pressure gradient drives u_z from the first step, so nu_t is not 0,
+   // but small: |grad u_z| <= t / 2 here, and D_sigma <= sigma_3 / 4.
+   EXPECT_GT(v.nu_t_max, 0.0);
    EXPECT_LT(v.nu_t_max, 0.1 * p.nu);
-   EXPECT_TRUE(std::isfinite(flow.KineticEnergy()));
+   EXPECT_TRUE(std::isfinite(ke));
+   EXPECT_GT(ke, 0.0);
 }
