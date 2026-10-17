@@ -7,10 +7,11 @@ implements is [design/uzawa_schur_cg_spec.md](design/uzawa_schur_cg_spec.md) (hu
 method stays the default. Whether Schur should replace it is the study at the end of this
 page, which needs GPU runs.
 
-**State (2026-10-16): builds and passes its tests in CI (GitHub Actions, CPU, np 1/2/4);
-never run on a GPU.** Nothing on this page has been timed, and the memory figures in §4
-are counts of the vectors the code allocates, not measurements. The code was written in a
-cloud session that cannot build Bessemer: CI is its only build so far.
+**State (2026-10-16): builds and passes its tests in CI (GitHub Actions, CPU, np 1/2/4) and
+on Bridges-2 (CPU np 1/2/4, H100 np 1/2, with the Q6/OIFS case defaults). Measured on one
+H100 (§7): correct, 8-19 % less memory than coupled and 1.19-1.45x its time per step, so it
+stays an option (the decision rule is not met).** The memory figures in §4 are counts of
+the vectors the code allocates; §7 has the measurements.
 
 ## 1. What it solves
 
@@ -183,7 +184,7 @@ Gram-Schmidt now has its own profiler region (`fgmres::orthogonalize`), shown as
 - **U8**: a Δt refresh of a Schur solver (CG re-pointed, point-block Jacobi updated in
   place) gives a fresh solver's answer, with point-block and scalar Jacobi.
 
-## 7. The study (needs GPU runs; nothing measured yet)
+## 7. The study (run 2026-10-16 on one H100)
 
 `bench/uzawa/study.sh` runs the proposal's Phases 0, 2 and 3 as `bench/throughput/bench.py`
 runs on one GPU at np 1. **Run it inside an allocation you hold: it submits no job.**
@@ -202,8 +203,49 @@ bench/uzawa/study.sh channel    # Re_tau 180 replay from its frozen restart
 bench/uzawa/study.sh capacity   # largest TGV mesh per method (88^3 and up)
 ```
 
+### Results (2026-10-16; main 7cb9278; jobs 49342006, 49341752, 49342093)
+
+Taylor-Green 32^3 Q3/Q2 with IMEX fixed steps (the bench template), one H100, np 1. Every
+pair converged to its tolerance with the energies agreeing to 1e-10 to 1e-14 (Δt x2:
+9.5e-6).
+
+| comparison | step, coupled -> Schur | memory, coupled -> Schur | rule |
+|---|---|---|---|
+| case defaults (projected guess, rtol 1e-3 step-relative) | 0.0544 -> 0.0696 s (x1.28) | 5.44 -> 4.71 GB (-13.3 %) | not met |
+| rtol 1e-10 | 0.125 -> 0.167 s (x1.34) | 5.81 -> 4.71 GB (-18.9 %) | not met |
+| `solver.schur: laplacian_legacy` | x1.45 | -13.5 % | not met |
+| `initial_guess: previous` | x1.19 | -8.4 % | time only |
+| Δt x0.5 / x2 | x1.22 / x1.22 | -12.5 % / -14.8 % | not met |
+| Q5/Q4 at about the Q3 run's DOFs (19^3) | x1.42 | -14.2 % | not met |
+| channel Re_tau 180 (walls, OIFS BDF3) | x1.19 | -8.9 % | time only |
+
+- **Inner tolerance:** `relaxed` 0.069 s, `loose` 0.074 s, `tight` 0.122 s per step;
+  `relax_c` 0.1 / 10: 0.067 / 0.069 s.
+- **Q7 did not run for either method:** the template is IMEX, and IMEX at velocity order 7
+  needs MFEM's convection setup at 11 points, which does not run on a GPU.
+- **Capacity, Q3:** coupled ran 92^3 (69.3M DOFs) and failed at 96^3; Schur ran 96^3
+  (78.7M DOFs) and failed at 100^3. **At the Q6 default** (Taylor-Green, OIFS CFL 2, ~25
+  steps): coupled ran 57.3M DOFs (70.1 GiB) and failed at 70.4M; Schur ran 70.4M (70.6 GiB,
+  1,076 B/DOF) and failed at 85.5M.
+- **Why it is slower:** the coupled method approximates the velocity block inside its
+  preconditioner (one Jacobi-PCG to 1e-2) and FGMRES absorbs the error; the Schur method
+  needs the velocity block solved to the momentum tolerance in Systems 1 and 3 and in every
+  S application. At the defaults: 20.8 velocity-PCG iterations per step coupled, 36.4 in
+  Schur's two solves outside S alone, for 1.10 outer iterations against 2.53. The gap grows
+  where the velocity block is harder (Q5: 83.5 against 49) and shrinks where coupled needs
+  more outer iterations (the channel: 7.2 against 6.2). A velocity preconditioner that needs
+  fewer iterations, robustly in p, would help Schur more than coupled.
+- **Memory profile at Q6** (the profiler's device gauge, profile: sync; 7.2M / 57.3M DOFs):
+  coupled 1,546 / 1,271 B/DOF, Schur 1,333 / 1,059 B/DOF (-13.8 % / -16.7 %). At 57.3M Schur
+  drops the FGMRES basis (4.4 GB), the coupled block PC's warm-up buffers (4.2 GB), the
+  basis growth after step 1 (5.0 GB) and the step-reference vector (0.4 GB), and adds
+  3.1 GB in `solve_true/rhs` (about 8.5 velocity vectors; not yet traced), 1.4 GB in
+  `schur_solver` and 0.7 GB in its velocity solve.
+
 **Decision rule (the proposal's):** Schur becomes the default only if its step is within
 1.2x of coupled at a matched coupled residual and its peak memory is at least 25% lower.
+Measured: neither holds in any configuration above, so coupled stays the default and Schur
+the option for memory-bound runs.
 The coupled path stays behind the switch either way. Not covered by the script: the
 square cylinder with AMR (outflow, CC's weakest case: `cases/square_cylinder_re200.yaml`
 with `solver.outer: schur`, CPU np 4, about 40 min) and Re_tau 550 (no deck yet). The
