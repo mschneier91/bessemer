@@ -32,10 +32,12 @@ void AddKernelSpecializations();
 /**
  * @brief Compile-time kernels for MFEM's quadrature interpolator where its
  *        runtime-size ones do not hold the points: the mesh Jacobians of
- *        linear meshes at 9 and 10 points per direction (its runtime-size
- *        kernels hold 8 on a GPU, unchecked). A correctness fix, not a
- *        speed-up: unlike AddKernelSpecializations()'s, these change results.
- *        Process-wide and idempotent.
+ *        meshes with nodes of order 1 to 7 at 9 and 10 points per direction
+ *        (and 11 in 2D; its runtime-size kernels hold 8 on a GPU,
+ *        unchecked). A correctness fix, not a speed-up: unlike
+ *        AddKernelSpecializations()'s, these change results (on a GPU; the
+ *        host kernels already held these sizes). Process-wide and
+ *        idempotent.
  */
 void AddInterpolationKernels();
 

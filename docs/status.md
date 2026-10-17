@@ -44,6 +44,17 @@ the on-the-fly OIFS apply as an opt-in, IMEX's convection on the fly, the lean v
 mass): OIFS coupled 50,465 MiB, Schur 40,351 MiB (738 B/DOF); IMEX coupled 44,745 MiB,
 Schur 32,165 MiB (589 B/DOF).
 
+**Q6 on curved meshes on a GPU (2026-10-17, change 26).** The 3D verification (human: "run
+the 3d verification tests ... to really be sure we didn't introduce any bugs") found the Q6
+DFG 3D decks stopping at setup on the H100 with an illegal address -- in main and in the main
+of before the memory work alike; the CPU runs them. The cylinder meshes take the velocity
+order as their geometry order (7 nodes per direction at Q6), and the dealiased convection's
+10-point rule (MFEM's form on curved elements: IMEX's explicit term, OIFS's wall nodes) asks
+MFEM's quadrature interpolator for the Jacobians, whose runtime-size kernels hold 8 per
+direction on a GPU, unchecked. `AddInterpolationKernels` registered compile-time kernels for
+linear nodes only; it now covers node orders 1-7 at 9 and 10 points (3D; 9-11 in 2D). **Open:**
+curved meshes at Q7 (11 points: MFEM's 3D kernel cannot launch 11^3 threads per element).
+
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be
 changing over time", rate threshold theory - 0.3 approved, grad-div "an open question",

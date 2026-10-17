@@ -146,23 +146,28 @@ TEST(KernelSpecializations, SameResultsAsTheGenericKernels)
 }
 
 // The mesh Jacobians (GeometricFactors, through MFEM's quadrature
-// interpolator) at 7 to 10 Gauss points per direction against the element
-// transformations' (host), 2D and 3D, a deformed mesh: MFEM's runtime-size
-// interpolation kernels hold 8 points per direction on a GPU and wrote past
-// their shared arrays at 9 and 10 until AddKernelSpecializations registered
-// those sizes (2026-10-16).
+// interpolator) at 7 to 10 Gauss points per direction (11 in 2D) against the
+// element transformations' (host), 2D and 3D, a deformed mesh with linear
+// nodes and curved ones of orders 2 to 7: MFEM's runtime-size interpolation
+// kernels hold 8 points per direction on a GPU and wrote past their shared
+// arrays at 9 and 10 until AddKernelSpecializations registered those sizes
+// (linear nodes 2026-10-16, curved 2026-10-17: the Q6 DFG decks).
 TEST(KernelSpecializations, GeometricFactorsAtManyPoints)
 {
    incns::AddKernelSpecializations();
    for (const int dim : {2, 3})
    {
-      for (const int n : {7, 8, 9, 10})
+      for (int pn = 0; pn < 7 * 5; ++pn)
       {
-         SCOPED_TRACE(testing::Message() << "dim " << dim << ", " << n
-                      << " points");
+         // Node order p = 1 (linear) to 7, n = 7 to 11 points per direction.
+         const int p = 1 + pn / 5, n = 7 + pn % 5;
+         if (dim == 3 && n == 11) { continue; } // not served (the header)
+         SCOPED_TRACE(testing::Message() << "dim " << dim << ", node order "
+                      << p << ", " << n << " points");
          Mesh serial = (dim == 2)
                        ? Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true)
                        : Mesh::MakeCartesian3D(3, 2, 2, Element::HEXAHEDRON);
+         if (p > 1) { serial.SetCurvature(p); } // curved nodes, then deformed
          serial.Transform(Deform);
          ParMesh mesh(MPI_COMM_WORLD, serial);
          const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
@@ -194,11 +199,14 @@ TEST(KernelSpecializations, GeometricFactorsAtManyPoints)
          MPI_Allreduce(MPI_IN_PLACE, &size, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
          if (Mpi::Root())
          {
-            mfem::out << "[geometric factors] dim " << dim << ", " << n
-                      << " points: max difference " << diff << std::endl;
+            mfem::out << "[geometric factors] dim " << dim << ", node order "
+                      << p << ", " << n << " points: max difference " << diff
+                      << std::endl;
          }
          EXPECT_GT(size, 0.0);
-         EXPECT_LE(diff, 1e-13 * size);
+         // Curved nodes: the host's element transformations and the
+         // kernels part at ~1e-13 relative at node order 7 (roundoff).
+         EXPECT_LE(diff, (p > 1 ? 1e-12 : 1e-13) * size);
       }
    }
 }

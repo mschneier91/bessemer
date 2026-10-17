@@ -300,6 +300,22 @@ void AddOrder()
    }
 }
 
+// The mesh Jacobians (reference derivatives of the nodes, byNODES, vdim =
+// dim) at Q1D points per direction for node orders 1 to 7 (D1D 2 to 8).
+template <int DIM, int Q1D>
+void AddNodeDerivatives()
+{
+   using QI = mfem::QuadratureInterpolator;
+   constexpr auto byNodes = mfem::QVectorLayout::byNODES;
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 2, Q1D>();
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 3, Q1D>();
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 4, Q1D>();
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 5, Q1D>();
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 6, Q1D>();
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 7, Q1D>();
+   QI::AddGradSpecializations<DIM, byNodes, false, DIM, 8, Q1D>();
+}
+
 } // namespace
 
 void AddKernelSpecializations()
@@ -336,20 +352,24 @@ void AddInterpolationKernels()
    static const bool added = []
    {
       // MFEM's quadrature interpolator above 8 points per direction: its
-      // runtime-size kernels size their shared arrays for 8
-      // (DofQuadLimits::MAX_INTERP_1D on CUDA) with no check, so the mesh
-      // Jacobians (GeometricFactors: reference derivatives of the linear
-      // nodes, byNODES) at 9 and 10 points wrote past them on a GPU -- the
-      // viscous, divergence and grad-div rules at velocity order 7 (9
-      // points), the IMEX convection's at order 6 (10). Compile-time kernels
-      // at those sizes (kernel_specializations_test
-      // GeometricFactorsAtManyPoints, 2026-10-16).
-      using QI = mfem::QuadratureInterpolator;
-      constexpr auto byNodes = mfem::QVectorLayout::byNODES;
-      QI::AddGradSpecializations<2, byNodes, false, 2, 2, 9>();
-      QI::AddGradSpecializations<2, byNodes, false, 2, 2, 10>();
-      QI::AddGradSpecializations<3, byNodes, false, 3, 2, 9>();
-      QI::AddGradSpecializations<3, byNodes, false, 3, 2, 10>();
+      // runtime-size kernels size their shared arrays for 8 per direction
+      // (DofQuadLimits::MAX_INTERP_1D on CUDA), dofs and points alike, with
+      // no check, so the mesh Jacobians (GeometricFactors: reference
+      // derivatives of the nodes, byNODES) at 9 and 10 points wrote past them
+      // on a GPU -- the viscous, divergence and grad-div rules at velocity
+      // order 7 (9 points), the IMEX convection's (and OIFS's wall nodes')
+      // at order 6 (10). Compile-time kernels at those sizes
+      // (kernel_specializations_test GeometricFactorsAtManyPoints): linear
+      // nodes since 2026-10-16; curved nodes of orders 2 to 7 since
+      // 2026-10-17 (the cylinder meshes take the velocity order: the Q6 DFG
+      // decks stopped with an illegal address at setup). Not 11 points in
+      // 3D: MFEM's kernel there launches 11^3 threads per element, more
+      // than a block holds.
+      AddNodeDerivatives<2, 9>();
+      AddNodeDerivatives<2, 10>();
+      AddNodeDerivatives<2, 11>();
+      AddNodeDerivatives<3, 9>();
+      AddNodeDerivatives<3, 10>();
       return true;
    }();
    (void)added;
