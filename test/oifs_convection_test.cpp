@@ -5,7 +5,8 @@
 // wind, summed. 3D, velocity orders 2 to 7 at OIFS's 3k rule, a deformed mesh,
 // three random winds (and two), random weights. Orders 6 and 7 on
 // straight-sided elements: the stored path and the on-the-fly path against the
-// same reference; order 6 also on curved elements (the Jacobians kept).
+// same reference; order 6 also on curved elements (their Jacobians formed by
+// element chunks).
 // Roundoff.
 
 #include <gtest/gtest.h>
@@ -149,5 +150,79 @@ TEST(OifsConvection, MatchesMfemFormsComponentwise)
             EXPECT_LE(diff, 1e-12 * size);
          }
       }
+   }
+}
+
+// Curved elements at orders 6 and 7 (node order = velocity order, as the
+// cylinder meshes have them): the Jacobians are formed chunk by chunk, so the
+// results must not depend on the chunk size, bitwise; and the self-only apply
+// (Convection's) must equal the stored path with the input as its one wind.
+TEST(OifsConvection, CurvedChunksAndTheSelfApply)
+{
+   int rank = 0;
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   for (const int k : {6, 7})
+   {
+      SCOPED_TRACE(testing::Message() << "order " << k);
+      Mesh serial = Mesh::MakeCartesian3D(3, 2, 2, Element::HEXAHEDRON);
+      serial.SetCurvature(k);
+      serial.Transform(Deform);
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      H1_FECollection fec(k, 3);
+      ParFiniteElementSpace V(&mesh, &fec, 3);
+      const IntegrationRule& ir = IntRules.Get(Geometry::CUBE, 3 * k);
+      ASSERT_TRUE(incns::OifsConvection::Supported(V, ir));
+      ASSERT_FALSE(incns::OifsConvection::OnTheFlyEligible(V, ir));
+      const int n = V.GetTrueVSize();
+      Vector x(n), u2(n);
+      x.Randomize(17 + rank);
+      x -= 0.5;
+      u2.Randomize(29 + rank);
+      u2 -= 0.5;
+      x.UseDevice(true);
+      ParGridFunction xg(&V), ug(&V);
+      xg.SetFromTrueDofs(x);
+      ug.SetFromTrueDofs(u2);
+      auto max_diff = [](const Vector & a, const Vector & b)
+      {
+         Vector d(a);
+         d -= b;
+         double m = d.Normlinf();
+         MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         return m;
+      };
+      // The stored path with two winds: one chunk, then chunks of 5 elements.
+      const std::vector<double> w = {0.7, -1.3};
+      Vector y1(n), y5(n);
+      y1.UseDevice(true);
+      y5.UseDevice(true);
+      for (const int chunk : {0, 5})
+      {
+         incns::OifsConvection oc(V, ir);
+         if (chunk) { oc.SetChunk(chunk); }
+         oc.SetWind(0, xg);
+         oc.SetWind(1, ug);
+         oc.Mult(w, x, chunk ? y5 : y1);
+      }
+      EXPECT_GT(y1.Normlinf(), 0.0);
+      EXPECT_EQ(max_diff(y1, y5), 0.0);
+      // The self apply against the stored path with x as its one wind.
+      Vector ys(n), yself(n), yself5(n);
+      ys.UseDevice(true);
+      yself.UseDevice(true);
+      yself5.UseDevice(true);
+      {
+         incns::OifsConvection oc(V, ir);
+         oc.SetWind(0, xg);
+         oc.Mult({1.0}, x, ys);
+      }
+      for (const int chunk : {0, 5})
+      {
+         incns::OifsConvection oc(V, ir, nullptr, false, /*self_only=*/true);
+         if (chunk) { oc.SetChunk(chunk); }
+         oc.MultSelf(x, chunk ? yself5 : yself);
+      }
+      EXPECT_EQ(max_diff(ys, yself), 0.0);
+      EXPECT_EQ(max_diff(ys, yself5), 0.0);
    }
 }

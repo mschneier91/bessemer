@@ -532,8 +532,9 @@ void Apply3DColumnsFly(const int NE, const int nw, const real_t w0,
 
 // SetupWind for one wind at Q1D 10/11 (a thread per (x, y) column): the
 // wind's values at the points by sum factorization in registers (no uq_), and
-// the Jacobian from the 8 vertices (LINEAR: straight-sided elements, no jac_)
-// or from the stored jac_ (curved). The expressions of SetupWind.
+// the Jacobian from the 8 vertices (LINEAR: straight-sided elements) or read
+// from j_ (curved: a chunk's, formed from the nodes). The expressions of
+// SetupWind.
 template <int D1D, int Q1D, bool LINEAR>
 void SetupWindColumns(const int NE, const Array<real_t>& b, const Vector& ue_,
                       const Array<real_t>& w_, const Vector& xn_,
@@ -784,7 +785,8 @@ bool OifsConvection::OnTheFlyEligible(const ParFiniteElementSpace& vfes,
 
 OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
                                const IntegrationRule& ir,
-                               ElementScratch* scratch, bool on_the_fly)
+                               ElementScratch* scratch, bool on_the_fly,
+                               bool self_only)
    : vfes_(vfes), ir_(ir)
 {
    MFEM_VERIFY(Supported(vfes, ir), "oifs_convection: no kernel for this "
@@ -794,6 +796,8 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
    maps_ = &vfes.GetTypicalFE()->GetDofToQuad(ir, DofToQuad::TENSOR);
    d1_ = maps_->ndof;
    q1_ = maps_->nqpt;
+   MFEM_VERIFY(!self_only || Columns(), "oifs_convection: self_only needs 9 or "
+               "more points per direction");
    restr_ = vfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
    if (Columns())
    {
@@ -814,7 +818,7 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
       {
          // Straight-sided elements: the Jacobians at the points come from the
          // 8 vertices -- in the wind setup (op_ kept), or in every apply on the
-         // on-the-fly path (nothing per point kept). No jac_ either way.
+         // on-the-fly path (nothing per point kept). No Jacobians kept.
          xn_.UseDevice(true);
          xn_.SetSize(nr->Height());
          nr->Mult(nodes, xn_);
@@ -834,21 +838,17 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
       }
       if (!linear_)
       {
-         Vector xe(nr->Height());
-         xe.UseDevice(true);
-         nr->Mult(nodes, xe);
-         jac_.SetSize(9 * ir.GetNPoints() * ne_);
-         jac_.UseDevice(true);
-         if (ne_ > 0 && q1_ == 10)
-         {
-            oifsconv::Jacobians3DColumns<10>(ne_, nm.ndof, nm.B, nm.G, xe, jac_);
-         }
-         else if (ne_ > 0)
-         {
-            oifsconv::Jacobians3DColumns<11>(ne_, nm.ndof, nm.B, nm.G, xe, jac_);
-         }
-         j_ = &jac_;
+         // Curved elements: the Jacobians at the points are formed from the
+         // element nodes chunk by chunk where they are used (SetWind; the
+         // self-only apply), not kept: 9 numbers per point less.
+         xnodes_.UseDevice(true);
+         xnodes_.SetSize(nr->Height());
+         nr->Mult(nodes, xnodes_);
+         cmaps_ = &nm;
+         self_ = self_only;
       }
+      MFEM_VERIFY(!self_only || fly_ || self_, "oifs_convection: self_only on "
+                  "straight-sided elements needs on_the_fly");
    }
    else
    {
@@ -864,7 +864,7 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
    {
       v->UseDevice(true);
    }
-   if (!fly_) { op_.SetSize(3 * 3 * nq * ne_); }
+   if (!fly_ && !self_) { op_.SetSize(3 * 3 * nq * ne_); }
    // The winds at the points: the quadrature interpolator's output below 9
    // points; from 9 the wind setup keeps them in registers.
    if (!Columns()) { uq_.SetSize(3 * nq * ne_); }
@@ -872,13 +872,13 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
    {
       // The wind's element vector is read only inside SetWind, the input's
       // only inside Mult: both can use the input-side buffer.
-      if (!fly_) { scratch->Lend(0, restr_->Height(), ue_); }
+      if (!fly_ && !self_) { scratch->Lend(0, restr_->Height(), ue_); }
       scratch->Lend(0, restr_->Height(), xe_);
       scratch->Lend(1, restr_->Height(), ye_);
    }
    else
    {
-      if (!fly_) { ue_.SetSize(restr_->Height()); }
+      if (!fly_ && !self_) { ue_.SetSize(restr_->Height()); }
       xe_.SetSize(restr_->Height());
       ye_.SetSize(restr_->Height());
    }
@@ -888,6 +888,7 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
 
 void OifsConvection::SetWind(int l, const ParGridFunction& u)
 {
+   MFEM_VERIFY(!self_, "oifs_convection: built self_only (no wind data)");
    MFEM_VERIFY(l >= 0 && l < 3, "oifs_convection: wind index out of range");
    MFEM_VERIFY(u.ParFESpace() == &vfes_, "oifs_convection: the wind must live "
                "on the bound velocity space");
@@ -903,33 +904,42 @@ void OifsConvection::SetWind(int l, const ParGridFunction& u)
    if (Columns())
    {
       // One kernel: the wind at the points in registers, the Jacobians from
-      // the vertices (straight-sided) or jac_ (curved), op written.
-      const Array<real_t>& nb = linear_ ? nmaps_->B : maps_->B;
-      const Array<real_t>& ng = linear_ ? nmaps_->G : maps_->G;
-      const Vector& jac = linear_ ? xn_ : jac_;
-      if (q1_ == 10 && linear_)
+      // the vertices (straight-sided) or a chunk's (curved), op written.
+      if (linear_ && q1_ == 10)
       {
          oifsconv::SetupWindColumns<7, 10, true>(ne_, maps_->B, ue_,
-                                                 ir_.GetWeights(), xn_, nb, ng,
-                                                 jac, op);
-      }
-      else if (q1_ == 10)
-      {
-         oifsconv::SetupWindColumns<7, 10, false>(ne_, maps_->B, ue_,
-               ir_.GetWeights(), xn_, nb, ng,
-               jac, op);
+                                                 ir_.GetWeights(), xn_,
+                                                 nmaps_->B, nmaps_->G, xn_, op);
       }
       else if (linear_)
       {
          oifsconv::SetupWindColumns<8, 11, true>(ne_, maps_->B, ue_,
-                                                 ir_.GetWeights(), xn_, nb, ng,
-                                                 jac, op);
+                                                 ir_.GetWeights(), xn_,
+                                                 nmaps_->B, nmaps_->G, xn_, op);
       }
       else
       {
-         oifsconv::SetupWindColumns<8, 11, false>(ne_, maps_->B, ue_,
-               ir_.GetWeights(), xn_, nb, ng,
-               jac, op);
+         // Curved: chunk by chunk, the Jacobians formed for the chunk (the
+         // same values as for the whole mesh at once: the same kernels).
+         const int dofs = d1_ * d1_ * d1_ * 3;
+         for (int e0 = 0; e0 < ne_; e0 += chunk_)
+         {
+            const int n = std::min(chunk_, ne_ - e0);
+            CurvedJacobians(e0, n);
+            Vector uv;
+            uv.MakeRef(ue_, e0 * dofs, n * dofs);
+            real_t* opc = op + static_cast<std::size_t>(e0) * 3 * nq;
+            if (q1_ == 10)
+            {
+               oifsconv::SetupWindColumns<7, 10, false>(n, maps_->B, uv,
+                     ir_.GetWeights(), xn_, maps_->B, maps_->G, jchunk_, opc);
+            }
+            else
+            {
+               oifsconv::SetupWindColumns<8, 11, false>(n, maps_->B, uv,
+                     ir_.GetWeights(), xn_, maps_->B, maps_->G, jchunk_, opc);
+            }
+         }
       }
    }
    else
@@ -1030,8 +1040,9 @@ void OifsConvection::Mult(const std::vector<double>& w, const Vector& x,
 
 void OifsConvection::MultSelf(const Vector& x, Vector& y)
 {
-   MFEM_VERIFY(fly_, "oifs_convection: MultSelf needs the on-the-fly path "
-               "(OnTheFlyEligible(), on_the_fly)");
+   MFEM_VERIFY(fly_ || self_, "oifs_convection: MultSelf needs the on-the-fly "
+               "path (OnTheFlyEligible(), on_the_fly) or self_only on curved "
+               "elements");
    const Vector* xl = &x;
    if (prolong_)
    {
@@ -1041,8 +1052,51 @@ void OifsConvection::MultSelf(const Vector& x, Vector& y)
    if (ne_ > 0)
    {
       restr_->Mult(*xl, xe_);
+      if (self_)
+      {
+         // Curved: chunk by chunk, the Jacobians, then the input's own wind
+         // data, then the apply -- the stored path's kernels with one wind of
+         // weight 1, so the same results as SetWind(0, x) + Mult({1}, x).
+         const int dofs = d1_ * d1_ * d1_ * 3;
+         if (opchunk_.Size() < 3 * ir_.GetNPoints() * std::min(chunk_, ne_))
+         {
+            opchunk_.UseDevice(true);
+            opchunk_.SetSize(3 * ir_.GetNPoints() * std::min(chunk_, ne_));
+         }
+         // The chunks write ye_ through views (yv), every element's block:
+         // ye_ must already be valid where they write, or reading it after
+         // them (MultTranspose below) restores its other copy -- on a GPU, a
+         // freshly sized ye_'s host values over the results.
+         ye_.Write();
+         for (int e0 = 0; e0 < ne_; e0 += chunk_)
+         {
+            const int n = std::min(chunk_, ne_ - e0);
+            CurvedJacobians(e0, n);
+            Vector xv, yv;
+            xv.MakeRef(xe_, e0 * dofs, n * dofs);
+            yv.MakeRef(ye_, e0 * dofs, n * dofs);
+            if (q1_ == 10)
+            {
+               oifsconv::SetupWindColumns<7, 10, false>(n, maps_->B, xv,
+                     ir_.GetWeights(), xn_, maps_->B, maps_->G, jchunk_,
+                     opchunk_.Write());
+               oifsconv::Apply3DColumns<7, 10>(n, 1, 1.0, 0.0, 0.0, maps_->B,
+                                               maps_->G, maps_->Bt, opchunk_,
+                                               xv, yv);
+            }
+            else
+            {
+               oifsconv::SetupWindColumns<8, 11, false>(n, maps_->B, xv,
+                     ir_.GetWeights(), xn_, maps_->B, maps_->G, jchunk_,
+                     opchunk_.Write());
+               oifsconv::Apply3DColumns<8, 11>(n, 1, 1.0, 0.0, 0.0, maps_->B,
+                                               maps_->G, maps_->Bt, opchunk_,
+                                               xv, yv);
+            }
+         }
+      }
       // The wind is the input itself, read from its local dofs.
-      if (q1_ == 10)
+      else if (q1_ == 10)
       {
          oifsconv::Apply3DColumnsFly<7, 10>(ne_, 1, 1.0, 0.0, 0.0, *gather_,
                                             ndofs_, *xl, *xl, *xl, xn_,
@@ -1068,6 +1122,34 @@ void OifsConvection::MultSelf(const Vector& x, Vector& y)
    else
    {
       restr_->MultTranspose(ye_, y);
+   }
+}
+
+void OifsConvection::SetChunk(int elements)
+{
+   MFEM_VERIFY(elements >= 1, "oifs_convection: a chunk holds an element or more");
+   chunk_ = elements;
+}
+
+void OifsConvection::CurvedJacobians(int e0, int n)
+{
+   const int nq = ir_.GetNPoints();
+   if (jchunk_.Size() < 9 * nq * std::min(chunk_, ne_))
+   {
+      jchunk_.UseDevice(true);
+      jchunk_.SetSize(9 * nq * std::min(chunk_, ne_));
+   }
+   const int nd1 = cmaps_->ndof;
+   const int ndofs = nd1 * nd1 * nd1 * 3;
+   Vector xv;
+   xv.MakeRef(xnodes_, e0 * ndofs, n * ndofs);
+   if (q1_ == 10)
+   {
+      oifsconv::Jacobians3DColumns<10>(n, nd1, cmaps_->B, cmaps_->G, xv, jchunk_);
+   }
+   else
+   {
+      oifsconv::Jacobians3DColumns<11>(n, nd1, cmaps_->B, cmaps_->G, xv, jchunk_);
    }
 }
 

@@ -173,6 +173,14 @@ TEST(DirectionalDoNothing, D1_ValueAndOutwardNormal)
       ddn.EnableDirectionalDoNothing(attrs);
       Vector y(V.GetTrueVSize());
       ddn.Mult(u, y);
+      // Built without the volume term (OIFS's use): the same boundary term.
+      incns::Convection only(spaces, rules, nullptr, /*volume=*/false);
+      only.EnableDirectionalDoNothing(attrs);
+      Vector a(V.GetTrueVSize()), b(V.GetTrueVSize());
+      ddn.MultDirectionalDoNothing(u, a);
+      only.MultDirectionalDoNothing(u, b);
+      a -= b;
+      EXPECT_EQ(a.Normlinf(), 0.0);
       y -= n_only;
       dx = InnerProduct(MPI_COMM_WORLD, y, ex);
       dy = InnerProduct(MPI_COMM_WORLD, y, ey);

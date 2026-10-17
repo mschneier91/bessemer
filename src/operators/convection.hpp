@@ -112,9 +112,14 @@ public:
     * @param rules   Quadrature source (borrowed, must outlive this).
     * @param scratch Element-vector buffers for the on-the-fly path (borrowed;
     *                must outlive this); null: its own.
+    * @param volume  false: no volume term at all (Mult aborts), for the
+    *                directional do-nothing term alone
+    *                (MultDirectionalDoNothing), as OIFS uses it. On curved
+    *                elements the volume term is MFEM's form, whose quadrature
+    *                data at the dealiased rule OIFS never used.
     */
    Convection(MixedSpaces& spaces, const RuleBook& rules,
-              ElementScratch* scratch = nullptr);
+              ElementScratch* scratch = nullptr, bool volume = true);
    ~Convection();
 
    /**
@@ -176,24 +181,15 @@ private:
    /// Non-owning; owned by the RuleBook, which outlives this object.
    const mfem::IntegrationRule* rule_ = nullptr;
    /// The nonlinear form carrying VectorConvectionNLFIntegrator (null on
-   /// the OIFS-kernel paths, fly_ and stored_).
+   /// the OIFS kernel's path, fly_).
    std::unique_ptr<mfem::ParNonlinearForm> form_;
-   /// On-the-fly path (OifsConvection::OnTheFlyEligible(): straight-sided
-   /// elements, velocity orders 6 and 7): N(u) = C(u) u by the OIFS kernel, which keeps
-   /// nothing per point (MFEM's form keeps W adj(J) and the mesh's cached
-   /// Jacobians at the 3k rule: 11 GiB at Q6 on 42^3 elements).
+   /// Velocity orders 6 and 7 (9 or more points per direction at the 3k
+   /// rule): N(u) = C(u) u by the OIFS kernel's self apply, which keeps
+   /// nothing per point -- on the fly on straight-sided elements, by element
+   /// chunks on curved ones (MFEM's form keeps W adj(J) and the mesh's cached
+   /// Jacobians at the 3k rule: 18 numbers per point, 11 GiB at Q6 on 42^3
+   /// elements; at 11 points it cannot run on a GPU at all).
    std::unique_ptr<OifsConvection> fly_;
-   /// Curved elements at velocity order 7 (11 points per direction at the 3k
-   /// rule): N(u) = C(u) u by the OIFS kernel's stored path, the wind's
-   /// quadrature data set from u at every Mult. MFEM's form cannot run there
-   /// on a GPU: the mesh Jacobians at 11 points per direction go through a
-   /// quadrature-interpolator kernel that launches 11^3 threads per element,
-   /// more than a block holds. The OIFS kernel forms them itself (a thread
-   /// per column) and keeps them, with the wind's data: the 18 numbers per
-   /// point that MFEM's form and the mesh's cache keep.
-   std::unique_ptr<OifsConvection> stored_;
-   /// The wind of stored_: u on local dofs (set in Mult).
-   std::unique_ptr<mfem::ParGridFunction> wind_;
    /// Outflow marker of the directional do-nothing term (per attribute).
    mfem::Array<int> ddn_marker_;
    /// The velocity the boundary term is evaluated at (set in Mult).

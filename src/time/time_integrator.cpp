@@ -100,7 +100,10 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       // paper, converging only as CFL -> 0.25 (measured 2026-10-09).
       if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
       {
-         oifs_ddn_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get());
+         // The boundary term alone: no volume form (on curved elements,
+         // MFEM's quadrature data at the dealiased rule, never applied).
+         oifs_ddn_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get(),
+                     /*volume=*/false);
          oifs_ddn_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
       }
    }

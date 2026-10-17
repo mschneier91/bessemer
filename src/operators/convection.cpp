@@ -12,7 +12,7 @@ using namespace mfem;
 Convection::~Convection() = default;
 
 Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
-                       ElementScratch* scratch)
+                       ElementScratch* scratch, bool volume)
    : spaces_(spaces), rules_(rules)
 {
    // MFEM's form asks the mesh for the Jacobians at the dealiased rule (10
@@ -33,6 +33,7 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
    // so this rule is honored under partial assembly rather than silently
    // replaced by the integrator's default.
    rule_ = &rules_.Get(geom, DealiasedOrder(spaces_.OrderU()));
+   if (!volume) { return; } // the boundary term alone (EnableDirectionalDoNothing)
 
    // Straight-sided elements at velocity orders 6 and 7: the same term,
    // C(u) u, through the OIFS on-the-fly kernel, which keeps nothing per point.
@@ -42,19 +43,21 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
    if (OifsConvection::OnTheFlyEligible(spaces_.Velocity(), *rule_))
    {
       fly_ = std::make_unique<OifsConvection>(spaces_.Velocity(), *rule_,
-                                              scratch, /*on_the_fly=*/true);
+                                              scratch, /*on_the_fly=*/true,
+                                              /*self_only=*/true);
       return;
    }
-   // Curved elements at order 7: the OIFS kernel's stored path, where MFEM's
-   // form cannot run on a GPU (its Jacobians at 11 points per direction; see
-   // stored_). On every device, so a configuration has one path.
+   // Curved elements at orders 6 and 7: the OIFS kernel's self apply by
+   // element chunks, keeping nothing per point (MFEM's form keeps 18 numbers
+   // per point, and at 11 points per direction cannot run on a GPU). On every
+   // device, so a configuration has one path.
    ParFiniteElementSpace& vfes = spaces_.Velocity();
    if (OifsConvection::Supported(vfes, *rule_) &&
-       vfes.GetTypicalFE()->GetDofToQuad(*rule_, DofToQuad::TENSOR).nqpt > 10)
+       vfes.GetTypicalFE()->GetDofToQuad(*rule_, DofToQuad::TENSOR).nqpt > 8)
    {
-      stored_ = std::make_unique<OifsConvection>(vfes, *rule_, scratch);
-      wind_ = std::make_unique<ParGridFunction>(&vfes);
-      wind_->UseDevice(true);
+      fly_ = std::make_unique<OifsConvection>(vfes, *rule_, scratch,
+                                              /*on_the_fly=*/false,
+                                              /*self_only=*/true);
       return;
    }
 
@@ -101,21 +104,13 @@ void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
 
 void Convection::Mult(const Vector& u, Vector& y) const
 {
+   MFEM_VERIFY(fly_ || form_, "convection: built without the volume term "
+               "(volume = false): only MultDirectionalDoNothing applies");
    if (fly_)
    {
       y.SetSize(spaces_.Velocity().GetTrueVSize());
       y.UseDevice(true);
       fly_->MultSelf(u, y);
-   }
-   else if (stored_)
-   {
-      // The wind is u itself: its quadrature data, then C(u) u.
-      static const std::vector<double> one = {1.0};
-      wind_->Distribute(u);
-      stored_->SetWind(0, *wind_);
-      y.SetSize(spaces_.Velocity().GetTrueVSize());
-      y.UseDevice(true);
-      stored_->Mult(one, u, y);
    }
    else { form_->Mult(u, y); }
    if (!ddn_form_) { return; }

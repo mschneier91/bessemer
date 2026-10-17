@@ -59,10 +59,16 @@ public:
     *                time.oifs_on_the_fly): 5 GiB (93 B/DOF) less at Q6
     *                on 42^3 elements than the stored default, which keeps
     *                only op_; the apply ~40 % slower (+6.5 % per step).
+    * @param self_only Only MultSelf() will be called (Convection): no wind
+    *                data is kept. On curved elements at 9 or more points per
+    *                direction the self apply then forms the Jacobians and the
+    *                wind's quadrature data chunk by chunk; on straight-sided
+    *                ones it needs @p on_the_fly.
     */
    OifsConvection(mfem::ParFiniteElementSpace& vfes,
                   const mfem::IntegrationRule& ir,
-                  ElementScratch* scratch = nullptr, bool on_the_fly = false);
+                  ElementScratch* scratch = nullptr, bool on_the_fly = false,
+                  bool self_only = false);
 
    /**
     * @brief Whether the on-the-fly path is available: Supported(), 9 or more
@@ -97,13 +103,25 @@ public:
    /**
     * @brief y := C(x) x: the dealiased (x . grad) x tested with v, the
     *        convective term N(x) of the IMEX scheme. The wind is the input's
-    *        own local dofs; no SetWind() needed. On-the-fly path only.
+    *        own local dofs; no SetWind() needed. The on-the-fly path, or
+    *        (self_only) curved elements chunk by chunk.
     * @param x Input, velocity true dofs.
     * @param y Output, velocity true dofs (overwritten).
     */
    void MultSelf(const mfem::Vector& x, mfem::Vector& y);
 
+   /**
+    * @brief Elements per chunk of the curved-element Jacobians (default
+    *        2048: a fixed buffer, about 0.2 GB at 11 points per direction,
+    *        whatever the mesh). The results do not depend on it (tests).
+    * @param elements At least 1.
+    */
+   void SetChunk(int elements);
+
 private:
+   /// jchunk_ := the Jacobians at the points of elements [e0, e0 + n) from
+   /// their nodes (curved elements, Columns()).
+   void CurvedJacobians(int e0, int n);
    mfem::ParFiniteElementSpace& vfes_;       ///< Velocity space (borrowed).
    const mfem::IntegrationRule& ir_;         ///< Rule (borrowed).
    const mfem::Operator* restr_ = nullptr;   ///< Lexicographic E-restriction.
@@ -111,10 +129,18 @@ private:
    const mfem::Operator* prolong_ = nullptr;
    const mfem::DofToQuad* maps_ = nullptr;   ///< 1D maps at ir_ (not owned).
    const mfem::GeometricFactors* geom_ = nullptr; ///< Jacobians (mesh cache).
-   /// Jacobians computed here (nq x 3 x 3 x ne) when MFEM's quadrature
-   /// interpolator cannot run (Columns()), and which ones SetWind reads.
-   mfem::Vector jac_;
+   /// The Jacobians SetWind reads below 9 points per direction (the mesh's).
    const mfem::Vector* j_ = nullptr;
+   /// Curved elements at 9 or more points: their nodes' element vector
+   /// (nd1^3, 3, NE) and 1D maps; the Jacobians are formed from them chunk
+   /// by chunk (jchunk_, (nq, 3, 3, chunk)), never kept for the mesh.
+   mfem::Vector xnodes_;
+   const mfem::DofToQuad* cmaps_ = nullptr;
+   mfem::Vector jchunk_;
+   /// self_only on curved elements: one chunk's wind data (nq, 3, chunk).
+   mfem::Vector opchunk_;
+   int chunk_ = 2048;
+   bool self_ = false; ///< Curved, self_only: MultSelf by chunks, no op_.
    /// Q1D > 8 (velocity orders 6 and 7 at the 3k rule): MFEM's quadrature
    /// interpolator has no compile-time kernel for the velocity there, its
    /// runtime-size ones hold 8 points per direction (DofQuadLimits::
@@ -130,7 +156,7 @@ private:
    /// on-the-fly path).
    mfem::Vector op_;
    /// Columns() on straight-sided elements (linear nodes): the Jacobians come
-   /// from the element vertices (xn_), so jac_ is not kept.
+   /// from the element vertices (xn_); curved ones form theirs by chunks.
    bool linear_ = false;
    /// On-the-fly path (opt-in, linear_): every apply reads the winds from
    /// their local dofs and forms the Jacobians from the vertices, so op_ is
