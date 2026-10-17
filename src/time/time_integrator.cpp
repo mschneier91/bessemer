@@ -501,6 +501,13 @@ void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
    // A constant coefficient (a body force, or none): assembled once, reused
    // while the constant stays the same.
    const auto* cf = dynamic_cast<const VectorConstantCoefficient*>(&forcing_);
+   if (cf && cf->GetVec().Normlinf() == 0.0)
+   {
+      // No body force (the default): F = 0, and nothing is kept for it.
+      Scratch(F, spaces_.Velocity().GetTrueVSize());
+      F = 0.0;
+      return;
+   }
    if (cf && forcing_value_.Size() == cf->GetVec().Size())
    {
       bool same = true;

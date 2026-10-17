@@ -74,7 +74,8 @@ private:
    mfem::ParFiniteElementSpace& vfes_;       ///< Velocity space (borrowed).
    const mfem::IntegrationRule& ir_;         ///< Rule (borrowed).
    const mfem::Operator* restr_ = nullptr;   ///< Lexicographic E-restriction.
-   const mfem::Operator* prolong_ = nullptr; ///< True -> local dofs (or null).
+   /// True -> local dofs (null when it is the identity: one rank).
+   const mfem::Operator* prolong_ = nullptr;
    const mfem::DofToQuad* maps_ = nullptr;   ///< 1D maps at ir_ (not owned).
    const mfem::GeometricFactors* geom_ = nullptr; ///< Jacobians (mesh cache).
    /// Jacobians computed here (nq x 3 x 3 x ne) when MFEM's quadrature
