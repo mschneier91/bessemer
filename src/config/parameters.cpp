@@ -360,7 +360,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(time, "oifs_on_the_fly", p.oifs_on_the_fly,
           "OIFS at velocity orders 6-7 on straight-sided elements: rebuild the "
           "convection's quadrature data at every substep instead of storing it "
-          "(about 200 B/DOF less memory, about 6 % more time per step).");
+          "(about 90 B/DOF less memory at Q6, about 6 % more time per step).");
    r.Read(time, "order", p.time_order,
           "BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX).");
    r.Read(time, "ext_order", p.ext_order,

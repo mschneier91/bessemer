@@ -135,7 +135,7 @@ Time integration.
 | `time.retry_dt_min` | real | `0` | cut_step: stop the run instead of cutting dt below this (0 = no floor). |
 | `time.convection` | auto \| imex \| oifs | `auto` | Convection: auto (OIFS where it applies -- Navier-Stokes, the convective form, fixed or cfl steps -- else IMEX), explicit and extrapolated (IMEX, CFL < ~0.7), or OIFS sub-stepping (CFL 2; BDF3 and, with discretization.mass auto, the collocated mass by default). |
 | `time.oifs_cfl` | real | `1.5` | CFL number of each OIFS substep. |
-| `time.oifs_on_the_fly` | bool | `false` | OIFS at velocity orders 6-7 on straight-sided elements: rebuild the convection's quadrature data at every substep instead of storing it (about 200 B/DOF less memory, about 6 % more time per step). |
+| `time.oifs_on_the_fly` | bool | `false` | OIFS at velocity orders 6-7 on straight-sided elements: rebuild the convection's quadrature data at every substep instead of storing it (about 90 B/DOF less memory at Q6, about 6 % more time per step). |
 | `time.order` | int | `0` | BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX). |
 | `time.ext_order` | int | `2` | Extrapolation order of the explicit/lagged nonlinear term, 2 or 3. |
 | `time.atol` | real | `1e-08` | Error control: absolute tolerance on the velocity error estimate. |

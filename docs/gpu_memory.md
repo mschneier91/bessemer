@@ -401,7 +401,10 @@ and merge it when its working". Measured at Q6 (the working list above).
     setup (once per wind per step) interpolates in registers and, on straight-sided
     elements, forms the Jacobians from the 8 vertices (curved elements keep `jac_`);
     the substep apply is unchanged. `time.oifs_on_the_fly: true` selects the on-the-fly
-    apply (about 200 B/DOF less, about 6 % more time); human: "ya that's fine with me
+    apply (93 B/DOF less than this default, whose only per-point data is then `op_`:
+    35,551 against 40,639 MiB at the peak of a whole Schur run at 57.3M, job 49348600 --
+    first written here as "about 200", the saving against the old storage; about 6 % more
+    time); human: "ya that's fine with me
     trying out the on the fly stuff". Q6 Taylor–Green at 57.3M DOFs (job 49347319, with
     changes 22 and 23): 6,770 MiB less (`jac_` 5,074, `uq_` 1,696); peak coupled
     50,465 MiB, Schur 40,351 MiB; the wind setup 10.5 → 7.2 ms, the substep apply and the

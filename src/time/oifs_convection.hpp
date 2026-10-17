@@ -56,8 +56,9 @@ public:
     *                its own.
     * @param on_the_fly Rebuild the quadrature data at every apply instead of
     *                storing it, where OnTheFlyEligible() (deck
-    *                time.oifs_on_the_fly): 12 GiB less at Q6 on 42^3
-    *                elements, the apply ~40 % slower (+6.5 % per step).
+    *                time.oifs_on_the_fly): 5 GiB (93 B/DOF) less at Q6
+    *                on 42^3 elements than the stored default, which keeps
+    *                only op_; the apply ~40 % slower (+6.5 % per step).
     */
    OifsConvection(mfem::ParFiniteElementSpace& vfes,
                   const mfem::IntegrationRule& ir,
