@@ -21,4 +21,20 @@ the profiles from two checkpoints. Then U⁺ in the log layer, and the peak u_rm
 
 The reference CSV is fetched, not committed: `python3 benchmarks/fetch_references.py`.
 
-Results: none yet.
+## Results
+
+**Re_τ 180 at Q6/Q5** (2026-10-17, the 3D verification of the GPU memory work): the deck
+with `--set discretization.order_u=6 --set discretization.order_p=5
+--set "mesh.elements=[12,9,12]"` (the Q3 deck's 72 × 54 × 72 nodes), OIFS at CFL 2, t = 0 to
+120, statistics over t = 60 to 120 (4,190 samples), run with main of before the GPU memory work (aa6aa7e) and main after it (changes 17-27), side by side on Bridges-2, one H100 each. DNS: Moser, Kim & Mansour,
+Re_τ 178.12; U⁺ relative for y⁺ >= 5, the stresses in wall units (`plot.py`).
+
+| Run | Re_τ | U⁺ | u_rms | v_rms | w_rms | u'v' | Steps | Wall | Peak memory |
+|---|---|---|---|---|---|---|---|---|---|
+| main before | 177.87 | 1.17 % | 0.043 | 0.016 | 0.021 | 0.014 | 42,078 | 1,489 s | 3.6 GiB |
+| main after | 178.04 | 1.68 % | 0.059 | 0.014 | 0.015 | 0.018 | 42,024 | 1,326 s | 3.0 GiB |
+| main after, `time.oifs_on_the_fly` | 177.86 | 1.05 % | 0.061 | 0.014 | 0.014 | 0.014 | 41,925 | 1,399 s | 2.9 GiB |
+
+The runs part in the transition, so their differences (at most 0.14 in U⁺) are the
+sampling noise of a 60-time-unit average. At Q3 on the same nodes the production run was
+within 7.6 % in U⁺ ([../../docs/throughput.md](../../docs/throughput.md), 2026-10-15).

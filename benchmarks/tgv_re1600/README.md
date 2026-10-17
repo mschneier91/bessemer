@@ -97,3 +97,33 @@ at this run's pace.
 A 32³ run at CFL 0.5 (2026-10-13, 39 min) reached max −dE/dt 0.01292 at t = 10.1; it went
 through the instability above and is not a result.
 
+
+**Q6/Q5 with OIFS, the defaults** (2026-10-17, the 3D verification of the GPU memory work;
+human: "run the 3d verification tests ... to really be sure we didn't introduce any bugs").
+The n32 deck with `--set discretization.order_u=6 --set discretization.order_p=5
+--set "mesh.elements=[n,n,n]" --set time.convection=oifs --set time.cfl_target=2` (substep
+CFL 1.5 and grad-div 6 h_K / k_u by default; the deck's solver settings), each case run with
+main of before the GPU memory work (aa6aa7e) and main after it (changes 17-27), side by side on Bridges-2, one H100 each. Dissipation error against the 512³ DNS (`plot.py`): at its peak, and the largest over
+t <= 20 as a fraction of the peak. Peak memory: `nvidia-smi` over the whole run.
+
+| Case | DOFs | Peak error old / new | Largest error old / new | Steps | Wall old / new | Peak memory old / new |
+|---|---|---|---|---|---|---|
+| 21³ (126 nodes), CFL 2 | 7.2M | 1.87 / 1.87 % | 3.32 / 3.32 % | 525 | 142 / 127 s | 10.5 / 8.2 GiB |
+| 21³, CFL 1 | 7.2M | 3.36 / 3.37 % | 4.74 / 4.74 % | 1,025 | 170 / 144 s | 10.6 / 8.2 GiB |
+| 21³, `solver.outer: schur` | 7.2M | 1.86 / 1.86 % | 3.29 / 3.30 % | 526 | 148 / 123 s | 9.2 / 6.7 GiB |
+| 21³, IMEX at CFL 0.25 | 7.2M | 4.03 / 4.03 % | 5.31 / 5.31 % | 4,096 | 391 / 382 s | 9.9 / 7.2 GiB |
+| 21³, np 2 (two H100s) | 7.2M | 1.87 / 1.86 % | 3.31 / 3.31 % | 525 | 104 / 97 s | 13.0 / 10.7 GiB |
+| 21³, `time.oifs_on_the_fly` (new only) | 7.2M | 1.86 % | 3.31 % | 525 | 116 s | 7.5 GiB |
+| 32³ (192 nodes) | 25.3M | 0.23 / 0.22 % | 2.42 / 2.42 % | 763 | 614 / 527 s | 32.1 / 23.6 GiB |
+| 42³ (252 nodes) | 57.3M | 0.16 / 0.17 % | 1.80 / 1.79 % | 1,019 | 1,759 / 1,467 s | 70.1 / 51.0 GiB |
+| 42³, Schur | 57.3M | 0.17 / 0.17 % | 1.75 / 1.75 % | 1,024 | 2,164 / 1,782 s | 58.8 / 39.7 GiB |
+| 42³, Schur, on the fly (new only) | 57.3M | 0.17 % | 1.75 % | 1,023 | 1,874 s | 34.7 GiB |
+
+- **The same answers.** The dissipation curves of the two mains differ by 1e-7 to 3e-6 of the
+  peak up to t = 4 (roundoff passed through the solver tolerance), 2e-5 to 8e-5 up to the
+  peak, and 1e-4 to 4e-4 over the turbulent decay, against gaps of 1.5e-2 and more to the DNS;
+  the step counts match to one step.
+- **252³ at Q6 is the first run under 2 %** in the largest dissipation error (1.79 %;
+  the order study had none by 192³).
+- The new main is 2-17 % faster in every pair. The two lanes shared a node, so the times
+  are indicative; the small 3D-1Z case (dfg_3d) ran 3.5x slower paired than alone.

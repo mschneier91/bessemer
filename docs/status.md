@@ -22,8 +22,8 @@ gets k_u - 1); `physics.grad_div_h` defaults to < 0 = 6 / k_u (`Parameters::Grad
 (Navier-Stokes, the convective form, fixed or CFL steps), IMEX for Stokes, the rotational
 form and error-controlled steps; `time.cfl_target` defaults to auto (`CflTarget()`: 2 under
 OIFS, 0.5 under IMEX) and `time.oifs_cfl` to 1.5, the study's settings. The verify tier
-follows the defaults by design, so it now verifies Q6 with OIFS. **Open:** no order
-reaches 2 % by 192^3; validation on the channel at Q6.
+follows the defaults by design, so it now verifies Q6 with OIFS. Q6 reaches 2 % at 252^3
+(1.79 %) and the channel is validated at Q6 (2026-10-17, below).
 
 **GPU memory toward 100M DOFs on one H100 (2026-10-16, branch memory-audit).** The pressure
 LOR-AMG was 39 % of a Q7 run (752 B/DOF). Freeing MFEM's LOR scaffolding after assembly
@@ -43,6 +43,20 @@ cached Jacobians, phase 2) 2.6 GiB more at 0.5–1.4 % per step: coupled 57,603 
 the on-the-fly OIFS apply as an opt-in, IMEX's convection on the fly, the lean vector
 mass): OIFS coupled 50,465 MiB, Schur 40,351 MiB (738 B/DOF); IMEX coupled 44,745 MiB,
 Schur 32,165 MiB (589 B/DOF).
+
+**3D verification of the GPU memory work (2026-10-17).** Human: "run the 3d verification
+tests (TG/channel flow/3d cylinder/... curved boundary ARM example) to really be sure we
+didn't introduce any bugs". Main of before the memory work (aa6aa7e) against main after it,
+one H100 each: Taylor-Green Re 1600 at Q6 (126^3 with OIFS at CFL 1 and 2, Schur, IMEX, the
+on-the-fly opt-in, np 2; 192^3; 252^3 = 57.3M DOFs coupled and Schur), the channel at Re_tau
+180 at Q6, DFG 3D-1Z and 3D-3Z at Q3 and Q6, and 3D-3Z with AMR on the curved cylinder (np 1
+and 2). **The same answers**: dissipation curves within 3e-6 of the peak to t = 4, forces
+within 4e-5 over the drag peak, channel statistics within the sampling noise; the new main
+2-17 % faster, and at 57.3M 70.1 -> 51.0 GiB (coupled) and 58.8 -> 39.7 GiB (Schur) over a
+whole run. Accuracy at Q6: 252^3 under 2 % in the largest dissipation error (1.79 %); the
+channel within 1.7 % in U+ (Re_tau 178.04); DFG c_D within 0.014 % (3D-1Z) and c_D,max within
+0.41 % (3D-3Z; 0.17 % with AMR). Results in benchmarks/*/README.md; where each memory change
+applies and the open gaps in gpu_memory.md. It also found the bug below.
 
 **Q6 on curved meshes on a GPU (2026-10-17, change 26).** The 3D verification (human: "run
 the 3d verification tests ... to really be sure we didn't introduce any bugs") found the Q6

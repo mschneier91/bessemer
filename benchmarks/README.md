@@ -12,12 +12,12 @@ decks.
 | [dfg_3d/](dfg_3d/) | laminar 3D flow past a cylinder: drag, lift | FeatFlow (Bayraktar, Mierka & Turek 2012) | 3D-1Z (steady, Re 20), 3D-3Z (unsteady) | desktop |
 | [sphere_re300/](sphere_re300/) | 3D wake and forces with AMR | Johnson & Patel 1999 | needs a hex mesh file first | — |
 
-**Status (2026-10-10):** the infrastructure is in place and unit-tested: the decks load,
-the solver features they use are tested (`test/channel_statistics_test`,
-`test/benchmark_setup_test`), and each plot script passes `--selftest` once the reference
-data is fetched (below). **None of the
-benchmarks has been run yet**; the human runs them. Record results in each benchmark's
-README and in [docs/status.md](../docs/status.md).
+**Status (2026-10-17):** tgv_re1600, channel (Re_τ 180) and dfg_3d have been run on
+Bridges-2 (one H100), at Q3 and at the Q6 defaults: results in each benchmark's README.
+sphere_re300 still needs its mesh. The decks load and the solver features they use are
+tested (`test/channel_statistics_test`, `test/benchmark_setup_test`); each plot script
+passes `--selftest` once the reference data is fetched (below). Record results in each
+benchmark's README and in [docs/status.md](../docs/status.md).
 
 ## Running one
 
