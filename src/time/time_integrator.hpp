@@ -112,6 +112,8 @@ struct TimeIntegratorOptions
    ConvectionTreatment convection_treatment = ConvectionTreatment::Imex;
    /// OIFS: CFL number of each RK4 substep.
    double oifs_cfl = 0.5;
+   /// OIFS: the convection's on-the-fly path where eligible (OifsConvection).
+   bool oifs_on_the_fly = false;
    /// Velocity-block PC with the rotational form (see RotationVelocityPC).
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    /// Rotational form + LOR-AMG velocity PC: include the rotation term in the

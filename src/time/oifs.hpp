@@ -98,13 +98,16 @@ public:
     *                  (borrowed; must outlive this); null: its own.
     * @param mass_diag_inv 1 / @p mass_diag when the BDF step's operator keeps
     *                  it (borrowed, like @p mass), or null: computed here.
+    * @param on_the_fly The convection's on-the-fly path where eligible
+    *                  (OifsConvection; deck time.oifs_on_the_fly).
     * @pre Aborts if the substeps' inverse does not reproduce @p mass.
     */
    OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
                 BoundaryConditions& bc, double sub_cfl, mfem::Operator& mass,
                 const mfem::Vector& mass_diag,
                 ElementScratch* scratch = nullptr,
-                const mfem::Vector* mass_diag_inv = nullptr);
+                const mfem::Vector* mass_diag_inv = nullptr,
+                bool on_the_fly = false);
 
    /**
     * @brief The advected BDF history combination.

@@ -54,15 +54,33 @@ public:
     * @param scratch Element-vector buffers for the wind, input and output
     *                element vectors (borrowed; must outlive this); null:
     *                its own.
+    * @param on_the_fly Rebuild the quadrature data at every apply instead of
+    *                storing it, where OnTheFlyEligible() (deck
+    *                time.oifs_on_the_fly): 12 GiB less at Q6 on 42^3
+    *                elements, the apply ~40 % slower (+6.5 % per step).
     */
    OifsConvection(mfem::ParFiniteElementSpace& vfes,
                   const mfem::IntegrationRule& ir,
-                  ElementScratch* scratch = nullptr);
+                  ElementScratch* scratch = nullptr, bool on_the_fly = false);
 
    /**
-    * @brief Set advecting velocity @p l: its quadrature data.
+    * @brief Whether the on-the-fly path is available: Supported(), 9 or more
+    *        points per direction (velocity orders 6 and 7 at the 3k rule),
+    *        linear mesh nodes (straight-sided elements).
+    * @param vfes Velocity space.
+    * @param ir   Quadrature rule.
+    * @return True when the constructor's on_the_fly takes effect.
+    */
+   static bool OnTheFlyEligible(const mfem::ParFiniteElementSpace& vfes,
+                                const mfem::IntegrationRule& ir);
+
+   /**
+    * @brief Set advecting velocity @p l: its quadrature data, or (the
+    *        on-the-fly path) a reference to it.
     * @param l Index, 0 to 2.
-    * @param u The velocity (on the bound space, local dofs valid).
+    * @param u The velocity (on the bound space, local dofs valid). On the
+    *          on-the-fly path it is read at every Mult(): it must stay alive
+    *          and unchanged until the next SetWind(l).
     */
    void SetWind(int l, const mfem::ParGridFunction& u);
 
@@ -98,8 +116,24 @@ private:
    int d1_ = 0;  ///< Dofs per direction.
    int q1_ = 0;  ///< Points per direction.
    int set_ = 0; ///< Winds set (bit l: SetWind(l) called).
-   /// Quadrature data of the three winds, (Q1D^3, 3, NE, 3).
+   /// Quadrature data of the three winds, (Q1D^3, 3, NE, 3) (empty on the
+   /// on-the-fly path).
    mfem::Vector op_;
+   /// Columns() on straight-sided elements (linear nodes): the Jacobians come
+   /// from the element vertices (xn_), so jac_ is not kept.
+   bool linear_ = false;
+   /// On-the-fly path (opt-in, linear_): every apply reads the winds from
+   /// their local dofs and forms the Jacobians from the vertices, so op_ is
+   /// not kept either (11.6 GiB less than the first stored path at Q6 on 42^3
+   /// elements, the apply 42 % slower).
+   bool fly_ = false;
+   /// The winds set by SetWind (borrowed: unchanged until the next SetWind of
+   /// the same index; on-the-fly path).
+   const mfem::Vector* wind_[3] = {nullptr, nullptr, nullptr};
+   const mfem::Array<int>* gather_ = nullptr; ///< The restriction's map.
+   int ndofs_ = 0; ///< Scalar local dofs: the component stride.
+   const mfem::DofToQuad* nmaps_ = nullptr; ///< Linear node maps at ir_.
+   mfem::Vector xn_; ///< Element vertices, (2, 2, 2, 3, NE).
    mfem::Vector ue_; ///< Wind, element vector (scratch).
    mfem::Vector uq_; ///< Wind at the points, (3, NQ, NE) (scratch).
    mfem::Vector xl_; ///< Input, local dofs (scratch).

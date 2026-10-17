@@ -86,6 +86,7 @@ void Case::BuildIntegrator()
    opts.outflow = params_.outflow;
    opts.convection_treatment = params_.Convection();
    opts.oifs_cfl = params_.oifs_cfl;
+   opts.oifs_on_the_fly = params_.oifs_on_the_fly;
    opts.rotation_pc = params_.rotation_pc;
    opts.rotation_in_lor = params_.rotation_in_lor;
    {

@@ -29,6 +29,8 @@ H100, `profile: sync`, 42³ elements = 57.3M DOFs (48.0M velocity, 9.3M pressure
 | + change 18 (job 49345234) | 63,029 MiB (1,153 B/DOF) | 53,203 MiB (974 B/DOF) |
 | + change 19 (job 49345424) | 61,955 MiB (1,134 B/DOF) | 48,127 MiB (881 B/DOF) |
 | + change 20 (job 49345599) | 57,603 MiB (1,054 B/DOF) | 46,031 MiB (842 B/DOF) |
+| + changes 21-23 (job 49347319) | 50,465 MiB (923 B/DOF) | 40,351 MiB (738 B/DOF) |
+| ... with `time.oifs_on_the_fly` (job 49345844, before 22-23) | 45,739 MiB (837 B/DOF) | 34,173 MiB (625 B/DOF) |
 
 100M DOFs fit only below about 850 B/DOF (the card's 81,559 MiB over 100M), less headroom.
 Last measured capacity (before change 17): coupled 57.3M runs and 70.4M does not; Schur
@@ -91,9 +93,11 @@ apply in full. To measure: Taylor–Green with a refined band (as oifs_test O3).
   methods; the divergence and gradient applies 15–17 % slower, the step 0.5–1.4 %.
   **Done, change 23:** W adj(J) once per element in shared memory; the kernel time is back
   to change 19's (within 1 % on the step).
-- **OIFS winds combined inside the apply kernel**: drops the per-wind data and its build
-  array (6,783 MiB). The apply would read about one number per point instead of nine and
-  interpolate the wind itself: expected neutral or faster, but measure.
+- **Done, change 21: OIFS keeps only its combined wind data** (6.8 GiB less, time
+  unchanged); the fully on-the-fly apply is the opt-in `time.oifs_on_the_fly` (11.6 GiB
+  less, 6.5 % more time per step). Measuring showed the expectation above was wrong: the
+  apply then reads the Jacobians (9 per point) besides the winds, unless they too are
+  formed on the fly, which costs arithmetic.
 
 **Held: could cost meaningful throughput, or change the answer.**
 
@@ -370,6 +374,26 @@ and merge it when its working". Measured at Q6 (the working list above).
     point against 9 stored values. Per step +0.5 % (coupled) and +1.4 % (Schur); steps 3–25
     25.3 → 25.8 s and 28.7 → 29.1 s. To win it back: form W adj(J) once per element in
     shared memory (37 KB at Q6) before the component loop. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
+
+21. **OIFS keeps only its combined wind data; on the fly is opt-in** (results change at
+    roundoff). At velocity orders 6 and 7 `OifsConvection` kept the Jacobians at the 10³
+    points (`jac_`), the three winds' quadrature data (`op_`) and the winds at the points
+    (`uq_`): 11.6 GiB at 57.3M DOFs. Measured first in one binary (job 49345844): the fully
+    on-the-fly apply (winds from their local dofs, Jacobians from the vertices at every
+    apply) drops all three, peak coupled 59,349 → 45,739 MiB and Schur 46,769 → 34,173
+    MiB, but the substep apply takes 16.5 ms instead of 11.7 and the step 6.5 % longer,
+    over the 2 % allowed. So the default keeps `op_` and drops the other two: the wind
+    setup (once per wind per step) interpolates in registers and, on straight-sided
+    elements, forms the Jacobians from the 8 vertices (curved elements keep `jac_`);
+    the substep apply is unchanged. `time.oifs_on_the_fly: true` selects the on-the-fly
+    apply (about 200 B/DOF less, about 6 % more time); human: "ya that's fine with me
+    trying out the on the fly stuff". Q6 Taylor–Green at 57.3M DOFs (job 49347319, with
+    changes 22 and 23): 6,770 MiB less (`jac_` 5,074, `uq_` 1,696); peak coupled
+    50,465 MiB, Schur 40,351 MiB; the wind setup 10.5 → 7.2 ms, the substep apply and the
+    step unchanged (within 1 %). CPU: Taylor–Green Q6 and the Q6 channel within 5.9e-13 of
+    change 20 (Jacobians from the vertices); everything else byte-identical. The OIFS
+    convection test also runs the on-the-fly path and curved elements at orders 6 and 7
+    against MFEM's forms. Tests (changes 21, 24 and 25 together): CPU smoke/fast at np 1, 2 and 4, 75/75 each; GPU smoke/fast at np 1 and 2, 73/73 each.
 
 22. **One reciprocal mass diagonal** (bitwise unchanged). With the mass applied as its
     diagonal (change 18), the OIFS substeps and the Schur PC's velocity mass inverse each

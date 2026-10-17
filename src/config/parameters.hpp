@@ -387,6 +387,11 @@ struct Parameters
    /// OIFS: CFL number of each RK4 substep (deck `time.oifs_cfl`; 1.5, the
    /// polynomial-order study's and the channel decks' setting).
    double oifs_cfl = 1.5;
+   /// OIFS at velocity orders 6 and 7 on straight-sided elements: rebuild the
+   /// convection's quadrature data at every substep apply instead of storing
+   /// it (deck `time.oifs_on_the_fly`; default false). 11.6 GiB less at 57.3M
+   /// DOFs, 6.5 % more time per step (job 49345844).
+   bool oifs_on_the_fly = false;
    /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3
    /// (deck `time.ext_order`): BDF2/EXT2 or BDF2/EXT3. CASE-LEVEL DEFAULT 2
    /// (human decision 2026-10-08, from the DFG 2D-3 study,

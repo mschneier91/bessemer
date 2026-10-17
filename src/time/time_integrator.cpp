@@ -136,7 +136,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                                              opts_.oifs_cfl, Trap().Blocks().Mass(),
                                              Trap().Blocks().MassDiagonal(),
                                              scratch_.get(),
-                                             Trap().Blocks().MassDiagonalInverse());
+                                             Trap().Blocks().MassDiagonalInverse(),
+                                             opts_.oifs_on_the_fly);
    }
 
    if (opts_.adaptive)

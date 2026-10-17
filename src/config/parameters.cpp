@@ -357,6 +357,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "CFL < ~0.7), or OIFS sub-stepping (CFL 2; BDF3 and, with "
    "discretization.mass auto, the collocated mass by default).");
    r.Read(time, "oifs_cfl", p.oifs_cfl, "CFL number of each OIFS substep.");
+   r.Read(time, "oifs_on_the_fly", p.oifs_on_the_fly,
+          "OIFS at velocity orders 6-7 on straight-sided elements: rebuild the "
+          "convection's quadrature data at every substep instead of storing it "
+          "(about 200 B/DOF less memory, about 6 % more time per step).");
    r.Read(time, "order", p.time_order,
           "BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX).");
    r.Read(time, "ext_order", p.ext_order,
