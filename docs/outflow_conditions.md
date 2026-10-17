@@ -87,7 +87,7 @@ condition for that form, and fixing it is an open item.
   sub-stepped advection of the BDF history, but this term does not: the time integrator
   evaluates it alone (`Convection::MultDirectionalDoNothing`) on the velocity history and
   subtracts its EXT extrapolation from the BDF step's right-hand side
-  (`SubtractOifsDirectionalDoNothing`), exactly as IMEX treats it. Putting it inside the
+  (`SubtractOifsExplicitTerms`), exactly as IMEX treats it. Putting it inside the
   substeps instead, linearized in the advected field ($-\tfrac12\int_{S_1}(w\cdot n)_-
   \varphi\psi$), makes the substep advection energy-exact but is stiff at backflow nodes
   (rate $\sim 6|u\cdot n|/h$ for $Q_3$): on the paper's square it biased the steady state
