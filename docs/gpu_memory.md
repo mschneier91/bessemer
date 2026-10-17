@@ -222,6 +222,11 @@ temporaries all went through the pool. Taylor-Green Q7 at ~128³ (one H100, prof
 - `HYPRE_SetGPUMemoryPoolSize(2, 1, 20, 64 MiB)` (only blocks up to 1 MiB pooled): AMG setup
   594 MiB, run peak 10,371 MiB (-21 %; Q3 -680 MiB). AMG setup +5 ms at Q7, +15 ms at Q3;
   steps unchanged (0.2546 against 0.2534 s).
+- Frequent rebuilds, the 2D square cylinder adapting every 5 steps to t = 20 (116 adapts in
+  1,149 steps, job 49341452): 134.1 s of solve time with the cap, 134.4 s with hypre's
+  defaults.
+- Capacity at Q6 (throughput.md): the largest Taylor-Green that ran on one H100 went from
+  39.2M to 57.3M DOFs (70.4M with the Schur outer method).
 
 `ConfigureDevice` applies that cap on every GPU run; `INCNS_HYPRE_POOL` overrides it. The pool
 exists because `cudaMalloc` is slow and `cudaFree` synchronizes the device: it pays when AMG

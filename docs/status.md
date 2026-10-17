@@ -29,8 +29,10 @@ reaches 2 % by 192^3; validation on the channel at Q6.
 LOR-AMG was 39 % of a Q7 run (752 B/DOF). Freeing MFEM's LOR scaffolding after assembly
 (6d90d0c) saves 460 MiB; capping hypre's device pool (it rounds every allocation up to a
 power of 8 and caches every freed block) saves 2.7 GB at Q7 128^3 with no time cost
-(ConfigureDevice; docs/gpu_memory.md). Q7 1,946 -> 1,488 B/DOF. The audit and the remaining
-items: throughput.md.
+(ConfigureDevice; docs/gpu_memory.md). Q7 1,946 -> 1,488 B/DOF. Measured capacity at Q6
+(Taylor-Green, one H100): 39.2M DOFs before (out of memory at 57.3M), 57.3M with the fixes
+(out at 70.4M), 70.4M with `solver.outer: schur` (out at 85.5M). The audit and what is left
+(not yet measured): throughput.md.
 
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be

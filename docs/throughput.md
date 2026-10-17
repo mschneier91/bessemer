@@ -1104,12 +1104,23 @@ pressure unknowns of Q3, which eats the operators' savings with p (2.55 -> 1.39 
   setup +5 ms, steps unchanged. MFEM's LORSolver kept its LOR mesh, space and batched-assembly
   scratch for its lifetime: freeing them after assembly saves 460 MiB at Q3 and Q7 (6d90d0c).
   BoomerAMG's strength threshold 0.5 / 0.6 made the hierarchy larger, aggressive coarsening
-  did not shrink it. Left: the assembled LOR matrix holds 1.4 GB at Q7 for ~0.4 GB of data.
-- **After both fixes Q7 is at 1,488 B/DOF** (1,946 before), ~1,370 at scale: ~60M DOFs per
-  80 GB H100. Toward 100M (850 B/DOF): Uzawa (`claude/schur-cg-solver-9sf1r5`, not yet
-  built) ~-150, the LOR matrix copies ~-130, sharing scratch vectors ~-100 to -150 (not yet
-  measured): ~940-990 B/DOF, ~87-91M DOFs. The last ~10 % needs another lever, e.g. the AMG
-  in single precision.
+  did not shrink it. The assembled LOR matrix holds 1.4 GB at Q7 for ~0.4 GB of nonzeros; a
+  deep copy made by hypre freed nothing (job 49341452), so it is one copy, ~1 GB of it not
+  yet explained.
+- **After both fixes Q7 is at 1,488 B/DOF** (1,946 before).
+- **Measured capacity at Q6** (Taylor-Green, OIFS CFL 2, ~25 steps, one H100, nvidia-smi
+  peak; jobs 49341518, 49341752), largest size that ran / first that did not:
+
+  | | 25.3M DOFs | largest that ran | first out of memory |
+  |---|---|---|---|
+  | main before the fixes, coupled | 38.8 GiB, 1,647 B/DOF | 39.2M (65.7 GiB) | 57.3M |
+  | both fixes, coupled | 32.1 GiB, 1,360 B/DOF | 57.3M (67.9 GiB) | 70.4M |
+  | both fixes, `solver.outer: schur` | 26.3 GiB, 1,117 B/DOF | 70.4M (70.6 GiB) | 85.5M |
+
+  The jump before the fixes at 39.2M (1,800 B/DOF) is the pool's power-of-8 rounding. 100M
+  DOFs needs ~850 B/DOF, about 20 % below Schur's 1,076. What is left has not been measured:
+  sharing MFEM's per-form scratch and the time integrator's vectors, the AMG in single
+  precision, OIFS's Jacobians and wind in single precision or on the fly.
 
 **Decision (human 2026-10-16): Q6/Q5 by default and gamma = 6 h_K / k_u** (`grad_div_h`
 default < 0 = 6 / k_u: 2 h_K at Q3, so Q3 runs are unchanged). Q6 is the cheapest order to
