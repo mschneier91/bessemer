@@ -283,6 +283,156 @@ void ApplyTranspose3DByComponent(const int NE, const Array<real_t>& bt,
    });
 }
 
+/// All of W coeff adj(J) at one point into @p a (a[c][d] = Q(d, c)): the
+/// three columns of AdjColumn, from one load of the Jacobian.
+template <typename Tj, typename Ta>
+MFEM_HOST_DEVICE inline void AdjAll(const Tj& J, const int qx, const int qy,
+                                    const int qz, const int e, const real_t cw,
+                                    Ta& a)
+{
+   const real_t J11 = J(qx, qy, qz, 0, 0, e), J21 = J(qx, qy, qz, 1, 0, e);
+   const real_t J31 = J(qx, qy, qz, 2, 0, e), J12 = J(qx, qy, qz, 0, 1, e);
+   const real_t J22 = J(qx, qy, qz, 1, 1, e), J32 = J(qx, qy, qz, 2, 1, e);
+   const real_t J13 = J(qx, qy, qz, 0, 2, e), J23 = J(qx, qy, qz, 1, 2, e);
+   const real_t J33 = J(qx, qy, qz, 2, 2, e);
+   a[0][0][qz][qy][qx] = cw * ((J22 * J33) - (J23 * J32)); // A11
+   a[0][1][qz][qy][qx] = cw * ((J31 * J23) - (J21 * J33)); // A21
+   a[0][2][qz][qy][qx] = cw * ((J21 * J32) - (J31 * J22)); // A31
+   a[1][0][qz][qy][qx] = cw * ((J32 * J13) - (J12 * J33)); // A12
+   a[1][1][qz][qy][qx] = cw * ((J11 * J33) - (J13 * J31)); // A22
+   a[1][2][qz][qy][qx] = cw * ((J31 * J12) - (J11 * J32)); // A32
+   a[2][0][qz][qy][qx] = cw * ((J12 * J23) - (J22 * J13)); // A13
+   a[2][1][qz][qy][qx] = cw * ((J21 * J13) - (J11 * J23)); // A23
+   a[2][2][qz][qy][qx] = cw * ((J11 * J22) - (J12 * J21)); // A33
+}
+
+// Apply3DByComponent / ApplyTranspose3DByComponent with W coeff adj(J) formed
+// once per element in shared memory (9 Q1D^3 values: 37 KB at 8 points per
+// direction, within the 48 KB of static shared memory up to 8): the Jacobian
+// is read once per point (9 values, as the stored data was) instead of 6
+// values per component. The same expressions: bitwise the same results.
+template <int TR_D1D, int TE_D1D, int Q1D>
+void Apply3DByComponentShared(const int NE, const Array<real_t>& b_,
+                              const Array<real_t>& g_,
+                              const Array<real_t>& bt_,
+                              const Array<real_t>& w_, const real_t coeff,
+                              const Vector& j_, const Vector& x_, Vector& y_)
+{
+   namespace ki = mfem::kernels::internal;
+   const auto B = b_.Read(), G = g_.Read(), Bt = bt_.Read();
+   const auto W = Reshape(w_.Read(), Q1D, Q1D, Q1D);
+   const auto J = Reshape(j_.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto X = Reshape(x_.Read(), TR_D1D, TR_D1D, TR_D1D, 3, NE);
+   auto Y = Reshape(y_.ReadWrite(), TE_D1D, TE_D1D, TE_D1D, 1, NE);
+
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1];
+      MFEM_SHARED real_t sA[3][3][MQ1][MQ1][MQ1]; // sA[c][d] = Q(d, c)
+      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
+      ki::v_regs3d_t<1, MQ1> r0, r1;
+      for (int qz = 0; qz < Q1D; qz++)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+            {
+               AdjAll(J, qx, qy, qz, e, W(qx, qy, qz) * coeff, sA);
+            }
+         }
+      }
+      ki::LoadMatrix(TR_D1D, Q1D, B, sB);
+      ki::LoadMatrix(TR_D1D, Q1D, G, sG);
+      MFEM_UNROLL(3)
+      for (int c = 0; c < 3; ++c)
+      {
+         kernels3d::LoadComponent(e, TR_D1D, c, X, g0);
+         kernels3d::GradComponent<false>(TR_D1D, Q1D, smem, sB, sG, g0, g1);
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  real_t r = g1[0][0][qz][qy][qx] * sA[c][0][qz][qy][qx];
+                  if (c > 0) { r = r0[0][qz][qy][qx] + r; }
+                  r += g1[0][1][qz][qy][qx] * sA[c][1][qz][qy][qx];
+                  r += g1[0][2][qz][qy][qx] * sA[c][2][qz][qy][qx];
+                  r0[0][qz][qy][qx] = r;
+               }
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      ki::LoadMatrix<MQ1, true>(TE_D1D, Q1D, Bt, sB);
+      ki::EvalTranspose3d(TE_D1D, Q1D, smem, sB, r0, r1);
+      ki::WriteDofs3d(e, TE_D1D, r1, Y);
+   });
+}
+
+template <int TR_D1D, int TE_D1D, int Q1D>
+void ApplyTranspose3DByComponentShared(const int NE, const Array<real_t>& bt,
+                                       const Array<real_t>& gt,
+                                       const Array<real_t>& b,
+                                       const Array<real_t>& w_,
+                                       const real_t coeff, const Vector& j_,
+                                       const Vector& x_, Vector& y_)
+{
+   namespace ki = mfem::kernels::internal;
+   const auto Bt = bt.Read(), Gt = gt.Read(), B = b.Read();
+   const auto W = Reshape(w_.Read(), Q1D, Q1D, Q1D);
+   const auto J = Reshape(j_.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto X = Reshape(x_.Read(), TE_D1D, TE_D1D, TE_D1D, 1, NE);
+   auto Y = Reshape(y_.ReadWrite(), TR_D1D, TR_D1D, TR_D1D, 3, NE);
+
+   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MQ1 = Q1D;
+      MFEM_SHARED real_t smem[MQ1][MQ1];
+      MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1];
+      MFEM_SHARED real_t sA[3][3][MQ1][MQ1][MQ1]; // sA[c][d] = Q(d, c)
+      ki::v_regs3d_t<1, MQ1> r0, r1;
+      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
+      for (int qz = 0; qz < Q1D; qz++)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+            {
+               AdjAll(J, qx, qy, qz, e, W(qx, qy, qz) * coeff, sA);
+            }
+         }
+      }
+      ki::LoadMatrix(TE_D1D, Q1D, B, sB);
+      ki::LoadDofs3d(e, TE_D1D, X, r0);
+      ki::Eval3d(TE_D1D, Q1D, smem, sB, r0, r1);
+      MFEM_SYNC_THREAD;
+      ki::LoadMatrix<MQ1, true>(TR_D1D, Q1D, Bt, sB);
+      ki::LoadMatrix<MQ1, true>(TR_D1D, Q1D, Gt, sG);
+      MFEM_UNROLL(3)
+      for (int c = 0; c < 3; ++c)
+      {
+         for (int qz = 0; qz < Q1D; qz++)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qy, y, Q1D)
+            {
+               MFEM_FOREACH_THREAD_DIRECT(qx, x, Q1D)
+               {
+                  const real_t r = r1[0][qz][qy][qx];
+                  g0[0][0][qz][qy][qx] = r * sA[c][0][qz][qy][qx];
+                  g0[0][1][qz][qy][qx] = r * sA[c][1][qz][qy][qx];
+                  g0[0][2][qz][qy][qx] = r * sA[c][2][qz][qy][qx];
+               }
+            }
+         }
+         kernels3d::GradComponent<true>(TR_D1D, Q1D, smem, sB, sG, g0, g1);
+         ki::WriteDofs3d(e, TR_D1D, 0, c, g1, Y);
+      }
+   });
+}
+
 } // namespace leandiv
 
 namespace
@@ -297,11 +447,18 @@ using Kernel = void (*)(const int, const Array<real_t>&, const Array<real_t>&,
 template <int K>
 Kernel Pick(const bool transpose)
 {
-   if constexpr(K + 2 >= 7)
+   if constexpr(K + 2 >= 9)
    {
       return transpose
              ? leandiv::ApplyTranspose3DByComponent < K + 1, K, K + 2 >
              : leandiv::Apply3DByComponent < K + 1, K, K + 2 >;
+   }
+   else if constexpr(K + 2 >= 7)
+   {
+      // W adj(J) per element in shared memory: it fits up to 8 points.
+      return transpose
+             ? leandiv::ApplyTranspose3DByComponentShared < K + 1, K, K + 2 >
+             : leandiv::Apply3DByComponentShared < K + 1, K, K + 2 >;
    }
    else
    {

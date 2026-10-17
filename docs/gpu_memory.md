@@ -89,7 +89,8 @@ apply in full. To measure: Taylor–Green with a refined band (as oifs_test O3).
 
 - **Done, change 20: the divergence from the cached Jacobians.** 2,606 MiB less in both
   methods; the divergence and gradient applies 15–17 % slower, the step 0.5–1.4 %.
-  **Follow-up:** W adj(J) once per element in shared memory, to win the kernel time back.
+  **Done, change 23:** W adj(J) once per element in shared memory; the kernel time is back
+  to change 19's (within 1 % on the step).
 - **OIFS winds combined inside the apply kernel**: drops the per-wind data and its build
   array (6,783 MiB). The apply would read about one number per point instead of nine and
   interpolate the wind itself: expected neutral or faster, but measure.
@@ -379,6 +380,19 @@ and merge it when its working". Measured at Q6 (the working list above).
     0.24 GiB), was dropped: it was not bitwise identical (roundoff in the channel, which
     DFG 3D's error-controlled steps amplified into different step sizes; the reordering
     was not found), and 4.5 B/DOF did not justify the search. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
+
+23. **Change 20's kernel time won back** (results change at roundoff). At 7 and 8 points per
+    direction (velocity orders 5 and 6) the lean divergence's one-component kernels now
+    form W adj(J) for the whole element once, in shared memory (9 Q1D^3 values: 37 KB at
+    8 points, inside the 48 KB of static shared memory), and read it for each component:
+    the Jacobian is read once per point (9 values, as the stored data was) instead of 6
+    values per component. Order 7 (9 points, 52 KB) keeps change 20's kernels. The same
+    expressions, but the compiler contracts them differently in the new context: CPU job
+    49346415 found the Q6 cases within 1.5e-12 of change 20 (step histories identical).
+    Q6 Taylor–Green at 57.3M DOFs (job 49346424): the divergence apply 5.23 → 4.59 ms
+    (change 19: 4.54), the gradient 7.65 → 6.98 ms (6.56); the step 1,263 → 1,245 ms
+    (coupled) and 1,349 → 1,344 ms (Schur), within noise of change 19. Memory
+    unchanged. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
 
 ## Where the memory is now (64³, one H100, after change 15)
 
