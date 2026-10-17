@@ -96,12 +96,15 @@ public:
     * @param mass_diag Its assembled diagonal (StokesOperator::MassDiagonal()).
     * @param scratch   Element-vector buffers for the convection kernel
     *                  (borrowed; must outlive this); null: its own.
+    * @param mass_diag_inv 1 / @p mass_diag when the BDF step's operator keeps
+    *                  it (borrowed, like @p mass), or null: computed here.
     * @pre Aborts if the substeps' inverse does not reproduce @p mass.
     */
    OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
                 BoundaryConditions& bc, double sub_cfl, mfem::Operator& mass,
                 const mfem::Vector& mass_diag,
-                ElementScratch* scratch = nullptr);
+                ElementScratch* scratch = nullptr,
+                const mfem::Vector* mass_diag_inv = nullptr);
 
    /**
     * @brief The advected BDF history combination.
@@ -199,7 +202,8 @@ private:
     *        (aborts when @f$ M^{-1}(Mz) \ne z @f$).
     * @param mass_diag The assembled diagonal of mass_.
     */
-   void SetupMass(const mfem::Vector& mass_diag);
+   void SetupMass(const mfem::Vector& mass_diag,
+                  const mfem::Vector* mass_diag_inv);
    /**
     * @brief phi on the imposed Dirichlet dofs := weight * u_D(s).
     * @param s      Time of the boundary data.
@@ -253,6 +257,8 @@ private:
    bool mass_diagonal_ = false; ///< mass_ is exactly diagonal.
    /// 1 / (the diagonal of mass_), true dofs: the diagonal inverse.
    mfem::Vector inv_mass_diag_;
+   /// The reciprocal applied: inv_mass_diag_, or the operator's (borrowed).
+   const mfem::Vector* inv_ = nullptr;
    long mass_iterations_ = 0;   ///< CG iterations of the mass solves.
    /// CG on mass_ (non-diagonal mass only).
    std::unique_ptr<mfem::CGSolver> mass_cg_;

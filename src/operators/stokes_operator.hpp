@@ -275,6 +275,19 @@ public:
    const mfem::Vector& MassDiagonal() const { return mass_diag_; }
 
    /**
+    * @brief 1 / MassDiagonal() when the mass is applied as its diagonal: one
+    *        copy, which the OIFS substeps and the Schur PC's mass inverse
+    *        borrow (each kept its own).
+    * @return The reciprocal (true dofs), or null when the mass is not
+    *         applied as its diagonal.
+    */
+   const mfem::Vector* MassDiagonalInverse() const
+   {
+      return DiagonalMass() ? &mass_diag_inv_ : nullptr;
+   }
+
+
+   /**
     * @brief Assembled diagonal of the (unconstrained) momentum block.
     *
     * Formed as mass_coeff * MassDiagonal() + the diagonal of nu*K (+
@@ -471,6 +484,7 @@ private:
    /// Rotation in LOR: the lagged velocity on the LOR space.
    std::unique_ptr<mfem::ParGridFunction> w_lor_;
    mfem::Vector mass_diag_;     ///< Assembled mass diagonal (true dofs).
+   mfem::Vector mass_diag_inv_; ///< 1 / mass_diag_ (diagonal mass only).
    mfem::Vector momentum_diag_; ///< Assembled momentum diagonal (true dofs).
    /// Diagonal of the Delta-t independent rest of the momentum block, nu*K
    /// (+ grad-div), true dofs: momentum_diag_ = mass_coeff * mass_diag_ +

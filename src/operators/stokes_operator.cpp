@@ -161,6 +161,11 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
          // empty.
          AssembleCollocatedMassDiagonal(spaces_.Velocity(), *mass_rule_,
                                         mass_diag_);
+         // Its reciprocal, once, for the OIFS substeps and the Schur PC.
+         mass_diag_inv_.UseDevice(true);
+         mass_diag_inv_.SetSize(mass_diag_.Size());
+         mass_diag_inv_ = 1.0;
+         mass_diag_inv_ /= mass_diag_;
          M_.Reset(new DiagonalOperator(mass_diag_), true);
       }
       else

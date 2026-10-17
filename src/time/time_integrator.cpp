@@ -135,7 +135,8 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       oifs_ = std::make_unique<OifsAdvector>(spaces_, rules_, bc_,
                                              opts_.oifs_cfl, Trap().Blocks().Mass(),
                                              Trap().Blocks().MassDiagonal(),
-                                             scratch_.get());
+                                             scratch_.get(),
+                                             Trap().Blocks().MassDiagonalInverse());
    }
 
    if (opts_.adaptive)

@@ -15,7 +15,8 @@ using namespace mfem;
 OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
                            BoundaryConditions& bc, double sub_cfl,
                            Operator& mass, const Vector& mass_diag,
-                           ElementScratch* scratch)
+                           ElementScratch* scratch,
+                           const Vector* mass_diag_inv)
    : spaces_(spaces), rules_(rules), bc_(bc), sub_cfl_(sub_cfl), mass_(mass)
 {
    MFEM_VERIFY(sub_cfl > 0.0, "oifs: the substep CFL number must be positive");
@@ -28,7 +29,7 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
    MFEM_VERIFY(dim_ * n_s_ == V.GetTrueVSize(), "oifs: the scalar companion "
                "space does not match the velocity space's components");
 
-   SetupMass(mass_diag);
+   SetupMass(mass_diag, mass_diag_inv);
    cfl_ = std::make_unique<ConvectiveCfl>(V, rules_);
    if (dim_ == 3)
    {
@@ -95,7 +96,8 @@ void OifsAdvector::Rhs(double s, const Vector& phi, Vector& dphi)
    dphi.SetSubVector(imposed_, 0.0);
 }
 
-void OifsAdvector::SetupMass(const Vector& mass_diag)
+void OifsAdvector::SetupMass(const Vector& mass_diag,
+                             const Vector* mass_diag_inv)
 {
    // The BDF step's mass M, inverted exactly (see the class comment). Whether
    // M is diagonal is measured here, never assumed from the options.
@@ -106,16 +108,29 @@ void OifsAdvector::SetupMass(const Vector& mass_diag)
                "velocity true dofs");
    // Its diagonal is needed only here: the check below and the inverse (the
    // Jacobi smoother keeps its own reciprocal), so no copy is kept.
-   inv_mass_diag_.SetSize(n);
-   inv_mass_diag_.UseDevice(true);
    {
       const double* d = mass_diag.HostRead(); // setup only
-      double* id = inv_mass_diag_.HostWrite();
       for (int i = 0; i < n; ++i)
       {
          MFEM_VERIFY(d[i] > 0.0, "oifs: the mass diagonal must be positive");
-         id[i] = 1.0 / d[i];
       }
+   }
+   // The reciprocal: the operator's when it keeps one (a diagonal mass; the
+   // same IEEE quotients), else computed here.
+   if (mass_diag_inv)
+   {
+      MFEM_VERIFY(mass_diag_inv->Size() == n, "oifs: the reciprocal mass "
+                  "diagonal must act on the velocity true dofs");
+      inv_ = mass_diag_inv;
+   }
+   else
+   {
+      inv_mass_diag_.SetSize(n);
+      inv_mass_diag_.UseDevice(true);
+      const double* d = mass_diag.HostRead();
+      double* id = inv_mass_diag_.HostWrite();
+      for (int i = 0; i < n; ++i) { id[i] = 1.0 / d[i]; }
+      inv_ = &inv_mass_diag_;
    }
    mass_rhs_.SetSize(n);
    mass_rhs_.UseDevice(true);
@@ -176,7 +191,7 @@ void OifsAdvector::MassInverse(const Vector& g, Vector& nodal)
    if (mass_diagonal_)
    {
       if (&nodal != &g) { nodal = g; }
-      nodal *= inv_mass_diag_; // element-wise: M^{-1}
+      nodal *= *inv_; // element-wise: M^{-1}
       return;
    }
    mass_rhs_ = g; // g and nodal may alias

@@ -150,7 +150,8 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
       cc_pc_ = std::make_unique<CahouetChabardSchurPC>(
                   cc, spaces_.Velocity(), spaces_.Pressure(), rules_,
                   op_.Divergence(), op_.Mass(), op_.MassDiagonal(),
-                  bc_.OutflowAttributes(), nullspace_);
+                  bc_.OutflowAttributes(), nullspace_,
+                  op_.MassDiagonalInverse());
       // Grad-div raises the Schur complement's plateau from nu to nu + gamma.
       if (opts_.cc.schur_grad_div && op_.GradDivCoefficient())
       {

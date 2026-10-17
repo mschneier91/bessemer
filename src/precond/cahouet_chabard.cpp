@@ -104,7 +104,8 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    const CahouetChabardConfig& cfg, ParFiniteElementSpace& vfes,
    ParFiniteElementSpace& pfes,
    const RuleBook& rules, const Operator& B, const Operator& Mv,
-   const Vector& mv_diag, const Array<int>& outflow_attrs, bool singular_auto)
+   const Vector& mv_diag, const Array<int>& outflow_attrs, bool singular_auto,
+   const Vector* mv_diag_inv)
    : Solver(pfes.GetTrueVSize()), cfg_(cfg),
      mp_form_(std::make_unique<ParBilinearForm>(&pfes))
 {
@@ -191,7 +192,8 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    else
    {
       mv_inv_ = std::make_unique<MassInverse>(Mv, mv_diag, pfes.GetComm(),
-                                              cfg_.mv_inv, cfg_.k_mv_chebyshev);
+                                              cfg_.mv_inv, cfg_.k_mv_chebyshev,
+                                              mv_diag_inv);
    }
    // The factors go through named regions, so the profile shows the gradient,
    // the mass inverse and the divergence of each B M_v^-1 B^T apply.

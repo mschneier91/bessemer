@@ -60,12 +60,14 @@ public:
     * @param comm       Communicator for the diagonality probe / power iteration.
     * @param type       Strategy (Auto resolves via the diagonality probe).
     * @param cheb_order Chebyshev polynomial order (Chebyshev path only).
+    * @param d_inv      The reciprocal of @p diag, kept by the caller (borrowed;
+    *                   DiagDirect only); null: computed and kept here.
     * @throws std::invalid_argument on DiagDirect-with-non-diagonal-mass or
     *         AbsLumped (config validation -- identical on every rank).
     */
    MassInverse(const mfem::Operator& mass, const mfem::Vector& diag,
                MPI_Comm comm, MassInvType type = MassInvType::Auto,
-               int cheb_order = 4)
+               int cheb_order = 4, const mfem::Vector* d_inv = nullptr)
       : mfem::Solver(diag.Size())
    {
       iterative_mode = false;
@@ -99,10 +101,19 @@ public:
             // pointers Read()/Write() hand back -- a segfault with "Invalid
             // permissions" on a real GPU. These operators live inside libmfem,
             // which IS nvcc-built, so they hit genuine device kernels.
+            if (d_inv)
+            {
+               // The caller's copy (StokesOperator::MassDiagonalInverse()).
+               MFEM_VERIFY(d_inv->Size() == diag.Size(), "mass_inverse: the "
+                           "reciprocal and the diagonal differ in size");
+               dinv_ = d_inv;
+               break;
+            }
             d_inv_.SetSize(diag.Size());
             d_inv_.UseDevice(true);
             d_inv_ = 1.0;
             d_inv_ /= diag;
+            dinv_ = &d_inv_;
             break;
          }
          case MassInvType::Chebyshev:
@@ -143,7 +154,7 @@ public:
          // Two device-aware mfem::Vector kernels (see the setup comment above
          // for why this is not a hand-written forall).
          y = x;
-         y *= d_inv_;
+         y *= *dinv_;
          return;
       }
       cheb_->Mult(x, y);
@@ -186,6 +197,8 @@ private:
 
    MassInvType resolved_ = MassInvType::Auto; ///< Post-Auto strategy.
    mfem::Vector d_inv_;            ///< Reciprocal diagonal (DiagDirect only).
+   /// The reciprocal applied: d_inv_, or the caller's (DiagDirect only).
+   const mfem::Vector* dinv_ = nullptr;
    mfem::Array<int> empty_ess_;    ///< No essential dofs on mass solves.
    /// Chebyshev smoother (Chebyshev path only; null on DiagDirect -- T1f).
    std::unique_ptr<mfem::OperatorChebyshevSmoother> cheb_;

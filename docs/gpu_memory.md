@@ -70,8 +70,8 @@ up to the region within 1 %; otherwise the split is an estimate.
 - **Done, change 19:** our own partially assembled blocks from MFEM's public pieces, their
   element vectors (and the OIFS kernel's) lent by one shared pair. 2,820 MiB less in both
   methods, bitwise unchanged, no time cost.
-- The pressure preconditioner's reciprocal mass diagonal and OIFS's hold the same values
-  (366 MiB): share them where the lifetimes allow.
+- **Done, change 22:** one reciprocal mass diagonal for the OIFS substeps and the Schur
+  PC. **Dropped:** the Schur PC's pressure masses as pooled operators (not bitwise; 0.24 GiB).
 - **Tabled (human 2026-10-17): full-size work vectors.** Where the prolongation is not the
   identity (hanging nodes, or
   two or more ranks): the RAP wrappers' pairs (about 1.9 GiB at 57.3M), the OIFS mass CG and
@@ -369,6 +369,16 @@ and merge it when its working". Measured at Q6 (the working list above).
     point against 9 stored values. Per step +0.5 % (coupled) and +1.4 % (Schur); steps 3–25
     25.3 → 25.8 s and 28.7 → 29.1 s. To win it back: form W adj(J) once per element in
     shared memory (37 KB at Q6) before the component loop. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
+
+22. **One reciprocal mass diagonal** (bitwise unchanged). With the mass applied as its
+    diagonal (change 18), the OIFS substeps and the Schur PC's velocity mass inverse each
+    kept their own 1 / diag(M). `StokesOperator::MassDiagonalInverse()` now holds one
+    (the same IEEE quotients), which `OifsAdvector` and `MassInverse` borrow. CPU job
+    49346351: byte-identical to change 20 at np 1 and 2. Q6 Taylor–Green at 57.3M DOFs (job 49346352): 368 MiB less in both methods (one velocity vector); too small to show above the run-to-run variation of the peaks. The other
+    phase-1 leftover, the Schur PC's pressure masses as pooled `PaOperator`s (about
+    0.24 GiB), was dropped: it was not bitwise identical (roundoff in the channel, which
+    DFG 3D's error-controlled steps amplified into different step sizes; the reordering
+    was not found), and 4.5 B/DOF did not justify the search. Tests: CPU smoke/fast at np 1, 2 and 4, 74/74 each; GPU at np 1 and 2, 72/72 each.
 
 ## Where the memory is now (64³, one H100, after change 15)
 

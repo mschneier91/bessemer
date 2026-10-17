@@ -189,6 +189,8 @@ public:
     * @param singular_auto Detection result (BoundaryConditions::
     *                      PressureNullspaceExists) -- used when
     *                      cfg.nullspace == Auto.
+    * @param mv_diag_inv   1 / @p mv_diag when the caller keeps it (borrowed;
+    *                      StokesOperator::MassDiagonalInverse()), or null.
     */
    CahouetChabardSchurPC(const CahouetChabardConfig& cfg,
                          mfem::ParFiniteElementSpace& vfes,
@@ -196,7 +198,8 @@ public:
                          const RuleBook& rules, const mfem::Operator& B,
                          const mfem::Operator& Mv, const mfem::Vector& mv_diag,
                          const mfem::Array<int>& outflow_attrs,
-                         bool singular_auto);
+                         bool singular_auto,
+                         const mfem::Vector* mv_diag_inv = nullptr);
 
    /**
     * @brief Apply @f$ z = \nu_{pc} M_p^{-1} r + \sigma\,w @f$, w from the
