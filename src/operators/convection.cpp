@@ -1,6 +1,7 @@
 #include "operators/convection.hpp"
 
 #include "operators/directional_do_nothing.hpp"
+#include "operators/kernel_specializations.hpp"
 #include "time/oifs_convection.hpp"
 
 namespace incns
@@ -14,6 +15,12 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
                        ElementScratch* scratch)
    : spaces_(spaces), rules_(rules)
 {
+   // MFEM's form asks the mesh for the Jacobians at the dealiased rule (10
+   // points per direction at order 6): on a GPU only the registered
+   // compile-time kernels hold them (AddInterpolationKernels; idempotent).
+   // Case and StokesOperator register them too; a Convection built on its
+   // own (tests, apps) must not depend on that.
+   AddInterpolationKernels();
    // Quad/hex only, same as every other operator here (StokesOperator does the
    // identical mapping) -- the tensor-product structure the PA kernels assume.
    const Geometry::Type geom =
@@ -36,6 +43,18 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
    {
       fly_ = std::make_unique<OifsConvection>(spaces_.Velocity(), *rule_,
                                               scratch, /*on_the_fly=*/true);
+      return;
+   }
+   // Curved elements at order 7: the OIFS kernel's stored path, where MFEM's
+   // form cannot run on a GPU (its Jacobians at 11 points per direction; see
+   // stored_). On every device, so a configuration has one path.
+   ParFiniteElementSpace& vfes = spaces_.Velocity();
+   if (OifsConvection::Supported(vfes, *rule_) &&
+       vfes.GetTypicalFE()->GetDofToQuad(*rule_, DofToQuad::TENSOR).nqpt > 10)
+   {
+      stored_ = std::make_unique<OifsConvection>(vfes, *rule_, scratch);
+      wind_ = std::make_unique<ParGridFunction>(&vfes);
+      wind_->UseDevice(true);
       return;
    }
 
@@ -87,6 +106,16 @@ void Convection::Mult(const Vector& u, Vector& y) const
       y.SetSize(spaces_.Velocity().GetTrueVSize());
       y.UseDevice(true);
       fly_->MultSelf(u, y);
+   }
+   else if (stored_)
+   {
+      // The wind is u itself: its quadrature data, then C(u) u.
+      static const std::vector<double> one = {1.0};
+      wind_->Distribute(u);
+      stored_->SetWind(0, *wind_);
+      y.SetSize(spaces_.Velocity().GetTrueVSize());
+      y.UseDevice(true);
+      stored_->Mult(one, u, y);
    }
    else { form_->Mult(u, y); }
    if (!ddn_form_) { return; }

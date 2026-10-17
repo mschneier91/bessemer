@@ -52,8 +52,10 @@ order as their geometry order (7 nodes per direction at Q6), and the dealiased c
 10-point rule (MFEM's form on curved elements: IMEX's explicit term, OIFS's wall nodes) asks
 MFEM's quadrature interpolator for the Jacobians, whose runtime-size kernels hold 8 per
 direction on a GPU, unchecked. `AddInterpolationKernels` registered compile-time kernels for
-linear nodes only; it now covers node orders 1-7 at 9 and 10 points (3D; 9-11 in 2D). **Open:**
-curved meshes at Q7 (11 points: MFEM's 3D kernel cannot launch 11^3 threads per element).
+linear nodes only; it now covers node orders 1-7 at 9 and 10 points (3D; 9-11 in 2D). Curved
+meshes at Q7 (11 points, where MFEM's 3D kernel cannot launch 11^3 threads per element): the
+dealiased convection takes the OIFS kernel's stored path instead of MFEM's form (change 27,
+human: "ya do that small change for Q7").
 
 **Branch `verification` (2026-10-15, PR #1, merged 2026-10-16): CI and the verification
 tier (Phase 1 of the verification audit).** Human: "start phase 1", "the defaults will be
