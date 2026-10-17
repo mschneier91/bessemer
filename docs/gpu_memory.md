@@ -132,6 +132,65 @@ convection history (two vectors, inherent to EXT).
 Systems with CUDA memory backtraces, one short run at 21³) would name every device
 allocation and its call site; to try before guessing at it.
 
+### Where each change applies, and what is left (2026-10-17)
+
+Human 2026-10-17: "put those changes into the document and I will adjudicate later", and
+"if a change would only help on a periodic mesh then we don't need to consider it".
+Savings are at 57.3M DOFs, Q6 Taylor–Green on one H100, unless noted (1 GiB there is
+18.7 B/DOF). *Curved*: elements with high-order nodes (the cylinder meshes take the
+velocity order). *Hanging*: AMR meshes with hanging nodes.
+
+| # | Change | Saving | Methods | Straight | Curved | Hanging | Results |
+|---|---|---|---|---|---|---|---|
+| 2–16 | Rounds 1–3 at Q3 (above): the vector-diffusion diagonal's stack, one solver for the starter and the BDF steps, diagnostics that store nothing, compact vector diffusion, grad-div α only, CFL Jacobians per call, … | Q3 64³: out of memory → 34.7 GB | all | yes | yes | yes | bitwise or roundoff |
+| — | hypre's device pool capped; the LOR scaffolding freed | Q7 ~128³: −21 % of the peak | all | yes | yes | yes | unchanged |
+| 17 | No RAP over identity prolongations; three kept copies dropped | 3,724 MiB (68 B/DOF) | all | yes | yes | ~0.7 GiB of it (also at 2+ ranks) | bitwise |
+| 18 | The collocated mass applied as its diagonal | 3,282 MiB (60); steps 10–14 % faster | OIFS (IMEX only with `mass: collocated`) | yes | yes | **no** (P^T D P is not diagonal) | roundoff |
+| 19 | Our own PA blocks from MFEM's public pieces; shared element vectors | 2,820 MiB (52) | all | yes | yes | yes | bitwise |
+| 20, 23 | The divergence reads the mesh's cached Jacobians; its kernel time won back | 2,606 MiB (48) | all | yes | yes | yes | roundoff |
+| 21a | OIFS keeps no winds at the points (`uq_`) | 1,696 MiB (31) | OIFS, Q6–Q7 | yes | yes | yes | roundoff |
+| 21b | OIFS's Jacobians from the 8 vertices (no `jac_`) | 5,074 MiB (93) | OIFS, Q6–Q7 | yes | **no** | yes | roundoff |
+| 21c | Opt-in `time.oifs_on_the_fly`: no `op_` either | 5,088 MiB (93); +6.5 % per step | OIFS, Q6–Q7 | yes | **no** | yes | roundoff |
+| 22 | One reciprocal mass diagonal for OIFS and the Schur PC | ~370 MiB (7) | OIFS | yes | yes | **no** | bitwise |
+| 24 | The dealiased convection on the fly | 10,190 + 1,900 MiB (~220) | IMEX; OIFS's wall nodes; Q6–Q7 | yes | **no** | yes | roundoff |
+| 25 | The vector mass keeps W det J, not the Jacobians | 1,552 MiB (28) | IMEX (Gauss mass); the collocated mass on hanging meshes | yes | yes | yes | bitwise |
+| 26 | Fix: MFEM's interpolation kernels for curved nodes at 9–10 points | correctness (curved Q6 crashed on a GPU) | all | — | yes | yes | unchanged |
+| 27 | Fix: curved Q7 convection through the OIFS kernel's stored path | none (18 numbers per point either way); curved Q7 runs on a GPU | all | — | yes | yes | roundoff |
+
+Net, whole runs to t = 20 at 57.3M (nvidia-smi, the 3D verification, jobs 49348598,
+49348600): OIFS coupled 71,781 → 52,211 MiB, Schur 60,209 → 40,639 MiB (35,551 with the
+opt-in). IMEX from changes 17–20, 25-step peaks (jobs 49346223, 49347319): coupled 57,483 →
+44,745 MiB, Schur 44,465 → 32,165 MiB. Changes 21 and 24 do not reach Q2–Q5: there OIFS keeps
+the winds at the points and the mesh's Jacobians, and the convection is MFEM's form (Q6 is the
+default).
+
+**Open gaps, for the human to decide** (estimates are marked):
+
+| Gap | Size at 57.3M | Where | What would close it | Cost / why not yet |
+|---|---|---|---|---|
+| FGMRES basis V and Z | 8.8 GiB | coupled only (Schur has none) | single precision; a shorter restart | iterations or the answer move |
+| Projection basis | coupled 7.4 GiB, Schur ~1.3 GiB | all | `projection_k` 8 → 4; single precision | more iterations; the guess moves within the tolerance |
+| Growth no region claims | Schur 3.2, coupled 8.2, + 1.5 GiB | all | an allocation census (Nsight Systems), then decide | none: a measurement |
+| Pressure LOR-AMG | 4.4 GiB | all | aggressive coarsening; single precision | AMG settings are the human's call; single precision changes the answer |
+| The wall-node convection over the whole mesh (only the boundary nodes' values are used) | ~200 B/DOF curved (estimate); time on every walled mesh (DFG 3D-3Z Q3: 20 % of the wall time) | OIFS with Dirichlet nodes: curved Q6–Q7, every mesh at Q2–Q5 (straight Q6–Q7 pays the time only) | evaluate it on the elements that touch imposed nodes | exact on conforming meshes (diagonal mass); hanging meshes need the whole field |
+| The IMEX convection on curved meshes | ~200 B/DOF (estimate) | IMEX, curved | curved Jacobians on the fly (applied once per step, so cheap) | — |
+| OIFS's `jac_` on curved meshes | 93 B/DOF | OIFS, curved | on the fly from the nodes; single precision | roughly doubles the substep interpolation; single precision changes the answer |
+| Geometry on the fly in the momentum and divergence blocks | 2.6 + 1.7 GiB | all | recompute J and the diffusion metric at every apply | the velocity solve is the hottest kernel: perhaps 5–15 % |
+| One pool of full-size work vectors (tabled) | RAP pairs ~1.9 GiB, plus the mass solves' vectors | hanging meshes, 2+ ranks; IMEX Schur (its Chebyshev mass inverse, 1.5 GiB) | the pool | tabled (human 2026-10-17) |
+| `initial_velocity`'s growth | 1.3 GiB, unexplained | all | the census | — |
+| Hanging-node extras | ~+100 B/DOF (estimate) | hanging meshes | changes 18 and 22 cannot apply; the pool above | partly the pool |
+| OIFS's mass solves on hanging-node meshes (time, not memory) | ~30 % of the run: DFG 3D-3Z Q3 with AMR, `oifs::rhs` 275 of 986 s (3.7 ms per RK stage against 0.014 ms conforming; `oifs::boundary_values` 26 s against 0.3) | OIFS on hanging meshes (P^T D P is not diagonal: a CG solve per stage) | a diagonal true-dof mass (row-sum lumped P^T D P) in both the Stokes step and the substeps: the pointwise inverse back, and changes 18 and 22 then apply | changes the answer near hanging faces (lumping); the lumped entries' positivity at high order to check |
+| Single-precision AMG | ~2 GiB | all | — | changes the answer (held, 2026-10-16) |
+
+Not considered (human: periodic-only): skipping OIFS's boundary classification projection when
+no node is imposed (0.7 GiB, only fully periodic meshes).
+
+Capacity on one H100 from these, before the probes: straight meshes measured (OIFS coupled
+~85–89M, Schur ~110–115M; 918 and 705 B/DOF marginal over whole runs), the rest estimated
+(Schur with the opt-in ~130M, IMEX coupled ~95–100M, Schur ~135–140M; curved and hanging
+meshes lower by the gaps above). The probes (~30 steps at sizes around these, straight,
+curved and hanging) replace the estimates.
+
 ## Result (rounds one to three, Q3)
 
 | | Largest mesh on one H100 | Velocity dofs | Peak at 32³ | Peak at 64³ |
