@@ -82,6 +82,89 @@ void ElementRates(int ne, int d1, int dim, const Vector& uq, const Vector& jac,
    });
 }
 
+// ElementRates on straight-sided elements, nothing per point read from
+// memory: u at node q through the gather map (byNODES, component stride
+// ndofs), J at q from the element's vertices XV(v, i, e), v lexicographic (x
+// fastest), the multilinear map on MFEM's [0, 1] reference element.
+void ElementRatesLinear(int ne, int d1, int dim, const Array<int>& gmap,
+                        int ndofs, const Vector& u, const Vector& xv,
+                        const Vector& z, const Vector& inv_dxi, Vector& rate)
+{
+   const int nq = (dim == 3) ? d1 * d1 * d1 : d1 * d1;
+   const int nv = (dim == 3) ? 8 : 4;
+   const auto Gm = Reshape(gmap.Read(), nq, ne);
+   const auto U = u.Read();
+   const auto XV = Reshape(xv.Read(), nv, dim, ne);
+   const auto Z = z.Read();
+   const auto X = inv_dxi.Read();
+   auto R = rate.Write();
+   const real_t inf = std::numeric_limits<real_t>::infinity();
+   mfem::forall(ne, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      real_t rmax = 0.0;
+      for (int q = 0; q < nq; ++q)
+      {
+         const int ix = q % d1, iy = (q / d1) % d1, iz = q / (d1 * d1);
+         const int g = Gm(q, e);
+         real_t s = 0.0;
+         if (dim == 2)
+         {
+            const real_t x = Z[ix], y = Z[iy];
+            real_t m[2][2];
+            for (int i = 0; i < 2; ++i)
+            {
+               m[i][0] = (1.0 - y) * (XV(1, i, e) - XV(0, i, e)) +
+                         y * (XV(3, i, e) - XV(2, i, e));
+               m[i][1] = (1.0 - x) * (XV(2, i, e) - XV(0, i, e)) +
+                         x * (XV(3, i, e) - XV(1, i, e));
+            }
+            const real_t a = m[0][0], b = m[0][1], c = m[1][0], d = m[1][1];
+            const real_t det = a * d - b * c;
+            const real_t u0 = U[g], u1 = U[g + ndofs];
+            s = fabs((d * u0 - b * u1) / det) * X[ix] +
+                fabs((-c * u0 + a * u1) / det) * X[iy];
+         }
+         else
+         {
+            const real_t x = Z[ix], y = Z[iy], w = Z[iz];
+            real_t m[3][3];
+            for (int i = 0; i < 3; ++i)
+            {
+               m[i][0] = (1.0 - y) * (1.0 - w) * (XV(1, i, e) - XV(0, i, e)) +
+                         y * (1.0 - w) * (XV(3, i, e) - XV(2, i, e)) +
+                         (1.0 - y) * w * (XV(5, i, e) - XV(4, i, e)) +
+                         y * w * (XV(7, i, e) - XV(6, i, e));
+               m[i][1] = (1.0 - x) * (1.0 - w) * (XV(2, i, e) - XV(0, i, e)) +
+                         x * (1.0 - w) * (XV(3, i, e) - XV(1, i, e)) +
+                         (1.0 - x) * w * (XV(6, i, e) - XV(4, i, e)) +
+                         x * w * (XV(7, i, e) - XV(5, i, e));
+               m[i][2] = (1.0 - x) * (1.0 - y) * (XV(4, i, e) - XV(0, i, e)) +
+                         x * (1.0 - y) * (XV(5, i, e) - XV(1, i, e)) +
+                         (1.0 - x) * y * (XV(6, i, e) - XV(2, i, e)) +
+                         x * y * (XV(7, i, e) - XV(3, i, e));
+            }
+            const real_t a00 = m[1][1] * m[2][2] - m[1][2] * m[2][1];
+            const real_t a01 = m[0][2] * m[2][1] - m[0][1] * m[2][2];
+            const real_t a02 = m[0][1] * m[1][2] - m[0][2] * m[1][1];
+            const real_t a10 = m[1][2] * m[2][0] - m[1][0] * m[2][2];
+            const real_t a11 = m[0][0] * m[2][2] - m[0][2] * m[2][0];
+            const real_t a12 = m[0][2] * m[1][0] - m[0][0] * m[1][2];
+            const real_t a20 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
+            const real_t a21 = m[0][1] * m[2][0] - m[0][0] * m[2][1];
+            const real_t a22 = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+            const real_t det = m[0][0] * a00 + m[0][1] * a10 + m[0][2] * a20;
+            const real_t u0 = U[g], u1 = U[g + ndofs], u2 = U[g + 2 * ndofs];
+            s = fabs((a00 * u0 + a01 * u1 + a02 * u2) / det) * X[ix] +
+                fabs((a10 * u0 + a11 * u1 + a12 * u2) / det) * X[iy] +
+                fabs((a20 * u0 + a21 * u1 + a22 * u2) / det) * X[iz];
+         }
+         if (!(s == s)) { s = inf; } // as ElementRates: NaN -> infinite rate
+         rmax = (s > rmax) ? s : rmax;
+      }
+      R[e] = rmax;
+   });
+}
+
 } // namespace cfl_kernels
 
 void RequireFiniteRate(double rate, double t)
@@ -132,6 +215,33 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
    nodal_gll_ = h1 && h1->GetBasisType() == BasisType::GaussLobatto;
    rate_.SetSize(ne_);
    rate_.UseDevice(true);
+   // On the fly where the elements are straight-sided (linear mesh nodes).
+   const GridFunction& nodes = *mesh.GetNodes();
+   const FiniteElementSpace& nfes = *nodes.FESpace();
+   const auto* er = dynamic_cast<const ElementRestriction*>(restr_);
+   fly_able_ = nodal_gll_ && er && vfes.GetOrdering() == Ordering::byNODES &&
+               ne_ > 0 && nfes.GetTypicalFE()->GetOrder() == 1 &&
+               dynamic_cast<const TensorBasisElement*>(nfes.GetTypicalFE());
+   if (fly_able_)
+   {
+      gather_ = &er->GatherMap();
+      const int* gm = gather_->HostRead();
+      for (int i = 0; i < gather_->Size(); ++i)
+      {
+         MFEM_VERIFY(gm[i] >= 0, "cfl: an H1 gather map has no orientation signs");
+      }
+      ndofs_ = vfes.GetNDofs();
+      const Operator* nr =
+         nfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
+      xv_.UseDevice(true);
+      xv_.SetSize(nr->Height());
+      nr->Mult(nodes, xv_);
+      const real_t* z = poly1d.GetPoints(order_, BasisType::GaussLobatto);
+      zgll_.SetSize(order_ + 1);
+      for (int i = 0; i <= order_; ++i) { zgll_(i) = z[i]; }
+      zgll_.UseDevice(true);
+      fly_ = true;
+   }
 }
 
 double ConvectiveCfl::Rate(const ParGridFunction& u) const
@@ -144,7 +254,17 @@ const
 {
    MFEM_VERIFY(!us.empty(), "cfl: no velocity");
    double local = 0.0;
-   if (ne_ > 0)
+   if (ne_ > 0 && fly_)
+   {
+      for (const ParGridFunction* up : us)
+      {
+         MFEM_VERIFY(up->ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+         cfl_kernels::ElementRatesLinear(ne_, order_ + 1, dim_, *gather_, ndofs_,
+                                         *up, xv_, zgll_, inv_dxi_, rate_);
+         local = std::max(local, rate_.Max()); // device-aware reduction
+      }
+   }
+   else if (ne_ > 0)
    {
       // The element copies of the velocity live for this call only: kept as
       // members they held 0.8 GB for 64^3 Q3 elements (2026-10-13).
@@ -192,7 +312,18 @@ void ConvectiveCfl::Rates(const std::vector<const ParGridFunction*>& us,
 {
    // MaxRate's evaluation, keeping each velocity's maximum apart.
    rates.assign(us.size(), 0.0);
-   if (ne_ > 0)
+   if (ne_ > 0 && fly_)
+   {
+      for (std::size_t l = 0; l < us.size(); ++l)
+      {
+         MFEM_VERIFY(us[l]->ParFESpace() == &vfes_,
+                     "cfl: u must live on the CFL space");
+         cfl_kernels::ElementRatesLinear(ne_, order_ + 1, dim_, *gather_, ndofs_,
+                                         *us[l], xv_, zgll_, inv_dxi_, rate_);
+         rates[l] = std::max(0.0, rate_.Max());
+      }
+   }
+   else if (ne_ > 0)
    {
       Vector ue(restr_->Height());
       ue.UseDevice(true);

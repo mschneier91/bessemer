@@ -150,6 +150,53 @@ TEST(Cfl, C4_PerCallJacobiansEqualTheCachedOnes)
    }
 }
 
+// Straight-sided elements (vertices moved, linear nodes): the on-the-fly
+// rate (the velocity through the gather map, the Jacobians from the vertices)
+// against the element copy and MFEM's Jacobians at the nodes, to roundoff;
+// curved elements keep the latter.
+TEST(Cfl, C7_OnTheFlyRateOnStraightSidedElements)
+{
+   for (const int dim : {2, 3})
+   {
+      for (const int k : {3, 6})
+      {
+         SCOPED_TRACE(testing::Message() << "dim " << dim << ", order " << k);
+         for (const bool curved : {false, true})
+         {
+            Mesh serial = (dim == 2)
+                          ? Mesh::MakeCartesian2D(3, 3, Element::QUADRILATERAL, true)
+                          : Mesh::MakeCartesian3D(2, 2, 2, Element::HEXAHEDRON);
+            if (curved) { serial.SetCurvature(2); }
+            serial.Transform([](const Vector & x, Vector & y)
+            {
+               y = x;
+               y(0) += 0.08 * std::sin(2.3 * x(1));
+               y(1) += 0.06 * x(0) * x(0);
+               if (x.Size() == 3) { y(2) += 0.05 * x(0) * x(1); }
+            });
+            ParMesh mesh(MPI_COMM_WORLD, serial);
+            incns::RuleBook rules;
+            H1_FECollection fec(k, dim);
+            ParFiniteElementSpace V(&mesh, &fec, dim);
+            ParGridFunction u(&V);
+            Vector ut(V.GetTrueVSize());
+            ut.Randomize(3 + Mpi::WorldRank());
+            ut -= 0.5;
+            u.SetFromTrueDofs(ut);
+            incns::ConvectiveCfl cfl(V, rules);
+            EXPECT_EQ(cfl.OnTheFly(), !curved);
+            if (curved) { continue; }
+            const double fly = cfl.Rate(u);
+            cfl.SetOnTheFly(false);
+            ASSERT_FALSE(cfl.OnTheFly());
+            const double ref = cfl.Rate(u);
+            EXPECT_GT(ref, 0.0);
+            EXPECT_LE(std::abs(fly - ref), 1e-13 * ref);
+         }
+      }
+   }
+}
+
 namespace
 {
 

@@ -105,6 +105,17 @@ public:
     */
    static mfem::Vector InverseNodeSpacing(int k);
 
+   /**
+    * @brief Use the on-the-fly evaluation where it applies (the default):
+    *        straight-sided elements, the GLL nodal basis, byNODES, an
+    *        ElementRestriction. false forces the element copy of the velocity
+    *        and MFEM's Jacobians at the nodes (tests compare the two).
+    * @param on Whether to evaluate on the fly where possible.
+    */
+   void SetOnTheFly(bool on) { fly_ = on && fly_able_; }
+   /// @return Whether the rate is evaluated on the fly.
+   bool OnTheFly() const { return fly_; }
+
 private:
    const mfem::ParFiniteElementSpace& vfes_; ///< Velocity space (borrowed).
    int dim_ = 0;                             ///< Spatial dimension.
@@ -117,6 +128,19 @@ private:
    /// The velocity basis is the GLL nodal one, so the element dofs ARE the
    /// values at the GLL points and nothing is interpolated.
    bool nodal_gll_ = false;
+   /// Straight-sided elements (linear mesh nodes), nodal_gll_, byNODES and an
+   /// ElementRestriction: the rate is evaluated on the fly, the velocity read
+   /// through the restriction's gather map and each node's Jacobian formed
+   /// from the element's 2^dim vertices, with nothing allocated per call.
+   /// The element copy of the velocity and MFEM's Jacobians at the nodes were
+   /// ~42 B/DOF at Q6 and sat on the run's memory peak (the allocation
+   /// census, 2026-10-17). Curved elements keep that path.
+   bool fly_able_ = false;
+   bool fly_ = false;
+   const mfem::Array<int>* gather_ = nullptr; ///< The restriction's map.
+   int ndofs_ = 0;      ///< Scalar local dofs: the component stride.
+   mfem::Vector xv_;    ///< Element vertices, (2^dim, dim, NE) (device).
+   mfem::Vector zgll_;  ///< The k+1 GLL points on [0, 1] (device).
    mutable mfem::Vector rate_; ///< Per-element rate.
    /// The rate of each of @p us (each a max over the ranks), with one
    /// evaluation of the Jacobians for all of them.
