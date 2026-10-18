@@ -439,15 +439,16 @@ private:
     * @brief P^T A P on true dofs, as MFEM's FormSystemMatrix builds it but
     *        without the ConstrainedOperator wrapper (and its two work
     *        vectors): the caller wraps it when it needs constraints.
-    *        Identity prolongations (one rank) give @p A itself.
+    *        Identity prolongations (one rank, no hanging nodes) give @p A
+    *        itself; otherwise its work vectors are scratch_'s local-dof
+    *        pair, shared by all of them.
     * @param Pin  Prolongation of the input space (null: identity).
     * @param A    The L-vector operator (a form, or its extension).
     * @param Pout Prolongation of the output space (null: identity).
     * @param out  Receives the operator (owned unless it is @p A itself).
     */
-   static void TrueDofOperator(const mfem::Operator* Pin, mfem::Operator& A,
-                               const mfem::Operator* Pout,
-                               mfem::OperatorPtr& out);
+   void TrueDofOperator(const mfem::Operator* Pin, mfem::Operator& A,
+                        const mfem::Operator* Pout, mfem::OperatorPtr& out);
    /// Momentum block form (mass + diffusion [+ grad-div]); rebuilt by
    /// BuildMomentum on each mass-factor change, hence held by pointer.
    std::unique_ptr<PaOperator> momentum_form_;

@@ -48,6 +48,55 @@ public:
    }
 };
 
+/**
+ * @brief MFEM's RAPOperator (Rt^T A P, the same arithmetic) with its two work
+ *        vectors lent by an ElementScratch: one pair for all the true-dof
+ *        operators of an integrator, which never run inside one another,
+ *        instead of a pair each for the run. On hanging-node meshes, and at
+ *        more than one rank, the momentum, mass and divergence blocks held
+ *        five velocity and one pressure local-dof vector (1.3 GB at 56.5M
+ *        DOFs, Q6, the curved cylinder with hanging nodes); now two.
+ */
+class SharedRAPOperator : public Operator
+{
+   const Operator& Rt_;
+   const Operator& A_;
+   const Operator& P_;
+   mutable Vector Px_;
+   mutable Vector APx_;
+   MemoryClass mem_class_;
+
+public:
+   SharedRAPOperator(const Operator& Rt, const Operator& A, const Operator& P,
+                     ElementScratch& scratch)
+      : Operator(Rt.Width(), P.Width()), Rt_(Rt), A_(A), P_(P)
+   {
+      MFEM_VERIFY(Rt.Height() == A.Height() && A.Width() == P.Height(),
+                  "stokes_operator: incompatible operators for P^T A P");
+      mem_class_ = Rt.GetMemoryClass() * P.GetMemoryClass();
+      scratch.LendLocal(0, P.Height(), Px_);
+      scratch.LendLocal(1, A.Height(), APx_);
+   }
+   MemoryClass GetMemoryClass() const override { return mem_class_; }
+   void Mult(const Vector& x, Vector& y) const override
+   { P_.Mult(x, Px_); A_.Mult(Px_, APx_); Rt_.MultTranspose(APx_, y); }
+   void AbsMult(const Vector& x, Vector& y) const override
+   { P_.AbsMult(x, Px_); A_.AbsMult(Px_, APx_); Rt_.AbsMultTranspose(APx_, y); }
+   void AssembleDiagonal(Vector& diag) const override
+   {
+      A_.AssembleDiagonal(APx_);
+      P_.MultTranspose(APx_, diag);
+   }
+   void MultTranspose(const Vector& x, Vector& y) const override
+   { Rt_.Mult(x, APx_); A_.MultTranspose(APx_, Px_); P_.MultTranspose(Px_, y); }
+   void AbsMultTranspose(const Vector& x, Vector& y) const override
+   {
+      Rt_.AbsMult(x, APx_);
+      A_.AbsMultTranspose(APx_, Px_);
+      P_.AbsMultTranspose(Px_, y);
+   }
+};
+
 } // namespace
 
 StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
@@ -398,9 +447,9 @@ void StokesOperator::TrueDofOperator(const Operator* Pin, Operator& A,
    }
    else if (Pin && Pout)
    {
-      // Pout^T A Pin; MFEM's SetupRAP builds the same (RAPOperator when
-      // the two are one object, the triple product otherwise).
-      out.Reset(new RAPOperator(*Pout, A, *Pin), true);
+      // Pout^T A Pin, as MFEM's SetupRAP builds it (a RAPOperator), its work
+      // vectors shared by all of them.
+      out.Reset(new SharedRAPOperator(*Pout, A, *Pin, *scratch_), true);
    }
    else
    {
