@@ -158,6 +158,13 @@ void ConfigureGpuAwareMpi(const std::string& backend)
 
 } // namespace
 
+void ConfigureMpiTransport()
+{
+#if defined(MFEM_USE_CUDA)
+   setenv("UCX_TLS", "^cuda_ipc", 0); // 0: a value the job set wins
+#endif
+}
+
 void ConfigureDevice(const std::string& backend)
 {
    // Environment override: INCNS_DEVICE, when set, wins over the requested

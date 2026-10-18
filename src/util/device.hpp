@@ -43,6 +43,20 @@ namespace incns
 void ConfigureDevice(const std::string& backend);
 
 /**
+ * @brief MPI transport settings that must precede MPI_Init: call it first
+ *        in main, before mfem::Mpi::Init.
+ *
+ * In CUDA builds, unless the environment sets @c UCX_TLS already, UCX's
+ * cuda_ipc transport is left out (@c UCX_TLS=^cuda_ipc; GPU-aware MPI then
+ * goes through the other CUDA paths). With bessemer's device buffers cuda_ipc
+ * cost 2.5 GB per GPU near capacity (np 2) and at np 4 doubled the step of
+ * Taylor-Green Q6 IMEX Schur at 136.6M DOFs (2.00 s against 0.79 s without
+ * it); at 21.6M it was 8 % faster (0.139 against 0.151 s; jobs 49401722,
+ * 49408610). UCX reads the variable during MPI_Init.
+ */
+void ConfigureMpiTransport();
+
+/**
  * @brief Wait until the GPU has finished everything launched so far.
  *
  * A no-op on host backends. On a GPU it blocks until the device is idle, so a

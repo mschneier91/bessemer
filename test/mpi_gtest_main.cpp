@@ -10,6 +10,7 @@
 
 int main(int argc, char** argv)
 {
+   incns::ConfigureMpiTransport(); // before MPI_Init
    mfem::Mpi::Init(argc, argv);
    mfem::Hypre::Init();
 

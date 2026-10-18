@@ -97,6 +97,7 @@ double Cl2(const Sample& s) { return s.cl * s.cl; }
 
 int main(int argc, char* argv[])
 {
+   incns::ConfigureMpiTransport(); // before MPI_Init
    Mpi::Init(argc, argv);
    Hypre::Init();
 

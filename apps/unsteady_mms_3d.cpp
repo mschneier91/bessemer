@@ -45,6 +45,7 @@ double Gp(double t) { return 1.0 + t; }
 
 int main(int argc, char* argv[])
 {
+   incns::ConfigureMpiTransport(); // before MPI_Init
    Mpi::Init(argc, argv);
    Hypre::Init();
 

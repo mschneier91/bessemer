@@ -360,7 +360,11 @@ PYBIND11_MODULE(_core, m)
    static bool initialized = false;
    if (!initialized)
    {
-      if (!Mpi::IsInitialized()) { Mpi::Init(); }
+      if (!Mpi::IsInitialized())
+      {
+         incns::ConfigureMpiTransport(); // before MPI_Init
+         Mpi::Init();
+      }
       Hypre::Init();
       initialized = true;
    }

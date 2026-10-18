@@ -54,6 +54,7 @@ double TimePerCall(int reps, F&& apply)
 
 int main(int argc, char* argv[])
 {
+   incns::ConfigureMpiTransport(); // before MPI_Init
    Mpi::Init(argc, argv);
    Hypre::Init();
 
