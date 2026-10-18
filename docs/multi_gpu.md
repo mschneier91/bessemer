@@ -1,0 +1,213 @@
+# bessemer on many GPUs: the plan (2026-10-17)
+
+Goal: take the single-H100 work (100M+ DOFs per 80 GB card for most solver
+configurations, after changes 28–35 land) to many GPUs. Targets:
+
+1. **Strong scaling**: ≥ 80 % parallel efficiency from 1 to 8 H100s on one
+   Bridges-2 node at ≥ 20M DOFs per GPU.
+2. **Weak scaling**: ~80–100M DOFs per GPU, ≥ 85 % efficiency to 8 GPUs and then to
+   2–4 nodes. That is ~1B DOFs on one node and a few billion on a handful of nodes.
+3. **No regressions**: run-to-run bitwise results at every rank count, and
+   restarts across rank counts.
+
+## Where it stands (measured 2026-10-17, change-32 code, profile: sync)
+
+Two H100s on one node, np 2 (one rank per GPU), the same problem as np 1:
+
+| Case (Q6) | DOFs | np 1 s/step | np 2 s/step | Efficiency |
+|---|---|---|---|---|
+| TGV OIFS coupled | 21.6M | 0.511 | 0.363 | 70 % |
+| TGV OIFS Schur | 21.6M | 0.616 | 0.395 | 78 % |
+| TGV IMEX coupled | 21.6M | 0.308 | 0.225 | 69 % |
+| TGV IMEX Schur | 21.6M | 0.341 | 0.216 | 79 % |
+| Curved cylinder OIFS coupled | ~22M | 1.118 | 0.730 | 77 % |
+| Curved cylinder OIFS Schur | ~22M | 1.209 | 0.735 | 82 % |
+| Curved cylinder IMEX coupled | ~22M | 0.832 | 0.582 | 72 % |
+| DFG Q3 AMR, channel (small) | ~0.3–1M | 0.03 | slower | latency-bound |
+
+What scales worst:
+
+- **The pressure LOR-AMG.** Per V-cycle it is 2x *slower* at np 2 on Taylor–Green
+  and 4x slower on the cylinder, with half the work per GPU. It goes from 4 % of
+  the step to 11–22 %.
+- **Transport.** Open MPI 5.0.10 and UCX 1.20 are built with CUDA, but hypre 2.33
+  is built with `gpu-aware-mpi: False`, and bessemer never tells MFEM that MPI is
+  GPU-aware. Every halo exchange in hypre (each AMG level) and in MFEM's parallel
+  prolongation (each operator apply) therefore goes device → host → MPI → device.
+- **Small problems** (< ~2M DOFs per GPU) get slower: launches and latency
+  dominate.
+- **Memory per rank at np > 1.** MFEM's device prolongation is built from R,
+  so P and R exist per rank (~17 B/DOF). The RAP wrappers' vector pairs (~1.9 GiB
+  at 57.3M) only appear when the prolongation is not the identity. That is
+  exactly np > 1, so the tabled work-vector pool matters here.
+
+## Phase 0: instrumentation (before changing anything)
+
+- **Communication regions** in the profiler: time in MPI waits for MFEM's
+  prolongation and restriction exchanges, hypre's AMG cycles, and global
+  reductions (Krylov dot products, norms, projection). Keep it per rank:
+  report the max and the min over ranks (the CSV already reduces both).
+- **Load balance**: elements, DOFs and shared DOFs per rank; the max/mean
+  imbalance printed at setup.
+- **Nsight Systems** traces at np 2 and 4 (one per rank): kernel/communication
+  overlap, idle gaps, host staging copies.
+- **Memory per rank** with the gauge (profile: sync) at np 1, 2 and 4 on the
+  same problem: what is duplicated or grows with np (P, R, halo buffers,
+  face-neighbour data, LOR replicas, AMG on every rank).
+
+Deliverable: a per-region "where the np-2/np-4 time goes" table, like the
+memory ledger.
+
+## Phase 1: transport (cheap, no trade-offs)
+
+1. **GPU-aware MPI**: MFEM `Device::SetGPUAwareMPI(true)` plus hypre
+   `HYPRE_SetGpuAwareMPI(1)`. The switch exists (`INCNS_GPU_AWARE_MPI=1`,
+   prototype). Its np-2 off/on test is queued (job gam2), with results checked
+   bitwise.
+   - **No hypre rebuild is needed.** Checked 2026-10-17 against the hypre
+     2.33.0 source:
+     - the configure option `--enable-gpu-aware-mpi`
+       (`HYPRE_USING_GPU_AWARE_MPI`) only sets the default of the handle's
+       `use_gpu_aware_mpi` flag (`utilities/general.c`);
+     - every exchange reads the flag at run time through
+       `hypre_GetGpuAwareMPI()`: `par_csr_communication.c` (halo exchanges),
+       `par_csr_matvec_device.c` (the AMG cycle's matvecs),
+       `par_csr_triplemat_device.c`, `par_csr_matop_device.c`,
+       `par_csr_fffc_device.c`;
+     - so `HYPRE_SetGpuAwareMPI(1)` before the first hypre object is enough,
+       given an MPI that takes device pointers.
+   - The job also prints Open MPI's `mpi_built_with_cuda_support` and UCX's CUDA
+     transports on the GPU node.
+   - If it helps and results stay bitwise, make it the default whenever MPI
+     reports CUDA support (`MPIX_Query_cuda_support`).
+2. **Intra-node path**: confirm UCX uses `cuda_ipc` between GPUs on a node
+   (NVLink) and `rc`/`dc` with GPUDirect RDMA across nodes. Tune `UCX_TLS` and
+   the rendezvous thresholds only if traces show staging.
+3. **Binding**: one rank per GPU (already enforced: `ResolveDeviceId`), each
+   rank's CPU cores and memory on the GPU's NUMA domain (`--cpu-bind`, PRTE
+   mapping), so the host-side work (setup, the residual host loops) doesn't
+   cross sockets.
+
+Expected: most of the AMG np-2 penalty, plus some of every operator apply's
+exchange cost.
+
+## Phase 2: the pressure solve at scale
+
+The LOR-AMG coarse levels become latency-bound as ranks grow (few rows per rank,
+many messages per level). AMG settings are the human's call, so these are
+options to measure and bring back, not to switch on:
+
+- **Coarse-grid agglomeration / redistribution**: gather the coarsest levels
+  onto fewer ranks (hypre's `agg_num_levels`, or a redundant coarse solve).
+- **Fewer levels plus a direct or Chebyshev coarse solve.**
+- **Aggressive coarsening on the first level** (already on the open list for
+  memory: 2.1 GB at Q3 64³).
+- **Smoother**: Chebyshev or l1-Jacobi instead of Gauss–Seidel-type smoothers
+  (no sequential sweeps, fewer reductions).
+- **Longer term**: a p-multigrid pressure preconditioner (Schwarz- or
+  Chebyshev-smoothed on the high-order levels, AMG only on the Q1 level). Far
+  less communication per cycle. A real project; decide after Phase 1's numbers.
+
+## Phase 3: global reductions
+
+Every Krylov iteration pays several `MPI_Allreduce`s:
+- FGMRES orthogonalization: modified Gram–Schmidt, one reduction per basis
+  vector;
+- the solution projection;
+- the velocity CG;
+- the pressure FCG.
+
+At 8+ GPUs these latencies add up.
+
+- **Batched dot products**: classical Gram–Schmidt with
+  reorthogonalization (CGS2), giving one fused reduction per iteration instead
+  of k. The same for the projection's coefficients.
+- **Fuse norm and dot products** where several are computed back to back (CG's
+  (r, z) and ||r||).
+- **Pipelined or s-step variants**: only if the traces show reductions still
+  dominate after batching.
+- **Bitwise constraint**: a different summation order changes results at
+  roundoff once. Any reduction change must stay deterministic for a fixed rank
+  count (no atomics, a fixed tree).
+
+## Phase 4: overlap of halo exchange and computation
+
+MFEM's parallel prolongation exchanges shared DOFs before the element kernels
+run. With interior and boundary elements split (boundary = touches a shared
+DOF), the interior kernels can run while the halo travels. This applies to the
+momentum apply, divergence/gradient, OIFS convection and the mass. It needs our
+own split restriction or a wrapper around MFEM's (no protected-member hacks).
+Worth it only if Phase 0 shows exposed exchange time after Phase 1.
+
+## Phase 5: partitioning and load balance
+
+- **Weights**: METIS by element count today. Curved elements (Jacobians on the
+  fly per chunk) and AMR-refined regions cost more, so weight by measured kernel
+  cost.
+- **AMR**: rebalance after each adaptation (`ParMesh::Rebalance`), with the
+  history projection following the new partition. Check that restarts and
+  checkpoints survive it.
+- **Shared-DOF surface**: report it per rank. Box partitions of TGV and channel
+  meshes should prefer slabs or cubes with small surfaces.
+
+## Phase 6: memory per GPU at np > 1
+
+- **The work-vector pool** (tabled 2026-10-17 for one GPU): at np > 1 the RAP
+  wrappers' pairs (~1.9 GiB at 57.3M), the OIFS mass CG and the Chebyshev mass
+  inverse all hold full-size vectors that are never live at once. Bring it back
+  to the human with the np-4 memory numbers.
+- **P and R per rank**: required by MFEM's device prolongation. Check their
+  size per rank and whether R alone would do (MFEM copies R's column indices
+  and keeps P).
+- **Capacity per GPU at np 2, 4 and 8**: the same probe method as the
+  single-GPU capacity table, so the weak-scaling size per GPU is measured, not
+  assumed.
+
+## Phase 7: scaling studies
+
+- **Strong scaling**: TGV Re 1600 Q6 at ~86M DOFs (fits one GPU with OIFS
+  Schur or IMEX) on 1, 2, 4 and 8 GPUs; the curved cylinder at ~70M; the
+  channel at Re_τ 550 (the deck exists).
+- **Weak scaling**: ~80M DOFs per GPU, the element count scaled by 2^(1/3) per
+  doubling, on 1, 2, 4 and 8 GPUs, then 16 and 32 (2–4 nodes).
+- **Metrics**: s/step, DOF-steps/s/GPU, efficiency, peak memory per GPU,
+  iterations per step (to separate solver and algorithmic scaling from
+  implementation scaling), time to solution for a fixed physical time.
+- **Each solver configuration**: OIFS and IMEX, coupled and Schur (Schur with
+  change 34's pressure target).
+
+## Correctness at scale
+
+- **Bitwise**: every run repeated twice at the same np gives identical output
+  (GPU-aware MPI on and off, every phase's change).
+- **Across np**: results agree to solver tolerance between np 1, 2, 4 and 8
+  (not bitwise: partition-dependent sums).
+- **Restart across np**: a checkpoint written at np 4 restarts at np 8 and
+  continues within tolerance.
+- **Tests**: GPU tests stay at np 1 and 2 (standing rule). Scaling runs are
+  studies, not tests.
+
+## Human decisions needed
+
+1. **GPU budget**: decided (human 2026-10-17). 4–8 H100s are fine for scaling
+   studies; the 2-GPU limit stays for everything else. Multi-node (16–32) is to
+   be asked when it comes up.
+2. **Rebuilding hypre**: not needed (hypre's GPU-aware MPI is a runtime switch;
+   see Phase 1).
+3. **Pressure AMG changes** (Phase 2).
+4. **The work-vector pool** for np > 1 (Phase 6).
+5. **Whether to start the p-multigrid pressure preconditioner** as a project.
+
+## Order and rough effort
+
+| Step | Effort | Needs |
+|---|---|---|
+| Phase 0 instrumentation + np-2/np-4 ledger | 1–2 days | 4 GPUs (approved) |
+| Phase 1 GPU-aware MPI, binding, UCX check | 1 day | test queued (gam2) |
+| Phase 7 first pass: strong + weak to 8 GPUs | 1 day of runs | 8 GPUs (approved) |
+| Phase 3 batched reductions | 2–3 days | — |
+| Phase 2 AMG options measured | 2–3 days | your call on settings |
+| Phase 5 weights + AMR rebalance | 2–4 days | — |
+| Phase 6 pool + per-GPU capacity at np > 1 | 2–3 days | your call on the pool |
+| Phase 4 overlap | ~1 week | only if Phase 0 shows exposed exchange |
+| Multi-node runs (2–4 nodes) | after the above | allocation |
