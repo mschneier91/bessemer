@@ -602,7 +602,10 @@ void StokesSolver::SetTolerance(const Vector& b, const Vector& x)
    // itself when tol_rel_ > 0).
    fgmres_.SetRelTol(tol_rel_);
    fgmres_.SetAbsTol(tol_abs_);
-   if (schur_solver_) { schur_solver_->SetTolerance(tol_rel_, tol_abs_); }
+   if (schur_solver_)
+   {
+      schur_solver_->SetTolerance(tol_rel_, tol_abs_, kSchurPressureReduction);
+   }
 }
 
 double StokesSolver::StepResidualNorm(const Vector& b, const Vector& x)

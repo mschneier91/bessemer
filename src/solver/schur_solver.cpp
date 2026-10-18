@@ -235,7 +235,7 @@ void SchurSolver::Mult(const Vector& b, Vector& x)
       tau = std::max(tau, rtol_ * std::sqrt(m0 * m0 + p0 * p0));
    }
    stats_.tolerance = tau;
-   const double tau_p = tau / std::sqrt(2.0);
+   double tau_p = tau / std::sqrt(2.0);
    const double tau_u = tau / std::sqrt(2.0);
 
    // System 1: u = A^-1 (f - B^T p), from the warm start.
@@ -246,6 +246,19 @@ void SchurSolver::Mult(const Vector& b, Vector& x)
    // then offset by A^-1 B^T times that correction until System 3.
    double rnorm = PressureResidual(g, u, r_);
    bool fresh = true; // r_ holds the residual of the current (u, p)
+   // The pressure's own target (human 2026-10-17): the constraint residual
+   // this step leaves after the velocity solve with the old pressure, reduced
+   // by p_reduction_, never looser than the coupled target. With the coupled
+   // target alone, a reference dominated by the momentum residual (explicit
+   // convection moving the right-hand side) let every solve end right here,
+   // the pressure never updated after the first step, and a wall-bounded IMEX
+   // run diverged (the curved cylinder, 2026-10-17).
+   if (p_reduction_ > 0.0)
+   {
+      tau_p = std::min(tau_p, std::max(atol_ / std::sqrt(2.0),
+                                       p_reduction_ * rnorm));
+   }
+   stats_.pressure_tolerance = tau_p;
    if (projection_)
    {
       p_start_ = p;

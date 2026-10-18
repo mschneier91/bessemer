@@ -32,6 +32,14 @@ struct SchurIterationRecord
 };
 
 /// What the last SchurSolver::Mult did.
+/// The Schur method's pressure target (SchurSolver::SetTolerance): the
+/// constraint residual a step leaves after its first velocity solve, reduced by
+/// this factor. Measured 2026-10-17 (small Schur decks, CPU): 0.1 keeps the
+/// curved-cylinder IMEX run stable with every solve updating the pressure, at
+/// about one FCG iteration per solve more than none (1.6-2.8 per solve);
+/// solver.rtol (1e-3) took 4-9 and over-solved the coupled target 2-5x.
+constexpr double kSchurPressureReduction = 0.1;
+
 struct SchurSolveStats
 {
    int iterations = 0;           ///< Outer iterations, all cycles.
@@ -46,6 +54,7 @@ struct SchurSolveStats
    int schur_cap_hits = 0;       ///< Of them, those that hit the cap.
    double schur_inner_time = 0.0; ///< Their wall time [s].
    double tolerance = 0.0;       ///< The coupled-residual target tau.
+   double pressure_tolerance = 0.0; ///< The pressure target used.
    double momentum_residual = 0.0; ///< ||f - A u - B^T p|| at exit.
    double pressure_residual = 0.0; ///< ||g - B u|| at exit.
    double final_residual = 0.0;  ///< The coupled residual at exit.
@@ -134,11 +143,17 @@ public:
     * @param rtol Relative to the initial coupled residual (0 = none: then
     *             no initial residual is computed).
     * @param atol Absolute.
+    * @param p_reduction The pressure's own target: the pressure (constraint)
+    *             residual after the first velocity solve, with the old
+    *             pressure, reduced by this factor (kSchurPressureReduction);
+    *             the target is never looser than the coupled one. 0: the
+    *             coupled target alone.
     */
-   void SetTolerance(double rtol, double atol)
+   void SetTolerance(double rtol, double atol, double p_reduction = 0.0)
    {
       rtol_ = rtol;
       atol_ = atol;
+      p_reduction_ = p_reduction;
    }
 
    /// @param n Cap on the outer iterations of a solve, all cycles.
@@ -238,6 +253,7 @@ private:
    SchurSolveOptions opts_;              ///< Options.
    double rtol_ = 1e-10;                 ///< See SetTolerance.
    double atol_ = 0.0;                   ///< See SetTolerance.
+   double p_reduction_ = 0.0;            ///< See SetTolerance.
    int max_iter_ = 2000;                 ///< See SetMaxIter.
    int print_level_ = -1;                ///< See SetPrintLevel.
 
