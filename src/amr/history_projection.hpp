@@ -6,6 +6,7 @@
 #pragma once
 
 #include "bc/boundary_conditions.hpp"
+#include "precond/cahouet_chabard.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "time/integrator_state.hpp"
@@ -13,12 +14,15 @@
 namespace incns
 {
 
-/// Krylov settings for the projection solves.
+/// Solver settings for the projection solves.
 struct HistoryProjectionOptions
 {
-   double rtol = 1e-12;  ///< FGMRES relative tolerance.
-   int max_iter = 2000;  ///< FGMRES iteration cap.
-   int kdim = 200;       ///< FGMRES restart size.
+   /// The run's Cahouet-Chabard configuration: its pressure (L_p) AMG and
+   /// inner settings carry over; the velocity PC is replaced (Jacobi-PCG,
+   /// the velocity block being a mass matrix) whatever the run uses.
+   CahouetChabardConfig cc;
+   double rtol = 1e-12;  ///< Relative tolerance of the coupled residual.
+   int max_iter = 2000;  ///< Outer iteration cap.
    int print_level = -1; ///< Solver print level.
 };
 
@@ -41,14 +45,17 @@ struct HistoryProjectionOptions
  * viscosity 1e-12 -- the operator requires nu > 0) on the Cahouet-Chabard
  * path regardless of the run's Schur choice (the mass-path Schur block
  * nu^{-1} M_p is degenerate at nu -> 0; CC with sigma = 1 is the exact Schur
- * model of a mass block). The BC time is left at state.times[0].
+ * model of a mass block), with the Schur complement outer method and a
+ * Jacobi-preconditioned CG for the velocity block (a mass matrix): no coupled
+ * Krylov basis and no velocity AMG, so an AMR event's projection stays below
+ * the time step's memory. The BC time is left at state.times[0].
  *
  * @param spaces Mixed spaces (on the refined mesh).
  * @param rules  Quadrature source.
  * @param bc     Boundary conditions over spaces.Velocity() (time is moved).
  * @param state  State whose u_hist is projected in place.
- * @param opts   Krylov settings.
- * @return Total FGMRES iterations over the levels.
+ * @param opts   Solver settings.
+ * @return Total outer iterations over the levels.
  */
 int ProjectHistoryDivergenceFree(MixedSpaces& spaces, const RuleBook& rules,
                                  BoundaryConditions& bc, IntegratorState& state,

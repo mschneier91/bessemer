@@ -36,7 +36,7 @@ struct AdaptStats
    MarkStats first_pass;       ///< Marking statistics of the first pass.
    long long ne_before = 0;    ///< Global elements before.
    long long ne_after = 0;     ///< Global elements after.
-   int projection_iterations = 0; ///< History-projection FGMRES iterations.
+   int projection_iterations = 0; ///< History-projection outer iterations.
    double seconds = 0.0;       ///< Wall time of the whole event.
    bool rebuilt = false;       ///< The integrator was rebuilt.
 };

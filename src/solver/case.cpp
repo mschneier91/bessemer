@@ -626,9 +626,9 @@ AdaptStats Case::Adapt(bool force_rebuild)
    if (refined && a.project_history)
    {
       HistoryProjectionOptions po;
+      po.cc = params_.cc;
       po.rtol = params_.krylov_rtol;
       po.max_iter = params_.max_iter;
-      po.kdim = params_.kdim;
       po.print_level = params_.print_level;
       st.projection_iterations =
          ProjectHistoryDivergenceFree(spaces_, rules_, *bc_, state, po);
