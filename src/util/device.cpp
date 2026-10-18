@@ -156,6 +156,37 @@ void ConfigureGpuAwareMpi(const std::string& backend)
    }
 }
 
+/**
+ * @brief hypre's own SpMV kernels instead of cuSPARSE's.
+ *
+ * The pressure LOR-AMG's SpMVs (a diagonal and an off-diagonal block per
+ * level at more than one rank): at np 2 on two H100s cuSPARSE took 6.7 ms per
+ * V-cycle on Taylor-Green Q6 and 17.0 ms on the curved cylinder, hypre's
+ * kernels 3.5 and 3.4 ms; one rank unchanged, 4.4 ms (job 49408885). Before
+ * the first hypre object; INCNS_HYPRE_SPMV_VENDOR=1 restores cuSPARSE.
+ */
+void ConfigureHypreSpMV(const std::string& backend)
+{
+#if defined(HYPRE_USING_GPU)
+   if (backend.find("cuda") == std::string::npos &&
+       backend.find("hip") == std::string::npos)
+   {
+      return;
+   }
+   int vendor = 0;
+   if (const char* env = std::getenv("INCNS_HYPRE_SPMV_VENDOR"))
+   {
+      MFEM_VERIFY((env[0] == '0' || env[0] == '1') && env[1] == '\0',
+                  "INCNS_HYPRE_SPMV_VENDOR must be 0 or 1");
+      vendor = env[0] - '0';
+   }
+   mfem::Hypre::Init(); // idempotent; the flag lives in hypre's handle
+   HYPRE_SetSpMVUseVendor(vendor);
+#else
+   (void)backend;
+#endif
+}
+
 } // namespace
 
 void ConfigureMpiTransport()
@@ -189,6 +220,7 @@ void ConfigureDevice(const std::string& backend)
       device.Configure(want, ResolveDeviceId(want));
       ConfigureHyprePool(want);
       ConfigureGpuAwareMpi(want);
+      ConfigureHypreSpMV(want);
       configured = true;
       current = want;
    }

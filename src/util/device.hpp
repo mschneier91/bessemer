@@ -35,7 +35,9 @@ namespace incns
  * built with it): only blocks up to 1 MiB are pooled, at most 64 MiB cached.
  * The environment variable @c INCNS_HYPRE_POOL
  * (@c "growth,min_bin,max_bin,cached_MiB"; @c "8,1,-1,-1" is hypre's default)
- * overrides it.
+ * overrides it. hypre's SpMVs use its own kernels, not cuSPARSE's (several
+ * times faster in the pressure AMG at more than one rank);
+ * @c INCNS_HYPRE_SPMV_VENDOR=1 restores cuSPARSE.
  *
  * @param backend The mfem::Device configuration string (default when
  *                @c INCNS_DEVICE is unset).
