@@ -38,7 +38,10 @@ SpMV in the pressure AMG (43; the cylinder's np-2 step −18 %), the AMR history
 without a velocity AMG or a Krylov basis (44) and the 3D indicator without a quadrature-point
 buffer (45): the curved adaptive run's peak 65.4 → 39.8 GB (IMEX Schur, 56.5M DOFs), its
 AMR events 387 → 36 s. The CFL rate on curved elements allocates nothing (46: a 2.3 GB
-spike every step that the gauge could not see; OIFS Schur 65.7 → 48.9 GB on that case). Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
+spike every step that the gauge could not see; OIFS Schur 65.7 → 48.9 GB on that case).
+The p = 6 comparison with one binary after 42–46 (gpu_memory.md): five meshes × four solvers,
+B/DOF at ~57M and the capacity on one H100; 100M fits with every Schur configuration but OIFS
+Schur on the curved adaptive mesh (84.4M), IMEX Schur there 112.5M. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
 nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what
 keeps OIFS coupled under 100M), the hanging-node cost in the steady state (+97–146 B/DOF
 at p = 6, not traced).

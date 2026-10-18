@@ -257,6 +257,64 @@ straight, 78.6M curved, 84.3M with hanging nodes) and IMEX coupled with hanging 
 FGMRES basis and projection basis (the open gaps above). Several probes stepped to the
 end and died in the end-of-run summary until change 41.
 
+### The p = 6 comparison (2026-10-18, after changes 42–46)
+
+Human 2026-10-18: "test the various cases at p=6 for a fair comparison between them all ...
+make sure they are labeled properly", run after every change was in. One binary, **B46** (the
+code of 8abdbf4: main with changes 28–46), one H100 per run, np 1, all Q6/Q5, `profile: sync`,
+nvidia-smi's peak (0.5 s samples). Decks in `runs/verify/decks`, runs in `runs/verify/<label>`,
+jobs 49412247–49412253.
+
+| Case | Label | Mesh | Size knob |
+|---|---|---|---|
+| Straight, periodic | `tgv` | Taylor–Green, 2π box, uniform | n³ elements |
+| Straight, periodic, hanging nodes | `tgv_hang` | the same on 40³, one AMR pass at startup | element cap |
+| Straight, walled | `chan` | channel Re_τ 180 box | scale of [24, 18, 24] |
+| Curved, walled | `cyl` | DFG 3D cylinder channel, level 2 | nz |
+| Curved, walled, hanging nodes | `cyl_hang` | the cylinder adapted every 5 steps (θ 0.2, nc_limit 1) | base nz and element cap |
+
+**Memory per DOF at ~57M DOFs** (labels `p6_<case>_<solver>_l57_b46`; B/DOF = nvidia-smi peak
+over velocity plus pressure DOFs). The coupled columns grow FGMRES's restart into free memory
+(the Krylov cap), so they are not capacity measures; the Schur columns are.
+
+| Case | OIFS coupled | OIFS Schur | IMEX coupled | IMEX Schur |
+|---|---|---|---|---|
+| tgv (57.3M) | 887 | 675 | 763 | 549 |
+| tgv_hang (58.0M) | 995 | 784 | 876 | 646 |
+| chan (57.5M) | 932 | 720 | 805 | 577 |
+| cyl (56.3M) | 997 | 758 | 895 | 601 |
+| cyl_hang (56.5M) | 1,169 | 906 | 1,032 | 739 |
+
+The curved adaptive case was 1,214–1,221 B/DOF on all four paths that morning (B41): its AMR
+events' history projection (change 44), indicator (45) and the curved CFL rate's per-step
+spike (46). What remains against the uniform cylinder is the hanging-node cost in the steady
+state (+136–148 B/DOF with Schur, not traced yet).
+
+**Capacity on one H100** (labels `p6_<case>_<solver>_c<size>`; largest run that completed ~25–53
+steps, then the first size that ran out of memory; sizes step 5–17 %):
+
+| Case | OIFS coupled | OIFS Schur | IMEX coupled | IMEX Schur |
+|---|---|---|---|---|
+| tgv | 96.6M (102.5M OOM) | **128.6M** (135.8M) | **115.1M** (121.7M) | **158.8M** (167.0M) |
+| tgv_hang | 87.1M (93.0M) | **103.9M** (110.1M) | 94.4M (99.8M) | **125.0M** (130.4M) |
+| chan | 90.6M (96.3M) | **118.9M** (125.7M) | **108.4M** (114.9M) | **152.5M** (160.6M) |
+| cyl | 78.6M (89.8M) | **112.1M** (123.3M) | **101.0M** (112.1M) | **145.6M** (156.8M) |
+| cyl_hang | 70.4M (84.4M) | 84.4M (98.6M) | 84.4M (≤ 98.6M) | **112.5M** (≤ 126.6M) |
+
+cyl_hang sizes are the element cap reached (90k, 108k, 144k elements); the runs that ran out of
+memory did so after refining to the next cap (126k elements is 98.6M; "≤" where the log
+shows no size before the failure). Predicted before the probes (scaled from the uniform
+cylinder by the B/DOF ratio): IMEX Schur 117–127M, OIFS Schur 85–95M, IMEX coupled 86–95M,
+OIFS coupled 70–80M; the measured brackets agree.
+
+**100M DOFs on one H100:** every Schur configuration but OIFS Schur on the curved adaptive
+mesh (84.4M), and IMEX coupled on the uniform meshes (straight and curved). Short of it: OIFS
+coupled everywhere (70–97M; its FGMRES and projection bases), IMEX coupled with hanging nodes,
+OIFS Schur on the curved adaptive mesh. Against the probes after 28–41: the curved cylinder's
+Schur limits rose one nz step (OIFS Schur 101.0 → 112.1M, IMEX Schur 134.5 → 145.6M); the
+straight cases are unchanged.
+
+
 ## Result (rounds one to three, Q3)
 
 | | Largest mesh on one H100 | Velocity dofs | Peak at 32³ | Peak at 64³ |
