@@ -11,7 +11,7 @@ The dated log below keeps the history.
 
 **Capacity on one H100 (2026-10-18, gpu_memory.md):** 100M+ DOFs with every Schur
 configuration (Taylor–Green OIFS 128.6M, IMEX 158.8M; curved cylinder OIFS 101.0M, IMEX
-134.5M; AMR OIFS 106.6M, IMEX 123.0M) and IMEX coupled (straight 115.1M, curved 101.0M);
+134.5M; with hanging nodes (Taylor–Green, one AMR pass) OIFS 106.6M, IMEX 123.0M) and IMEX coupled (straight 115.1M, curved 101.0M);
 OIFS coupled reaches 96.6M straight, 78.6M curved.
 
 **Changes 28–41 (2026-10-17/18).** Changes 38–41: change 36's kernel at Q7 (38), the

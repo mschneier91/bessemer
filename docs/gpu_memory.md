@@ -215,16 +215,19 @@ curved and hanging) replace the estimates.
 | Taylor–Green IMEX coupled | n51, ~104M | n52 |
 | Taylor–Green IMEX Schur | n57, ~144M | n58 |
 | Curved cylinder OIFS Schur | nz 6, ~67M (76.9 GB) | — |
-| AMR (DFG 3D-3Z Q3) OIFS coupled | 90k elements, ~70M | 100k |
-| AMR OIFS Schur | 110k, ~85M (120k reached 79 GiB at the time limit) | — |
-| AMR IMEX coupled / Schur | — | 120k / 160k (smaller sizes not probed) |
+| Hanging nodes (Taylor–Green, one AMR pass) OIFS coupled | 90k elements, ~70M | 100k |
+| Hanging nodes OIFS Schur | 110k, ~85M (120k reached 79 GiB at the time limit) | — |
+| Hanging nodes IMEX coupled / Schur | — | 120k / 160k (smaller sizes not probed) |
 
 (The curved IMEX Schur probes stalled: the stale-pressure solves of change 34.)
 
 **Measured capacity after changes 28–41** (2026-10-18; one H100, np 1, nvidia-smi peak;
 ~25–48 steps per probe; jobs 49401699, 49401702, 49401703, 49403322, 49403783; B31 =
 the probes of job 49388637 with changes 28–31, where not re-probed). DOFs are velocity
-plus pressure. Q6/Q5 except AMR (DFG 3D-3Z, Q3/Q2 on the curved cylinder):
+plus pressure, all Q6/Q5. *Hanging nodes*: Taylor–Green on 40³ with one AMR pass up to the
+element cap (straight, periodic; the hanging-node cost alone). (Until 2026-10-18 these rows
+were labelled "AMR, DFG 3D-3Z Q3 on the curved cylinder" here and in the messages of
+changes 31 and 41: wrong; no curved AMR case was probed.)
 
 | Case | Largest that ran | First out of memory | Round 2 (17–27) |
 |---|---|---|---|
@@ -237,14 +240,14 @@ plus pressure. Q6/Q5 except AMR (DFG 3D-3Z, Q3/Q2 on the curved cylinder):
 | Curved cylinder OIFS Schur | **101.0M** (74.7 GB) | 112.1M | 67M |
 | Curved cylinder IMEX coupled | **101.0M** (80.9 GB) | 112.1M | — |
 | Curved cylinder IMEX Schur | **134.5M** (79.6 GB) | 145.6M | stalled |
-| AMR OIFS coupled | 84.3M (80.7 GB) | 91.7M | 70M |
-| AMR OIFS Schur | **106.6M** (81.0 GB) | not probed | 85M |
-| AMR IMEX coupled | 91.7M (78.8 GB; B31) | 99.2M | out of memory at 91.7M |
-| AMR IMEX Schur | **123.0M** (78.6 GB) | 130.4M | out of memory at 123.0M |
+| Hanging nodes OIFS coupled | 84.3M (80.7 GB) | 91.7M | 70M |
+| Hanging nodes OIFS Schur | **106.6M** (81.0 GB) | not probed | 85M |
+| Hanging nodes IMEX coupled | 91.7M (78.8 GB; B31) | 99.2M | out of memory at 91.7M |
+| Hanging nodes IMEX Schur | **123.0M** (78.6 GB) | 130.4M | out of memory at 123.0M |
 
-100M DOFs fit on one H100 with every Schur configuration (straight, curved, AMR) and
+100M DOFs fit on one H100 with every Schur configuration (straight, curved, hanging nodes) and
 with IMEX coupled on straight and curved meshes. Short of it: OIFS coupled (96.6M
-straight, 78.6M curved, 84.3M AMR) and AMR IMEX coupled (91.7M): the coupled method's
+straight, 78.6M curved, 84.3M with hanging nodes) and IMEX coupled with hanging nodes (91.7M): the coupled method's
 FGMRES basis and projection basis (the open gaps above). Several probes stepped to the
 end and died in the end-of-run summary until change 41.
 
