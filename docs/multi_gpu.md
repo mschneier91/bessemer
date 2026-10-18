@@ -59,6 +59,29 @@ What scales worst:
 Deliverable: a per-region "where the np-2/np-4 time goes" table, like the
 memory ledger.
 
+**First measurements (2026-10-18, job 49404241; changes through 41, np 2 on
+two H100s, Nsight Systems with CUDA, NVTX and MPI tracing):**
+
+- **Taylor–Green Q6 OIFS, 21.6M DOFs.** The GPUs are busy 81 % of the step
+  (242 of 298 ms of kernels per GPU) and the work is balanced (241.7 / 240.9
+  ms). Rank 0's MPI waits (~180 ms per step, against ~20 on rank 1) are its
+  host running ahead of queued GPU work, mostly hidden. The loss against np 1
+  is extra GPU work: 398 ms of kernels per step at np 1, 483 ms summed over the
+  two GPUs at np 2 (+21 %):
+  - the AMG's SpMVs (cuSPARSE csrmv) 18 -> 52 ms, launches 154 -> 324 per
+    step per GPU (diagonal and off-diagonal blocks on every level);
+  - MFEM's prolongation exchanges' gather and scatter (ExtractSubArray,
+    SetSubArray) +22 ms, kernels that do not exist at one rank;
+  - the assembled diagonal +7 ms.
+  Halo overlap (Phase 4) would buy little here; the AMG at np > 1 (Phase 2)
+  and the RAP wrappers' extra vector passes are where the time is.
+- **The curved cylinder OIFS, ~22M DOFs.** The GPUs are busy only ~70 % of
+  the step (486 / 502 ms of 716): rank 0 waits ~430 ms per step on rank 1's
+  serial host work (`oifs::classify`'s host loop, 43 ms per step; the outflow
+  term's face loop on the rank that owns the outflow). Moving the
+  classification onto the device and balancing the outflow faces come before
+  any transport work for walled cases.
+
 ## Phase 1: transport (cheap, no trade-offs)
 
 1. **GPU-aware MPI: done, on by default (change 37).** MFEM
