@@ -6,7 +6,10 @@
 #include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
+#include <cstddef>
 #include <memory>
+#include <type_traits>
+#include <vector>
 
 // The kernels below must be compiled by nvcc in a CUDA build, or they run on
 // the host while the data is on the device. See src/CMakeLists.txt's nvcc
@@ -535,13 +538,241 @@ void FusedApply3D(const int NE, const Array<real_t>& b, const Array<real_t>& g,
 // registers and 12 % occupancy at (4, 5), against 56 and 55 % here; 1.09 ->
 // 0.65 ms per apply on an H100 at TGV 32^3 (Nsight Compute, 2026-10-15). The
 // same terms; the contractions sum in a different order (roundoff).
+//
+// One element's shared arrays, in reals: every component's gradients,
+// grad-div's term per point and six scratch arrays of max(D1D, Q1D)^3.
+template <int D1D, int Q1D>
+struct FusedPointsShared
+{
+   static constexpr int DQ = (Q1D > D1D) ? Q1D : D1D;
+   static constexpr int size = 3 * 3 * Q1D * Q1D * Q1D + Q1D * Q1D * Q1D +
+                               6 * DQ * DQ * DQ;
+};
+
+// One element of the thread-per-point apply, its shared arrays carved from
+// smem (FusedPointsShared<D1D, Q1D>::size reals).
+template <int D1D, int Q1D, typename TM, typename TD, typename TJ,
+          typename TA, typename TX, typename TY>
+MFEM_HOST_DEVICE inline void FusedPointsElement(const int e, real_t* smem,
+      const TM& B, const TM& G,
+      const TD& DE, const TJ& J,
+      const TA& AL, const TX& XE,
+      const TY& YE)
+{
+   static constexpr int DIM = 3, VDIM = 3, NQ = Q1D * Q1D * Q1D;
+   static constexpr int DQ = FusedPointsShared<D1D, Q1D>::DQ, NM = DQ * DQ * DQ;
+   real_t (*sGr)[DIM][Q1D][Q1D][Q1D] = (real_t (*)[DIM][Q1D][Q1D][Q1D]) smem;
+   real_t (*sT)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D])(smem + VDIM * DIM * NQ);
+   real_t* sm0 = smem + (VDIM * DIM + 1) * NQ;
+   real_t* sm1 = sm0 + NM;
+   real_t* sm2 = sm1 + NM;
+   real_t* sm3 = sm2 + NM;
+   real_t* sm4 = sm3 + NM;
+   real_t* sm5 = sm4 + NM;
+   // Every component's reference gradient at the points.
+   for (int c = 0; c < VDIM; ++c)
+   {
+      real_t (*u)[D1D][D1D] = (real_t (*)[D1D][D1D]) sm0;
+      MFEM_FOREACH_THREAD(dz, z, D1D)
+      {
+         MFEM_FOREACH_THREAD(dy, y, D1D)
+         {
+            MFEM_FOREACH_THREAD(dx, x, D1D) { u[dz][dy][dx] = XE(dx, dy, dz, c, e); }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      real_t (*Bu)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm1;
+      real_t (*Gu)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm2;
+      MFEM_FOREACH_THREAD(dz, z, D1D)
+      {
+         MFEM_FOREACH_THREAD(dy, y, D1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t bu = 0.0, gu = 0.0;
+               for (int dx = 0; dx < D1D; ++dx)
+               {
+                  bu += B(qx, dx) * u[dz][dy][dx];
+                  gu += G(qx, dx) * u[dz][dy][dx];
+               }
+               Bu[dz][dy][qx] = bu;
+               Gu[dz][dy][qx] = gu;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      real_t (*BBu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm3;
+      real_t (*GBu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm4;
+      real_t (*BGu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm5;
+      MFEM_FOREACH_THREAD(dz, z, D1D)
+      {
+         MFEM_FOREACH_THREAD(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t bbu = 0.0, gbu = 0.0, bgu = 0.0;
+               for (int dy = 0; dy < D1D; ++dy)
+               {
+                  bbu += B(qy, dy) * Bu[dz][dy][qx];
+                  gbu += G(qy, dy) * Bu[dz][dy][qx];
+                  bgu += B(qy, dy) * Gu[dz][dy][qx];
+               }
+               BBu[dz][qy][qx] = bbu;
+               GBu[dz][qy][qx] = gbu;
+               BGu[dz][qy][qx] = bgu;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      MFEM_FOREACH_THREAD(qz, z, Q1D)
+      {
+         MFEM_FOREACH_THREAD(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t gx = 0.0, gy = 0.0, gz = 0.0;
+               for (int dz = 0; dz < D1D; ++dz)
+               {
+                  gx += B(qz, dz) * BGu[dz][qy][qx];
+                  gy += B(qz, dz) * GBu[dz][qy][qx];
+                  gz += G(qz, dz) * BBu[dz][qy][qx];
+               }
+               sGr[c][0][qz][qy][qx] = gx;
+               sGr[c][1][qz][qy][qx] = gy;
+               sGr[c][2][qz][qy][qx] = gz;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+   }
+   // grad-div's term at each point: alpha sum_c sum_k grad_c[k] A[k][c].
+   MFEM_FOREACH_THREAD(qz, z, Q1D)
+   {
+      MFEM_FOREACH_THREAD(qy, y, Q1D)
+      {
+         MFEM_FOREACH_THREAD(qx, x, Q1D)
+         {
+            real_t A[3][3];
+            Adjugate3D(J, qx, qy, qz, e, A);
+            real_t s = 0.0;
+            MFEM_UNROLL(VDIM)
+            for (int c = 0; c < VDIM; ++c)
+            {
+               real_t acc = 0.0;
+               MFEM_UNROLL(DIM)
+               for (int k = 0; k < DIM; ++k) { acc += sGr[c][k][qz][qy][qx] * A[k][c]; }
+               s += acc;
+            }
+            sT[qz][qy][qx] = AL(qx, qy, qz, e) * s;
+         }
+      }
+   }
+   MFEM_SYNC_THREAD;
+   // Per component: the flux O grad_c + t adj(J)[:, c], contracted back.
+   // Unrolled: adj(J)[:, c] then has compile-time indices.
+   MFEM_UNROLL(VDIM)
+   for (int c = 0; c < VDIM; ++c)
+   {
+      real_t (*F0)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm0;
+      real_t (*F1)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm1;
+      real_t (*F2)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm2;
+      MFEM_FOREACH_THREAD(qz, z, Q1D)
+      {
+         MFEM_FOREACH_THREAD(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t A[3][3];
+               Adjugate3D(J, qx, qy, qz, e, A);
+               const real_t t = sT[qz][qy][qx];
+               const real_t gradX = sGr[c][0][qz][qy][qx];
+               const real_t gradY = sGr[c][1][qz][qy][qx];
+               const real_t gradZ = sGr[c][2][qz][qy][qx];
+               const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
+                            O13 = DE(qx, qy, qz, 2, e);
+               const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
+               const real_t O33 = DE(qx, qy, qz, 5, e);
+               F0[qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ) + t * A[0][c];
+               F1[qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ) + t * A[1][c];
+               F2[qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ) + t * A[2][c];
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      // z: B for F0 and F1, G for F2.
+      real_t (*Z0)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm3;
+      real_t (*Z1)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm4;
+      real_t (*Z2)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm5;
+      MFEM_FOREACH_THREAD(dz, z, D1D)
+      {
+         MFEM_FOREACH_THREAD(qy, y, Q1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t z0 = 0.0, z1 = 0.0, z2 = 0.0;
+               for (int qz = 0; qz < Q1D; ++qz)
+               {
+                  z0 += B(qz, dz) * F0[qz][qy][qx];
+                  z1 += B(qz, dz) * F1[qz][qy][qx];
+                  z2 += G(qz, dz) * F2[qz][qy][qx];
+               }
+               Z0[dz][qy][qx] = z0;
+               Z1[dz][qy][qx] = z1;
+               Z2[dz][qy][qx] = z2;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      // y: B for F0, G for F1, B for F2; F1 and F2 both take B in x.
+      real_t (*W0)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm0;
+      real_t (*W1)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm1;
+      MFEM_FOREACH_THREAD(dz, z, D1D)
+      {
+         MFEM_FOREACH_THREAD(dy, y, D1D)
+         {
+            MFEM_FOREACH_THREAD(qx, x, Q1D)
+            {
+               real_t w0 = 0.0, w1 = 0.0;
+               for (int qy = 0; qy < Q1D; ++qy)
+               {
+                  w0 += B(qy, dy) * Z0[dz][qy][qx];
+                  w1 += G(qy, dy) * Z1[dz][qy][qx] + B(qy, dy) * Z2[dz][qy][qx];
+               }
+               W0[dz][dy][qx] = w0;
+               W1[dz][dy][qx] = w1;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      // x: G for F0, B for F1 and F2.
+      MFEM_FOREACH_THREAD(dz, z, D1D)
+      {
+         MFEM_FOREACH_THREAD(dy, y, D1D)
+         {
+            MFEM_FOREACH_THREAD(dx, x, D1D)
+            {
+               real_t v = 0.0;
+               for (int qx = 0; qx < Q1D; ++qx)
+               {
+                  v += G(qx, dx) * W0[dz][dy][qx] + B(qx, dx) * W1[dz][dy][qx];
+               }
+               YE(dx, dy, dz, c, e) += v;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+   }
+}
+
+// The thread-per-point apply with static shared memory: up to 48 KB, so Q1D
+// up to 7 (44 KB at (7, 7)).
 template <int D1D, int Q1D>
 void FusedApply3DPoints(const int NE, const Array<real_t>& b,
                         const Array<real_t>& g, const Vector& d,
                         const Vector& j, const Vector& alpha, const Vector& x,
                         Vector& y, const int, const int)
 {
-   static constexpr int DIM = 3, VDIM = 3;
+   static constexpr int VDIM = 3;
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
    const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
@@ -552,208 +783,74 @@ void FusedApply3DPoints(const int NE, const Array<real_t>& b,
 
    mfem::forall_3D(NE, Q1D, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
    {
-      constexpr int DQ = (Q1D > D1D) ? Q1D : D1D;
-      MFEM_SHARED real_t sGr[VDIM][DIM][Q1D][Q1D][Q1D];
-      MFEM_SHARED real_t sT[Q1D][Q1D][Q1D];
-      MFEM_SHARED real_t sm0[DQ * DQ * DQ];
-      MFEM_SHARED real_t sm1[DQ * DQ * DQ];
-      MFEM_SHARED real_t sm2[DQ * DQ * DQ];
-      MFEM_SHARED real_t sm3[DQ * DQ * DQ];
-      MFEM_SHARED real_t sm4[DQ * DQ * DQ];
-      MFEM_SHARED real_t sm5[DQ * DQ * DQ];
-      // Every component's reference gradient at the points.
-      for (int c = 0; c < VDIM; ++c)
+      MFEM_SHARED real_t smem[FusedPointsShared<D1D, Q1D>::size];
+      FusedPointsElement<D1D, Q1D>(e, smem, B, G, DE, J, AL, XE, YE);
+   });
+}
+
+// A forall_3D whose kernel takes its shared memory dynamically, for more than
+// the 48 KB of static shared memory: opted in once per kernel (the H100 allows
+// 227 KB per block). An X x Y x Z thread block per element, at most 512
+// threads. On the host: the elements in turn, the arrays in one buffer.
+#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
+template <typename BODY>
+__global__ void __launch_bounds__(512) DynamicSharedKernel3D(const int N,
+      BODY body)
+{
+   extern __shared__ real_t dyn_smem[];
+   for (int k = blockIdx.x; k < N; k += gridDim.x) { body(k, dyn_smem); }
+}
+#endif
+
+template <typename BODY>
+void ForallDynamicShared3D(const int N, const int X, const int Y, const int Z,
+                           const int reals, BODY&& body)
+{
+   if (N == 0) { return; }
+   MFEM_VERIFY(X * Y * Z <= 512, "ForallDynamicShared3D: at most 512 threads");
+#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
+   if (Device::Allows(Backend::CUDA_MASK))
+   {
+      using K = typename std::decay<BODY>::type;
+      const std::size_t bytes = sizeof(real_t) * reals;
+      static bool opted_in = false;
+      if (!opted_in)
       {
-         real_t (*u)[D1D][D1D] = (real_t (*)[D1D][D1D]) sm0;
-         MFEM_FOREACH_THREAD(dz, z, D1D)
-         {
-            MFEM_FOREACH_THREAD(dy, y, D1D)
-            {
-               MFEM_FOREACH_THREAD(dx, x, D1D) { u[dz][dy][dx] = XE(dx, dy, dz, c, e); }
-            }
-         }
-         MFEM_SYNC_THREAD;
-         real_t (*Bu)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm1;
-         real_t (*Gu)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm2;
-         MFEM_FOREACH_THREAD(dz, z, D1D)
-         {
-            MFEM_FOREACH_THREAD(dy, y, D1D)
-            {
-               MFEM_FOREACH_THREAD(qx, x, Q1D)
-               {
-                  real_t bu = 0.0, gu = 0.0;
-                  for (int dx = 0; dx < D1D; ++dx)
-                  {
-                     bu += B(qx, dx) * u[dz][dy][dx];
-                     gu += G(qx, dx) * u[dz][dy][dx];
-                  }
-                  Bu[dz][dy][qx] = bu;
-                  Gu[dz][dy][qx] = gu;
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
-         real_t (*BBu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm3;
-         real_t (*GBu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm4;
-         real_t (*BGu)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm5;
-         MFEM_FOREACH_THREAD(dz, z, D1D)
-         {
-            MFEM_FOREACH_THREAD(qy, y, Q1D)
-            {
-               MFEM_FOREACH_THREAD(qx, x, Q1D)
-               {
-                  real_t bbu = 0.0, gbu = 0.0, bgu = 0.0;
-                  for (int dy = 0; dy < D1D; ++dy)
-                  {
-                     bbu += B(qy, dy) * Bu[dz][dy][qx];
-                     gbu += G(qy, dy) * Bu[dz][dy][qx];
-                     bgu += B(qy, dy) * Gu[dz][dy][qx];
-                  }
-                  BBu[dz][qy][qx] = bbu;
-                  GBu[dz][qy][qx] = gbu;
-                  BGu[dz][qy][qx] = bgu;
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
-         MFEM_FOREACH_THREAD(qz, z, Q1D)
-         {
-            MFEM_FOREACH_THREAD(qy, y, Q1D)
-            {
-               MFEM_FOREACH_THREAD(qx, x, Q1D)
-               {
-                  real_t gx = 0.0, gy = 0.0, gz = 0.0;
-                  for (int dz = 0; dz < D1D; ++dz)
-                  {
-                     gx += B(qz, dz) * BGu[dz][qy][qx];
-                     gy += B(qz, dz) * GBu[dz][qy][qx];
-                     gz += G(qz, dz) * BBu[dz][qy][qx];
-                  }
-                  sGr[c][0][qz][qy][qx] = gx;
-                  sGr[c][1][qz][qy][qx] = gy;
-                  sGr[c][2][qz][qy][qx] = gz;
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
+         MFEM_GPU_CHECK(cudaFuncSetAttribute(DynamicSharedKernel3D<K>,
+                                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                             static_cast<int>(bytes)));
+         opted_in = true;
       }
-      // grad-div's term at each point: alpha sum_c sum_k grad_c[k] A[k][c].
-      MFEM_FOREACH_THREAD(qz, z, Q1D)
-      {
-         MFEM_FOREACH_THREAD(qy, y, Q1D)
-         {
-            MFEM_FOREACH_THREAD(qx, x, Q1D)
-            {
-               real_t A[3][3];
-               Adjugate3D(J, qx, qy, qz, e, A);
-               real_t s = 0.0;
-               MFEM_UNROLL(VDIM)
-               for (int c = 0; c < VDIM; ++c)
-               {
-                  real_t acc = 0.0;
-                  MFEM_UNROLL(DIM)
-                  for (int k = 0; k < DIM; ++k) { acc += sGr[c][k][qz][qy][qx] * A[k][c]; }
-                  s += acc;
-               }
-               sT[qz][qy][qx] = AL(qx, qy, qz, e) * s;
-            }
-         }
-      }
-      MFEM_SYNC_THREAD;
-      // Per component: the flux O grad_c + t adj(J)[:, c], contracted back.
-      // Unrolled: adj(J)[:, c] then has compile-time indices.
-      MFEM_UNROLL(VDIM)
-      for (int c = 0; c < VDIM; ++c)
-      {
-         real_t (*F0)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm0;
-         real_t (*F1)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm1;
-         real_t (*F2)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm2;
-         MFEM_FOREACH_THREAD(qz, z, Q1D)
-         {
-            MFEM_FOREACH_THREAD(qy, y, Q1D)
-            {
-               MFEM_FOREACH_THREAD(qx, x, Q1D)
-               {
-                  real_t A[3][3];
-                  Adjugate3D(J, qx, qy, qz, e, A);
-                  const real_t t = sT[qz][qy][qx];
-                  const real_t gradX = sGr[c][0][qz][qy][qx];
-                  const real_t gradY = sGr[c][1][qz][qy][qx];
-                  const real_t gradZ = sGr[c][2][qz][qy][qx];
-                  const real_t O11 = DE(qx, qy, qz, 0, e), O12 = DE(qx, qy, qz, 1, e),
-                               O13 = DE(qx, qy, qz, 2, e);
-                  const real_t O22 = DE(qx, qy, qz, 3, e), O23 = DE(qx, qy, qz, 4, e);
-                  const real_t O33 = DE(qx, qy, qz, 5, e);
-                  F0[qz][qy][qx] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ) + t * A[0][c];
-                  F1[qz][qy][qx] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ) + t * A[1][c];
-                  F2[qz][qy][qx] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ) + t * A[2][c];
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
-         // z: B for F0 and F1, G for F2.
-         real_t (*Z0)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm3;
-         real_t (*Z1)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm4;
-         real_t (*Z2)[Q1D][Q1D] = (real_t (*)[Q1D][Q1D]) sm5;
-         MFEM_FOREACH_THREAD(dz, z, D1D)
-         {
-            MFEM_FOREACH_THREAD(qy, y, Q1D)
-            {
-               MFEM_FOREACH_THREAD(qx, x, Q1D)
-               {
-                  real_t z0 = 0.0, z1 = 0.0, z2 = 0.0;
-                  for (int qz = 0; qz < Q1D; ++qz)
-                  {
-                     z0 += B(qz, dz) * F0[qz][qy][qx];
-                     z1 += B(qz, dz) * F1[qz][qy][qx];
-                     z2 += G(qz, dz) * F2[qz][qy][qx];
-                  }
-                  Z0[dz][qy][qx] = z0;
-                  Z1[dz][qy][qx] = z1;
-                  Z2[dz][qy][qx] = z2;
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
-         // y: B for F0, G for F1, B for F2; F1 and F2 both take B in x.
-         real_t (*W0)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm0;
-         real_t (*W1)[D1D][Q1D] = (real_t (*)[D1D][Q1D]) sm1;
-         MFEM_FOREACH_THREAD(dz, z, D1D)
-         {
-            MFEM_FOREACH_THREAD(dy, y, D1D)
-            {
-               MFEM_FOREACH_THREAD(qx, x, Q1D)
-               {
-                  real_t w0 = 0.0, w1 = 0.0;
-                  for (int qy = 0; qy < Q1D; ++qy)
-                  {
-                     w0 += B(qy, dy) * Z0[dz][qy][qx];
-                     w1 += G(qy, dy) * Z1[dz][qy][qx] + B(qy, dy) * Z2[dz][qy][qx];
-                  }
-                  W0[dz][dy][qx] = w0;
-                  W1[dz][dy][qx] = w1;
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
-         // x: G for F0, B for F1 and F2.
-         MFEM_FOREACH_THREAD(dz, z, D1D)
-         {
-            MFEM_FOREACH_THREAD(dy, y, D1D)
-            {
-               MFEM_FOREACH_THREAD(dx, x, D1D)
-               {
-                  real_t v = 0.0;
-                  for (int qx = 0; qx < Q1D; ++qx)
-                  {
-                     v += G(qx, dx) * W0[dz][dy][qx] + B(qx, dx) * W1[dz][dy][qx];
-                  }
-                  YE(dx, dy, dz, c, e) += v;
-               }
-            }
-         }
-         MFEM_SYNC_THREAD;
-      }
+      DynamicSharedKernel3D<K> <<< N, dim3(X, Y, Z), bytes>>>(N, body);
+      MFEM_GPU_CHECK(cudaGetLastError());
+      return;
+   }
+#endif
+   std::vector<real_t> buf(reals);
+   for (int e = 0; e < N; ++e) { body(e, buf.data()); }
+}
+
+// The thread-per-point apply with dynamic shared memory: (7, 8), 64 KB.
+template <int D1D, int Q1D>
+void FusedApply3DPointsDynamic(const int NE, const Array<real_t>& b,
+                               const Array<real_t>& g, const Vector& d,
+                               const Vector& j, const Vector& alpha,
+                               const Vector& x, Vector& y, const int, const int)
+{
+   static_assert(Q1D * Q1D * Q1D <= 512, "a thread per point: at most 512");
+   static constexpr int VDIM = 3;
+   const auto B = Reshape(b.Read(), Q1D, D1D);
+   const auto G = Reshape(g.Read(), Q1D, D1D);
+   const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto J = Reshape(j.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto AL = Reshape(alpha.Read(), Q1D, Q1D, Q1D, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+
+   ForallDynamicShared3D(NE, Q1D, Q1D, Q1D, FusedPointsShared<D1D, Q1D>::size,
+                         [ = ] MFEM_HOST_DEVICE(int e, real_t* smem)
+   {
+      FusedPointsElement<D1D, Q1D>(e, smem, B, G, DE, J, AL, XE, YE);
    });
 }
 
@@ -786,14 +883,19 @@ LeanVectorDiffusionIntegrator::FusedKernelType
 LeanVectorDiffusionIntegrator::FusedApplyKernels::Kernel()
 {
    if constexpr(DIM == 2) { return leandiff::FusedApply2D<D1D, Q1D>; }
-   // A thread per point while its static shared memory fits in 48 KB (Q1D up
-   // to 7: 44 KB at (7, 7)); (7, 8) needs 64 KB and keeps FusedApply3D, 1.2 KB
-   // of stack per thread included: a two-pass variant one component at a time
-   // (no stack, 255 registers, the gradients computed twice) took 1.01 ms per
-   // apply against its 0.87 ms (TGV 16^3 Q6, one H100, job 49270936).
+   // A thread per point. Its shared memory is static up to 48 KB (Q1D up to
+   // 7: 44 KB at (7, 7)) and dynamic beyond: (7, 8) takes 64 KB, 0.94 -> 0.57
+   // ms per apply against FusedApply3D's column of points (96 -> 64
+   // registers, occupancy 29 -> 49 %; TGV 16^3 Q6, one H100, job 49397767),
+   // 11-24 % off the step at 21.6M DOFs. Q1D = 9 (729 threads) keeps
+   // FusedApply3D.
    else if constexpr(DIM == 3 && Q1D <= 7)
    {
       return leandiff::FusedApply3DPoints<D1D, Q1D>;
+   }
+   else if constexpr(DIM == 3 && Q1D == 8)
+   {
+      return leandiff::FusedApply3DPointsDynamic<D1D, Q1D>;
    }
    else if constexpr(DIM == 3) { return leandiff::FusedApply3D<D1D, Q1D>; }
    MFEM_ABORT("LeanVectorDiffusionIntegrator: unsupported kernel dim");
