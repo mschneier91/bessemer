@@ -34,6 +34,9 @@ struct FlowSumsWork
 {
    mfem::Vector out; ///< (3, NE) element sums.
    mfem::Vector col; ///< One column of out.
+   /// The velocity's element vector, when lent (an ElementScratch alias of
+   /// the restriction's height): used instead of one allocated per call.
+   mfem::Vector xe;
 };
 
 /// As above, with the per-element vectors in @p work.

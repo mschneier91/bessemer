@@ -325,7 +325,10 @@ void LocalFlowSums(const ParGridFunction& u, const IntegrationRule& ir,
    const Operator* restrict_op =
       fes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
    MFEM_VERIFY(restrict_op, "flow_sums: no element restriction");
-   Vector xe(restrict_op->Height());
+   Vector own;
+   const bool lent = work.xe.Size() == restrict_op->Height();
+   if (!lent) { own.SetSize(restrict_op->Height()); }
+   Vector& xe = lent ? work.xe : own;
    xe.UseDevice(true);
    restrict_op->Mult(u, xe);
    Vector& out = work.out;

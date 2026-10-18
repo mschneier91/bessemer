@@ -465,6 +465,9 @@ FlowDiagnostics& Case::Diagnostics()
    {
       flow_diag_ = std::make_unique<FlowDiagnostics>(spaces_.Velocity(), rules_);
    }
+   // The integrator's element scratch, lent at each use: an adaptation
+   // rebuilds the integrator, and its scratch, even when the space stays.
+   flow_diag_->UseScratch(integrator_->OperatorScratch());
    return *flow_diag_;
 }
 

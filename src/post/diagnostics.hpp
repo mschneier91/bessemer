@@ -15,6 +15,8 @@
 namespace incns
 {
 
+class ElementScratch;
+
 /**
  * @brief Kinetic energy, @f$ \tfrac12 \int_\Omega |u|^2 @f$.
  *
@@ -88,6 +90,17 @@ public:
     * @param rules Owns the integration rules (must outlive this object).
     */
    FlowDiagnostics(mfem::ParFiniteElementSpace& vfes, const RuleBook& rules);
+
+   /**
+    * @brief Borrow the velocity's element vector from @p scratch for the
+    *        next evaluations instead of allocating one each time (a whole
+    *        velocity E-vector: at the end of a run, with the device nearly
+    *        full, that allocation was the one to fail). The diagnostics run
+    *        between steps, when no operator holds the scratch; lend again
+    *        whenever the scratch may have been rebuilt.
+    * @param scratch The buffers (borrowed; must outlive the evaluations).
+    */
+   void UseScratch(ElementScratch& scratch);
 
    /// @return Whether the space changed (was refined) since construction.
    bool Stale() const { return vfes_.GetSequence() != sequence_; }

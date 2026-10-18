@@ -404,6 +404,10 @@ public:
    /// @return The velocity field (updated by Step()).
    mfem::ParGridFunction& Velocity() { return u_; }
 
+   /// @return The element-vector buffers the operators borrow; free between
+   ///         steps, when the flow diagnostics borrow them too.
+   ElementScratch& OperatorScratch() { return *scratch_; }
+
    /// @return The (static) pressure field, updated by Step(). With the
    ///         rotational form this is P - 1/2|u|^2, not the solved Bernoulli
    ///         head P.

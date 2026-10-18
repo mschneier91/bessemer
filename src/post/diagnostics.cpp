@@ -1,6 +1,7 @@
 #include "post/diagnostics.hpp"
 
 #include "post/flow_sums.hpp"
+#include "operators/element_scratch.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -87,6 +88,13 @@ FlowDiagnostics::FlowDiagnostics(ParFiniteElementSpace& vfes,
       (vfes.GetParMesh()->Dimension() == 3) ? Geometry::CUBE : Geometry::SQUARE;
    // The rule the free functions use (MeasureOrder), so the values agree.
    ir_ = &rules.Get(geom, 2 * vfes.GetMaxElementOrder() + 2);
+}
+
+void FlowDiagnostics::UseScratch(ElementScratch& scratch)
+{
+   const Operator* r =
+      vfes_.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
+   if (r && r->Height() <= scratch.Size()) { scratch.Lend(0, r->Height(), work_.xe); }
 }
 
 FlowDiagnostics::Values FlowDiagnostics::All(const ParGridFunction& u,
