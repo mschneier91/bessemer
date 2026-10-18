@@ -165,6 +165,146 @@ void ElementRatesLinear(int ne, int d1, int dim, const Array<int>& gmap,
    });
 }
 
+// Mesh-node 1D sizes the curved kernel takes (mesh orders up to 9): its tiles
+// and its per-thread partial sums are sized by it.
+constexpr int kCurvedMaxND1 = 10;
+
+// ElementRates on curved elements in 3D, nothing per point read from memory:
+// u at node q through the gather map (byNODES, component stride ndofs); J at
+// q contracted from the element's mesh nodes (through their gather map, value
+// c of node j at XN[j * nds + c * ncs]) with the mesh basis B and its
+// derivative Gd at the GLL nodes, in the order of MFEM's Derivatives3D (x,
+// then y, then z, each sum from index 0, the same products), so J -- and the
+// rate -- are the stored path's bit for bit where both are compiled alike (on
+// a GPU; the CPU build differs from MFEM's in FMA). Threads: a (qx, qy)
+// column each, qz looped; the element's maximum from the columns' at the end.
+void ElementRatesCurved3D(int ne, int d1, int nd1, const Array<int>& gmap,
+                          int ndofs, const Vector& u, const Array<int>& ngmap,
+                          int nds, int ncs, const Vector& xn,
+                          const Array<real_t>& b, const Array<real_t>& g,
+                          const Vector& inv_dxi, Vector& rate)
+{
+   const int nq = d1 * d1 * d1, nn = nd1 * nd1 * nd1;
+   const auto Gm = Reshape(gmap.Read(), nq, ne);
+   const auto Nm = Reshape(ngmap.Read(), nn, ne);
+   const auto U = u.Read();
+   const auto XN = xn.Read();
+   const auto B = Reshape(b.Read(), d1, nd1);
+   const auto Gd = Reshape(g.Read(), d1, nd1);
+   const auto X = inv_dxi.Read();
+   auto R = rate.Write();
+   const real_t inf = std::numeric_limits<real_t>::infinity();
+   mfem::forall_2D(ne, d1, d1, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      constexpr int MN = kCurvedMaxND1;
+      constexpr int MQ = DofQuadLimits::MAX_D1D;
+      MFEM_SHARED real_t sX[3][MN][MN][MN]; // [c][dz][dy][dx]
+      MFEM_SHARED real_t sB[MQ][MN], sG[MQ][MN];
+      MFEM_SHARED real_t smax[MQ][MQ];
+      MFEM_FOREACH_THREAD(dy, y, nd1)
+      {
+         MFEM_FOREACH_THREAD(dx, x, nd1)
+         {
+            for (int dz = 0; dz < nd1; ++dz)
+            {
+               const int j = Nm(dx + nd1 * (dy + nd1 * dz), e);
+               for (int c = 0; c < 3; ++c) { sX[c][dz][dy][dx] = XN[j * nds + c * ncs]; }
+            }
+         }
+      }
+      MFEM_FOREACH_THREAD(d, y, nd1)
+      {
+         MFEM_FOREACH_THREAD(q, x, d1)
+         {
+            sB[q][d] = B(q, d);
+            sG[q][d] = Gd(q, d);
+         }
+      }
+      MFEM_SYNC_THREAD;
+      MFEM_FOREACH_THREAD(qy, y, d1)
+      {
+         MFEM_FOREACH_THREAD(qx, x, d1)
+         {
+            // x and y contracted for every dz: r[c][d][dz] (MFEM's DQQ0-2).
+            real_t r[3][3][MN];
+            for (int c = 0; c < 3; ++c)
+            {
+               for (int dz = 0; dz < nd1; ++dz)
+               {
+                  real_t a0 = 0.0, a1 = 0.0, a2 = 0.0;
+                  for (int dy = 0; dy < nd1; ++dy)
+                  {
+                     real_t bu = 0.0, gu = 0.0; // MFEM's DDQ0, DDQ1
+                     for (int dx = 0; dx < nd1; ++dx)
+                     {
+                        const real_t in = sX[c][dz][dy][dx];
+                        bu += in * sB[qx][dx];
+                        gu += in * sG[qx][dx];
+                     }
+                     a0 += gu * sB[qy][dy];
+                     a1 += bu * sG[qy][dy];
+                     a2 += bu * sB[qy][dy];
+                  }
+                  r[c][0][dz] = a0;
+                  r[c][1][dz] = a1;
+                  r[c][2][dz] = a2;
+               }
+            }
+            real_t rmax = 0.0;
+            for (int qz = 0; qz < d1; ++qz)
+            {
+               real_t m[3][3]; // dx_c / dxi_d
+               for (int c = 0; c < 3; ++c)
+               {
+                  real_t j0 = 0.0, j1 = 0.0, j2 = 0.0;
+                  for (int dz = 0; dz < nd1; ++dz)
+                  {
+                     j0 += r[c][0][dz] * sB[qz][dz];
+                     j1 += r[c][1][dz] * sB[qz][dz];
+                     j2 += r[c][2][dz] * sG[qz][dz];
+                  }
+                  m[c][0] = j0;
+                  m[c][1] = j1;
+                  m[c][2] = j2;
+               }
+               // ElementRates' arithmetic, as written there.
+               const real_t a00 = m[1][1] * m[2][2] - m[1][2] * m[2][1];
+               const real_t a01 = m[0][2] * m[2][1] - m[0][1] * m[2][2];
+               const real_t a02 = m[0][1] * m[1][2] - m[0][2] * m[1][1];
+               const real_t a10 = m[1][2] * m[2][0] - m[1][0] * m[2][2];
+               const real_t a11 = m[0][0] * m[2][2] - m[0][2] * m[2][0];
+               const real_t a12 = m[0][2] * m[1][0] - m[0][0] * m[1][2];
+               const real_t a20 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
+               const real_t a21 = m[0][1] * m[2][0] - m[0][0] * m[2][1];
+               const real_t a22 = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+               const real_t det = m[0][0] * a00 + m[0][1] * a10 + m[0][2] * a20;
+               const int gq = Gm(qx + d1 * (qy + d1 * qz), e);
+               const real_t u0 = U[gq], u1 = U[gq + ndofs], u2 = U[gq + 2 * ndofs];
+               real_t s = fabs((a00 * u0 + a01 * u1 + a02 * u2) / det) * X[qx] +
+                          fabs((a10 * u0 + a11 * u1 + a12 * u2) / det) * X[qy] +
+                          fabs((a20 * u0 + a21 * u1 + a22 * u2) / det) * X[qz];
+               if (!(s == s)) { s = inf; } // as ElementRates: NaN -> infinite rate
+               rmax = (s > rmax) ? s : rmax;
+            }
+            smax[qy][qx] = rmax;
+         }
+      }
+      MFEM_SYNC_THREAD;
+      if (MFEM_THREAD_ID(x) == 0 && MFEM_THREAD_ID(y) == 0)
+      {
+         real_t rmax = 0.0;
+         for (int qy = 0; qy < d1; ++qy)
+         {
+            for (int qx = 0; qx < d1; ++qx)
+            {
+               rmax = (smax[qy][qx] > rmax) ? smax[qy][qx] : rmax;
+            }
+         }
+         R[e] = rmax;
+      }
+   });
+}
+
 } // namespace cfl_kernels
 
 void RequireFiniteRate(double rate, double t)
@@ -215,14 +355,23 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
    nodal_gll_ = h1 && h1->GetBasisType() == BasisType::GaussLobatto;
    rate_.SetSize(ne_);
    rate_.UseDevice(true);
-   // On the fly where the elements are straight-sided (linear mesh nodes).
+   // On the fly where the elements are straight-sided (linear mesh nodes),
+   // and on curved elements in 3D (the Jacobians from the mesh nodes).
    const GridFunction& nodes = *mesh.GetNodes();
    const FiniteElementSpace& nfes = *nodes.FESpace();
    const auto* er = dynamic_cast<const ElementRestriction*>(restr_);
-   fly_able_ = nodal_gll_ && er && vfes.GetOrdering() == Ordering::byNODES &&
-               ne_ > 0 && nfes.GetTypicalFE()->GetOrder() == 1 &&
-               dynamic_cast<const TensorBasisElement*>(nfes.GetTypicalFE());
-   if (fly_able_)
+   const bool gather_able = nodal_gll_ && er &&
+                            vfes.GetOrdering() == Ordering::byNODES && ne_ > 0;
+   const int nk = nfes.GetTypicalFE()->GetOrder();
+   const bool tensor_nodes =
+      dynamic_cast<const TensorBasisElement*>(nfes.GetTypicalFE()) != nullptr;
+   fly_able_ = gather_able && nk == 1 && tensor_nodes;
+   const auto* ner = dynamic_cast<const ElementRestriction*>(
+                        nfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC));
+   curved_able_ = gather_able && nk >= 2 && tensor_nodes && dim_ == 3 && ner &&
+                  nfes.GetVDim() == 3 && nk + 1 <= cfl_kernels::kCurvedMaxND1 &&
+                  order_ + 1 <= DeviceDofQuadLimits::Get().MAX_D1D;
+   if (fly_able_ || curved_able_)
    {
       gather_ = &er->GatherMap();
       const int* gm = gather_->HostRead();
@@ -231,6 +380,27 @@ ConvectiveCfl::ConvectiveCfl(const ParFiniteElementSpace& vfes,
          MFEM_VERIFY(gm[i] >= 0, "cfl: an H1 gather map has no orientation signs");
       }
       ndofs_ = vfes.GetNDofs();
+   }
+   if (curved_able_)
+   {
+      ngather_ = &ner->GatherMap();
+      const int* gm = ngather_->HostRead();
+      for (int i = 0; i < ngather_->Size(); ++i)
+      {
+         MFEM_VERIFY(gm[i] >= 0, "cfl: an H1 gather map has no orientation signs");
+      }
+      // Value c of mesh node j at nodes[j * node_stride_ + c * comp_stride_].
+      const bool byvdim = nfes.GetOrdering() == Ordering::byVDIM;
+      node_stride_ = byvdim ? 3 : 1;
+      comp_stride_ = byvdim ? 1 : nfes.GetNDofs();
+      nodes_ = &nodes;
+      // The maps MFEM's QuadratureInterpolator uses for the mesh nodes at
+      // this rule (GeometricFactors' Jacobians).
+      nmaps_ = &nfes.GetTypicalFE()->GetDofToQuad(*ir_, DofToQuad::TENSOR);
+      curved_fly_ = true;
+   }
+   if (fly_able_)
+   {
       const Operator* nr =
          nfes.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
       xv_.UseDevice(true);
@@ -249,6 +419,14 @@ double ConvectiveCfl::Rate(const ParGridFunction& u) const
    return MaxRate({&u});
 }
 
+void ConvectiveCfl::CurvedRates(const ParGridFunction& u) const
+{
+   cfl_kernels::ElementRatesCurved3D(ne_, order_ + 1, nmaps_->ndof, *gather_,
+                                     ndofs_, u, *ngather_, node_stride_,
+                                     comp_stride_, *nodes_, nmaps_->B,
+                                     nmaps_->G, inv_dxi_, rate_);
+}
+
 double ConvectiveCfl::MaxRate(const std::vector<const ParGridFunction*>& us)
 const
 {
@@ -261,6 +439,15 @@ const
          MFEM_VERIFY(up->ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
          cfl_kernels::ElementRatesLinear(ne_, order_ + 1, dim_, *gather_, ndofs_,
                                          *up, xv_, zgll_, inv_dxi_, rate_);
+         local = std::max(local, rate_.Max()); // device-aware reduction
+      }
+   }
+   else if (ne_ > 0 && curved_fly_)
+   {
+      for (const ParGridFunction* up : us)
+      {
+         MFEM_VERIFY(up->ParFESpace() == &vfes_, "cfl: u must live on the CFL space");
+         CurvedRates(*up);
          local = std::max(local, rate_.Max()); // device-aware reduction
       }
    }
@@ -320,6 +507,16 @@ void ConvectiveCfl::Rates(const std::vector<const ParGridFunction*>& us,
                      "cfl: u must live on the CFL space");
          cfl_kernels::ElementRatesLinear(ne_, order_ + 1, dim_, *gather_, ndofs_,
                                          *us[l], xv_, zgll_, inv_dxi_, rate_);
+         rates[l] = std::max(0.0, rate_.Max());
+      }
+   }
+   else if (ne_ > 0 && curved_fly_)
+   {
+      for (std::size_t l = 0; l < us.size(); ++l)
+      {
+         MFEM_VERIFY(us[l]->ParFESpace() == &vfes_,
+                     "cfl: u must live on the CFL space");
+         CurvedRates(*us[l]);
          rates[l] = std::max(0.0, rate_.Max());
       }
    }

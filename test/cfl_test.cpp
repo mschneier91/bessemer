@@ -22,6 +22,13 @@
 //  C6 MaxRateAt (the per-level cache: a step's history levels keyed by their
 //     times) gives MaxRate's value bitwise, computed or from the cache. (A
 //     space change clears the cache; the integrator is rebuilt then anyway.)
+//  C7 The on-the-fly rate on straight-sided elements against the stored path,
+//     to roundoff; curved elements in 3D are on the fly too, 2D curved not.
+//  C8 On curved elements in 3D (mesh orders 2 and 3, a nonconforming mesh
+//     with hanging nodes, Q3 and Q6) the on-the-fly rate -- the Jacobians
+//     contracted from the mesh nodes inside the kernel -- is the stored
+//     path's, for Rate and MaxRate: bit for bit on a GPU, to roundoff on the
+//     CPU build (CurvedTolerance).
 
 #include <gtest/gtest.h>
 
@@ -150,10 +157,23 @@ TEST(Cfl, C4_PerCallJacobiansEqualTheCachedOnes)
    }
 }
 
+namespace
+{
+
+// The curved on-the-fly rate against the stored one: on a GPU both
+// contractions are nvcc's and fuse alike (bit for bit); on the CPU build MFEM
+// is compiled with the target's FMA and bessemer without (2e-15 measured).
+double CurvedTolerance()
+{
+   return Device::Allows(Backend::DEVICE_MASK) ? 0.0 : 1e-14;
+}
+
+} // namespace
+
 // Straight-sided elements (vertices moved, linear nodes): the on-the-fly
 // rate (the velocity through the gather map, the Jacobians from the vertices)
 // against the element copy and MFEM's Jacobians at the nodes, to roundoff;
-// curved elements keep the latter.
+// curved elements in 2D keep the latter.
 TEST(Cfl, C7_OnTheFlyRateOnStraightSidedElements)
 {
    for (const int dim : {2, 3})
@@ -184,15 +204,65 @@ TEST(Cfl, C7_OnTheFlyRateOnStraightSidedElements)
             ut -= 0.5;
             u.SetFromTrueDofs(ut);
             incns::ConvectiveCfl cfl(V, rules);
-            EXPECT_EQ(cfl.OnTheFly(), !curved);
-            if (curved) { continue; }
+            // Curved elements: on the fly in 3D (C8: bit for bit), the stored
+            // path in 2D.
+            const bool on_the_fly = !curved || dim == 3;
+            EXPECT_EQ(cfl.OnTheFly(), on_the_fly);
+            if (!on_the_fly) { continue; }
             const double fly = cfl.Rate(u);
             cfl.SetOnTheFly(false);
             ASSERT_FALSE(cfl.OnTheFly());
             const double ref = cfl.Rate(u);
             EXPECT_GT(ref, 0.0);
-            EXPECT_LE(std::abs(fly - ref), 1e-13 * ref);
+            const double tol = curved ? CurvedTolerance() : 1e-13;
+            EXPECT_LE(std::abs(fly - ref), tol * ref);
          }
+      }
+   }
+}
+
+// Curved elements in 3D, refined in bands (hanging nodes): the rate with the
+// Jacobians contracted from the mesh nodes inside the kernel against the
+// element copy and MFEM's Jacobians at the nodes.
+TEST(Cfl, C8_CurvedOnTheFlyIsBitwise)
+{
+   for (const int k : {3, 6})
+   {
+      for (const int nk : {2, 3})
+      {
+         SCOPED_TRACE(testing::Message() << "order " << k << ", mesh order " << nk);
+         Mesh serial = incns::MakeBoxMesh(amr_test::Box(3, 3, false));
+         serial.SetCurvature(nk);
+         serial.Transform([](const Vector & x, Vector & y)
+         {
+            y = x;
+            y(0) += 0.05 * std::sin(M_PI * x(1));
+            y(1) += 0.05 * std::sin(M_PI * x(0));
+            y(2) += 0.05 * std::sin(M_PI * x(0));
+         });
+         auto mesh = incns::PartitionMesh(serial, true);
+         amr_test::RefineBands(*mesh, true);
+         incns::RuleBook rules;
+         H1_FECollection fec(k, 3);
+         ParFiniteElementSpace V(mesh.get(), &fec, 3);
+         ParGridFunction u(&V), w(&V);
+         Vector ut(V.GetTrueVSize());
+         ut.Randomize(5 + Mpi::WorldRank());
+         ut -= 0.5;
+         u.SetFromTrueDofs(ut);
+         ut *= -1.7;
+         w.SetFromTrueDofs(ut);
+         incns::ConvectiveCfl cfl(V, rules);
+         ASSERT_TRUE(cfl.OnTheFly());
+         const double fly = cfl.Rate(u);
+         const double fly2 = cfl.MaxRate({&u, &w});
+         cfl.SetOnTheFly(false);
+         ASSERT_FALSE(cfl.OnTheFly());
+         const double ref = cfl.Rate(u);
+         const double ref2 = cfl.MaxRate({&u, &w});
+         EXPECT_GT(ref, 0.0);
+         EXPECT_LE(std::abs(fly - ref), CurvedTolerance() * ref);
+         EXPECT_LE(std::abs(fly2 - ref2), CurvedTolerance() * ref2);
       }
    }
 }

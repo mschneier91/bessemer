@@ -44,8 +44,9 @@ void RequireFiniteRate(double rate, double t);
  * uniform @f$ k_u^2 \max_q \sum_d |(J^{-1}u)_d| @f$ at Gauss-Legendre points,
  * which is ~2.5x this value at element edges (Q3: 9 vs 3.62 per unit |u|/h)
  * and ~3.3x in element interiors. Global over ranks. Built per mesh; rebuild
- * after refinement. The Jacobians at the nodes are computed at every call and
- * not kept (1.2 GB at 64^3 Q3).
+ * after refinement. Nothing per point is kept: the Jacobians at the nodes
+ * are formed inside the rate kernel (straight-sided elements, and curved ones
+ * in 3D), or else computed at every call and freed (1.2 GB at 64^3 Q3).
  */
 class ConvectiveCfl
 {
@@ -107,14 +108,19 @@ public:
 
    /**
     * @brief Use the on-the-fly evaluation where it applies (the default):
-    *        straight-sided elements, the GLL nodal basis, byNODES, an
-    *        ElementRestriction. false forces the element copy of the velocity
-    *        and MFEM's Jacobians at the nodes (tests compare the two).
+    *        straight-sided elements, or curved ones in 3D (mesh orders up to
+    *        9), the GLL nodal basis, byNODES, ElementRestrictions. false
+    *        forces the element copy of the velocity and MFEM's Jacobians at
+    *        the nodes (tests compare the two).
     * @param on Whether to evaluate on the fly where possible.
     */
-   void SetOnTheFly(bool on) { fly_ = on && fly_able_; }
+   void SetOnTheFly(bool on)
+   {
+      fly_ = on && fly_able_;
+      curved_fly_ = on && curved_able_;
+   }
    /// @return Whether the rate is evaluated on the fly.
-   bool OnTheFly() const { return fly_; }
+   bool OnTheFly() const { return fly_ || curved_fly_; }
 
 private:
    const mfem::ParFiniteElementSpace& vfes_; ///< Velocity space (borrowed).
@@ -134,14 +140,35 @@ private:
    /// from the element's 2^dim vertices, with nothing allocated per call.
    /// The element copy of the velocity and MFEM's Jacobians at the nodes were
    /// ~42 B/DOF at Q6 and sat on the run's memory peak (the allocation
-   /// census, 2026-10-17). Curved elements keep that path.
+   /// census, 2026-10-17).
    bool fly_able_ = false;
    bool fly_ = false;
+   /// Curved elements in 3D (mesh nodes of order 2-9, a tensor basis), with
+   /// the conditions above: on the fly too, each node's Jacobian contracted
+   /// from the element's mesh nodes inside the kernel in the order of MFEM's
+   /// Derivatives3D, so the rate is the stored path's bit for bit on a GPU
+   /// (on the CPU build to roundoff: MFEM there is compiled with the
+   /// target's FMA, bessemer without). That path
+   /// allocated the velocity's element copy, MFEM's Jacobians at the nodes
+   /// and its element copy of the mesh nodes for every call: 2.96 GB at 72k
+   /// Q6 elements, 2.26 GB above the rest of the step on the curved cylinder
+   /// with hanging nodes (the allocation trace, 2026-10-18).
+   bool curved_able_ = false;
+   bool curved_fly_ = false;
    const mfem::Array<int>* gather_ = nullptr; ///< The restriction's map.
    int ndofs_ = 0;      ///< Scalar local dofs: the component stride.
    mfem::Vector xv_;    ///< Element vertices, (2^dim, dim, NE) (device).
    mfem::Vector zgll_;  ///< The k+1 GLL points on [0, 1] (device).
+   /// The mesh nodes' gather map, values and their layout (curved path).
+   const mfem::Array<int>* ngather_ = nullptr;
+   const mfem::GridFunction* nodes_ = nullptr;
+   int node_stride_ = 1; ///< Value c of node j at j * node_stride_ ...
+   int comp_stride_ = 0; ///< ... + c * comp_stride_.
+   /// The mesh basis and its derivative at the GLL nodes (curved path).
+   const mfem::DofToQuad* nmaps_ = nullptr;
    mutable mfem::Vector rate_; ///< Per-element rate.
+   /// rate_ from @p u on curved elements (curved_fly_).
+   void CurvedRates(const mfem::ParGridFunction& u) const;
    /// The rate of each of @p us (each a max over the ranks), with one
    /// evaluation of the Jacobians for all of them.
    void Rates(const std::vector<const mfem::ParGridFunction*>& us,
