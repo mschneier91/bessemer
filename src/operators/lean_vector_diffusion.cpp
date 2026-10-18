@@ -790,24 +790,27 @@ void FusedApply3DPoints(const int NE, const Array<real_t>& b,
 
 // A forall_3D whose kernel takes its shared memory dynamically, for more than
 // the 48 KB of static shared memory: opted in once per kernel (the H100 allows
-// 227 KB per block). An X x Y x Z thread block per element, at most 512
-// threads. On the host: the elements in turn, the arrays in one buffer.
+// 227 KB per block). An X x Y x Z thread block per element, at most
+// MAX_THREADS (the kernel's launch bound, up to 1024). On the host: the
+// elements in turn, the arrays in one buffer.
 #if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
-template <typename BODY>
-__global__ void __launch_bounds__(512) DynamicSharedKernel3D(const int N,
-      BODY body)
+template <int MAX_THREADS, typename BODY>
+__global__ void __launch_bounds__(MAX_THREADS)
+DynamicSharedKernel3D(const int N, BODY body)
 {
    extern __shared__ real_t dyn_smem[];
    for (int k = blockIdx.x; k < N; k += gridDim.x) { body(k, dyn_smem); }
 }
 #endif
 
-template <typename BODY>
+template <int MAX_THREADS, typename BODY>
 void ForallDynamicShared3D(const int N, const int X, const int Y, const int Z,
                            const int reals, BODY&& body)
 {
+   static_assert(MAX_THREADS <= 1024, "at most 1024 threads per block");
    if (N == 0) { return; }
-   MFEM_VERIFY(X * Y * Z <= 512, "ForallDynamicShared3D: at most 512 threads");
+   MFEM_VERIFY(X * Y * Z <= MAX_THREADS,
+               "ForallDynamicShared3D: more threads than the launch bound");
 #if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
    if (Device::Allows(Backend::CUDA_MASK))
    {
@@ -816,12 +819,12 @@ void ForallDynamicShared3D(const int N, const int X, const int Y, const int Z,
       static bool opted_in = false;
       if (!opted_in)
       {
-         MFEM_GPU_CHECK(cudaFuncSetAttribute(DynamicSharedKernel3D<K>,
+         MFEM_GPU_CHECK(cudaFuncSetAttribute(DynamicSharedKernel3D<MAX_THREADS, K>,
                                              cudaFuncAttributeMaxDynamicSharedMemorySize,
                                              static_cast<int>(bytes)));
          opted_in = true;
       }
-      DynamicSharedKernel3D<K> <<< N, dim3(X, Y, Z), bytes>>>(N, body);
+      DynamicSharedKernel3D<MAX_THREADS, K> <<< N, dim3(X, Y, Z), bytes>>>(N, body);
       MFEM_GPU_CHECK(cudaGetLastError());
       return;
    }
@@ -830,15 +833,16 @@ void ForallDynamicShared3D(const int N, const int X, const int Y, const int Z,
    for (int e = 0; e < N; ++e) { body(e, buf.data()); }
 }
 
-// The thread-per-point apply with dynamic shared memory: (7, 8), 64 KB.
+// The thread-per-point apply with dynamic shared memory: (7, 8), 64 KB and
+// 512 threads; (8, 9), 93 KB and 729 threads.
 template <int D1D, int Q1D>
 void FusedApply3DPointsDynamic(const int NE, const Array<real_t>& b,
                                const Array<real_t>& g, const Vector& d,
                                const Vector& j, const Vector& alpha,
                                const Vector& x, Vector& y, const int, const int)
 {
-   static_assert(Q1D * Q1D * Q1D <= 512, "a thread per point: at most 512");
-   static constexpr int VDIM = 3;
+   static constexpr int NQ = Q1D * Q1D * Q1D, VDIM = 3;
+   static_assert(NQ <= 1024, "a thread per point: at most 1024 per block");
    const auto B = Reshape(b.Read(), Q1D, D1D);
    const auto G = Reshape(g.Read(), Q1D, D1D);
    const auto DE = Reshape(d.Read(), Q1D, Q1D, Q1D, 6, NE);
@@ -847,8 +851,9 @@ void FusedApply3DPointsDynamic(const int NE, const Array<real_t>& b,
    const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
    auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
 
-   ForallDynamicShared3D(NE, Q1D, Q1D, Q1D, FusedPointsShared<D1D, Q1D>::size,
-                         [ = ] MFEM_HOST_DEVICE(int e, real_t* smem)
+   ForallDynamicShared3D<NQ>(NE, Q1D, Q1D, Q1D,
+                             FusedPointsShared<D1D, Q1D>::size,
+                             [ = ] MFEM_HOST_DEVICE(int e, real_t* smem)
    {
       FusedPointsElement<D1D, Q1D>(e, smem, B, G, DE, J, AL, XE, YE);
    });
@@ -884,16 +889,17 @@ LeanVectorDiffusionIntegrator::FusedApplyKernels::Kernel()
 {
    if constexpr(DIM == 2) { return leandiff::FusedApply2D<D1D, Q1D>; }
    // A thread per point. Its shared memory is static up to 48 KB (Q1D up to
-   // 7: 44 KB at (7, 7)) and dynamic beyond: (7, 8) takes 64 KB, 0.94 -> 0.57
-   // ms per apply against FusedApply3D's column of points (96 -> 64
-   // registers, occupancy 29 -> 49 %; TGV 16^3 Q6, one H100, job 49397767),
-   // 11-24 % off the step at 21.6M DOFs. Q1D = 9 (729 threads) keeps
-   // FusedApply3D.
+   // 7: 44 KB at (7, 7)) and dynamic beyond, against FusedApply3D's column of
+   // points on one H100: (7, 8) takes 64 KB, 0.94 -> 0.57 ms per apply (96 ->
+   // 64 registers, occupancy 29 -> 49 %; TGV 16^3 Q6, job 49397767), 11-24 %
+   // off the step at 21.6M DOFs; (8, 9) 93 KB and 729 threads, 0.71 -> 0.44
+   // ms (112 -> 76 registers, occupancy 21 -> 36 %; TGV 12^3 Q7, job
+   // 49400684), 21-24 % off the step at 17M DOFs.
    else if constexpr(DIM == 3 && Q1D <= 7)
    {
       return leandiff::FusedApply3DPoints<D1D, Q1D>;
    }
-   else if constexpr(DIM == 3 && Q1D == 8)
+   else if constexpr(DIM == 3 && (Q1D == 8 || Q1D == 9))
    {
       return leandiff::FusedApply3DPointsDynamic<D1D, Q1D>;
    }
