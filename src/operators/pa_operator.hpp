@@ -42,6 +42,14 @@ public:
 
    void Mult(const mfem::Vector& x, mfem::Vector& y) const override;
    void MultTranspose(const mfem::Vector& x, mfem::Vector& y) const override;
+   /**
+    * @brief y += a A x, scattered straight into y: no full-size temporary
+    *        (Operator::AddMult allocates one per call). a = 1 and a = -1
+    *        give Operator::AddMult's values bit for bit; other a scale the
+    *        element vector first (roundoff).
+    */
+   void AddMult(const mfem::Vector& x, mfem::Vector& y,
+                const mfem::real_t a = 1.0) const override;
 
    /// @return The space's prolongation (true dofs -> local dofs).
    const mfem::Operator* GetProlongation() const
@@ -82,6 +90,14 @@ public:
 
    void Mult(const mfem::Vector& x, mfem::Vector& y) const override;
    void MultTranspose(const mfem::Vector& x, mfem::Vector& y) const override;
+   /**
+    * @brief y += a A x, scattered straight into y: no full-size temporary
+    *        (Operator::AddMult allocates one per call). a = 1 and a = -1
+    *        give Operator::AddMult's values bit for bit; other a scale the
+    *        element vector first (roundoff).
+    */
+   void AddMult(const mfem::Vector& x, mfem::Vector& y,
+                const mfem::real_t a = 1.0) const override;
 
    /// @return The trial space's prolongation.
    const mfem::Operator* GetProlongation() const

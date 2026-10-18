@@ -34,6 +34,18 @@ void PaOperator::Mult(const Vector& x, Vector& y) const
    restr_->MultTranspose(ye_, y);
 }
 
+void PaOperator::AddMult(const Vector& x, Vector& y, const real_t a) const
+{
+   if (integs_.empty()) { return; }
+   restr_->Mult(x, xe_);
+   ye_ = 0.0;
+   for (const auto& integ : integs_) { integ->AddMultPA(xe_, ye_); }
+   // MFEM's restrictions add with a = 1 only: scale the element vector.
+   // Negating it negates the scattered sums exactly.
+   if (a != 1.0) { ye_ *= a; }
+   restr_->AddMultTranspose(ye_, y);
+}
+
 void PaOperator::MultTranspose(const Vector& x, Vector& y) const
 {
    if (integs_.empty()) { y = 0.0; return; }
@@ -74,6 +86,17 @@ void PaMixedOperator::Mult(const Vector& x, Vector& y) const
    test_e_ = 0.0;
    for (const auto& integ : integs_) { integ->AddMultPA(trial_e_, test_e_); }
    restr_test_->MultTranspose(test_e_, y);
+}
+
+void PaMixedOperator::AddMult(const Vector& x, Vector& y, const real_t a) const
+{
+   if (integs_.empty()) { return; }
+   restr_trial_->Mult(x, trial_e_);
+   test_e_ = 0.0;
+   for (const auto& integ : integs_) { integ->AddMultPA(trial_e_, test_e_); }
+   // As PaOperator::AddMult: a = -1 (EliminateRHS) negates the sums exactly.
+   if (a != 1.0) { test_e_ *= a; }
+   restr_test_->AddMultTranspose(test_e_, y);
 }
 
 void PaMixedOperator::MultTranspose(const Vector& x, Vector& y) const
