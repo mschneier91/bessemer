@@ -252,6 +252,67 @@ void InvertBlocksSym(int dim, int n, bool by_vdim, const Vector& d,
    });
 }
 
+// z_a = B_a^{-1} r_a, the symmetric blocks inverted in the kernel from the
+// diagonal and the off-diagonals: InvertBlocksSym's expressions, then
+// ApplyBlocksSym's sums -- the values it gives from the stored inverse, bit
+// for bit, from the same number of reads per node (d 3, g 3, r 3 against inv
+// 6, r 3).
+void ApplyBlocksSymFromParts(int dim, int n, bool by_vdim, const Vector& d,
+                             const Vector& g, const Vector& r, Vector& z)
+{
+   const auto D = d.Read(), Gs = g.Read();
+   const auto R = r.Read();
+   auto Z = z.Write();
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int a)
+   {
+      if (dim == 3)
+      {
+         const real_t d0 = D[Idx(0, a, n, 3, by_vdim)];
+         const real_t d1 = D[Idx(1, a, n, 3, by_vdim)];
+         const real_t d2 = D[Idx(2, a, n, 3, by_vdim)];
+         const real_t g0 = Gs[Idx(0, a, n, 3, by_vdim)];
+         const real_t g1 = Gs[Idx(1, a, n, 3, by_vdim)];
+         const real_t g2 = Gs[Idx(2, a, n, 3, by_vdim)];
+         const real_t b00 = d0, b01 = g2, b02 = g1;
+         const real_t b11 = d1, b12 = g0, b22 = d2;
+         const real_t a00 = b11 * b22 - b12 * b12;
+         const real_t a01 = b02 * b12 - b01 * b22;
+         const real_t a02 = b01 * b12 - b02 * b11;
+         const real_t a11 = b00 * b22 - b02 * b02;
+         const real_t a12 = b02 * b01 - b00 * b12;
+         const real_t a22 = b00 * b11 - b01 * b01;
+         const real_t rr = 1.0 / (b00 * a00 + b01 * a01 + b02 * a02);
+         const real_t i0 = rr * a00, i1 = rr * a01, i2 = rr * a02;
+         const real_t i3 = rr * a11, i4 = rr * a12, i5 = rr * a22;
+         const real_t r0 = R[Idx(0, a, n, 3, by_vdim)];
+         const real_t r1 = R[Idx(1, a, n, 3, by_vdim)];
+         const real_t r2 = R[Idx(2, a, n, 3, by_vdim)];
+         real_t z0 = 0.0, z1 = 0.0, z2 = 0.0;
+         z0 += i0 * r0; z0 += i1 * r1; z0 += i2 * r2;
+         z1 += i1 * r0; z1 += i3 * r1; z1 += i4 * r2;
+         z2 += i2 * r0; z2 += i4 * r1; z2 += i5 * r2;
+         Z[Idx(0, a, n, 3, by_vdim)] = z0;
+         Z[Idx(1, a, n, 3, by_vdim)] = z1;
+         Z[Idx(2, a, n, 3, by_vdim)] = z2;
+      }
+      else
+      {
+         const real_t d0 = D[Idx(0, a, n, 2, by_vdim)];
+         const real_t d1 = D[Idx(1, a, n, 2, by_vdim)];
+         const real_t g0 = Gs[Idx(0, a, n, 2, by_vdim)];
+         const real_t rr = 1.0 / (d0 * d1 - g0 * g0);
+         const real_t i0 = rr * d1, i1 = rr * (-g0), i2 = rr * d0;
+         const real_t r0 = R[Idx(0, a, n, 2, by_vdim)];
+         const real_t r1 = R[Idx(1, a, n, 2, by_vdim)];
+         real_t z0 = 0.0, z1 = 0.0;
+         z0 += i0 * r0; z0 += i1 * r1;
+         z1 += i1 * r0; z1 += i2 * r1;
+         Z[Idx(0, a, n, 2, by_vdim)] = z0;
+         Z[Idx(1, a, n, 2, by_vdim)] = z1;
+      }
+   });
+}
+
 // z_a = B_a^{-1} r_a with the symmetric layout (InvertBlocksSym).
 void ApplyBlocksSym(int dim, int n, bool by_vdim, const Vector& inv,
                     const Vector& r, Vector& z)
@@ -399,19 +460,28 @@ void PointBlockJacobi::UpdateSkew()
 
 void PointBlockJacobi::RebuildBlocks()
 {
-   // Closed-form inverses, in place: once per step (UpdateSkew) and per
-   // Delta-t change (SetDiagonal). Without a rotation term the blocks are
-   // symmetric and only their upper triangles are stored.
+   // Closed-form inverses: with a rotation term, in place, once per step
+   // (UpdateSkew) and per Delta-t change (SetDiagonal). Without one the
+   // blocks are symmetric and the apply inverts them from d_ and g_ itself:
+   // nothing is stored (change 35: two velocity vectors).
    sym_ = !skew_form_;
-   inv_.SetSize((sym_ ? dim_ * (dim_ + 1) / 2 : dim_ * dim_) * n_);
-   if (sym_) { pbj::InvertBlocksSym(dim_, n_, by_vdim_, d_, g_, inv_); }
-   else { pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, g_, inv_); }
+   if (sym_)
+   {
+      inv_.Destroy();
+      return;
+   }
+   inv_.SetSize(dim_ * dim_ * n_);
+   pbj::InvertBlocks(dim_, n_, by_vdim_, d_, s_, g_, inv_);
 }
 
 void PointBlockJacobi::ReleaseBuildData()
 {
    MFEM_VERIFY(!skew_form_, "PointBlockJacobi::ReleaseBuildData: not with a "
                "rotation term (its blocks are rebuilt every step)");
+   // The inverted blocks in place of their inputs: the same size, and the
+   // same values the apply forms from the inputs.
+   inv_.SetSize(dim_ * (dim_ + 1) / 2 * n_);
+   pbj::InvertBlocksSym(dim_, n_, by_vdim_, d_, g_, inv_);
    d_.Destroy();
    s_.Destroy();
    g_.Destroy();
@@ -420,7 +490,11 @@ void PointBlockJacobi::ReleaseBuildData()
 
 void PointBlockJacobi::Mult(const Vector& r, Vector& z) const
 {
-   if (sym_) { pbj::ApplyBlocksSym(dim_, n_, by_vdim_, inv_, r, z); }
+   if (sym_ && !released_)
+   {
+      pbj::ApplyBlocksSymFromParts(dim_, n_, by_vdim_, d_, g_, r, z);
+   }
+   else if (sym_) { pbj::ApplyBlocksSym(dim_, n_, by_vdim_, inv_, r, z); }
    else { pbj::ApplyBlocks(dim_, n_, by_vdim_, inv_, r, z); }
 }
 

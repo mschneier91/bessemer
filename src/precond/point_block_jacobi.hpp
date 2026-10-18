@@ -171,7 +171,9 @@ public:
 
    /**
     * @brief Free the inputs the blocks were built from (the diagonal and
-    *        the nodal off-diagonals), keeping only the inverted blocks.
+    *        the nodal off-diagonals), keeping only the inverted blocks
+    *        (without a rotation term the apply otherwise inverts them from
+    *        those inputs: the same size either way).
     *
     * For a preconditioner built once and never updated: two true-dof
     * velocity vectors. (StokesSolver keeps them: it updates its
@@ -217,8 +219,10 @@ private:
    /// PA form, proxy integrator; null without a rotation term.
    std::unique_ptr<mfem::BilinearForm> skew_form_;
    /// Inverse nodal blocks. With a rotation term (nonsymmetric): (dim, dim,
-   /// n) column-major, inv(i, j, a). Without (symmetric): the upper triangle
-   /// only, (dim (dim + 1) / 2, n): 3D 00, 01, 02, 11, 12, 22; 2D 00, 01, 11.
+   /// n) column-major, inv(i, j, a). Without (symmetric): empty -- the apply
+   /// inverts each block from d_ and g_ -- until ReleaseBuildData, then the
+   /// upper triangle only, (dim (dim + 1) / 2, n): 3D 00, 01, 02, 11, 12,
+   /// 22; 2D 00, 01, 11.
    mfem::Vector inv_;
    bool sym_ = true;       ///< inv_ holds the symmetric layout.
    bool released_ = false; ///< ReleaseBuildData was called.
