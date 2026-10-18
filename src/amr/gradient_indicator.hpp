@@ -11,6 +11,8 @@
 namespace incns
 {
 
+class ElementScratch;
+
 /**
  * @brief Per element K and reference direction d, the RMS change of the
  *        velocity across K along d:
@@ -25,9 +27,13 @@ namespace incns
  * criterion: refining the directions with large @f$ G_{K,d} @f$ is exactly
  * what reduces the indicator. Element-local, so independent of the partition.
  *
- * Reference derivatives at quadrature points come from MFEM's sum-factorized
- * QuadratureInterpolator; one device kernel reduces them per element. The rule
- * is the RuleBook's diffusion rule (Gauss-Legendre, order 2k + dim - 1), exact
+ * Reference derivatives at quadrature points: in 3D one sum-factorized device
+ * kernel makes them per element and reduces them as it goes, with no
+ * quadrature-point buffer (9 values per point: 2.65 GB at 72k Q6 elements,
+ * on top of the live time integrator at an adaptation event's first pass).
+ * In 2D, and past the device's 1D size limits, MFEM's QuadratureInterpolator
+ * makes them into such a buffer and a second kernel reduces it. The rule is
+ * the RuleBook's diffusion rule (Gauss-Legendre, order 2k + dim - 1), exact
  * for the integrand on affine elements. Built per adaptation event (it holds
  * mesh-dependent data).
  */
@@ -42,6 +48,15 @@ public:
     */
    GradientIndicator(const mfem::ParFiniteElementSpace& vfes,
                      const RuleBook& rules);
+
+   /**
+    * @brief Restrict the velocity into a buffer of a time integrator's
+    *        operator scratch instead of one of this object's own (0.59 GB at
+    *        72k Q6 elements). The scratch's operators must not run between
+    *        this call and the last Compute().
+    * @param scratch Scratch over the same velocity space; must outlive this.
+    */
+   void UseScratch(ElementScratch& scratch);
 
    /**
     * @brief Compute @f$ G_{K,d} @f$ for every local element.
@@ -64,10 +79,15 @@ private:
    int ne_ = 0;                              ///< Local element count.
    const mfem::IntegrationRule* ir_ = nullptr; ///< Indicator rule (RuleBook).
    const mfem::Operator* restr_ = nullptr;   ///< Lexicographic restriction.
-   const mfem::QuadratureInterpolator* qi_ = nullptr; ///< Reference grads.
    const mfem::GeometricFactors* geom_ = nullptr;     ///< det J at points.
+   /// The 1D basis and its derivative at the rule's 1D points (the fused
+   /// kernel's; null on the QuadratureInterpolator path).
+   const mfem::DofToQuad* maps_ = nullptr;
+   /// Reference gradients (the QuadratureInterpolator path; else null).
+   const mfem::QuadratureInterpolator* qi_ = nullptr;
    mutable mfem::Vector ue_;                 ///< Velocity E-vector buffer.
-   mutable mfem::Vector qd_;                 ///< Reference-gradient buffer.
+   /// Reference-gradient buffer (the QuadratureInterpolator path; else empty).
+   mutable mfem::Vector qd_;
 };
 
 } // namespace incns

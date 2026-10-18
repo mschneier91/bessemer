@@ -561,6 +561,7 @@ AdaptStats Case::Adapt(bool force_rebuild)
    Array<Refinement> refs;
    {
       GradientIndicator ind(spaces_.Velocity(), rules_);
+      ind.UseScratch(integrator_->OperatorScratch()); // between steps: idle
       Vector g;
       ind.Compute(integrator_->Velocity(), g);
       marker.Mark(mesh_, g, refs, &st.first_pass);
