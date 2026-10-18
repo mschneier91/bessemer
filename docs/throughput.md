@@ -1128,3 +1128,111 @@ default < 0 = 6 / k_u: 2 h_K at Q3, so Q3 runs are unchanged). Q6 is the cheapes
 close, and the scaled grad-div cuts its time by about a fifth. These numbers assume OIFS at
 CFL 2 (substeps 1.5), which became the default the same day (`time.convection: auto`; human:
 "it honestly seems to always be better").
+
+## The solver matrix at Q6: one and two H100s (2026-10-17/18)
+
+Every solver configuration at ~22M DOFs (Q6/Q5, `output.profile: sync`; the decks are
+`runs/verify/decks/thr_*`): Taylor-Green 32^3 (OIFS at CFL 2, IMEX) and the curved DFG
+3D cylinder channel (level 2, nz 5), coupled and Schur, at np 1 and np 2 (one H100 per
+rank), on the change-32 code:
+
+| Case | np 1 s/step | np 2 s/step | Efficiency |
+|---|---|---|---|
+| TGV OIFS coupled | 0.511 | 0.363 | 70 % |
+| TGV OIFS Schur | 0.616 | 0.395 | 78 % |
+| TGV IMEX coupled | 0.308 | 0.225 | 69 % |
+| TGV IMEX Schur | 0.341 | 0.216 | 79 % |
+| Cylinder OIFS coupled | 1.118 | 0.730 | 77 % |
+| Cylinder OIFS Schur | 1.209 | 0.735 | 82 % |
+| Cylinder IMEX coupled | 0.832 | 0.582 | 72 % |
+| Cylinder IMEX Schur | diverged (fixed by change 34) | | |
+
+The DFG Q3 AMR run and the channel at Re_tau 180 are slower at np 2: under ~2M DOFs per
+GPU, launches and latency dominate.
+
+What it found, and what was done:
+
+- **The Stokes step projected Dirichlet data on the host at every solve**: 230 ms of every
+  step on the cylinder, about 20 % (`stokes_solver::solve_true`'s own time). Change 33: the
+  separable data's shapes are projected once per space and scaled on the device.
+- **The Schur method stalled on the curved IMEX case**: the first velocity solve's
+  constraint residual met the coupled target, so the pressure was never updated. Change 34
+  gives the pressure its own target (1.6-2.8 FCG iterations per solve).
+- **The momentum apply at Q6 ran the column kernel** (its thread-per-point version needs
+  64 KB of shared memory). Change 36: dynamic shared memory; 0.94 -> 0.57 ms per apply.
+- **All communication was staged through the host.** Change 37: GPU-aware MPI by default.
+- **The pressure LOR-AMG scales worst**: 2x (Taylor-Green) to 4x (cylinder) slower per call
+  at np 2 with half the work per GPU. GPU-aware MPI cuts its time by about a quarter on
+  Taylor-Green; the rest is docs/multi_gpu.md's Phase 2 (AMG settings are the human's call).
+- **`oifs::advect`'s own time on the cylinder (~200 ms per step) and the curved IMEX
+  convection (158 ms per step)** were mostly the outflow condition's host round trips:
+  change 39 (below).
+
+**Change 36** (prototype measurement, job 49397767; one H100, 21.6M DOFs):
+
+| Case | s/step before | after | Change |
+|---|---|---|---|
+| TGV OIFS coupled | 0.511 | 0.416 | -19 % |
+| TGV OIFS Schur | 0.622 | 0.474 | -24 % |
+| TGV IMEX coupled | 0.317 | 0.261 | -18 % |
+| Cylinder OIFS coupled | 1.111 | 0.986 | -11 % |
+
+**Change 37** (job 49397771; np 2 on two H100s, 21.6M DOFs):
+
+| Case | s/step off | on | Change | Pressure AMG, whole run |
+|---|---|---|---|---|
+| TGV OIFS coupled | 0.371 | 0.297 | -20 % | 1.69 -> 1.27 s |
+| TGV IMEX coupled | 0.225 | 0.182 | -19 % | 1.35 -> 1.10 s |
+| Cylinder OIFS | 0.743 | 0.719 | -3 % | 3.52 -> 3.31 s |
+
+**Changes 36 + 37 as landed** (job 49400578; change 35 -> 36 + 37, s/step):
+
+| Case | np 1 | np 2 (36 alone, GPU-aware off) | np 2 (36 + 37) |
+|---|---|---|---|
+| TGV OIFS coupled | 0.517 -> 0.412 (-20 %) | 0.359 -> 0.334 (-7 %) | 0.250 (-30 %) |
+| TGV OIFS Schur | 0.712 -> 0.535 (-25 %) | | |
+| TGV IMEX coupled | 0.325 -> 0.258 (-21 %) | | |
+| TGV IMEX Schur | 0.611 -> 0.474 (-22 %) | 0.429 -> 0.356 (-17 %) | 0.262 (-39 %) |
+| Cylinder OIFS coupled | 0.889 -> 0.786 (-12 %) | 0.640 -> 0.569 (-11 %) | 0.573 (-10 %) |
+
+GPU-aware MPI does nothing for the cylinder at np 2 (0.569 -> 0.573); its pressure AMG
+stays 17-18 ms per call.
+
+**What the cylinder's step spends besides kernels** (Nsight Systems with CUDA call
+stacks, jobs 49400579 and 49401163; the regions are NVTX ranges):
+- The outflow condition (directional do-nothing) copied a whole velocity vector to the
+  host and back per evaluation: ~120 ms per step OIFS, ~113 ms IMEX. **Change 39** moves
+  only the outflow elements' dofs (the same sums, bitwise): cylinder OIFS 0.775 -> 0.707
+  s per step (-9 %), IMEX 0.510 -> 0.455 s (-11 %) at np 1 (job 49401382).
+- `RectangularConstrainedOperator::EliminateRHS` called MFEM's default `Operator::AddMult`
+  on the divergence block, which allocates and frees a full-size vector per call (the
+  free 5.6-7.8 ms with its device synchronization), twice per step. **Change 40**: the PA
+  blocks add into y themselves (bitwise). Taylor-Green OIFS -1.5 %, IMEX Schur -7 %; the
+  cylinder within its run-to-run variation (job 49401559).
+- The curved CFL rate (the old path) allocates an element copy and the Jacobians per
+  call; `oifs::classify` allocates its transient flag vectors (change 32's memory
+  choice). A few ms per step each in the call-stack profile; not changed.
+
+**Change 38**: change 36's kernel at Q7 ((8, 9): 729 threads, 93 KB of dynamic shared
+memory). 0.71 -> 0.44 ms per apply; Taylor-Green Q7 24^3 (17M DOFs) OIFS 0.399 -> 0.310
+s per step (-22 %), IMEX Schur 0.424 -> 0.324 (-24 %) (jobs 49400684, 49401382).
+
+**Tried and rejected**: three blocks per SM for the Q6 kernel (`__launch_bounds__(512,
+3)`: 40 registers, ~800 bytes of spills): 0.57 -> 0.81 ms per apply, +15 % per step (job
+49401164). Two blocks (change 36) stay.
+
+**DFG 3D-3Z Q3 with change 32** (OIFS's Dirichlet data per stage without projections;
+job 49390028): 151 -> 60 s of step wall time conforming, 698 -> 189 s with AMR
+(`oifs::dirichlet` had 380 s and `oifs::classify` 109 s of the AMR run); c_D within
+4.4e-5 relative, c_L within 1e-4 absolute (the GPU's run-to-run level).
+
+**Held or dropped this round.**
+- Geometry on the fly (Jacobians from the nodes in every kernel, ~74 B/DOF): +26-28 % per
+  step on Taylor-Green, +14 % on curved DFG Q6; held by the human (2026-10-17), a candidate
+  only for the memory profile.
+- hypre's prolongation at np 1: helps one rank only; dropped (human 2026-10-17).
+
+**Open, no memory trade-off**: the AMG at np > 1 (instrumentation first); batched
+reductions in FGMRES and CG (docs/multi_gpu.md, Phase 3); the remaining per-step
+allocations (the curved CFL rate, OIFS's classification). **Trade-off candidates** for a
+throughput profile: hypre's keep-transpose (a stored restriction).

@@ -52,11 +52,16 @@ the largest CFL rate over the wind's history velocities.
   operators with that stage's interpolation weights; nothing is reassembled per stage.
 - The substeps invert the Stokes step's own velocity mass $M$: the operator object is
   passed in, never rebuilt (`OifsAdvector`'s constructor). When $M$ is diagonal (the
-  collocated GLL mass on a conforming mesh, the default) the inverse is a pointwise
-  scaling. Otherwise (the consistent mass, or the collocated mass on a hanging-node
-  mesh) each RK stage does a Jacobi-preconditioned CG solve, about 6 iterations per stage
-  on a hanging-node mesh. Setup checks that the inverse reproduces $M$ and aborts if it
+  collocated GLL mass, the default; on hanging-node meshes lumped by its row sums since
+  2026-10-17, `discretization.hanging_mass: lumped`) the inverse is a pointwise scaling.
+  Otherwise (the consistent mass, or `hanging_mass: exact` on a hanging-node mesh) each RK
+  stage does a Jacobi-preconditioned CG solve, about 6 iterations per stage on a
+  hanging-node mesh. Setup checks that the inverse reproduces $M$ and aborts if it
   doesn't (see [the mass mismatch](#the-mass-mismatch)).
+- Dirichlet data separable in time, $u_D = s(t)\,g(x)$ (the deck's velocity conditions),
+  has its shapes $g$ projected once per space; each RK stage scales them on the device by
+  the stage's factors. Other data is projected per stage on the host and only the imposed
+  values are moved (2026-10-17).
 
 **Defaults under OIFS** (all automatic at the case level):
 - BDF3 (`time.order` auto = 0 → `Parameters::BdfOrder()`; human decision, 2026-10-09),
@@ -97,9 +102,10 @@ scheme's order.
 Without it, the MMS error stalled at 4.6e-4 ($h = 1/3$) whatever $\Delta t$ was, and
 converged only like $h^2$ (`nse_mms_test` OifsTemporalOrder2D measures it).
 
-With the collocated mass now used under OIFS, $M$ is diagonal on conforming meshes and this
-coupling mostly disappears. It still matters in two places:
-- on hanging-node (AMR) meshes, where the collocated mass $P^T D P$ is not diagonal;
+With the collocated mass now used under OIFS, $M$ is diagonal (on hanging-node meshes, by
+default, lumped) and this coupling mostly disappears. It still matters in two places:
+- with the consistent mass, or `hanging_mass: exact` on a hanging-node (AMR) mesh, where
+  $P^T D P$ is not diagonal;
 - for lift and drag, which come from the momentum residual at the wall rows. There the
   boundary values make OIFS's residual equal IMEX's $N(u)$ (`nse_mms_test`
   OifsWallBounded2D: wall force equal to IMEX's to 1.5e-3).
@@ -134,7 +140,14 @@ to invert the Stokes step's mass operator itself, so the two can't differ:
   wall-bounded MMS matches IMEX (5.456e-3 vs 5.453e-3; wall force to 5 digits). On the
   polynomial MMS, OIFS is exact up to the time error (9.1e-8), as IMEX is.
 - **Hanging-node meshes are now exact too.** There the collocated mass $P^TDP$ is not
-  diagonal, and the old row-sum lumping differed slightly from it.
+  diagonal, and the old row-sum lumping differed slightly from it. Since 2026-10-17 the
+  default lumps $P^TDP$ by its row sums in the Stokes step *and* the substeps
+  (`discretization.hanging_mass: lumped`; Nek5000's non-conforming lumping): still one mass
+  operator for both, so no mismatch, and the substeps' inverse is pointwise again. Guard
+  rails keep the lumped entries positive: AMR with the collocated mass requires
+  `amr.nc_limit: 1`, and every assembly checks the smallest lumped entry against its
+  conforming weight (abort below 0.5, warning below 0.9). `hanging_mass: exact` keeps the
+  CG solve per stage.
 - **The substep solve must be the full inverse, imposed rows included,** with the imposed
   rates dropped afterwards. A constrained solve that holds the imposed increments at zero
   couples their values into the interior rows through $M$'s off-diagonals, and left a
@@ -220,8 +233,9 @@ at `time.dt` and grow at most ×1.2 per step. The order tests seed the exact his
 OIFS is the case-level default since 2026-10-16 (`time.convection: auto`, outer CFL 2,
 substep CFL 1.5; the polynomial-order study in throughput.md). `auto` already picks IMEX
 where OIFS does not apply: Stokes, the rotational form, and error-controlled steps (an OIFS
-step is a CFL multiple, so an embedded estimator's second solve buys nothing). Q7 on walled
-domains does not run on a GPU (MFEM's convection setup at 11 points); Q6 does. Set
+step is a CFL multiple, so an embedded estimator's second solve buys nothing). Q6 and Q7 run
+on walled and curved domains on a GPU (MFEM's convection setup at 9–11 points was fixed and
+bypassed, 2026-10-17, gpu_memory.md changes 26–29). Set
 `time.convection: imex` explicitly for:
 
 - **Steady states reached by time marching.** At a steady state the advected history levels
@@ -240,8 +254,10 @@ domains does not run on a GPU (MFEM's convection setup at 11 points); Q6 does. S
 - **Outflow with backflow.** The directional do-nothing term is stiff at backflow nodes
   inside the substeps (above): Braack and Mucha's square at CFL 2 was 2.3 % off the paper,
   converging only as CFL -> 0.25.
-- **Hanging-node (AMR) meshes**, where it is a cost question: the collocated mass is not
-  diagonal there, so every RK stage is a CG solve instead of a pointwise inverse.
+- **Hanging-node (AMR) meshes with `discretization.hanging_mass: exact`**, where it is a
+  cost question: the collocated mass is not diagonal there, so every RK stage is a CG solve
+  instead of a pointwise inverse (about 30 % of a Q3 AMR DFG 3D-3Z run). With the default
+  lumped mass the stages are pointwise, as on conforming meshes.
 - **Small problems on a GPU.** The substeps are many small kernels: latency-bound
   (`nse_mms_test` and `tgv_nse_test` take 15-30+ min on an H100, seconds on a CPU).
 - **Memory-bound runs.** OIFS holds ~190-250 B/DOF (Q7-Q3 at ~128^3, throughput.md), 10-13 %

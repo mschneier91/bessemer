@@ -75,11 +75,16 @@ memory ledger.
      | TGV IMEX coupled | 0.225 | 0.182 | −19 % | 1.35 → 1.10 |
      | Curved cylinder OIFS | 0.743 | 0.719 | −3 % | 3.52 → 3.31 |
 
-   - Memory: 0.1–0.4 GiB more per GPU at ~11M DOFs per GPU (hypre's and UCX's
-     device communication buffers). The human made it the default in both the
-     throughput and the memory profile (2026-10-17). The cost near capacity
-     (~68M DOFs per GPU) is measured in job c36g; record it in
-     docs/gpu_memory.md.
+   - Memory: 0.1–0.4 GiB more per GPU at ~11M DOFs per GPU, 2.5 GB per GPU
+     at ~68M (Taylor–Green IMEX Schur, 136.6M DOFs on two H100s: 39.46 ->
+     41.92 GB on the larger rank; job 49400578). All of it is UCX's cuda_ipc
+     transport (job 49401722): MFEM's GPU-aware mode alone adds nothing, and
+     with `UCX_TLS=^cuda_ipc` the GPU-aware run takes 39.46 GB at the same
+     step time (1.470 s; host-memory rendezvous fragments change nothing). The
+     human made GPU-aware MPI the default in both the throughput and the
+     memory profile (2026-10-17); whether to drop cuda_ipc (job scripts or
+     scripts/env.sh) is theirs to decide -- at 4-8 GPUs on a node the NVLink
+     path may matter more than at 2.
    - Results are not bitwise equal off against on, nor run to run on the GPU
      (library-level nondeterminism in hypre/cuSPARSE, known and accepted since
      2026-10-15). On the CPU build the switch does nothing.
@@ -112,11 +117,15 @@ memory ledger.
      coarse levels (small messages) and the operator halos (large) can be
      judged.
    - **GDRCopy**: UCX is built `~gdrcopy`. GDRCopy cuts small-message latency
-     from device buffers (the AMG coarse levels), but needs the `gdrdrv` kernel
-     module on the GPU nodes, which only PSC can install (absent on the login
-     node; job c36g checks a GPU node, with `nvidia_peermem` for GPUDirect
-     RDMA). If present, rebuild UCX `+gdrcopy`; otherwise ask PSC only if the
-     multi-node traces show small-message latency dominating.
+     from device buffers (the AMG coarse levels). The GPU nodes have the
+     `gdrdrv` module and `nvidia_peermem` (GPUDirect RDMA) loaded (job
+     49400578, w008), so a UCX `+gdrcopy` rebuild (and Open MPI and everything
+     above it) is possible: the human's call, best after the multi-node traces.
+   - **Topology** (w008): the two GPUs of a GPU-shared allocation are joined by
+     NVLink (NV18); each sits on its own PCIe switch with an InfiniBand HCA
+     (GPU0 with NIC4, GPU1 with NIC6 in `nvidia-smi topo -m`'s numbering; its
+     legend maps them to mlx5 devices for `UCX_NET_DEVICES`), CPU cores
+     75, 79-89, 96-103 on NUMA node 1.
 3. **Binding**: one rank per GPU (already enforced: `ResolveDeviceId`), each
    rank's CPU cores and memory on the GPU's NUMA domain (`--cpu-bind`, PRTE
    mapping), so the host-side work (setup, the residual host loops) doesn't

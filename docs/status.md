@@ -4,10 +4,38 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-16)
+## Where development left off (2026-10-18)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Capacity on one H100 (2026-10-18, gpu_memory.md):** 100M+ DOFs with every Schur
+configuration (Taylor–Green OIFS 128.6M, IMEX 158.8M; curved cylinder OIFS 101.0M, IMEX
+134.5M; AMR OIFS 106.6M, IMEX 123.0M) and IMEX coupled (straight 115.1M, curved 101.0M);
+OIFS coupled reaches 96.6M straight, 78.6M curved.
+
+**Changes 28–41 (2026-10-17/18).** Changes 38–41: change 36's kernel at Q7 (38), the
+outflow term without whole-vector host round trips (39), the PA blocks' AddMult without
+a temporary (40), the diagnostics borrowing the element scratch (41: runs no longer die
+in the end-of-run summary). A GPU-only bug of 28–29 (the curved self apply's chunk
+views) is fixed in place. Changes 28–37: memory: curved elements keep no convection data per
+point (28–29), the CFL rate allocates nothing on straight-sided elements (30), OIFS's
+Dirichlet data per stage without projections or kept boundary vectors (32), point-block
+Jacobi without stored inverse blocks (35). The collocated mass is lumped at hanging nodes
+by default (31; human: "this should be the default option and we shouldn't allow a regime
+that fails"). Throughput: the Stokes step's Dirichlet values without a projection per
+solve (33; 230 ms of the cylinder's step), the Q6 momentum apply with a thread per point
+(36; 11–24 % per step), GPU-aware MPI by default in both profiles (37; human 2026-10-17;
+19–20 % per step at np 2 on Taylor–Green). Fix: the Schur method's pressure target (34;
+curved IMEX Schur stalled). The solver matrix at np 1 and 2 and what it found:
+throughput.md ("The solver matrix at Q6"); each memory change, the gaps and the capacities:
+gpu_memory.md; the multi-GPU plan: multi_gpu.md (human: 4–8 GPUs for scaling studies; no
+hard cap on concurrent H100s, the queue is the limit). Held by the human: geometry on the
+fly (+26–28 % per step for ~74 B/DOF). Planned: one `performance.priority: throughput |
+memory` key for trade-offs instead of a key each (human 2026-10-17). Open for the human:
+`UCX_TLS=^cuda_ipc` (removes GPU-aware MPI's 2.5 GB per GPU near capacity at the same
+np-2 step time), a UCX `+gdrcopy` rebuild (gdrdrv is on the GPU nodes), the coupled
+method's FGMRES and projection bases (what keeps OIFS coupled under 100M).
 
 **Defaults: Q6/Q5, grad-div gamma = 6 h_K / k_u, OIFS at CFL 2 (2026-10-16, human: "go with
 p=6 and your grad-div scaling recommendation", "make oifs the default it honestly seems to
