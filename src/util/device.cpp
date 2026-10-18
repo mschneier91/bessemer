@@ -2,6 +2,10 @@
 
 #include "mfem.hpp"
 
+#if defined(OPEN_MPI) && OPEN_MPI
+#include <mpi-ext.h> // MPIX_Query_cuda_support
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -103,6 +107,55 @@ void ConfigureHyprePool(const std::string& backend)
 #endif
 }
 
+/// @return Whether the MPI library takes CUDA device pointers: Open MPI built
+///         with CUDA (MPIX_CUDA_AWARE_SUPPORT) and its CUDA support loaded at
+///         run time. Other MPIs: false.
+bool MpiTakesCudaPointers()
+{
+#if defined(MPIX_CUDA_AWARE_SUPPORT) && MPIX_CUDA_AWARE_SUPPORT
+   return mfem::Mpi::IsInitialized() && MPIX_Query_cuda_support() == 1;
+#else
+   return false;
+#endif
+}
+
+/**
+ * @brief GPU-aware MPI: MFEM's parallel prolongation and restriction
+ *        exchanges and hypre's communication hand device buffers to MPI
+ *        instead of staging them through the host.
+ *
+ * On whenever the MPI library takes CUDA device pointers. hypre's configure
+ * option only sets the default of a runtime flag every exchange reads
+ * (hypre_GetGpuAwareMPI), so HYPRE_SetGpuAwareMPI(1) before the first hypre
+ * object suffices with a hypre built without it. At np 2 on two H100s (job
+ * 49397771): 20 % off the step on Taylor-Green Q6 OIFS, 19 % IMEX, 3 % on
+ * the curved cylinder, mostly in the pressure AMG, for 0.1-0.4 GiB more
+ * device memory per GPU at ~11M DOFs per GPU; on in both the throughput and
+ * the memory profile (docs/multi_gpu.md). INCNS_GPU_AWARE_MPI=0 or 1
+ * overrides the detection.
+ */
+void ConfigureGpuAwareMpi(const std::string& backend)
+{
+   if (backend.find("cuda") == std::string::npos) { return; }
+   bool on = MpiTakesCudaPointers();
+   if (const char* env = std::getenv("INCNS_GPU_AWARE_MPI"))
+   {
+      MFEM_VERIFY((env[0] == '0' || env[0] == '1') && env[1] == '\0',
+                  "INCNS_GPU_AWARE_MPI must be 0 or 1");
+      on = (env[0] == '1');
+   }
+   if (!on) { return; }
+   mfem::Device::SetGPUAwareMPI(true);
+#if defined(HYPRE_USING_GPU)
+   mfem::Hypre::Init(); // idempotent; the flag lives in hypre's handle
+   HYPRE_SetGpuAwareMPI(1);
+#endif
+   if (mfem::Mpi::IsInitialized() && mfem::Mpi::Root())
+   {
+      mfem::out << "[incns] GPU-aware MPI: on" << std::endl;
+   }
+}
+
 } // namespace
 
 void ConfigureDevice(const std::string& backend)
@@ -128,6 +181,7 @@ void ConfigureDevice(const std::string& backend)
       // and whenever there is at most one visible device, this is plain 0.
       device.Configure(want, ResolveDeviceId(want));
       ConfigureHyprePool(want);
+      ConfigureGpuAwareMpi(want);
       configured = true;
       current = want;
    }

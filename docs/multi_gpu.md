@@ -30,10 +30,11 @@ What scales worst:
 - **The pressure LOR-AMG.** Per V-cycle it is 2x *slower* at np 2 on Taylor–Green
   and 4x slower on the cylinder, with half the work per GPU. It goes from 4 % of
   the step to 11–22 %.
-- **Transport.** Open MPI 5.0.10 and UCX 1.20 are built with CUDA, but hypre 2.33
-  is built with `gpu-aware-mpi: False`, and bessemer never tells MFEM that MPI is
-  GPU-aware. Every halo exchange in hypre (each AMG level) and in MFEM's parallel
-  prolongation (each operator apply) therefore goes device → host → MPI → device.
+- **Transport** (fixed by change 37, see Phase 1). Open MPI 5.0.10 and UCX 1.20
+  are built with CUDA, but hypre 2.33 is built with `gpu-aware-mpi: False`, and
+  bessemer never told MFEM that MPI is GPU-aware. Every halo exchange in hypre
+  (each AMG level) and in MFEM's parallel prolongation (each operator apply)
+  therefore went device → host → MPI → device.
 - **Small problems** (< ~2M DOFs per GPU) get slower: launches and latency
   dominate.
 - **Memory per rank at np > 1.** MFEM's device prolongation is built from R,
@@ -60,10 +61,28 @@ memory ledger.
 
 ## Phase 1: transport (cheap, no trade-offs)
 
-1. **GPU-aware MPI**: MFEM `Device::SetGPUAwareMPI(true)` plus hypre
-   `HYPRE_SetGpuAwareMPI(1)`. The switch exists (`INCNS_GPU_AWARE_MPI=1`,
-   prototype). Its np-2 off/on test is queued (job gam2), with results checked
-   bitwise.
+1. **GPU-aware MPI: done, on by default (change 37).** MFEM
+   `Device::SetGPUAwareMPI(true)` plus hypre `HYPRE_SetGpuAwareMPI(1)`, set at
+   startup whenever the MPI library takes CUDA device pointers (Open MPI's
+   `MPIX_Query_cuda_support`); `INCNS_GPU_AWARE_MPI=0` or `1` overrides the
+   detection.
+   - Measured at np 2 on two H100s (job 49397771, TGV Q6 32³ and the curved
+     cylinder, 21.6M DOFs, off against on):
+
+     | Case | s/step off | on | Change | Pressure AMG (s, whole run) |
+     |---|---|---|---|---|
+     | TGV OIFS coupled | 0.371 | 0.297 | −20 % | 1.69 → 1.27 |
+     | TGV IMEX coupled | 0.225 | 0.182 | −19 % | 1.35 → 1.10 |
+     | Curved cylinder OIFS | 0.743 | 0.719 | −3 % | 3.52 → 3.31 |
+
+   - Memory: 0.1–0.4 GiB more per GPU at ~11M DOFs per GPU (hypre's and UCX's
+     device communication buffers). The human made it the default in both the
+     throughput and the memory profile (2026-10-17). The cost near capacity
+     (~68M DOFs per GPU) is measured in job c36g; record it in
+     docs/gpu_memory.md.
+   - Results are not bitwise equal off against on, nor run to run on the GPU
+     (library-level nondeterminism in hypre/cuSPARSE, known and accepted since
+     2026-10-15). On the CPU build the switch does nothing.
    - **No hypre rebuild is needed.** Checked 2026-10-17 against the hypre
      2.33.0 source:
      - the configure option `--enable-gpu-aware-mpi`
@@ -76,20 +95,36 @@ memory ledger.
        `par_csr_fffc_device.c`;
      - so `HYPRE_SetGpuAwareMPI(1)` before the first hypre object is enough,
        given an MPI that takes device pointers.
-   - The job also prints Open MPI's `mpi_built_with_cuda_support` and UCX's CUDA
-     transports on the GPU node.
-   - If it helps and results stay bitwise, make it the default whenever MPI
-     reports CUDA support (`MPIX_Query_cuda_support`).
+   - **The spack side.** `environments/psc_gpu/spack.yaml` already builds the
+     MPI CUDA-aware (`openmpi+cuda fabrics=ucx` on `ucx+cuda`; the installed
+     `mpi-ext.h` has `MPIX_CUDA_AWARE_SUPPORT 1`). hypre's spack variant
+     `+gpu-aware-mpi` (default off) only flips the default of the runtime flag
+     change 37 sets anyway; MFEM has no build option (runtime only:
+     `Device::SetGPUAwareMPI` or `MFEM_GPU_AWARE_MPI`). Adding
+     `^hypre+cuda+gpu-aware-mpi` is harmless at the next environment rebuild;
+     not worth a rebuild by itself.
 2. **Intra-node path**: confirm UCX uses `cuda_ipc` between GPUs on a node
    (NVLink) and `rc`/`dc` with GPUDirect RDMA across nodes. Tune `UCX_TLS` and
    the rendezvous thresholds only if traces show staging.
+   - **OSU micro-benchmarks with device buffers** (`osu_latency -d cuda D D`,
+     `osu_bw`, `osu_allreduce`) on 2 GPUs of one node and on 2 nodes: the
+     transport's latency and bandwidth by message size, against which the AMG
+     coarse levels (small messages) and the operator halos (large) can be
+     judged.
+   - **GDRCopy**: UCX is built `~gdrcopy`. GDRCopy cuts small-message latency
+     from device buffers (the AMG coarse levels), but needs the `gdrdrv` kernel
+     module on the GPU nodes, which only PSC can install (absent on the login
+     node; job c36g checks a GPU node, with `nvidia_peermem` for GPUDirect
+     RDMA). If present, rebuild UCX `+gdrcopy`; otherwise ask PSC only if the
+     multi-node traces show small-message latency dominating.
 3. **Binding**: one rank per GPU (already enforced: `ResolveDeviceId`), each
    rank's CPU cores and memory on the GPU's NUMA domain (`--cpu-bind`, PRTE
    mapping), so the host-side work (setup, the residual host loops) doesn't
-   cross sockets.
+   cross sockets. Across nodes, set `UCX_NET_DEVICES` to the HCA nearest each
+   GPU (`nvidia-smi topo -m`) rather than letting UCX pick.
 
-Expected: most of the AMG np-2 penalty, plus some of every operator apply's
-exchange cost.
+Measured: the step 19–20 % shorter at np 2 on Taylor–Green, mostly in the AMG
+(above).
 
 ## Phase 2: the pressure solve at scale
 
@@ -101,7 +136,15 @@ options to measure and bring back, not to switch on:
   onto fewer ranks (hypre's `agg_num_levels`, or a redundant coarse solve).
 - **Fewer levels plus a direct or Chebyshev coarse solve.**
 - **Aggressive coarsening on the first level** (already on the open list for
-  memory: 2.1 GB at Q3 64³).
+  memory: 2.1 GB at Q3 64³). Measure iterations and time per step at 1, 2, 4
+  and 8 GPUs before proposing it.
+- **Keep the transpose** (`HYPRE_BoomerAMGSetKeepTranspose(1)`): hypre's GPU
+  guidance; the restriction is stored explicitly instead of applied as the
+  transposed interpolation, a faster matvec for more memory. A candidate for the
+  throughput profile only (`performance.priority: throughput`).
+- **Already at MFEM's GPU BoomerAMG defaults**: PMIS coarsening, ext+i
+  interpolation with at most 4 entries per row, l1-Jacobi smoothing (relax type
+  18), θ 0.25 in 3D, no aggressive levels, hypre's own SpGEMM.
 - **Smoother**: Chebyshev or l1-Jacobi instead of Gauss–Seidel-type smoothers
   (no sequential sweeps, fewer reductions).
 - **Longer term**: a p-multigrid pressure preconditioner (Schwarz- or
@@ -193,7 +236,8 @@ Worth it only if Phase 0 shows exposed exchange time after Phase 1.
    studies; the 2-GPU limit stays for everything else. Multi-node (16–32) is to
    be asked when it comes up.
 2. **Rebuilding hypre**: not needed (hypre's GPU-aware MPI is a runtime switch;
-   see Phase 1).
+   see Phase 1). GPU-aware MPI is on by default in both profiles (decided
+   2026-10-17).
 3. **Pressure AMG changes** (Phase 2).
 4. **The work-vector pool** for np > 1 (Phase 6).
 5. **Whether to start the p-multigrid pressure preconditioner** as a project.
@@ -203,7 +247,7 @@ Worth it only if Phase 0 shows exposed exchange time after Phase 1.
 | Step | Effort | Needs |
 |---|---|---|
 | Phase 0 instrumentation + np-2/np-4 ledger | 1–2 days | 4 GPUs (approved) |
-| Phase 1 GPU-aware MPI, binding, UCX check | 1 day | test queued (gam2) |
+| Phase 1 GPU-aware MPI (done, change 37), binding, UCX/OSU checks | 1 day | — |
 | Phase 7 first pass: strong + weak to 8 GPUs | 1 day of runs | 8 GPUs (approved) |
 | Phase 3 batched reductions | 2–3 days | — |
 | Phase 2 AMG options measured | 2–3 days | your call on settings |
