@@ -1,13 +1,150 @@
 # GPU memory: what was recovered, and what is left
 
 The record of the GPU memory work: each change, numbered, with what it saved, and what is
-left. **The current working list (Q6, toward 100M DOFs on one H100) is the next section.**
+left. **The campaign ended on 2026-10-18 with change 47: the next section is its summary**;
+the Q6 working list after it (toward 100M DOFs on one H100) is kept as the record.
 Rounds one to three (2026-10-13 and 14) were measured on Taylor–Green (Re 1600) with the case defaults
 (Q3/Q2, IMEX BDF2, grad-div γ = 2h, Cahouet–Chabard Schur PC, PCG with point-block Jacobi
 on the velocity block), about ten steps per run, one NVIDIA H100 80 GB on Bridges-2, CUDA
 backend. Memory is the device's peak in use (`nvidia-smi`, and the profiler gauge of
 change 1), in units of 1000 MiB; step times are the mean from step 3 on, with the
 synchronizing profiler on.
+
+## The campaign's end (2026-10-18)
+
+Human 2026-10-18: "we will accept 95 million or whatever we get to and move on, when these
+changes pass validation and are measured and merged that marks the end of our memory
+optimization campaign". It ended with change 47. No new memory reduction work unless the
+human reopens it; throughput and multi-GPU work go on (throughput.md, multi_gpu.md). Every
+change is a row of "Where each change applies, and what is left" below (what it saved, the
+methods and meshes it applies to, what it does to the results); the measurements behind
+each are in its commit message.
+
+**Start and end on one H100, Q6/Q5** (nvidia-smi peak; DOFs are velocity plus pressure).
+Taylor–Green Re 1600 at 57.3M DOFs, B/DOF:
+
+| | Start | End (B46; change 47 does not apply to a uniform mesh at np 1) |
+|---|---|---|
+| OIFS coupled | 1,314 (main aa6aa7e, 2026-10-16) | 887 |
+| OIFS Schur | 1,070 (the same) | 675 |
+| IMEX coupled | 1,052 (first measured after changes 17–20) | 763 |
+| IMEX Schur | 814 (the same) | 549 |
+
+(The coupled method's FGMRES restart is capped to the free memory (change 10), so its peaks
+partly fill what is free and are not capacity measures; the Schur rows are the clean
+comparison.)
+
+Largest run on one H100 (~25–53 steps; the first size that ran out of memory in brackets
+where probed):
+
+| Case | Start | End |
+|---|---|---|
+| Taylor–Green coupled | 39.2M (57.3M; 2026-10-16, before the hypre pool cap) | OIFS 96.6M, IMEX 115.1M |
+| Taylor–Green Schur | 70.4M (85.5M; after the pool cap, before change 17) | OIFS **128.6M**, IMEX **158.8M** |
+| Curved cylinder OIFS Schur | 67M (after changes 17–27; first probe) | **112.1M** |
+| Curved cylinder IMEX Schur | stalled (change 34's bug) | **145.6M** |
+| Curved adaptive OIFS Schur | 84.4M (B46; first probe) | 93.7M (B47; 124k elements, ~96.8M, out of memory) |
+| Curved adaptive IMEX Schur | 112.5M (B46) | **118.7M** (B47) |
+
+At Q3 (rounds one to three): 64³ went from out of memory to 34.7 GB. The full end state, five
+meshes × four solvers, is "The p = 6 comparison" below (B46, with the curved adaptive row
+re-probed with B47).
+
+**Where it ended against the goal.** 100M DOFs fit on one H100 with every Schur configuration
+except OIFS Schur on the curved adaptive mesh (93.7M ran, ~96.8M did not), and with IMEX
+coupled on the uniform meshes. Short of it: OIFS coupled everywhere (FGMRES's basis and the
+projection basis), IMEX coupled with hanging nodes, and that one OIFS Schur case. The human
+accepted ~95M there and closed the campaign.
+
+**What the changes did, by kind** (numbers in the table below):
+- *Not keeping what is cheap to recompute or not needed*: no RAP over identity
+  prolongations and no kept copies (17), OIFS's winds and Jacobians (21, 28), one reciprocal
+  mass diagonal (22), the dealiased and curved convection on the fly (24, 28–29), the CFL
+  rate without per-call arrays (30 straight, 46 curved), point-block Jacobi inverted in the
+  apply (35), OIFS's Dirichlet data per stage (32).
+- *Leaner storage than MFEM's integrators keep*: the compact vector diffusion (11), the
+  collocated mass as its diagonal (18), the divergence from the cached Jacobians (20, 23),
+  the vector mass with W det J (25).
+- *One shared scratch instead of a pair per operator*: our own PA blocks with one element
+  vector pair (19), the diagnostics (41), the AMR indicator (45), one local-dof pair for all
+  the P^T A P operators (47).
+- *Runtime and library settings*: hypre's device pool capped, MFEM's LOR scaffolding freed,
+  UCX's cuda_ipc off (42).
+- *Transient peaks that set the run's peak*: the AMR history projection's own velocity AMG
+  and Krylov basis (44), the indicator's quadrature-point buffer (45), the curved CFL rate's
+  2.3 GB per-step spike that the gauge could not see (46).
+
+**Tried and dropped** (both 2026-10-18; code kept on branches, not merged):
+- *The constrained operators' work vectors shared* (momentum `ConstrainedOperator`,
+  divergence `RectangularConstrainedOperator`; ~8 B/DOF; branch `shared-work`, 26f6445).
+  Every CPU test passed at np 1, 2 and 4 with identical decks, but on the H100
+  `nc_stokes_test` and `amr_event_test` gave O(1) wrong solutions (u_err 0.55) at np 1 and
+  2. The GPU bisect (job 49418211) cleared change 47 and pinned this. Cause not found
+  (suspected: hypre's stream against MFEM's kernels, or MFEM's alias coherence). Human:
+  "Just drop change 48 too fragile I think."
+- *The Schur PC's two pressure masses as our PA operators on the shared buffers* (~8–9 B/DOF
+  beyond 47; branch `shared-rap`, 71c3e58). The GPU suite passed, but the CPU cylinder decks
+  moved: iteration counts by up to 20 % at np 2, dt in the 7th digit. That is not last-bit
+  drift and was not explained; dropped with the human's agreement.
+- Earlier (change 22's round): the same masses as pooled operators (not bitwise, 0.24 GiB).
+
+**Not pursued (the human's decisions):** AMG settings and `projection_k` (solver knobs are
+not memory levers), single precision (parked), geometry on the fly in the momentum and
+divergence blocks (+26–28 % per step), restructuring P and its transpose, one scratch pool
+for the OIFS and solve phases, OIFS on the fly for curved meshes (a time cost), changes that
+help only periodic meshes or only one rank.
+
+**What is left** (B/DOF at ~57M; the "Open gaps" table below has the detail):
+- The coupled method's FGMRES basis (~165) and projection basis (~140): what keeps OIFS
+  coupled under 100M.
+- The hanging-node cost in the steady state, +97–146 against the uniform mesh at the same
+  DOFs (change 47 took 6–22 of it). Not traced in full; the largest known part is MFEM's
+  assembled P for hanging nodes and its stored transpose.
+- The pressure LOR-AMG (~80), the cached geometry (~74, held), OIFS's per-point wind data
+  on curved meshes (~76–94; on the fly is opt-in and straight-sided only), and the two
+  phases' scratch, each idle while the other runs (~58 in the OIFS buffers).
+
+**What MFEM changes would have made this much easier.** Most of the campaign was working
+around six design choices. They suit MFEM's usual use (CPU runs, or many GPUs with modest
+problems on each) and cost a lot when 100M DOFs share one GPU:
+
+1. *A shared workspace for temporaries.* Nearly every MFEM operator owns its scratch vectors
+   for its whole life: `RAPOperator`'s two, `ConstrainedOperator`'s two (which
+   `FormSystemMatrix` adds even with no constraints), each partially assembled form's
+   element-vector pair, each solver's work vectors. A library workspace that operators
+   borrow from during an apply would have made changes 19, 41 and 47 unnecessary, and the two
+   dropped attempts too. It would also define what we lacked: which applies may overlap and
+   which kernels run on which stream (where the shared constrained vectors broke on the GPU).
+   MFEM 4.10 has only the reduction and scan scratch.
+2. *A light prolongation for hanging-node meshes.* Uniform meshes get a device operator that
+   stores almost nothing; hanging nodes fall back to a full `HypreParMatrix` P, identity rows
+   included, plus a stored copy of its transpose (`EnsureMultTranspose`). A structured P
+   (copy the true dofs, store only the hanging rows' weights, often one pattern shared by
+   many faces, and apply the transpose deterministically without a second copy) would remove
+   most of the remaining hanging-node cost. Related: `GetEssentialTrueDofs` builds that full
+   matrix just to find the constrained dofs (~13 B/DOF even on uniform meshes).
+3. *Control over geometric data.* The mesh caches Jacobians and determinants for every rule
+   anyone asks for, for the rest of the run, with no way to release one entry, and computing
+   them allocates large temporaries (a copy of the mesh nodes per element). Changes 20, 23,
+   25, 28–30 and 46 stored or recomputed geometry ourselves. What would have helped:
+   Jacobians for one batch of elements at a time, device helpers to evaluate them inside a
+   kernel, and releasing cache entries.
+4. *Storage options in the integrators.* Each PA integrator has one layout; we rewrote
+   several for compact, symmetric, diagonal or on-the-fly versions (changes 11, 18, 19, 21,
+   24, 25). A storage policy per integrator would have covered most of it.
+5. *Visibility into memory.* MFEM cannot say who owns which device memory; it allocates
+   lazily, so a vector shows up under whichever function first writes it, and hypre's pool
+   silently rounds up and caches freed blocks. We built a profiler gauge and an Nsight
+   allocation census to see anything, and the two biggest surprises (the AMR history
+   projection, the curved CFL spike) were still invisible to sampling at region boundaries.
+   Tagged allocations with per-object high-water marks would have found both on day one.
+6. *Release hooks and safer defaults.* Several objects keep temporary state with no public
+   way to drop it (the LOR assembly scaffolding, mesh-update operators, hypre's per-matrix
+   auxiliary vectors and stored transposes), and hypre's pool caches everything by default.
+   Each cost an investigation.
+
+Of these, 1 and 2 would have saved the most work, and both would be natural upstream
+contributions.
 
 ## Q6: toward 100M DOFs on one H100 (the working list)
 
@@ -79,6 +216,9 @@ up to the region within 1 %; otherwise the split is an estimate.
   two or more ranks): the RAP wrappers' pairs (about 1.9 GiB at 57.3M), the OIFS mass CG and
   the Cahouet–Chabard Chebyshev mass inverse (both only when the mass is not diagonal) are
   never in use at the same time either: one pool of full-size vectors.
+  **Done in part, change 47 (2026-10-18):** the RAP wrappers' pairs are one shared pair.
+  Sharing the constrained wrappers' pair and the Schur PC's masses was tried and dropped
+  ("The campaign's end").
 
 **Meshes with hanging nodes (estimate, not measured).** Changes 17 and 18 rest on an
 identity prolongation and a diagonal true-dof mass, which hanging nodes break: about 0.7 GiB
@@ -176,6 +316,7 @@ velocity order). *Hanging*: AMR meshes with hanging nodes.
 | 44 | The AMR history projection: Jacobi-PCG for its mass block, the Schur outer method and the run's CC settings, on every solver path (it built a velocity LOR-AMG and an uncapped FGMRES basis of its own) | the curved adaptive run's peak at 56.5M, the projection on all four paths: 65.4 → 42.8 GB IMEX Schur, 65.7 → 50.4 OIFS Schur, 65.4 → 56.0 IMEX coupled, 65.7 → 62.2 OIFS coupled; its 9 AMR events 387 → 36 s | AMR events with history | yes | yes | **yes** | the projected history moves within the solver tolerance |
 | 45 | The 3D gradient indicator without a quadrature-point buffer; its E-vector from the scratch at an event's first pass | an AMR event no longer rises above the step at 56.5M: IMEX Schur 42.8 → 39.8 GB (the step's level), OIFS Schur's gauge peak 51.5 → 48.4 GB (the step's; nvidia-smi's short spikes to 50.7 GB were the curved CFL rate's, change 46) | AMR, 3D | yes | yes | yes | roundoff |
 | 46 | The CFL rate on curved elements allocates nothing: the Jacobians contracted from the mesh nodes inside the kernel (change 30's path for straight-sided ones) | 2.96 GB per call at 72k Q6 elements, allocated and freed inside every step's `cfl_step` (the gauge missed it; Nsight's allocation trace and nvidia-smi at 0.1 s found it): the curved adaptive run's OIFS Schur peak 50.7 → 48.9 GB (941 → 907 B/DOF at 56.5M), the 2,262 MiB spike every step gone | all, 3D | — | **yes** | yes | bitwise on the GPU; CPU build to roundoff (FMA) |
+| 47 | One pair of local-dof work vectors for all the P^T A P operators: MFEM's `RAPOperator` arithmetic, borrowing the element scratch's new local-dof pair (they never run inside one another) | the true-dof blocks' five velocity and one pressure L-vectors (~1.3 GB at 56.5M on the curved adaptive mesh); at the peak there: IMEX Schur 39.8 → 38.6 GB (739 → 718 B/DOF), OIFS Schur 48.8 → 48.4 (906 → 899; its peak is in the OIFS phase); Taylor–Green with hanging nodes −9.5 B/DOF; nothing on a uniform mesh at np 1 | all | at 2+ ranks | at 2+ ranks | **yes** | bitwise |
 
 Net, whole runs to t = 20 at 57.3M (nvidia-smi, the 3D verification, jobs 49348598,
 49348600): OIFS coupled 71,781 → 52,211 MiB, Schur 60,209 → 40,639 MiB (35,551 with the
@@ -197,9 +338,9 @@ default).
 | ~~OIFS's `jac_` on curved meshes~~ | | | **done, change 28** (Jacobians by chunks, bitwise) | |
 | Geometry on the fly in the momentum and divergence blocks | 2.6 + 1.7 GiB (~74 B/DOF) | all | recompute J and the diffusion metric at every apply | **measured** (prototype, 2026-10-17): +26–28 % per step on Taylor–Green, +14 % on curved DFG Q6 (the momentum kernel +40 %, the divergence +47 %). **Held** by the human (2026-10-17); if a memory profile takes it, probably one of that profile's bigger throughput costs |
 | ~~Velocity preconditioner blocks~~ | was 0.65 GB at 21.6M | all | **done, change 35** (inverted in the apply) | |
-| One pool of full-size work vectors (tabled) | RAP pairs ~1.9 GiB, plus the mass solves' vectors | hanging meshes, 2+ ranks; IMEX Schur (its Chebyshev mass inverse, 1.5 GiB) | the pool | tabled (human 2026-10-17) |
+| One pool of full-size work vectors (tabled) | RAP pairs ~1.9 GiB, plus the mass solves' vectors | hanging meshes, 2+ ranks; IMEX Schur (its Chebyshev mass inverse, 1.5 GiB) | the pool | **RAP pairs done, change 47**; the constrained wrappers' pair and the PC masses tried and dropped (2026-10-18); the rest closed with the campaign |
 | `initial_velocity`'s growth | 1.3 GiB, unexplained | all | the census | — |
-| Hanging-node extras | measured at p = 6 (2026-10-18; time-step peaks against the uniform mesh at the same DOFs, B41): Taylor–Green +97–109 B/DOF, the curved cylinder +136–146 (Schur) | hanging meshes | not traced yet; the pool above | partly the pool |
+| Hanging-node extras | measured at p = 6 (2026-10-18; time-step peaks against the uniform mesh at the same DOFs, B41): Taylor–Green +97–109 B/DOF, the curved cylinder +136–146 (Schur); change 47 took 6–22 of it | hanging meshes | MFEM's assembled P and its stored transpose (a structured P); the pool above | closed with the campaign (human 2026-10-18) |
 | ~~AMR events~~ | were the curved adaptive run's peak: 65.4 GB against the step's 39.8 (IMEX Schur, 56.5M) | AMR | **done, changes 44–45**: the history projection's own velocity AMG and FGMRES basis, the indicator's quadrature-point buffer | |
 | ~~OIFS's mass solves on hanging-node meshes (time, not memory)~~ | was ~30 % of a Q3 AMR run | OIFS on hanging meshes | **done, change 31** (the row-sum lumped collocated mass by default, with positivity guard rails) | |
 | hypre's P at np 1 | — | one rank only | — | **dropped** (human 2026-10-17: changes that help only np = 1 are not considered) |
@@ -300,6 +441,7 @@ steps, then the first size that ran out of memory; sizes step 5–17 %):
 | chan | 90.6M (96.3M) | **118.9M** (125.7M) | **108.4M** (114.9M) | **152.5M** (160.6M) |
 | cyl | 78.6M (89.8M) | **112.1M** (123.3M) | **101.0M** (112.1M) | **145.6M** (156.8M) |
 | cyl_hang | 70.4M (84.4M) | 84.4M (98.6M) | 84.4M (≤ 98.6M) | **112.5M** (≤ 126.6M) |
+| cyl_hang, B47 (finer caps, below) | 76.6M (~79.7M) | 93.7M (~96.8M) | 93.6M (≤ 96.8M) | **118.7M** (≤ 121.8M) |
 
 cyl_hang sizes are the element cap reached (90k, 108k, 144k elements); the runs that ran out of
 memory did so after refining to the next cap (126k elements is 98.6M; "≤" where the log
@@ -313,6 +455,37 @@ coupled everywhere (70–97M; its FGMRES and projection bases), IMEX coupled wit
 OIFS Schur on the curved adaptive mesh. Against the probes after 28–41: the curved cylinder's
 Schur limits rose one nz step (OIFS Schur 101.0 → 112.1M, IMEX Schur 134.5 → 145.6M); the
 straight cases are unchanged.
+
+### Change 47 and the curved adaptive capacity (2026-10-18, the campaign's last measurement)
+
+Binary **B47** (393a884: B46's code plus change 47), one H100, np 1, as above. Ledgers at
+~57M DOFs (job 49423438, nvidia-smi peak):
+
+| Case | B46 | B47 | |
+|---|---|---|---|
+| cyl_hang IMEX Schur (56.5M) | 39,819 MiB (739 B/DOF) | 38,637 (718) | −22 B/DOF |
+| cyl_hang OIFS Schur (56.5M) | 48,761 (906) | 48,433 (899) | −6 (the peak is in the OIFS phase) |
+| tgv_hang OIFS Schur (58.0M) | 43,333 (784) | 42,807 (774) | −9.5 |
+| tgv OIFS Schur (57.3M) | 36,853 (675) | 36,853 (675) | 0 (identity P: nothing to share) |
+
+Capacity on the curved adaptive mesh with B47, on a finer grid than B46's (element caps
+4,000 apart, ~3 %; jobs 49424792–49424795; the size is the element cap reached; the size
+that ran out of memory is estimated from the elements reached at ~781 DOFs per element,
+or "≤" where the log shows none):
+
+| Solver | Largest that ran | First out of memory | B46 (caps 18,000 apart) |
+|---|---|---|---|
+| OIFS Schur | **93.7M** (120k elements, 80.1 GB) | 124k elements, ~96.8M (at step 32) | 84.4M (98.6M) |
+| IMEX Schur | **118.7M** (152k, 79.1 GB) | 156k, ≤ 121.8M | 112.5M (≤ 126.6M) |
+| IMEX coupled | 93.6M (120k) | 124k, ≤ 96.8M | 84.4M (≤ 98.6M) |
+| OIFS coupled | 76.6M (98k, 79.2 GB) | 102k, ~79.7M (at step 10) | 70.4M (84.4M) |
+
+Most of the rise against B46 is the finer grid, not change 47: B46's coarse caps only
+bracketed the limits, and 47's saving at the peak (6 B/DOF on OIFS Schur, ~0.7 % of the
+capacity; 22 on IMEX Schur, ~3 %) moves each limit by less than one of these steps for
+OIFS Schur and by about one for IMEX Schur. The final answer for OIFS Schur on the curved
+adaptive mesh is 93.7M run, ~96.8M not; the human accepted it ("we will accept 95 million
+or whatever we get to").
 
 
 ## Result (rounds one to three, Q3)
