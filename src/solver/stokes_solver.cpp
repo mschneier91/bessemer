@@ -925,11 +925,23 @@ void StokesSolver::SolveTrue(const Vector& b_mom, ParGridFunction& u,
    // u/p act as the Krylov warm start. The eliminated (identity) rows of the
    // block system reproduce the boundary values. Constant data (no-slip) is
    // projected once (on the host: a device round trip of u) and then written
-   // on the essential true dofs, the only ones the projection sets.
+   // on the essential true dofs, the only ones the projection sets; separable
+   // data is its cached shapes scaled; anything else is projected per solve.
    const Array<int>& ess = op_.EssentialTrueDofs();
    if (bc_.DirichletIsConstant() && dirichlet_cached_)
    {
       u.GetTrueDofs(x.GetBlock(0));
+      if (ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, dirichlet_vals_); }
+   }
+   else if (!bc_.DirichletIsConstant() && bc_.DirichletIsSeparable())
+   {
+      // Separable data (the deck's velocity conditions, u_D = s(t) g): the
+      // shapes projected once (BoundaryConditions) times s(t), on the device
+      // -- no projection (a host loop and a device round trip of u per solve).
+      u.GetTrueDofs(x.GetBlock(0));
+      bc_.SeparableEssentialValues(dirichlet_vals_);
+      MFEM_VERIFY(dirichlet_vals_.Size() == ess.Size(), "stokes_solver: the "
+                  "operator's essential dofs are not the boundary conditions'");
       if (ess.Size() > 0) { x.GetBlock(0).SetSubVector(ess, dirichlet_vals_); }
    }
    else

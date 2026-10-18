@@ -1,9 +1,76 @@
 #include "bc/boundary_conditions.hpp"
 
+// The separable data's kernel must be compiled by nvcc in a CUDA build, or it
+// runs on the host while the data is on the device: see the nvcc TU list in
+// src/CMakeLists.txt.
+#if defined(MFEM_USE_CUDA) && !defined(__CUDACC__)
+#error "boundary_conditions.cpp must be compiled by nvcc -- see the nvcc TU list in src/CMakeLists.txt"
+#endif
+
 namespace incns
 {
 
 using namespace mfem;
+
+// Device kernels live in free functions in a NAMED namespace: nvcc rejects
+// extended lambdas in private members.
+namespace bckernels
+{
+
+// vals[k] = s_e(k) g(k) (fac: the entries' factors; entry: each dof's entry).
+void ScaleEntries(const Vector& fac, const Vector& shape, const Vector& entry,
+                  Vector& vals)
+{
+   const int n = shape.Size();
+   vals.SetSize(n);
+   const auto F = fac.Read();
+   const auto G = shape.Read();
+   const auto E = entry.Read();
+   auto U = vals.Write();
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int k)
+   {
+      U[k] = F[static_cast<int>(E[k])] * G[k];
+   });
+}
+
+} // namespace bckernels
+
+void TrueDofLocalDofs(const ParFiniteElementSpace& fes, const Array<int>& tdofs,
+                      std::vector<int>& ldofs)
+{
+   std::vector<int> t2l(fes.GetTrueVSize(), -1);
+   if (fes.Conforming())
+   {
+      // R is the transpose of P's diagonal block: the owned local dof of each
+      // true-dof number.
+      for (int l = 0; l < fes.GetVSize(); ++l)
+      {
+         const int t = fes.GetLocalTDofNumber(l);
+         if (t >= 0) { t2l[t] = l; }
+      }
+   }
+   else
+   {
+      const SparseMatrix* R = fes.GetRestrictionMatrix();
+      const int* ri = R->HostReadI();
+      const int* rj = R->HostReadJ();
+      const real_t* ra = R->HostReadData();
+      for (int t = 0; t < R->Height(); ++t)
+      {
+         MFEM_VERIFY(ri[t + 1] - ri[t] == 1 && ra[ri[t]] == 1.0,
+                     "TrueDofLocalDofs: the restriction is not a selection");
+         t2l[t] = rj[ri[t]];
+      }
+   }
+   const int* td = tdofs.HostRead();
+   ldofs.resize(tdofs.Size());
+   for (int k = 0; k < tdofs.Size(); ++k)
+   {
+      ldofs[k] = t2l[td[k]];
+      MFEM_VERIFY(ldofs[k] >= 0, "TrueDofLocalDofs: a true dof without a "
+                  "local dof");
+   }
+}
 
 BoundaryConditions::BoundaryConditions(ParFiniteElementSpace& vfes)
    : vfes_(vfes)
@@ -146,6 +213,69 @@ void BoundaryConditions::ProjectDirichletShapes(ParGridFunction& g,
    }
 }
 
+void BoundaryConditions::CacheShapes() const
+{
+   if (shape_seq_ == vfes_.GetSequence()) { return; }
+   MFEM_VERIFY(DirichletIsSeparable(), "BoundaryConditions: the Dirichlet "
+               "data is not separable in time");
+   // Host-only scratch: the projections run on the host, and only the values
+   // on the essential dofs are kept.
+   ParGridFunction g(&vfes_), entry(&vfes_);
+   g.UseDevice(false);
+   entry.UseDevice(false);
+   g = 0.0;
+   entry = -1.0;
+   ProjectDirichletShapes(g, entry);
+   std::vector<int> ldof;
+   TrueDofLocalDofs(vfes_, ess_tdofs_, ldof);
+   const int n = static_cast<int>(ldof.size());
+   ess_shape_.SetSize(n);
+   ess_entry_.SetSize(n);
+   const double* gh = g.HostRead();
+   const double* eh = entry.HostRead();
+   double* sh = ess_shape_.HostWrite();
+   double* nh = ess_entry_.HostWrite();
+   for (int k = 0; k < n; ++k)
+   {
+      sh[k] = gh[ldof[k]]; // GetTrueDofs' value: a copy of the local dof
+      nh[k] = eh[ldof[k]];
+      MFEM_VERIFY(nh[k] >= 0.0 && nh[k] < NumDirichlet(), "BoundaryConditions: "
+                  "a Dirichlet dof without a projected shape");
+   }
+   ess_shape_.UseDevice(true);
+   ess_entry_.UseDevice(true);
+   shape_seq_ = vfes_.GetSequence();
+}
+
+const Vector& BoundaryConditions::EssentialShapes() const
+{
+   CacheShapes();
+   return ess_shape_;
+}
+
+const Vector& BoundaryConditions::EssentialEntries() const
+{
+   CacheShapes();
+   return ess_entry_;
+}
+
+void BoundaryConditions::SeparableEssentialValues(Vector& vals) const
+{
+   CacheShapes();
+   const int ne = NumDirichlet();
+   fac_.UseDevice(true);
+   fac_.SetSize(ne);
+   double* f = fac_.HostWrite();
+   for (int e = 0; e < ne; ++e)
+   {
+      // Each coefficient's own time: what ProjectDirichlet() would evaluate.
+      auto* s = dynamic_cast<SeparableVectorCoefficient*>(dirichlet_[e].second);
+      f[e] = s ? s->TimeFactor(s->GetTime()) : 1.0;
+   }
+   vals.UseDevice(true);
+   bckernels::ScaleEntries(fac_, ess_shape_, ess_entry_, vals);
+}
+
 void BoundaryConditions::SetTime(double t)
 {
    for (auto& entry : dirichlet_) { entry.second->SetTime(t); }
@@ -180,6 +310,7 @@ void BoundaryConditions::UpdateEssentialTrueDofs()
 {
    Array<int> marker(dirichlet_marker_); // copy: GetEssentialTrueDofs is non-const
    vfes_.GetEssentialTrueDofs(marker, ess_tdofs_);
+   shape_seq_ = -1; // the shapes are re-gathered on the new list
 }
 
 } // namespace incns

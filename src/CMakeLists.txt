@@ -100,7 +100,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # this LANGUAGE CUDA property is the only thing preventing that -- keep it.
 # The other entries open with the #error guard (CLAUDE.md).
 if(USE_CUDA)
-  set_source_files_properties(operators/grad_div_integrator.cpp
+  set_source_files_properties(bc/boundary_conditions.cpp
+                              operators/grad_div_integrator.cpp
                               operators/collocated_mass.cpp
                               operators/lean_vector_diffusion.cpp
                               operators/lean_vector_mass.cpp

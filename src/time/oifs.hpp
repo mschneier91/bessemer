@@ -249,8 +249,7 @@ private:
     */
    void EssentialValues(const mfem::Vector& x, mfem::Vector& vals) const;
    /// Caches ess_ldof_: the local dof whose value each Dirichlet true dof
-   /// takes (one per row of R, a selection; on a conforming space found from
-   /// the true-dof numbering without building R).
+   /// takes (TrueDofLocalDofs).
    void CacheEssentialLocalDofs();
    /**
     * @brief imposed_ := the Dirichlet true dofs where the wind enters or is
@@ -332,12 +331,9 @@ private:
    mfem::Vector bd_const_ess_;
    long bd_const_seq_ = -1;   ///< Velocity-space sequence of bd_const_ess_.
    bool bd_const_zero_ = false; ///< ... and zero on every Dirichlet dof.
-   /// Separable data (BoundaryConditions::DirichletIsSeparable): the shapes
-   /// and their entries on the Dirichlet true dofs, projected once per
-   /// velocity-space sequence (bd_shape_seq_).
-   mfem::Vector bd_shape_ess_;
-   mfem::Vector bd_entry_ess_; ///< Entry indices (whole numbers).
-   long bd_shape_seq_ = -1;   ///< Velocity-space sequence of the shapes.
+   /// Separable data (BoundaryConditions::DirichletIsSeparable), whose
+   /// shapes BoundaryConditions keeps on the Dirichlet true dofs: this window
+   /// scales them per stage.
    bool bd_sep_ = false;      ///< This window scales the shapes per stage.
    mfem::Vector bd_shape_;    ///< The shapes on imposed_ (device).
    mfem::Vector bd_entry_;    ///< Their entries on imposed_ (device).

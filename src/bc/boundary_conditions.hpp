@@ -57,6 +57,18 @@ private:
 };
 
 /**
+ * @brief The local dof whose value each listed true dof takes in GetTrueDofs
+ *        (R has one unit entry per row): on a conforming space the owned local
+ *        dof of the true-dof number, found without building R (and P);
+ *        otherwise read from R.
+ * @param fes   Space.
+ * @param tdofs True dofs (this rank's numbering).
+ * @param ldofs Output: their local dofs, in order.
+ */
+void TrueDofLocalDofs(const mfem::ParFiniteElementSpace& fes,
+                      const mfem::Array<int>& tdofs, std::vector<int>& ldofs);
+
+/**
  * @brief Velocity boundary conditions, assigned per boundary attribute.
  *
  * Two kinds are supported at the library level:
@@ -151,6 +163,25 @@ public:
                                mfem::ParGridFunction& entry) const;
 
    /**
+    * @brief Separable data: the shapes on EssentialTrueDofs() (true-dof
+    *        values, as GetTrueDofs gives them), projected on first use and
+    *        again after the space changes (collective then). Device-usable.
+    */
+   const mfem::Vector& EssentialShapes() const;
+   /// Their entries (whole numbers), as EssentialShapes().
+   const mfem::Vector& EssentialEntries() const;
+
+   /**
+    * @brief Separable data (DirichletIsSeparable()) on EssentialTrueDofs() at
+    *        each coefficient's current time: s_e(t) g, from the shapes
+    *        projected once, on the device. The projected data exactly where
+    *        s_e = 1, to roundoff otherwise (ProjectDirichletShapes()).
+    *        Collective on first use.
+    * @param vals Output, in the order of EssentialTrueDofs().
+    */
+   void SeparableEssentialValues(mfem::Vector& vals) const;
+
+   /**
     * @brief Advance every Dirichlet coefficient to time @p t.
     * @param t New time; a subsequent ProjectDirichlet() uses data at this time.
     */
@@ -210,6 +241,9 @@ public:
 private:
    /// Recompute the essential true-dof list from the Dirichlet markers.
    void UpdateEssentialTrueDofs();
+   /// The shapes and entries on the essential true dofs (ess_shape_,
+   /// ess_entry_), unless current for the space's sequence.
+   void CacheShapes() const;
 
    mfem::ParFiniteElementSpace& vfes_; ///< Velocity space (borrowed).
    int max_attr_;                      ///< Largest boundary attribute in the mesh.
@@ -226,6 +260,10 @@ private:
    mfem::Array<int> ess_tdofs_;        ///< Essential velocity true dofs.
    /// Zero velocity coefficient owned for no-slip walls (built on first use).
    std::unique_ptr<mfem::VectorConstantCoefficient> zero_coeff_;
+   /// Separable data on ess_tdofs_ (CacheShapes): shapes, entries; and the
+   /// entries' factors (scratch).
+   mutable mfem::Vector ess_shape_, ess_entry_, fac_;
+   mutable long shape_seq_ = -1; ///< Velocity-space sequence of the shapes.
 };
 
 } // namespace incns

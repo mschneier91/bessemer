@@ -296,40 +296,7 @@ void OifsAdvector::CacheBoundaryNodes()
 void OifsAdvector::CacheEssentialLocalDofs()
 {
    ParFiniteElementSpace& V = spaces_.Velocity();
-   // GetTrueDofs applies R, one unit entry per row: each true dof takes the
-   // value of one local dof. On a conforming space that is the owned local
-   // dof of its true-dof number (R is the transpose of P's diagonal block),
-   // found here without building R and P; otherwise R is read.
-   std::vector<int> t2l(V.GetTrueVSize(), -1);
-   if (V.Conforming())
-   {
-      for (int l = 0; l < V.GetVSize(); ++l)
-      {
-         const int t = V.GetLocalTDofNumber(l);
-         if (t >= 0) { t2l[t] = l; }
-      }
-   }
-   else
-   {
-      const SparseMatrix* R = V.GetRestrictionMatrix();
-      const int* ri = R->HostReadI();
-      const int* rj = R->HostReadJ();
-      const real_t* ra = R->HostReadData();
-      for (int t = 0; t < R->Height(); ++t)
-      {
-         MFEM_VERIFY(ri[t + 1] - ri[t] == 1 && ra[ri[t]] == 1.0, "oifs: the "
-                     "restriction is not a selection");
-         t2l[t] = rj[ri[t]];
-      }
-   }
-   const Array<int>& ess = bc_.EssentialTrueDofs();
-   const int* e = ess.HostRead();
-   ess_ldof_.resize(ess.Size());
-   for (int k = 0; k < ess.Size(); ++k)
-   {
-      ess_ldof_[k] = t2l[e[k]];
-      MFEM_VERIFY(ess_ldof_[k] >= 0, "oifs: a true dof without a local dof");
-   }
+   TrueDofLocalDofs(V, bc_.EssentialTrueDofs(), ess_ldof_);
    ess_seq_ = V.GetSequence();
 }
 
@@ -637,26 +604,6 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
          bd_const_zero_ = (m == 0.0);
          bd_const_seq_ = V.GetSequence();
       }
-      if (separable && bd_shape_seq_ != V.GetSequence())
-      {
-         // Separable data (the deck's velocity conditions, u_D = s(t) g):
-         // the shapes projected once per space, on the host; the substeps
-         // scale them (SetDirichlet).
-         ParGridFunction entry(&V);
-         entry.UseDevice(false);
-         *bd_ = 0.0;
-         entry = -1.0;
-         bc_.ProjectDirichletShapes(*bd_, entry);
-         EssentialValues(*bd_, bd_shape_ess_);
-         EssentialValues(entry, bd_entry_ess_);
-         const double* en = bd_entry_ess_.HostRead();
-         for (int k = 0; k < bd_entry_ess_.Size(); ++k)
-         {
-            MFEM_VERIFY(en[k] >= 0.0 && en[k] < bc_.NumDirichlet(), "oifs: a "
-                        "Dirichlet dof without a projected shape");
-         }
-         bd_shape_seq_ = V.GetSequence();
-      }
       // Zero data and a wind that is zero on every Dirichlet dof (the history
       // satisfies the data): ClassifyBoundary would impose them all, so skip
       // its host loop.
@@ -700,8 +647,11 @@ void OifsAdvector::AdvectImpl(const std::vector<const Vector*>& wind,
       }
       else if (separable)
       {
-         bd_shape_ess_.GetSubVector(imposed_pos_, bd_shape_);
-         bd_entry_ess_.GetSubVector(imposed_pos_, bd_entry_);
+         // Separable data (the deck's velocity conditions, u_D = s(t) g):
+         // the shapes projected once per space (BoundaryConditions), scaled
+         // at every stage (SetDirichlet).
+         bc_.EssentialShapes().GetSubVector(imposed_pos_, bd_shape_);
+         bc_.EssentialEntries().GetSubVector(imposed_pos_, bd_entry_);
          bd_static_valid_ = false;
          bd_sep_ = true;
       }

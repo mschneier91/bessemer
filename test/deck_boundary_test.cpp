@@ -12,7 +12,8 @@
 //     2D channel (the 2D-3 sine inflow, walls and cylinder no-slip) the time
 //     factors times the projected shapes reproduce the projected data on
 //     every Dirichlet dof -- bit for bit where s = 1, to roundoff during the
-//     sine (the projection averages s g where shapes are averaged).
+//     sine (the projection averages s g where shapes are averaged) -- and so
+//     does the cached path the Stokes step takes.
 
 #include <gtest/gtest.h>
 
@@ -208,5 +209,19 @@ TEST(DeckBoundary, B4_DeckVelocityIsSeparable)
       EXPECT_GT(v[0], 0.5);
       if (t == 4.0) { EXPECT_EQ(v[1], 0.0); }
       else { EXPECT_LE(v[1], 2e-15 * v[0]); }
+      // The cached path the Stokes step takes (SeparableEssentialValues):
+      // the same values.
+      Vector sv;
+      bc.SeparableEssentialValues(sv);
+      const double* SV = sv.HostRead();
+      const int* ED = ess.HostRead();
+      double dmax = 0.0;
+      for (int k = 0; k < ess.Size(); ++k)
+      {
+         dmax = std::max(dmax, std::abs(SV[k] - U[ED[k]]));
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &dmax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      if (t == 4.0) { EXPECT_EQ(dmax, 0.0); }
+      else { EXPECT_LE(dmax, 2e-15 * v[0]); }
    }
 }
