@@ -11,6 +11,7 @@
 namespace incns
 {
 
+class DirectionalDoNothingIntegrator;
 class ElementScratch;
 class OifsConvection;
 
@@ -194,10 +195,26 @@ private:
    mfem::Array<int> ddn_marker_;
    /// The velocity the boundary term is evaluated at (set in Mult).
    std::unique_ptr<mfem::ParGridFunction> ddn_u_;
-   /// Boundary-face linear form of the term (null = classical do-nothing).
+   /// Boundary-face linear form of the term (null = classical do-nothing);
+   /// its vector holds the term on local dofs for ParallelAssemble.
    std::unique_ptr<mfem::ParLinearForm> ddn_form_;
+   /// The form's integrator (owned by ddn_form_), applied face by face.
+   DirectionalDoNothingIntegrator* ddn_integ_ = nullptr;
    /// The term on true dofs (Mult scratch).
    mutable mfem::Vector ddn_true_;
+   /// The marked boundary elements in mesh order, and the local velocity
+   /// dofs of the elements next to them (sorted): all the term reads and
+   /// writes (CacheDirectionalDoNothingDofs).
+   mutable mfem::Array<int> ddn_bdr_, ddn_dofs_;
+   /// The velocity space's sequence ddn_dofs_ belongs to.
+   mutable long ddn_seq_ = -1;
+   /// u at ddn_dofs_, the term there, and one face's element dofs and vector
+   /// (MultDirectionalDoNothing scratch).
+   mutable mfem::Vector ddn_vals_, ddn_b_, ddn_elvect_;
+   mutable mfem::Array<int> ddn_vdofs_;
+
+   /// Fill ddn_bdr_ and ddn_dofs_ for the current velocity space.
+   void CacheDirectionalDoNothingDofs() const;
 };
 
 } // namespace incns

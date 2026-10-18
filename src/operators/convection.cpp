@@ -4,6 +4,9 @@
 #include "operators/kernel_specializations.hpp"
 #include "time/oifs_convection.hpp"
 
+#include <algorithm>
+#include <vector>
+
 namespace incns
 {
 
@@ -92,7 +95,9 @@ void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
    ddn_u_ = std::make_unique<ParGridFunction>(&spaces_.Velocity());
    *ddn_u_ = 0.0;
    ddn_form_ = std::make_unique<ParLinearForm>(&spaces_.Velocity());
+   ddn_form_->UseDevice(true);
    auto* integ = new DirectionalDoNothingIntegrator(*ddn_u_, 0.5);
+   ddn_integ_ = integ;
    // Same exactness as the interior term: (u.n)_- (u.phi) is cubic in u.
    const Geometry::Type face =
       (spaces_.Dim() == 3) ? Geometry::SQUARE : Geometry::SEGMENT;
@@ -121,14 +126,77 @@ void Convection::Mult(const Vector& u, Vector& y) const
 void Convection::MultDirectionalDoNothing(const Vector& u, Vector& y) const
 {
    MFEM_VERIFY(ddn_form_, "convection: directional do-nothing not enabled");
-   // Legacy host assembly over the marked faces (few), reading u's element
-   // values on the host.
+   // Host assembly over the marked faces (few), as LinearForm::Assemble does
+   // it -- the same faces in the same order, the same element vectors added
+   // the same way -- but only the elements next to them move between the
+   // device and the host: a whole velocity vector each way per call before
+   // (~90 ms per step on the DFG 3D cylinder at 22M DOFs, 2026-10-18).
+   CacheDirectionalDoNothingDofs();
    ddn_u_->SetFromTrueDofs(u);
-   ddn_u_->HostRead();
-   ddn_form_->Assemble();
-   y.SetSize(spaces_.Velocity().GetTrueVSize());
+   {
+      // A device view of ddn_u_ (the integrator reads ddn_u_ on the host).
+      Vector lu;
+      lu.MakeRef(*ddn_u_, 0, ddn_u_->Size());
+      lu.UseDevice(true);
+      lu.GetSubVector(ddn_dofs_, ddn_vals_);
+   }
+   const int nd = ddn_dofs_.Size();
+   const int* d = ddn_dofs_.HostRead();
+   {
+      // The host copy is current at ddn_dofs_ only: all the faces read.
+      real_t* hu = ddn_u_->HostWrite();
+      const real_t* v = ddn_vals_.HostRead();
+      for (int k = 0; k < nd; ++k) { hu[d[k]] = v[k]; }
+   }
+   ParFiniteElementSpace& fes = spaces_.Velocity();
+   ParMesh& mesh = *fes.GetParMesh();
+   ddn_b_.UseDevice(true);
+   ddn_b_.SetSize(nd);
+   real_t* b = ddn_b_.HostWrite();
+   for (int k = 0; k < nd; ++k) { b[k] = 0.0; }
+   for (const int i : ddn_bdr_)
+   {
+      FaceElementTransformations* tr = mesh.GetBdrFaceTransformations(i);
+      fes.GetElementVDofs(tr->Elem1No, ddn_vdofs_);
+      ddn_integ_->AssembleRHSElementVect(*fes.GetFE(tr->Elem1No), *tr,
+                                         ddn_elvect_);
+      for (int j = 0; j < ddn_vdofs_.Size(); ++j)
+      {
+         const int v = ddn_vdofs_[j];
+         const int k = static_cast<int>(
+                          std::lower_bound(d, d + nd, v >= 0 ? v : -1 - v) - d);
+         if (v >= 0) { b[k] += ddn_elvect_(j); }
+         else { b[k] -= ddn_elvect_(j); }
+      }
+   }
+   *ddn_form_ = 0.0;
+   ddn_form_->SetSubVector(ddn_dofs_, ddn_b_);
+   y.SetSize(fes.GetTrueVSize());
    y.UseDevice(true);
    ddn_form_->ParallelAssemble(y); // MFEM-owned buffer (CLAUDE.md §6)
+}
+
+void Convection::CacheDirectionalDoNothingDofs() const
+{
+   ParFiniteElementSpace& fes = spaces_.Velocity();
+   if (ddn_seq_ == fes.GetSequence()) { return; }
+   ParMesh& mesh = *fes.GetParMesh();
+   std::vector<int> dofs;
+   ddn_bdr_.SetSize(0);
+   for (int i = 0; i < fes.GetNBE(); ++i)
+   {
+      if (ddn_marker_[mesh.GetBdrAttribute(i) - 1] == 0) { continue; }
+      FaceElementTransformations* tr = mesh.GetBdrFaceTransformations(i);
+      if (tr == nullptr) { continue; }
+      ddn_bdr_.Append(i);
+      fes.GetElementVDofs(tr->Elem1No, ddn_vdofs_);
+      for (const int v : ddn_vdofs_) { dofs.push_back(v >= 0 ? v : -1 - v); }
+   }
+   std::sort(dofs.begin(), dofs.end());
+   dofs.erase(std::unique(dofs.begin(), dofs.end()), dofs.end());
+   ddn_dofs_.SetSize(static_cast<int>(dofs.size()));
+   for (int k = 0; k < ddn_dofs_.Size(); ++k) { ddn_dofs_[k] = dofs[k]; }
+   ddn_seq_ = fes.GetSequence();
 }
 
 } // namespace incns
