@@ -171,6 +171,10 @@ velocity order). *Hanging*: AMR meshes with hanging nodes.
 | 39 | Throughput: the outflow term without whole-vector host round trips | none; 9–11 % off the cylinder's step | outflow boundaries | yes | yes | yes | bitwise |
 | 40 | Throughput: the PA blocks add into y without a temporary | a transient pressure vector per solve; 1.5–7 % | all | yes | yes | yes | bitwise |
 | 41 | The flow diagnostics borrow the element scratch | a whole velocity E-vector at the end of a run (~1 GB at 97M DOFs): runs that stepped to the end no longer die in the summary | all | yes | yes | yes | bitwise |
+| 42 | UCX's cuda_ipc left out of GPU-aware MPI (`UCX_TLS=^cuda_ipc` unless the job sets `UCX_TLS`; human 2026-10-18) | change 37's 1–2.5 GB per GPU near capacity; small sizes 1.6 % (np 2) to 7 % (np 4) slower | np > 1 | yes | yes | yes | not bitwise on GPUs (as before) |
+| 43 | Throughput: hypre's own SpMV kernels in the pressure AMG, not cuSPARSE's | none; the V-cycle at np 2 6.7 → 3.5 ms (Taylor–Green), 17.0 → 3.4 ms (cylinder); steps −7 % and −18 % | np > 1 (GPU) | yes | yes | yes | not bitwise on GPUs (as before) |
+| 44 | The AMR history projection: Jacobi-PCG for its mass block, the Schur outer method and the run's CC settings, on every solver path (it built a velocity LOR-AMG and an uncapped FGMRES basis of its own) | the curved adaptive run's peak at 56.5M, the projection on all four paths: 65.4 → 42.8 GB IMEX Schur, 65.7 → 50.4 OIFS Schur, 65.4 → 56.0 IMEX coupled, 65.7 → 62.2 OIFS coupled; its 9 AMR events 387 → 36 s | AMR events with history | yes | yes | **yes** | the projected history moves within the solver tolerance |
+| 45 | The 3D gradient indicator without a quadrature-point buffer; its E-vector from the scratch at an event's first pass | an AMR event no longer rises above the step at 56.5M: IMEX Schur 42.8 → 39.8 GB (the step's level), OIFS Schur's gauge peak 51.5 → 48.4 GB (the step's; nvidia-smi shows short spikes to 50.7, being traced) | AMR, 3D | yes | yes | yes | roundoff |
 
 Net, whole runs to t = 20 at 57.3M (nvidia-smi, the 3D verification, jobs 49348598,
 49348600): OIFS coupled 71,781 → 52,211 MiB, Schur 60,209 → 40,639 MiB (35,551 with the
@@ -194,7 +198,8 @@ default).
 | ~~Velocity preconditioner blocks~~ | was 0.65 GB at 21.6M | all | **done, change 35** (inverted in the apply) | |
 | One pool of full-size work vectors (tabled) | RAP pairs ~1.9 GiB, plus the mass solves' vectors | hanging meshes, 2+ ranks; IMEX Schur (its Chebyshev mass inverse, 1.5 GiB) | the pool | tabled (human 2026-10-17) |
 | `initial_velocity`'s growth | 1.3 GiB, unexplained | all | the census | — |
-| Hanging-node extras | ~+100 B/DOF (estimate) | hanging meshes | changes 18 and 22 cannot apply; the pool above | partly the pool |
+| Hanging-node extras | measured at p = 6 (2026-10-18; time-step peaks against the uniform mesh at the same DOFs, B41): Taylor–Green +97–109 B/DOF, the curved cylinder +136–146 (Schur) | hanging meshes | not traced yet; the pool above | partly the pool |
+| ~~AMR events~~ | were the curved adaptive run's peak: 65.4 GB against the step's 39.8 (IMEX Schur, 56.5M) | AMR | **done, changes 44–45**: the history projection's own velocity AMG and FGMRES basis, the indicator's quadrature-point buffer | |
 | ~~OIFS's mass solves on hanging-node meshes (time, not memory)~~ | was ~30 % of a Q3 AMR run | OIFS on hanging meshes | **done, change 31** (the row-sum lumped collocated mass by default, with positivity guard rails) | |
 | hypre's P at np 1 | — | one rank only | — | **dropped** (human 2026-10-17: changes that help only np = 1 are not considered) |
 | Single-precision AMG | ~2 GiB | all | — | changes the answer (held, 2026-10-16) |

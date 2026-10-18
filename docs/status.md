@@ -32,10 +32,15 @@ throughput.md ("The solver matrix at Q6"); each memory change, the gaps and the 
 gpu_memory.md; the multi-GPU plan: multi_gpu.md (human: 4–8 GPUs for scaling studies; no
 hard cap on concurrent H100s, the queue is the limit). Held by the human: geometry on the
 fly (+26–28 % per step for ~74 B/DOF). Planned: one `performance.priority: throughput |
-memory` key for trade-offs instead of a key each (human 2026-10-17). Open for the human:
-`UCX_TLS=^cuda_ipc` (removes GPU-aware MPI's 2.5 GB per GPU near capacity at the same
-np-2 step time), a UCX `+gdrcopy` rebuild (gdrdrv is on the GPU nodes), the coupled
-method's FGMRES and projection bases (what keeps OIFS coupled under 100M).
+memory` key for trade-offs instead of a key each (human 2026-10-17). Changes 42–45
+(2026-10-18): UCX's cuda_ipc off by default (42; the human chose the memory), hypre's own
+SpMV in the pressure AMG (43; the cylinder's np-2 step −18 %), the AMR history projection
+without a velocity AMG or a Krylov basis (44) and the 3D indicator without a quadrature-point
+buffer (45): the curved adaptive run's peak 65.4 → 39.8 GB (IMEX Schur, 56.5M DOFs), its
+AMR events 387 → 36 s. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
+nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what
+keeps OIFS coupled under 100M), the hanging-node cost in the steady state (+97–146 B/DOF
+at p = 6, not traced).
 
 **Defaults: Q6/Q5, grad-div gamma = 6 h_K / k_u, OIFS at CFL 2 (2026-10-16, human: "go with
 p=6 and your grad-div scaling recommendation", "make oifs the default it honestly seems to

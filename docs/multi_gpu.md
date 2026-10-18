@@ -70,6 +70,8 @@ two H100s, Nsight Systems with CUDA, NVTX and MPI tracing):**
   two GPUs at np 2 (+21 %):
   - the AMG's SpMVs (cuSPARSE csrmv) 18 -> 52 ms, launches 154 -> 324 per
     step per GPU (diagonal and off-diagonal blocks on every level);
+    change 43 has hypre use its own SpMV kernels instead: the V-cycle at
+    np 2 6.7 -> 3.5 ms here, 17.0 -> 3.4 ms on the cylinder (job 49408885);
   - MFEM's prolongation exchanges' gather and scatter (ExtractSubArray,
     SetSubArray) +22 ms, kernels that do not exist at one rank;
   - the assembled diagonal +7 ms.
@@ -81,6 +83,14 @@ two H100s, Nsight Systems with CUDA, NVTX and MPI tracing):**
   term's face loop on the rank that owns the outflow). Moving the
   classification onto the device and balancing the outflow faces come before
   any transport work for walled cases.
+- **Run-to-run solver paths at np 4** (jobs 49408610, 49408821, 49409280;
+  Taylor–Green IMEX Schur 136.6M on four H100s). The same binary and deck
+  take one of three paths, outer iterations per step `3 2 1 1 3 2 2`,
+  `3 2 1 2 4 2 2` or `6 2 7 7 9 7 41`, at identical dt: 3 of 10 repeats took
+  the slow one (11.3 s against 4.9 s for the 7 steps), with GPU-aware MPI off
+  as well. GPU runs differ at roundoff from run to run (hypre; accepted
+  2026-10-15), and this case sits near a convergence cliff that roundoff
+  tips. Open (np-4 work waits for the p = 6 comparison, human 2026-10-18).
 
 ## Phase 1: transport (cheap, no trade-offs)
 
@@ -105,9 +115,11 @@ two H100s, Nsight Systems with CUDA, NVTX and MPI tracing):**
      with `UCX_TLS=^cuda_ipc` the GPU-aware run takes 39.46 GB at the same
      step time (1.470 s; host-memory rendezvous fragments change nothing). The
      human made GPU-aware MPI the default in both the throughput and the
-     memory profile (2026-10-17); whether to drop cuda_ipc (job scripts or
-     scripts/env.sh) is theirs to decide -- at 4-8 GPUs on a node the NVLink
-     path may matter more than at 2.
+     memory profile (2026-10-17), and chose the memory over cuda_ipc
+     (2026-10-18): change 42 sets `UCX_TLS=^cuda_ipc` before MPI_Init unless
+     the job sets `UCX_TLS`. Its cost at small sizes: 1.6 % per step at np 2,
+     7 % at np 4 (job 49408821). A 2x at np 4 first put on cuda_ipc was the
+     run-to-run solver path of Phase 0.
    - Results are not bitwise equal off against on, nor run to run on the GPU
      (library-level nondeterminism in hypre/cuSPARSE, known and accepted since
      2026-10-15). On the CPU build the switch does nothing.
@@ -144,6 +156,11 @@ two H100s, Nsight Systems with CUDA, NVTX and MPI tracing):**
      `gdrdrv` module and `nvidia_peermem` (GPUDirect RDMA) loaded (job
      49400578, w008), so a UCX `+gdrcopy` rebuild (and Open MPI and everything
      above it) is possible: the human's call, best after the multi-node traces.
+     Tried 2026-10-18 with spack (UCX 1.20.1 `+gdrcopy` beside the
+     environment's): the concretizer failed with gdrcopy 2.5.1 (job 49408619)
+     and did not finish in 1.5 h with the nodes' gdrcopy 2.3.1 as an external
+     (job 49408871). Next: UCX built by hand from spack's cached tarball,
+     swapped in with `LD_LIBRARY_PATH` for an np 2 / np 4 comparison.
    - **Topology** (w008): the two GPUs of a GPU-shared allocation are joined by
      NVLink (NV18); each sits on its own PCIe switch with an InfiniBand HCA
      (GPU0 with NIC4, GPU1 with NIC6 in `nvidia-smi topo -m`'s numbering; its
