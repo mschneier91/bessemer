@@ -67,6 +67,8 @@ add_library(incns STATIC
   precond/point_block_jacobi.cpp
   precond/rotational_schur.cpp
   precond/viscous_ratio.cpp
+  solid/linear_elasticity.cpp
+  solid/elasticity_case.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and

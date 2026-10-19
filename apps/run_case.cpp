@@ -1,7 +1,8 @@
 // Generic YAML-driven driver: `run_case <deck.yaml>` -- no recompilation per
 // case. The deck supplies parameters, mesh, initial condition (by name), and
 // output settings; the case goes through the same Case surface as any
-// in-code driver. `run_case --deck-reference` prints every deck key with its
+// in-code driver, and equation: linear_elasticity runs a solid instead
+// (ElasticityCase). `run_case --deck-reference` prints every deck key with its
 // default (docs/deck_reference.md is that output). Every run writes a
 // machine-readable summary (<output.path>/<output.name>_summary.json, or
 // --summary <file>): "running" at the start, then "ok" or "diverged" (exit
@@ -11,6 +12,7 @@
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
+#include "solid/elasticity_case.hpp"
 #include "solver/case.hpp"
 #include "util/device.hpp"
 #include "mfem.hpp"
@@ -74,6 +76,22 @@ int main(int argc, char* argv[])
          MFEM_ABORT("run_case: the mesh has boundaries (" << list << ") but the "
                     "deck declares no boundary_conditions");
       }
+   }
+
+   // A solid: a static solve or a dynamic march (solid/elasticity_case).
+   if (params.equation == incns::Equation::LinearElasticity)
+   {
+      incns::ElasticityCase solid(mesh, params);
+      solid.WriteSummary(summary, "running");
+      const bool ok = solid.Run();
+      solid.WriteSummary(summary, ok ? "ok" : "diverged");
+      if (Mpi::Root())
+      {
+         std::cout << "run_case: linear_elasticity  status="
+                   << (ok ? "ok" : "diverged") << "  summary: " << summary
+                   << std::endl;
+      }
+      return ok ? 0 : 2;
    }
 
    incns::Case flow_case(mesh, params);

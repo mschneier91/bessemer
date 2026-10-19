@@ -1,0 +1,43 @@
+# The 2D cantilever of cantilever_2d.yaml with its tip load applied suddenly
+# at t = 0: the beam oscillates about the static deflection (tip u_y between
+# 0 and about twice the static -0.040), mostly in its first bending mode,
+# Euler-Bernoulli period 2 pi / ((1.8751 / L)^2 sqrt(E I / (rho A))) = 19.6.
+# Generalized-alpha (the default scheme), two periods in 200 steps; a ctest
+# runs it at np 1/2/4. output.history: true writes the tip displacement and
+# the energies per step to <path>/<name>_history.csv.
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/cantilever_2d_dynamic.yaml
+#   -> cantilever_dynamic/cantilever_dynamic_summary.json
+
+equation: linear_elasticity
+
+mesh:
+  dim: 2
+  elements: [20, 2]
+  lengths: [10.0, 1.0]
+  periodic: [false, false]
+
+solid:
+  youngs_modulus: 1000.0
+  poisson_ratio: 0.3
+  plane: stress
+  order: 3
+  probe: [10.0, 0.5]
+  analysis: dynamic
+  density: 1.0
+  time_scheme: generalized_alpha
+  rho_inf: 0.8
+
+time:
+  dt: 0.2
+  t_final: 40.0
+
+boundary_conditions:
+  - {select: [xmin], type: fixed}
+  - {select: [xmax], type: traction, value: [0.0, -0.01]}
+  - {select: [ymin, ymax], type: free}
+
+output:
+  path: cantilever_dynamic
+  name: cantilever_dynamic
+  history: false
