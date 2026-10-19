@@ -17,6 +17,10 @@
 //     outflow energy flux j2 = int (u.n)_+ |u|^2 on the outflow match the
 //     paper's Table 5.1 for BOTH conditions (DDN: -4.269e-2 / 5.318e-4,
 //     classical: -4.498e-2 / 6.109e-4), and DDN reduces both;
+//  D5 the cached faces (Convection) against the integrator's own face
+//     assembly (ParLinearForm::Assemble) on a curved 3D mesh with backflow,
+//     Q3 and Q6: the same term to roundoff (the element's other shapes vanish
+//     on the face);
 //  D4 D3 with OIFS convection (BDF3, CFL 2), where the term is explicit and
 //     extrapolated in the BDF step: the same Table 5.1 values for both
 //     conditions (measured 2026-10-09: directional j1 -4.2705e-2, j2
@@ -32,6 +36,7 @@
 #include "mesh/case_mesh.hpp"
 #include "mesh/periodic_box.hpp"
 #include "operators/convection.hpp"
+#include "operators/directional_do_nothing.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solver/case.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -195,6 +200,69 @@ TEST(DirectionalDoNothing, D1_ValueAndOutwardNormal)
    term(1, 1.0, dx, dy); // y = 1: u.n = x >= 0, pure outflow
    EXPECT_NEAR(dx, 0.0, 1e-14);
    EXPECT_NEAR(dy, 0.0, 1e-14);
+}
+
+TEST(DirectionalDoNothing, D5_CachedFacesMatchTheIntegrator)
+{
+   for (const int k : {3, 6})
+   {
+      incns::RuleBook rules; // before the mesh (rule-keyed caches)
+      Mesh serial = incns::MakeBoxMesh(UnitBox(3, 2));
+      serial.SetCurvature(k);
+      // Curved faces; the box's vertices stay on its planes (sin(2 pi y) and
+      // sin(2 pi z) vanish at y, z = 0, 1/2, 1).
+      serial.Transform([](const Vector & x, Vector & y)
+      {
+         y = x;
+         y(0) += 0.05 * x(0) * std::sin(2.0 * M_PI * x(1)) * std::sin(2.0 * M_PI * x(2));
+         y(1) += 0.03 * std::sin(M_PI * x(0)) * x(1) * (1.0 - x(1));
+      });
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      const int attr = FaceAttribute(mesh, 0, 1.0); // x = 1
+      ASSERT_GT(attr, 0);
+      incns::MixedSpaces spaces(mesh, k, k - 1);
+      ParFiniteElementSpace& V = spaces.Velocity();
+      VectorFunctionCoefficient uc(3, [](const Vector & x, Vector & u)
+      {
+         u(0) = 1.0 - 2.0 * x(1); // backflow on y > 1/2 at x = 1
+         u(1) = x(0) * x(2);
+         u(2) = 0.5 * x(1);
+      });
+      ParGridFunction ug(&V);
+      ug.ProjectCoefficient(uc);
+      Vector u(V.GetTrueVSize());
+      ug.GetTrueDofs(u);
+      Array<int> attrs({attr});
+      incns::Convection only(spaces, rules, nullptr, /*volume=*/false);
+      only.EnableDirectionalDoNothing(attrs);
+      Vector y(V.GetTrueVSize());
+      only.MultDirectionalDoNothing(u, y);
+
+      ParGridFunction uref(&V);
+      uref.SetFromTrueDofs(u);
+      uref.HostRead();
+      Array<int> marker(mesh.bdr_attributes.Max());
+      marker = 0;
+      marker[attr - 1] = 1;
+      ParLinearForm f(&V);
+      auto* integ = new incns::DirectionalDoNothingIntegrator(uref, 0.5);
+      integ->SetIntRule(&rules.Get(Geometry::SQUARE,
+                                   incns::Convection::DealiasedOrder(k)));
+      f.AddBdrFaceIntegrator(integ, marker);
+      f.Assemble();
+      Vector ref(V.GetTrueVSize());
+      f.ParallelAssemble(ref);
+      auto linf = [](const Vector & z)
+      {
+         double m = z.Normlinf(), out = m;
+         MPI_Allreduce(&m, &out, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         return out;
+      };
+      const double scale = linf(ref);
+      EXPECT_GT(scale, 1e-4) << "k = " << k; // there is backflow
+      y -= ref;
+      EXPECT_LE(linf(y), 1e-12 * scale) << "k = " << k;
+   }
 }
 
 TEST(DirectionalDoNothing, D2_CancelsTheBackflowEnergyFlux)

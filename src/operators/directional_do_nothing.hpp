@@ -7,6 +7,8 @@
 
 #include "mfem.hpp"
 
+#include <vector>
+
 namespace incns
 {
 
@@ -28,12 +30,13 @@ namespace incns
  * so @f$ ((u\cdot\nabla)u, u) - \tfrac12\int_{S_1}(u\cdot n)_-|u|^2 @f$ keeps
  * only the outflow part @f$ \tfrac12\int_{S_1}(u\cdot n)_+|u|^2 \ge 0 @f$.
  *
- * Host-side (legacy) assembly over the marked boundary faces only -- a few
- * faces, evaluated once per explicit convection apply; no device kernel. The
+ * Host-side assembly over the marked boundary faces only -- a few faces,
+ * evaluated once per explicit convection apply; no device kernel. The
  * outward normal comes from the boundary face transformation (MFEM's
  * convention: from element 1 outward), so it does not depend on how the mesh
  * orients its boundary elements. Element vectors are component-major
- * (@c [c * ndof + i]), matching MFEM's element vdofs.
+ * (@c [c * ndof + i]), matching MFEM's element vdofs. Convection applies the
+ * term from FaceData cached per mesh, not through AssembleRHSElementVect.
  *
  * @warning Reads @c u on the host: the caller syncs it (HostRead) first.
  */
@@ -71,7 +74,38 @@ public:
    using mfem::LinearFormIntegrator::AssembleRHSElementVect;
    /// @endcond
 
+   /**
+    * @brief One boundary face's quadrature data, to apply the term without
+    *        its transformation (Convection caches it per mesh): per point of
+    *        AssembleRHSElementVect's face rule, its weight, the area-scaled
+    *        outward normal and the element's shapes at the given dofs.
+    * @param el      Finite element of the face's neighbour element.
+    * @param Tr      Boundary face transformations (Elem1 = the neighbour).
+    * @param pos     The element dofs whose shapes to keep (the face's own:
+    *                an H1 element's other shapes vanish on the face).
+    * @param weights Output, appended: one per point.
+    * @param normals Output, appended: dim per point.
+    * @param shapes  Output, appended: pos.Size() per point.
+    * @return The number of points.
+    */
+   int FaceData(const mfem::FiniteElement& el,
+                mfem::FaceElementTransformations& Tr,
+                const mfem::Array<int>& pos, std::vector<double>& weights,
+                std::vector<double>& normals, std::vector<double>& shapes);
+
+   /// @return The coefficient of the term (Braack & Mucha: 1/2).
+   double Beta() const { return beta_; }
+
 private:
+   /**
+    * @brief The face rule: the one set (SetIntRule), else 3k on the face.
+    * @param el Finite element of the face's neighbour element.
+    * @param Tr Boundary face transformations.
+    * @return The rule.
+    */
+   const mfem::IntegrationRule& FaceRule(const mfem::FiniteElement& el,
+                                         mfem::FaceElementTransformations& Tr) const;
+
    const mfem::GridFunction& u_; ///< Velocity the term is evaluated at.
    double beta_;                 ///< Coefficient (1/2 for DDN).
    mfem::Array<int> vdofs_;      ///< Scratch: element vdofs of u.

@@ -8,6 +8,9 @@
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
 
+#include <memory>
+#include <vector>
+
 namespace incns
 {
 
@@ -198,22 +201,31 @@ private:
    /// Boundary-face linear form of the term (null = classical do-nothing);
    /// its vector holds the term on local dofs for ParallelAssemble.
    std::unique_ptr<mfem::ParLinearForm> ddn_form_;
-   /// The form's integrator (owned by ddn_form_), applied face by face.
+   /// The form's integrator (owned by ddn_form_): the faces' data.
    DirectionalDoNothingIntegrator* ddn_integ_ = nullptr;
    /// The term on true dofs (Mult scratch).
    mutable mfem::Vector ddn_true_;
    /// The marked boundary elements in mesh order, and the local velocity
-   /// dofs of the elements next to them (sorted): all the term reads and
-   /// writes (CacheDirectionalDoNothingDofs).
+   /// dofs on them (sorted): all the term reads and writes
+   /// (CacheDirectionalDoNothingDofs).
    mutable mfem::Array<int> ddn_bdr_, ddn_dofs_;
    /// The velocity space's sequence ddn_dofs_ belongs to.
    mutable long ddn_seq_ = -1;
-   /// u at ddn_dofs_, the term there, and one face's element dofs and vector
-   /// (MultDirectionalDoNothing scratch).
-   mutable mfem::Vector ddn_vals_, ddn_b_, ddn_elvect_;
+   /// Per marked face (ddn_bdr_ order), with ddn_dofs_: its points' weights,
+   /// area-scaled outward normals (dim each) and the shapes of the face's own
+   /// element dofs at them (DirectionalDoNothingIntegrator::FaceData), and
+   /// per component and face dof its place k in ddn_dofs_ (-1-k for a
+   /// negative vdof). Per-face offsets: points, face dofs, shapes.
+   mutable std::vector<double> ddn_w_, ddn_nor_, ddn_shape_;
+   mutable std::vector<int> ddn_fk_, ddn_qoff_, ddn_doff_, ddn_soff_;
+   /// u at ddn_dofs_, the term there, and one face's term and element vdofs
+   /// (MultDirectionalDoNothing and cache scratch).
+   mutable mfem::Vector ddn_vals_, ddn_b_;
+   mutable std::vector<double> ddn_e_;
    mutable mfem::Array<int> ddn_vdofs_;
 
-   /// Fill ddn_bdr_ and ddn_dofs_ for the current velocity space.
+   /// Fill ddn_bdr_, ddn_dofs_ and the faces' data for the current
+   /// velocity space.
    void CacheDirectionalDoNothingDofs() const;
 };
 

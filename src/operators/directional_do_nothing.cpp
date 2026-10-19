@@ -42,13 +42,7 @@ void DirectionalDoNothingIntegrator::AssembleRHSElementVect(
    nor_.SetSize(dim);
    u_q_.SetSize(dim);
 
-   const IntegrationRule* ir = IntRule;
-   if (!ir)
-   {
-      // The integrand (u.n)_- (u.phi) is cubic in degree-k fields: 3k, the
-      // same dealiasing order as the interior convection.
-      ir = &IntRules.Get(Tr.GetGeometryType(), 3 * el.GetOrder());
-   }
+   const IntegrationRule* ir = &FaceRule(el, Tr);
    for (int q = 0; q < ir->GetNPoints(); ++q)
    {
       const IntegrationPoint& ip = ir->IntPoint(q);
@@ -72,6 +66,37 @@ void DirectionalDoNothingIntegrator::AssembleRHSElementVect(
          for (int i = 0; i < ndof; ++i) { elvect(c * ndof + i) += wc * shape_(i); }
       }
    }
+}
+
+int DirectionalDoNothingIntegrator::FaceData(const FiniteElement& el,
+      FaceElementTransformations& Tr, const Array<int>& pos,
+      std::vector<double>& weights, std::vector<double>& normals,
+      std::vector<double>& shapes)
+{
+   const int dim = el.GetDim();
+   const IntegrationRule& ir = FaceRule(el, Tr);
+   shape_.SetSize(el.GetDof());
+   nor_.SetSize(dim);
+   for (int q = 0; q < ir.GetNPoints(); ++q)
+   {
+      const IntegrationPoint& ip = ir.IntPoint(q);
+      Tr.SetAllIntPoints(&ip);
+      CalcOrtho(Tr.Jacobian(), nor_);
+      el.CalcShape(Tr.GetElement1IntPoint(), shape_);
+      weights.push_back(ip.weight);
+      for (int d = 0; d < dim; ++d) { normals.push_back(nor_(d)); }
+      for (const int i : pos) { shapes.push_back(shape_(i)); }
+   }
+   return ir.GetNPoints();
+}
+
+const IntegrationRule& DirectionalDoNothingIntegrator::FaceRule(
+   const FiniteElement& el, FaceElementTransformations& Tr) const
+{
+   // The integrand (u.n)_- (u.phi) is cubic in degree-k fields: 3k, the
+   // same dealiasing order as the interior convection.
+   return IntRule ? *IntRule : IntRules.Get(Tr.GetGeometryType(),
+          3 * el.GetOrder());
 }
 
 } // namespace incns
