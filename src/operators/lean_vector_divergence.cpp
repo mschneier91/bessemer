@@ -409,8 +409,7 @@ void ApplyTranspose3DByComponentShared(const int NE, const Array<real_t>& bt,
       ki::LoadDofs3d(e, TE_D1D, X, r0);
       ki::Eval3d(TE_D1D, Q1D, smem, sB, r0, r1);
       MFEM_SYNC_THREAD;
-      ki::LoadMatrix<MQ1, true>(TR_D1D, Q1D, Bt, sB);
-      ki::LoadMatrix<MQ1, true>(TR_D1D, Q1D, Gt, sG);
+      kernels3d::LoadGradTranspose(TR_D1D, Q1D, Bt, Gt, sB, sG);
       MFEM_UNROLL(3)
       for (int c = 0; c < 3; ++c)
       {
@@ -427,7 +426,7 @@ void ApplyTranspose3DByComponentShared(const int NE, const Array<real_t>& bt,
                }
             }
          }
-         kernels3d::GradComponent<true>(TR_D1D, Q1D, smem, sB, sG, g0, g1);
+         kernels3d::GradTransposeComponent(TR_D1D, Q1D, smem, sB, sG, g0, g1);
          ki::WriteDofs3d(e, TR_D1D, 0, c, g1, Y);
       }
    });
