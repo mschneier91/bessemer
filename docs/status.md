@@ -9,6 +9,31 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Linear elasticity, static and dynamic (2026-10-19, branch
+`claude/linear-elasticity-qqgghm`, draft PR; human: "scope and then add a linear
+elasticity solver", the first step toward FSI with ALE; "I want A and C
+implemented" for the time schemes).** `src/solid/` (`LinearElasticity`,
+`ElasticityCase`), `equation: linear_elasticity` in `run_case`, deck section `solid`
+(`analysis: static | dynamic`, `time_scheme: generalized_alpha | bdf`, `bdf_order`,
+`rho_inf`, `density`), boundary types `fixed`, `displacement`, `traction`, `free`;
+decks `cases/cantilever_2d.yaml`, `cases/cook_membrane.yaml`. Defaults picked by the
+agent: generalized-alpha with rho_inf 0.8, BDF order 2. **BDF3 is not A-stable for
+undamped structures** (a mode with omega dt near 1 grows 4 % per step): fine for the
+fluid, short or damped solid runs only (docs/elasticity.md §1). Tests
+`linear_elasticity_test`, `elastodynamics_test` (fast) and `verify_elasticity_test`
+(verify: MMS 2D/3D, Lame cylinder on a curved mesh, Cook's membrane in plane stress
+and strain, the default scheme's time order, a cantilever's first frequency against
+Euler-Bernoulli). Cook's membrane: the literature's 23.96 is the loaded edge's
+midpoint (48, 52), not the top corner (which converges to ~25.2; checked with an
+independent Q2 code). Pre-checked in the cloud session with a scratch MFEM build
+(1c19aba, pip Open MPI, not the Spack toolchain): the three test programs pass at
+np 1/2/4, and that build's fast tier passed 231 of 237 (the failures flow tests this
+work does not touch: `persistent_fgmres_test`, the known `-march` mismatch, and hypre
+"Error during solve" in three np-1 tests; not compared with main there); CI is the real
+gate (PR #4). Never run on a GPU; memory per DOF estimated only
+(docs/elasticity.md §3). **Next:** large deformation (St. Venant-Kirchhoff, Turek-Hron
+CSM), then the ALE fluid and the coupling.
+
 **Capacity on one H100 (2026-10-18, gpu_memory.md):** 100M+ DOFs with every Schur
 configuration (Taylor–Green OIFS 128.6M, IMEX 158.8M; curved cylinder OIFS 101.0M, IMEX
 134.5M; with hanging nodes (Taylor–Green, one AMR pass) OIFS 106.6M, IMEX 123.0M) and IMEX coupled (straight 115.1M, curved 101.0M);

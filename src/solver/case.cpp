@@ -31,6 +31,9 @@ Case::Case(ParMesh& mesh, const Parameters& params)
 {
    // The mesh must have been built from NORMALIZED parameters -- the case
    // cannot detect a dimensional mesh after the fact, only this flag can.
+   MFEM_VERIFY(params_.equation != Equation::LinearElasticity,
+               "case: equation linear_elasticity is a solid: use "
+               "incns::ElasticityCase (apps/run_case does)");
    MFEM_VERIFY(params_.nondim.normalized,
                "case: call Parameters::Normalize() before building the "
                "mesh and the case (LoadYAML does it automatically)");

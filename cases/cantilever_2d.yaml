@@ -1,0 +1,32 @@
+# A 2D cantilever: a 10 x 1 plane-stress beam clamped at x = 0 and loaded by
+# a downward shear traction on x = 10 (total load 0.01 per unit thickness).
+# Euler-Bernoulli predicts a tip deflection P L^3 / (3 E I) = 0.04 (I = 1/12);
+# shear deformation adds ~1 %. A small, fast deck that runs a solid end to
+# end (a ctest runs it at np 1/2/4).
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/cantilever_2d.yaml
+#   -> cantilever/cantilever_summary.json (results.probe.u_y: the deflection)
+
+equation: linear_elasticity
+
+mesh:
+  dim: 2
+  elements: [20, 2]
+  lengths: [10.0, 1.0]
+  periodic: [false, false]
+
+solid:
+  youngs_modulus: 1000.0
+  poisson_ratio: 0.3
+  plane: stress
+  order: 3
+  probe: [10.0, 0.5]
+
+boundary_conditions:
+  - {select: [xmin], type: fixed}
+  - {select: [xmax], type: traction, value: [0.0, -0.01]}
+  - {select: [ymin, ymax], type: free}
+
+output:
+  path: cantilever
+  name: cantilever

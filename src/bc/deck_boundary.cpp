@@ -169,6 +169,14 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
             for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *coeffs_.back()); }
             break;
          }
+         case BcType::Fixed:
+         case BcType::Displacement:
+         case BcType::Traction:
+         case BcType::Free:
+            MFEM_ABORT("boundary_conditions: group " << g << " has a solid "
+                       "boundary type (fixed, displacement, traction, free) "
+                       "in a flow case");
+            break;
       }
    }
 }

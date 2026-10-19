@@ -1,0 +1,34 @@
+# Cook's membrane (Cook 1974), the standard bending-with-shear test of a 2D
+# solid: a tapered panel clamped on its left edge (x = 0) and loaded by a
+# uniform shear of total 1 on its right edge (x = 48). Plane stress, E = 1,
+# nu = 1/3. The literature's converged vertical displacement at the midpoint
+# (48, 52) of the loaded edge is 23.96 (e.g. Pian & Sumihara 1984; 21.520 in
+# plane strain, Auricchio et al. 2005); verify_elasticity_test V4 checks both.
+# Run from the repository root (the mesh path is relative to the working
+# directory):
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/cook_membrane.yaml
+#   -> cook_membrane/cook_membrane_summary.json (results.probe.u_y)
+
+equation: linear_elasticity
+
+mesh:
+  dim: 2
+  geometry: file
+  file: cases/cook_membrane.mesh
+  boundary_names: {clamped: 1, load: 2, free: 3}
+
+solid:
+  youngs_modulus: 1.0
+  poisson_ratio: 0.3333333333333333
+  plane: stress
+  probe: [48.0, 52.0]
+
+boundary_conditions:
+  - {select: [clamped], type: fixed}
+  - {select: [load], type: traction, value: [0.0, 0.0625]}
+  - {select: [free], type: free}
+
+output:
+  path: cook_membrane
+  name: cook_membrane

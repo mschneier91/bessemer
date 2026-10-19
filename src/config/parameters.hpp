@@ -16,6 +16,7 @@
 #include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/rotational_schur.hpp"
+#include "solid/elasticity_parameters.hpp"
 #include "solver/outer_solver.hpp"
 #include "solver/solution_projection.hpp"
 #include "solver/velocity_preconditioner.hpp"
@@ -29,12 +30,14 @@
 namespace incns
 {
 
-/// The equation set a case solves -- a runtime option; the unified Case
-/// dispatches on it (never a class per physics).
+/// The equation set a case solves -- a runtime option. The unified flow Case
+/// dispatches on Stokes / NavierStokes (never a class per flow physics); a
+/// solid is a different unknown and has its own case (solid/elasticity_case).
 enum class Equation
 {
-   Stokes,      ///< Unsteady Stokes (Sprint 1).
-   NavierStokes ///< Incompressible Navier-Stokes (Sprint 2.2; IMEX BDF/AB).
+   Stokes,          ///< Unsteady Stokes (Sprint 1).
+   NavierStokes,    ///< Incompressible Navier-Stokes (Sprint 2.2; IMEX BDF/AB).
+   LinearElasticity ///< Small-strain linear elasticity (ElasticityCase).
 };
 
 /// How the time step is chosen (deck `time.step_control`).
@@ -64,7 +67,11 @@ enum class BcType
    VelocityDirichlet, ///< Prescribed velocity (the field is bound in the driver).
    Velocity,          ///< Prescribed velocity given in the deck (value or profile).
    NoSlip,            ///< Zero velocity wall (no field needed).
-   Outflow            ///< Do-nothing / natural traction (no field).
+   Outflow,           ///< Do-nothing / natural traction (no field).
+   Fixed,             ///< Solid: zero displacement (clamped).
+   Displacement,      ///< Solid: a constant displacement (`value`).
+   Traction,          ///< Solid: a constant traction sigma n (`value`).
+   Free               ///< Solid: traction-free.
 };
 
 /// Spatial shape of a deck-given boundary velocity (BcType::Velocity).
@@ -99,7 +106,8 @@ struct BcSpec
    std::vector<std::string>
    faces; ///< Boundary-name selectors (box faces or geometry names).
    std::vector<int> attributes;    ///< Explicit boundary attribute selectors.
-   /// BcType::Velocity: the constant value (Constant profile).
+   /// BcType::Velocity: the constant value (Constant profile); the
+   /// displacement or traction of the solid types Displacement and Traction.
    std::array<double, 3> value = {0.0, 0.0, 0.0};
    BcProfile profile = BcProfile::Constant;           ///< BcType::Velocity shape.
    double u_max = 1.0;   ///< Parabolic: peak velocity.
@@ -531,6 +539,9 @@ struct Parameters
    std::vector<BcSpec> boundary_conditions;
 
    OutputParameters output; ///< ParaView output settings.
+
+   /// The solid of an equation: linear_elasticity case (deck section `solid`).
+   ElasticityParameters solid;
 
    CheckpointParameters checkpoint; ///< Rolling checkpoint settings.
    /// When non-empty, restore the marching state from this checkpoint

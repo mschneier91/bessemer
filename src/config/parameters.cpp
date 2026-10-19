@@ -25,9 +25,11 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.ReadEnum(root, "equation", p.equation,
    {
       {"stokes", Equation::Stokes}, {"navier_stokes", Equation::NavierStokes},
+      {"linear_elasticity", Equation::LinearElasticity},
       {"nse", Equation::NavierStokes}
    },
-   "Equation set: unsteady Stokes or incompressible Navier-Stokes.");
+   "Equation set: unsteady Stokes, incompressible Navier-Stokes, or a "
+   "small-strain linear elastic solid, static or dynamic (section solid).");
    r.Read(root, "device", p.device,
           "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
    r.Read(root, "initial_velocity", p.initial_velocity,
@@ -640,7 +642,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    // parses fully as one, otherwise a box face name.
    r.Declare(root, "boundary_conditions", "list", "[]", "",
              "Boundary groups, each {select: [names or attributes], type: no_slip | "
-             "outflow | velocity | velocity_dirichlet, ...}. Names: box faces xmin, "
+             "outflow | velocity | velocity_dirichlet, ...}; a solid (equation "
+             "linear_elasticity) takes type fixed | displacement | traction | free "
+             "instead, displacement and traction with value: [x, y(, z)] (a "
+             "traction is sigma n, force per unit area). Names: box faces xmin, "
              "xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. "
              "type velocity takes value: [u, v] (constant), or profile: parabolic "
              "with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D "
@@ -688,14 +693,38 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          if (ty == "outflow") { s.type = BcType::Outflow; }
          else if (ty == "no_slip") { s.type = BcType::NoSlip; }
          else if (ty == "velocity") { s.type = BcType::Velocity; }
+         else if (ty == "fixed") { s.type = BcType::Fixed; }
+         else if (ty == "displacement") { s.type = BcType::Displacement; }
+         else if (ty == "traction") { s.type = BcType::Traction; }
+         else if (ty == "free") { s.type = BcType::Free; }
          else
          {
             MFEM_VERIFY(ty == "velocity_dirichlet",
                         "parameters: unknown boundary type '" << ty
-                        << "' (no_slip|outflow|velocity|velocity_dirichlet)");
+                        << "' (no_slip|outflow|velocity|velocity_dirichlet; "
+                        "solid: fixed|displacement|traction|free)");
             s.type = BcType::VelocityDirichlet;
          }
-         if (s.type == BcType::Velocity)
+         if (s.type == BcType::Displacement || s.type == BcType::Traction)
+         {
+            MFEM_VERIFY(e["value"] && e["value"].IsSequence() &&
+                        static_cast<int>(e["value"].size()) == p.mesh.dim,
+                        "parameters: a " << ty << " boundary needs value: a "
+                        "list of " << p.mesh.dim << " components");
+            for (int d = 0; d < p.mesh.dim; ++d)
+            {
+               s.value[d] = e["value"][d].as<double>();
+            }
+            for (const char* k :
+                 {"profile", "u_max", "height", "width", "time_profile",
+                  "time_scale"
+                 })
+            {
+               MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
+                           << "' needs type velocity");
+            }
+         }
+         else if (s.type == BcType::Velocity)
          {
             const std::string prof = e["profile"] ? e["profile"].as<std::string>()
                                      : std::string("constant");
@@ -909,6 +938,70 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "The pressure-difference probe's value.");
    r.Read(ref, "re_tau", rv.re_tau,
           "Channel: Re_tau from the time-averaged wall shear stress.");
+
+   ElasticityParameters& sp = p.solid;
+   const DeckSection solid = r.Section(root, "solid",
+                                       "The solid of equation linear_elasticity: "
+                                       "small strains, isotropic and homogeneous, "
+                                       "displacement-only on the reference "
+                                       "configuration (docs/elasticity.md). Units "
+                                       "are the deck's own, consistent ones.");
+   r.Read(solid, "youngs_modulus", sp.youngs_modulus, "Young's modulus E.");
+   r.Read(solid, "poisson_ratio", sp.poisson_ratio,
+          "Poisson's ratio (-1 < nu < 1/2). A displacement-only discretization "
+          "locks as nu -> 1/2; high orders delay it.");
+   r.ReadEnum(solid, "plane", sp.plane,
+   {{"strain", PlaneModel::Strain}, {"stress", PlaneModel::Stress}},
+   "2D model: plane strain, or plane stress (lambda* = 2 lambda mu / (lambda + "
+   "2 mu)). Ignored in 3D.");
+   r.Read(solid, "order", sp.order,
+          "Displacement polynomial order; <= 0: discretization.order_u, so the "
+          "solid matches the fluid's velocity at a future interface.");
+   r.ReadArray(solid, "body_force", sp.body_force, p.mesh.dim,
+               "A constant body force per unit volume.");
+   r.Read(solid, "rtol", sp.rtol, "CG relative tolerance.");
+   r.Read(solid, "atol", sp.atol, "CG absolute tolerance.");
+   r.Read(solid, "max_iter", sp.max_iter, "CG iteration cap.");
+   r.ReadEnum(solid, "preconditioner", sp.preconditioner,
+   {{"loramg", ElasticityPC::LorAmg}, {"jacobi", ElasticityPC::Jacobi}},
+   "CG preconditioner: one BoomerAMG V-cycle (systems mode) on the low-order-"
+   "refined operator, or the operator's diagonal (no setup, iterations grow "
+   "with the resolution).");
+   r.Declare(solid, "probe", "real[dim]", "unset", "",
+             "A point whose displacement the run summary reports (e.g. the tip "
+             "of a cantilever).");
+   if (solid.Has("probe"))
+   {
+      const YAML::Node pt = solid.Get("probe");
+      MFEM_VERIFY(pt.IsSequence() && static_cast<int>(pt.size()) == p.mesh.dim,
+                  "parameters: solid.probe needs " << p.mesh.dim << " coordinates");
+      for (int d = 0; d < p.mesh.dim; ++d) { sp.probe[d] = pt[d].as<double>(); }
+      sp.has_probe = true;
+   }
+   r.ReadEnum(solid, "analysis", sp.analysis,
+   {{"static", SolidAnalysis::Static}, {"dynamic", SolidAnalysis::Dynamic}},
+   "static: one solve of K u = f. dynamic: rho u_tt + K u = f marched from rest "
+   "at t = 0 to time.t_final in fixed steps of time.dt (the last one shortened "
+   "to land on t_final); the loads act from t = 0.");
+   r.Read(solid, "density", sp.density, "Mass density rho (dynamic analysis).");
+   r.ReadEnum(solid, "time_scheme", sp.time_scheme,
+   {
+      {"generalized_alpha", SolidTimeScheme::GeneralizedAlpha},
+      {"bdf", SolidTimeScheme::Bdf}
+   },
+   "Dynamic time integrator: Chung-Hulbert generalized-alpha (second order, "
+   "high-frequency damping set by rho_inf), or the fluid's variable-step BDF "
+   "(order bdf_order) on the first-order system (u, v), started by one "
+   "trapezoidal step.");
+   r.Read(solid, "bdf_order", sp.bdf_order,
+          "BDF order, 2 or 3. BDF3 is not A-stable: an undamped mode with "
+          "omega dt between about 0.5 and 2 grows (4 % per step at omega dt "
+          "= 1), so it suits short or damped runs only; BDF2 and "
+          "generalized-alpha are unconditionally stable.");
+   r.Read(solid, "rho_inf", sp.rho_inf,
+          "Generalized-alpha spectral radius at infinite frequency, in [0, 1]: "
+          "1 is the trapezoidal rule (energy-conserving, no damping), smaller "
+          "values damp the unresolved high frequencies more.");
 }
 
 // Abort with every unknown key a deck sets, each with its closest valid key.
@@ -1031,6 +1124,46 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(!p.channel_statistics.enabled || !p.amr.enabled,
                "parameters: channel_statistics needs a fixed mesh (amr off): "
                "every node height must span the whole x-z plane");
+   // A solid takes the solid boundary types, a flow the flow ones.
+   const bool solid = (p.equation == Equation::LinearElasticity);
+   bool held = false;
+   for (const BcSpec& s : p.boundary_conditions)
+   {
+      const bool solid_type = s.type == BcType::Fixed ||
+                              s.type == BcType::Displacement ||
+                              s.type == BcType::Traction ||
+                              s.type == BcType::Free;
+      MFEM_VERIFY(solid_type == solid, "parameters: boundary types fixed, "
+                  "displacement, traction and free are for equation "
+                  "linear_elasticity, and only they are");
+      held = held || s.type == BcType::Fixed || s.type == BcType::Displacement;
+   }
+   if (solid)
+   {
+      const ElasticityParameters& sp = p.solid;
+      MFEM_VERIFY(sp.youngs_modulus > 0.0,
+                  "parameters: solid.youngs_modulus must be > 0");
+      MFEM_VERIFY(sp.poisson_ratio > -1.0 && sp.poisson_ratio < 0.5,
+                  "parameters: solid.poisson_ratio must be in (-1, 1/2)");
+      MFEM_VERIFY(sp.rtol > 0.0 && sp.atol >= 0.0 && sp.max_iter >= 1,
+                  "parameters: bad solid.rtol, solid.atol or solid.max_iter");
+      MFEM_VERIFY(p.nondim.mode == ScalingMode::Dimensionless,
+                  "parameters: a solid uses the deck's own consistent units "
+                  "(nondimensionalization.mode dimensionless)");
+      MFEM_VERIFY(!p.amr.enabled, "parameters: AMR is not available for a solid");
+      MFEM_VERIFY(sp.density > 0.0, "parameters: solid.density must be > 0");
+      MFEM_VERIFY(sp.bdf_order == 2 || sp.bdf_order == 3,
+                  "parameters: solid.bdf_order must be 2 or 3");
+      MFEM_VERIFY(sp.rho_inf >= 0.0 && sp.rho_inf <= 1.0,
+                  "parameters: solid.rho_inf must be in [0, 1]");
+      MFEM_VERIFY(sp.analysis == SolidAnalysis::Static ||
+                  (p.dt > 0.0 && p.t_final > 0.0),
+                  "parameters: a dynamic solid needs time.dt > 0 and "
+                  "time.t_final > 0");
+      MFEM_VERIFY(p.boundary_conditions.empty() || held,
+                  "parameters: a solid needs a fixed or displacement boundary "
+                  "(otherwise its rigid motions are free)");
+   }
    p.Normalize();
    return p;
 }
