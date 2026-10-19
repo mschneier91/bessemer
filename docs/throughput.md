@@ -1288,6 +1288,35 @@ ms at np 1 and 437 -> 300 at np 2; `oifs::advect` (inclusive) 319 -> 197 and 254
 host compaction, 5.5 ms at np 1). The cylinder OIFS's np-2 efficiency 64 -> 93 % in this
 job. At np 4 with both (job 49434071): cylinder OIFS coupled 0.304 -> 0.177 s per step (-42 %; np-4 efficiency 55 -> 83 %), OIFS Schur 0.365 -> 0.232 (-36 %; 61 -> 80 %), IMEX coupled 0.203 -> 0.115 (-43 %; 55 -> 77 %), IMEX Schur 0.256 -> 0.171 (-33 %); DFG 3D-3Z Q3 AMR stays latency-bound (0.032 -> 0.031).
 
+**Change 50**: OIFS's wall-node convection (`oifs::boundary_values`, read at the Dirichlet
+dofs only, through the diagonal mass) on the elements that hold those dofs, with the same
+values there bit for bit (conforming meshes; job 49441991, NVTX medians on the cylinder):
+38.8 -> 13.2 ms per step at np 1, 20.3 -> 7.4 at np 2; cylinder OIFS -4 % per step at np 1,
+-8 % at np 2.
+
+**Scaling at ~22-25M DOFs per GPU** (jobs 49440745, 49439670; binary B49, main 4d73bf0's
+code; `~/bessemer_jobs/scsum.py`). Weak: ~25M DOFs per GPU at np 1, 2 and 4 (Taylor-Green
+32^3, 40^3, 50^3; the cylinder nz 2, 4, 8). Strong: the largest size (Taylor-Green 96.6M,
+the cylinder 89.8M) at np 1, 2 and 4; OIFS coupled does not fit it on one GPU. Efficiency:
+weak t1 / tk, strong t1 / (k tk).
+
+| Case | Weak np 2 | Weak np 4 | Strong np 2 | Strong np 4 |
+|---|---|---|---|---|
+| TGV OIFS coupled | 93 % | 91 % | | |
+| TGV OIFS Schur | 95 % | 93 % | 93 % | 87 % |
+| TGV IMEX coupled | 89 % | 84 % | 94 % | 79 % |
+| TGV IMEX Schur | 90 % | 88 % | 94 % | 86 % |
+| Cylinder OIFS coupled | 97 % | 93 % | | |
+| Cylinder OIFS Schur | 98 % | 97 % | 96 % | 91 % |
+| Cylinder IMEX coupled | 112 % | 93 % | 107 % | 101 % |
+| Cylinder IMEX Schur | 101 % | 101 % | 95 % | 92 % |
+
+Against docs/multi_gpu.md's targets (strong >= 80 % at >= 20M DOFs per GPU, weak >= 85 %;
+here within one node): met but for TGV IMEX coupled (weak 84 %, strong 79 % at np 4). Over
+100 %: a weak series changes the problem (the cylinder's nz, so its iterations per step),
+and the np-1 runs at 90M+ sit near the GPU's capacity. The 22M matrix above at np 4 (5-6M
+DOFs per GPU) is below the size these targets are set at.
+
 **Open after this round**: TGV IMEX Schur's np-1 time (change 34's iterations); the
 pressure LOR-AMG at np 4 (`cc::lor_amg` is 23-24 % of the small cases' step); the np-4
 bimodal solver path (docs/multi_gpu.md); the classification's host compaction (5.5 ms);

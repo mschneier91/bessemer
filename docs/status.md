@@ -51,7 +51,8 @@ is left, what MFEM changes would have helped) is gpu_memory.md's first section.
 (throughput.md): Taylor-Green 85-92 % efficient at np 2, 72-73 % at np 4. The cylinder's
 outflow term ran on the host on one rank: changes 48 (OIFS's classification flags on the
 device) and 49 (the outflow term from cached face data), cylinder OIFS np 2 0.524 ->
-0.313 s per step, IMEX -30 %, np 1 -12 to -20 %. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
+0.313 s per step, IMEX -30 %, np 1 -12 to -20 %. Change 50: OIFS's wall-node convection
+on the wall elements only (cylinder -4 % at np 1, -8 % at np 2). Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
 nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what
 keeps OIFS coupled under 100M), the hanging-node cost in the steady state (+97–146 B/DOF
 at p = 6, not traced).

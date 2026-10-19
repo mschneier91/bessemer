@@ -51,7 +51,9 @@ owns the outflow, ~120-140 ms per step at any rank count. Changes 48-49 (the
 classification's flags on the device, the outflow term from cached face data): cylinder
 OIFS np 2 0.524 -> 0.313 s per step (np-2 efficiency 64 -> 93 %). At np 4: cylinder OIFS coupled 0.304 -> 0.177 s per step (-42 %; np-4 efficiency 55 -> 83 %), OIFS Schur 0.365 -> 0.232 (-36 %; 61 -> 80 %), IMEX coupled 0.203 -> 0.115 (-43 %; 55 -> 77 %), IMEX Schur 0.256 -> 0.171 (-33 %); DFG 3D-3Z Q3 AMR stays latency-bound (0.032 -> 0.031).
 The "43 ms per step" of `oifs::classify` below was a per-call average including its first
-call; steady state it was ~14 ms.
+call; steady state it was ~14 ms. At ~22-25M DOFs per GPU (throughput.md, "Scaling at
+~22-25M DOFs per GPU"): weak 84-97 % at np 4 (the cylinder 93-101 %), strong 79-91 % at
+np 4 on 90-97M DOFs; the targets above are met but for TGV IMEX coupled.
 
 ## Phase 0: instrumentation (before changing anything)
 
