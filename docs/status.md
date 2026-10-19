@@ -33,7 +33,9 @@ gpu_memory.md; the multi-GPU plan: multi_gpu.md (human: 4–8 GPUs for scaling s
 hard cap on concurrent H100s, the queue is the limit). Held by the human: geometry on the
 fly (+26–28 % per step for ~74 B/DOF). The planned `performance.priority: throughput |
 memory` key for trade-offs (human 2026-10-17) was dropped (human 2026-10-18): only
-`time.oifs_on_the_fly` is such a trade-off, and it stays its own opt-in. Changes 42–45
+`time.oifs_on_the_fly` is such a trade-off, and it stays its own opt-in, renamed
+`memory.max_dofs` (change 51, human 2026-10-18; the old name still read), which a run near
+a full GPU suggests. Changes 42–45
 (2026-10-18): UCX's cuda_ipc off by default (42; the human chose the memory), hypre's own
 SpMV in the pressure AMG (43; the cylinder's np-2 step −18 %), the AMR history projection
 without a velocity AMG or a Krylov basis (44) and the 3D indicator without a quadrature-point

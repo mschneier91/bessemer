@@ -399,7 +399,8 @@ struct Parameters
    double oifs_cfl = 1.5;
    /// OIFS at velocity orders 6 and 7 on straight-sided elements: rebuild the
    /// convection's quadrature data at every substep apply instead of storing
-   /// it (deck `time.oifs_on_the_fly`; default false). 11.6 GiB less at 57.3M
+   /// it (deck `memory.max_dofs`, older spelling `time.oifs_on_the_fly`;
+   /// default false; a run near a full GPU suggests it). 11.6 GiB less at 57.3M
    /// DOFs, 6.5 % more time per step (job 49345844).
    bool oifs_on_the_fly = false;
    /// Extrapolation order of the explicit / lagged nonlinear term, 2 or 3

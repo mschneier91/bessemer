@@ -367,10 +367,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "CFL < ~0.7), or OIFS sub-stepping (CFL 2; BDF3 and, with "
    "discretization.mass auto, the collocated mass by default).");
    r.Read(time, "oifs_cfl", p.oifs_cfl, "CFL number of each OIFS substep.");
-   r.Read(time, "oifs_on_the_fly", p.oifs_on_the_fly,
-          "OIFS at velocity orders 6-7 on straight-sided elements: rebuild the "
-          "convection's quadrature data at every substep instead of storing it "
-          "(about 90 B/DOF less memory at Q6, about 6 % more time per step).");
+   r.Declare(time, "oifs_on_the_fly", "bool", "unset", "",
+             "Older spelling of memory.max_dofs.");
    r.Read(time, "order", p.time_order,
           "BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX).");
    r.Read(time, "ext_order", p.ext_order,
@@ -379,6 +377,21 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Error control: absolute tolerance on the velocity error estimate.");
    r.Read(time, "rtol", p.controller.rtol,
           "Error control: relative tolerance on the velocity error estimate.");
+
+   const DeckSection mem = r.Section(root, "memory",
+                                     "Trading speed for capacity.");
+   r.Read(mem, "max_dofs", p.oifs_on_the_fly,
+          "Fit more DOFs on each GPU at a cost in speed: OIFS at velocity orders "
+          "6-7 on straight-sided elements rebuilds the convection's quadrature "
+          "data at every substep instead of storing it (about 90 B/DOF less, "
+          "about 6-7 % slower per step). A run whose GPU is 85 % full suggests "
+          "it where it applies.");
+   if (time.Has("oifs_on_the_fly"))
+   {
+      MFEM_VERIFY(!mem.Has("max_dofs"), "parameters: give memory.max_dofs or the "
+                  "older time.oifs_on_the_fly, not both");
+      p.oifs_on_the_fly = time.Get("oifs_on_the_fly").as<bool>();
+   }
 
    const DeckSection solver = r.Section(root, "solver",
                                         "Linear solver: FGMRES on the monolithic "

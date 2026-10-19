@@ -285,6 +285,13 @@ private:
     */
    void MaybeLogDiagnostics(int cycle, double time);
 
+   /**
+    * @brief Suggest memory.max_dofs in the log when it applies (OIFS at
+    *        velocity orders 6 and 7 on straight-sided elements, not on) and
+    *        a GPU is 85 % full. Collective.
+    */
+   void MaybeSuggestMaxDofs();
+
    mfem::ParMesh& mesh_;      ///< Mesh (borrowed).
    Parameters params_;        ///< Case parameters (copied).
    RuleBook rules_;           ///< Quadrature owner (outlives all operators).
@@ -306,6 +313,7 @@ private:
    std::unique_ptr<FlowDiagnostics> flow_diag_;
    int cycle_ = 0; ///< Accepted-step counter for output.
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
+   bool memory_hint_done_ = false; ///< memory.max_dofs considered (once).
    std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.
    /// Convective CFL estimator on the current mesh (time.cfl_max, NSE only).
    std::unique_ptr<ConvectiveCfl> cfl_;

@@ -318,6 +318,29 @@ TEST(Deck, ConvectionKeys)
    EXPECT_TRUE(p.CollocatedMass());
 }
 
+// `memory.max_dofs` (2026-10-18, human: a name to remember for "more DOFs,
+// slower") and its older spelling `time.oifs_on_the_fly`, still read.
+TEST(Deck, MaxDofsKey)
+{
+   const std::string path =
+      "deck_maxdofs_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+   auto load = [&](const std::string & block)
+   {
+      {
+         std::ofstream f(path);
+         f << "equation: navier_stokes\n" << "physics:\n  nu: 0.01\n"
+           << "time:\n  dt: 0.01\n  t_final: 1.0\n" << block;
+      }
+      Parameters p = Parameters::LoadYAML(path);
+      std::remove(path.c_str());
+      return p;
+   };
+   EXPECT_FALSE(load("").oifs_on_the_fly);
+   EXPECT_TRUE(load("memory:\n  max_dofs: true\n").oifs_on_the_fly);
+   EXPECT_FALSE(load("memory:\n  max_dofs: false\n").oifs_on_the_fly);
+   EXPECT_TRUE(load("  oifs_on_the_fly: true\n").oifs_on_the_fly);
+}
+
 // Time step control: `time.step_control: fixed|error|cfl` (the older
 // `adaptive: true|false` = error|fixed), `time.cfl_target`, `time.dt_max`
 // (scaled like dt in dimensional mode) and `time.ext_order`. Case-level
@@ -452,7 +475,7 @@ TEST(Deck, SchemaIsCompleteAndCurrent)
          "time.dt", "time.convection", "time.adaptive",
          "solver.schur", "solver.rotation_schur",
          "solver.rotation_schur.mu_on", "boundary_conditions",
-         "amr.theta", "forces.attributes", "checkpoint.path"
+         "amr.theta", "forces.attributes", "checkpoint.path", "memory.max_dofs"
         })
    {
       EXPECT_TRUE(paths.count(must)) << "schema lacks " << must;

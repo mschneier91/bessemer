@@ -229,6 +229,10 @@ stability limit; pass `-dt 0.001`.)
   harder cases (each outer iteration adds two system-sized vectors). What was done to
   get there and what is left: [gpu_memory.md](gpu_memory.md). `output.profile: sync` on a
   GPU adds device memory per region to the profile CSV.
+- **More DOFs per GPU, slower:** `memory.max_dofs: true` (OIFS at velocity orders 6-7 on
+  straight-sided meshes: about 90 B/DOF less, about 6-7 % slower per step; Taylor-Green
+  OIFS Schur 128.6M -> 150.8M DOFs on one H100). A run whose GPU is 85 % full prints the
+  suggestion where it applies.
 
 ## 7. When something goes wrong
 

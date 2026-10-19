@@ -5,6 +5,7 @@
 #include "amr/mesh_adapter.hpp"
 #include "bc/boundary_names.hpp"
 #include "operators/kernel_specializations.hpp"
+#include "time/oifs_convection.hpp"
 #include "util/device.hpp"
 #include "util/json.hpp"
 #include "util/profiler.hpp"
@@ -390,6 +391,14 @@ void Case::Step()
       monitor_->PrintProgress(cfl, where, ne_);
    }
 
+   // memory.max_dofs, suggested once where it would help (after the second
+   // step: the solvers' vectors exist by then).
+   if (!memory_hint_done_ && cycle_ >= 2)
+   {
+      memory_hint_done_ = true;
+      MaybeSuggestMaxDofs();
+   }
+
    // Bad-reference-scale guard (dimensional mode): with a well-chosen U_ref
    // the nondimensional velocity stays O(1); a large drift means the declared
    // scales do not match the flow and the tolerances/residual balance suffer.
@@ -412,6 +421,36 @@ void Case::Step()
          }
       }
    }
+}
+
+void Case::MaybeSuggestMaxDofs()
+{
+   // Where it applies (the same on every rank: the collective below holds).
+   if (params_.oifs_on_the_fly || params_.equation != Equation::NavierStokes ||
+       params_.Convection() != ConvectionTreatment::Oifs || spaces_.Dim() != 3)
+   {
+      return;
+   }
+   ParFiniteElementSpace& V = spaces_.Velocity();
+   const IntegrationRule& ir = rules_.Get(Geometry::CUBE, 3 * spaces_.OrderU());
+   if (!OifsConvection::OnTheFlyEligible(V, ir)) { return; }
+   // The fullest GPU, and the most DOFs on a rank (the saving per GPU).
+   double free = 0.0, total = 0.0;
+   double v[2] = {0.0, static_cast<double>(V.GetTrueVSize() +
+                                           spaces_.Pressure().GetTrueVSize())
+                 };
+   if (DeviceMemoryInfo(free, total) && total > 0.0) { v[0] = 1.0 - free / total; }
+   MPI_Allreduce(MPI_IN_PLACE, v, 2, MPI_DOUBLE, MPI_MAX, V.GetComm());
+   if (v[0] < 0.85 || !Mpi::Root()) { return; }
+   const std::ios_base::fmtflags flags = mfem::out.flags();
+   const std::streamsize prec = mfem::out.precision();
+   mfem::out << "[incns] GPU memory " << static_cast<int>(100.0 * v[0] + 0.5)
+             << " % full. For more DOFs per GPU: memory.max_dofs: true (about "
+             "90 B/DOF less, ~" << std::fixed << std::setprecision(1)
+             << 90.0 * v[1] / 1e9 << " GB per GPU here; about 6-7 % slower per "
+             "step)." << std::endl;
+   mfem::out.flags(flags);
+   mfem::out.precision(prec);
 }
 
 void Case::Run()
