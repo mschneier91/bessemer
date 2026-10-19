@@ -1,6 +1,8 @@
 // LeanVectorMassIntegrator against MFEM's VectorMassIntegrator (both
-// partially assembled): the same apply and diagonal, to the bit, on a curved
-// mesh in 2D and 3D, with and without a constant coefficient.
+// partially assembled): the same apply and diagonal, to roundoff, on a curved
+// mesh in 2D and 3D, with and without a constant coefficient (on a device the
+// 3D apply is VectorMassApply3DPoints). VectorMassApply3DPoints itself, on
+// every device, against MFEM's apply at orders 2 to 7.
 
 #include <gtest/gtest.h>
 
@@ -93,6 +95,52 @@ TEST(LeanVectorMass, MatchesMfem3D)
 {
    Check(3, 2, 1.0);
    Check(3, 4, 2.5);
+}
+
+TEST(LeanVectorMass, PointKernelMatchesMfem)
+{
+   for (const int k : {2, 4, 6, 7})
+   {
+      SCOPED_TRACE(testing::Message() << "k " << k);
+      Mesh serial = CurvedBox(3);
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      H1_FECollection fec(k, 3);
+      ParFiniteElementSpace V(&mesh, &fec, 3);
+      RuleBook rules;
+      const IntegrationRule& ir = rules.Get(Geometry::CUBE, 2 * k);
+      Vector wdet;
+      incns::MassWeightDet(V, ir, wdet);
+      // MFEM's apply (its own kernels on any device), on local dofs.
+      auto* mi = new VectorMassIntegrator;
+      mi->SetIntRule(&ir);
+      ParBilinearForm form(&V);
+      form.AddDomainIntegrator(mi);
+      form.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      form.Assemble();
+      Vector x(V.GetVSize()), y_ref(V.GetVSize()), y(V.GetVSize());
+      for (Vector* v : {&x, &y_ref, &y}) { v->UseDevice(true); }
+      x.Randomize(11 + mesh.GetMyRank());
+      form.Mult(x, y_ref);
+      // The point kernel on E-vectors (C = 1: D = W det J).
+      const Operator* R = V.GetElementRestriction(ElementDofOrdering::LEXICOGRAPHIC);
+      const DofToQuad& maps = V.GetTypicalFE()->GetDofToQuad(ir, DofToQuad::TENSOR);
+      ASSERT_EQ(maps.ndof, k + 1);
+      ASSERT_EQ(maps.nqpt, k + 1);
+      Vector xe(R->Height()), ye(R->Height());
+      xe.UseDevice(true);
+      ye.UseDevice(true);
+      R->Mult(x, xe);
+      ye = 0.0;
+      ASSERT_TRUE(incns::VectorMassApply3DPoints(maps.ndof, maps.nqpt, mesh.GetNE(),
+                  maps.B, wdet, xe, ye));
+      R->MultTranspose(ye, y);
+      y -= y_ref;
+      double diff = y.Normlinf(), scale = y_ref.Normlinf();
+      MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      EXPECT_GT(scale, 0.0);
+      EXPECT_LE(diff, 1e-13 * scale);
+   }
 }
 
 TEST(LeanVectorMass, MatchesMfem2D)
