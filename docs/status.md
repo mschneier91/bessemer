@@ -61,7 +61,9 @@ SpMV is 21 % of curved adaptive steps (the assembled hanging-node P). Kernel hea
 (Nsight Compute, 2026-10-19, throughput.md): a quarter of a step is at the DRAM limit, the
 momentum kernel is bound by the L1 pipe and the OIFS kernel by latency; ~1.2-1.5x per step
 is left in kernel work, not 2x. Change 54: the gradient without shared-memory bank
-conflicts on a device (-14 % per call, -1.2 % per TGV OIFS step). Weak scaling on full GPUs
+conflicts on a device (-14 % per call, -1.2 % per TGV OIFS step). Change 55: the OIFS
+column kernels by direction, four blocks per SM, on a device (-38 % per call, -7.7 % per TGV
+OIFS step). Weak scaling on full GPUs
 (~67-75M DOFs per GPU): np 4 at 68-92 %, the losses beyond ~10-14 % from iterations growing
 with the problem. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
 nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what

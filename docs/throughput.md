@@ -1460,3 +1460,20 @@ the cylinder's Schur and coupled paths +5-20 %. That part is the solver's (and t
 per-run hierarchy), not communication. A first Taylor-Green set with ~15 steps per run (job
 49462427) was too short: step times drift 2-3x over a run (the CFL ramp), and single runs
 changed the outer iterations by up to 40 %.
+
+**Change 55**: the OIFS column kernels (Apply3DColumns; Apply3DColumnsFly on straight-sided
+meshes) by direction on a device, four blocks per SM. They held each component's three
+reference gradients and scratch in registers (190 registers, two 100-thread blocks per SM, 12 %
+occupancy, nothing saturated). On a device `WindDotGrad` forms wind . grad u one direction at a
+time (three Q1D register columns: 140 registers, no stack), and `ColumnsForall` launches with
+`__launch_bounds__(threads, 4)` (128 registers, 8 bytes of stack at Q1D 10); the host keeps the
+loops (CPU results unchanged, all 27 decks identical). Job 49483996, Nsight Systems per call:
+
+| Kernel | main | 55 |
+|---|---|---|
+| Apply3DColumns (TGV OIFS) | 4.47 ms | 2.78 ms (-38 %) |
+| Apply3DColumnsFly (TGV IMEX) | 6.48 ms | 4.36 ms (-33 %) |
+
+The step: TGV OIFS 381.4 -> 352.2 ms (-7.7 %), TGV IMEX 273.7 -> 267.6 ms (-2.2 %; the
+on-the-fly kernel runs once per IMEX step). The launch bound alone (three blocks) gave 4.13 ms
+with spills; by direction alone 3.87 ms; five blocks spill (jobs 49480666, 49482720).
