@@ -257,12 +257,29 @@ private:
     *        collective). Deterministic: a node is free (outflow) only when
     *        its outward normal velocity exceeds 1e-10 of the largest wind on
     *        the boundary, so a no-slip wall (zero wind) is imposed everywhere.
-    *        Only the boundary nodes' wind and the Dirichlet dofs' flags cross
-    *        between device and host (nodal boundary elements). Also sets
+    *        Nodal boundary elements: the test runs on the device and only
+    *        the Dirichlet dofs' flags come to the host. Also sets
     *        imposed_pos_.
     * @param w The wind (the newest velocity).
     */
    void ClassifyBoundary(const mfem::ParGridFunction& w);
+   /**
+    * @brief ClassifyBoundary's flags for nodal boundary elements, on the
+    *        device: flag = 1 at the local vdofs of every boundary node where
+    *        the wind does not leave (collective: the largest wind).
+    * @param w    The wind (an L-vector).
+    * @param flag Local vector, zero on entry.
+    */
+   void FlagBoundaryNodesDevice(const mfem::ParGridFunction& w,
+                                mfem::Vector& flag);
+   /**
+    * @brief ClassifyBoundary's flags for other boundary elements: the wind
+    *        evaluated through each boundary element on the host (collective).
+    * @param w    The wind (an L-vector).
+    * @param flag Local vector, zero on entry.
+    */
+   void FlagBoundaryNodesHost(const mfem::ParGridFunction& w,
+                              mfem::Vector& flag);
    /// Caches the boundary nodes of ClassifyBoundary (bnode_*).
    void CacheBoundaryNodes();
 
@@ -323,7 +340,9 @@ private:
    std::vector<double> bnode_w_; ///< The wind at the nodes (scratch).
    /// bnode_vdofs_ as a device-usable index list (the wind's gather).
    mfem::Array<int> bnode_gather_;
-   mfem::Vector bnode_wd_;    ///< The gathered wind (device, then host).
+   mfem::Vector bnode_nor_;   ///< bnode_normals_ on the device (nodal test).
+   /// The device maximum's workspace (mfem::reduce; pinned host memory).
+   mfem::Array<double> max_workspace_;
    mfem::Array<int> flag_idx_; ///< Local dofs flagged imposed (scratch).
    /// Constant Dirichlet data (BoundaryConditions::DirichletIsConstant) on
    /// the Dirichlet true dofs, projected once per velocity-space sequence

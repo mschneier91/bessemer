@@ -1,5 +1,6 @@
 #include "time/oifs.hpp"
 
+#include "mfem/general/reducers.hpp"
 #include "time/multistep_coeffs.hpp"
 #include "util/profiler.hpp"
 
@@ -50,6 +51,87 @@ void SetFlags(const Array<int>& idx, Vector& flag)
    mfem::forall(idx.Size(), [ = ] MFEM_HOST_DEVICE(int j) { F[I[j]] = 1.0; });
 }
 
+// a * b and a + b rounded as written: nvcc contracts a * b + c into an FMA by
+// default, and the classification must decide every node as the host loop
+// did (the CPU build compiles these lines without contraction).
+MFEM_HOST_DEVICE inline double MulRn(const double a, const double b)
+{
+#if defined(__CUDA_ARCH__)
+   return __dmul_rn(a, b);
+#else
+   return a * b;
+#endif
+}
+
+MFEM_HOST_DEVICE inline double AddRn(const double a, const double b)
+{
+#if defined(__CUDA_ARCH__)
+   return __dadd_rn(a, b);
+#else
+   return a + b;
+#endif
+}
+
+// The wind's gathered value j: G[j] = -1-v reads -W[v], as GetSubVector.
+MFEM_HOST_DEVICE inline double NodeWind(const double* W, const int* G,
+                                        const int j)
+{
+   const int v = G[j];
+   return v >= 0 ? W[v] : -W[-1 - v];
+}
+
+// The largest |w| over the boundary nodes (dim gathered values each), from
+// 0: a maximum, the same in any order.
+double MaxNodeWind(const Vector& w, const Array<int>& vdofs, const int dim,
+                   Array<double>& workspace)
+{
+   const int n = vdofs.Size() / dim;
+   const auto W = w.Read();
+   const auto G = vdofs.Read();
+   double m = 0.0;
+   mfem::reduce(n, m, [ = ] MFEM_HOST_DEVICE(int i, double & r)
+   {
+      double ww = 0.0;
+      for (int d = 0; d < dim; ++d)
+      {
+         const double wd = NodeWind(W, G, i * dim + d);
+         ww = AddRn(ww, MulRn(wd, wd));
+      }
+      r = fmax(r, sqrt(ww));
+   }, MaxReducer<double> {}, true, workspace);
+   return m;
+}
+
+// flag[v] = 1 for the dim local vdofs of each boundary node whose outward
+// normal wind w.n is at most thr |n| (duplicates write the same value).
+void FlagNodes(const Vector& w, const Array<int>& vdofs, const Vector& nor,
+               const int dim, const double thr, Vector& flag)
+{
+   const int n = vdofs.Size() / dim;
+   const auto W = w.Read();
+   const auto G = vdofs.Read();
+   const auto N = nor.Read();
+   auto F = flag.ReadWrite();
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int i)
+   {
+      double wn = 0.0, nn = 0.0;
+      for (int d = 0; d < dim; ++d)
+      {
+         const int j = i * dim + d;
+         wn = AddRn(wn, MulRn(NodeWind(W, G, j), N[j]));
+         nn = AddRn(nn, MulRn(N[j], N[j]));
+      }
+      if (wn <= MulRn(thr, sqrt(nn)))
+      {
+         for (int d = 0; d < dim; ++d)
+         {
+            const int v = G[i * dim + d];
+            F[v >= 0 ? v : -1 - v] = 1.0;
+         }
+      }
+   });
+}
+
 } // namespace oifsbc
 
 OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
@@ -88,7 +170,6 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
       v->UseDevice(true);
    }
    bd_fac_.UseDevice(true);
-   bnode_wd_.UseDevice(true);
    tmp_s_.SetSize(n_s_);
    tmp_s_.UseDevice(true);
    for (Vector* v : {&k1_, &k2_, &k3_, &k4_, &y_})
@@ -290,6 +371,10 @@ void OifsAdvector::CacheBoundaryNodes()
    int* g = bnode_gather_.HostWrite();
    for (std::size_t i = 0; i < bnode_vdofs_.size(); ++i) { g[i] = bnode_vdofs_[i]; }
    bnode_gather_.GetMemory().UseDevice(true);
+   bnode_nor_.SetSize(static_cast<int>(bnode_normals_.size()));
+   double* nh = bnode_nor_.HostWrite();
+   for (std::size_t i = 0; i < bnode_normals_.size(); ++i) { nh[i] = bnode_normals_[i]; }
+   bnode_nor_.UseDevice(true);
    bnode_seq_ = V.GetSequence();
 }
 
@@ -310,22 +395,14 @@ void OifsAdvector::EssentialValues(const Vector& x, Vector& vals) const
    for (std::size_t k = 0; k < ess_ldof_.size(); ++k) { v[k] = xh[ess_ldof_[k]]; }
 }
 
-void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
+void OifsAdvector::FlagBoundaryNodesHost(const ParGridFunction& w,
+      Vector& flag)
 {
    ParFiniteElementSpace& V = spaces_.Velocity();
-   if (bnode_seq_ != V.GetSequence()) { CacheBoundaryNodes(); }
    ParMesh& mesh = *V.GetParMesh();
    const int n_nodes = static_cast<int>(bnode_be_.size());
-   // The wind at every boundary node: a nodal element's value at its node is
-   // that node's dofs (exactly zero on a no-slip wall), gathered on the
-   // device so that only these values come to the host; otherwise evaluated
-   // through the element (on the host).
-   const double* wg = nullptr;
-   if (bnode_nodal_)
-   {
-      w.GetSubVector(bnode_gather_, bnode_wd_); // -1-v reads -w[v], as below
-      wg = bnode_wd_.HostRead();
-   }
+   // The wind at every boundary node, evaluated through its element (on
+   // the host; nodal elements take FlagBoundaryNodesDevice).
    bnode_w_.resize(static_cast<std::size_t>(n_nodes) * dim_);
    double w_max = 0.0;
    {
@@ -334,23 +411,16 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
       for (int i = 0; i < n_nodes; ++i)
       {
          double* wi = &bnode_w_[i * dim_];
-         if (bnode_nodal_)
+         const int be = bnode_be_[i];
+         if (T == nullptr || be != bnode_be_[i - 1])
          {
-            for (int d = 0; d < dim_; ++d) { wi[d] = wg[i * dim_ + d]; }
+            T = mesh.GetBdrElementTransformation(be);
          }
-         else
-         {
-            const int be = bnode_be_[i];
-            if (T == nullptr || be != bnode_be_[i - 1])
-            {
-               T = mesh.GetBdrElementTransformation(be);
-            }
-            const IntegrationPoint& ip =
-               V.GetBE(be)->GetNodes().IntPoint(bnode_k_[i]);
-            T->SetIntPoint(&ip);
-            w.GetVectorValue(*T, ip, wv);
-            for (int d = 0; d < dim_; ++d) { wi[d] = wv(d); }
-         }
+         const IntegrationPoint& ip =
+            V.GetBE(be)->GetNodes().IntPoint(bnode_k_[i]);
+         T->SetIntPoint(&ip);
+         w.GetVectorValue(*T, ip, wv);
+         for (int d = 0; d < dim_; ++d) { wi[d] = wv(d); }
          double ww = 0.0;
          for (int d = 0; d < dim_; ++d) { ww += wi[d] * wi[d]; }
          w_max = std::max(w_max, std::sqrt(ww));
@@ -382,27 +452,50 @@ void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
          }
       }
    }
-   // The flags as a local vector on the device (transient: nothing of it
-   // stays allocated), summed over the ranks sharing a dof -- any rank's
-   // inflow counts -- and read back on the Dirichlet dofs only.
+   // The flagged local dofs as a device list (scratch).
    flag_idx_.SetSize(static_cast<int>(flagged.size()));
    {
       int* fi = flag_idx_.HostWrite();
       for (std::size_t j = 0; j < flagged.size(); ++j) { fi[j] = flagged[j]; }
    }
    flag_idx_.GetMemory().UseDevice(true);
+   oifsbc::SetFlags(flag_idx_, flag);
+}
+
+void OifsAdvector::FlagBoundaryNodesDevice(const ParGridFunction& w,
+      Vector& flag)
+{
+   // The host path's test on the same values, node for node: the wind read
+   // through the gather inside the kernels, its largest |w| reduced on the
+   // device; nothing comes to the host.
+   double w_max = oifsbc::MaxNodeWind(w, bnode_gather_, dim_, max_workspace_);
+   MPI_Allreduce(MPI_IN_PLACE, &w_max, 1, MPI_DOUBLE, MPI_MAX,
+                 spaces_.Velocity().GetComm());
+   oifsbc::FlagNodes(w, bnode_gather_, bnode_nor_, dim_, 1e-10 * w_max, flag);
+}
+
+void OifsAdvector::ClassifyBoundary(const ParGridFunction& w)
+{
+   ParFiniteElementSpace& V = spaces_.Velocity();
+   if (bnode_seq_ != V.GetSequence()) { CacheBoundaryNodes(); }
+   // The flags as a local vector on the device (transient: nothing of it
+   // stays allocated), summed over the ranks sharing a dof -- any rank's
+   // inflow counts -- and read back on the Dirichlet dofs only.
    const Array<int>& ess = bc_.EssentialTrueDofs();
    Vector fe;
    fe.UseDevice(true);
    {
+      INCNS_PROFILE("oifs::classify_flags");
       ParGridFunction flag(&V);
       flag = 0.0;
-      oifsbc::SetFlags(flag_idx_, flag);
+      if (bnode_nodal_) { FlagBoundaryNodesDevice(w, flag); }
+      else { FlagBoundaryNodesHost(w, flag); }
       Vector ft(V.GetTrueVSize());
       ft.UseDevice(true);
       flag.ParallelAssemble(ft);
       ft.GetSubVector(ess, fe);
    }
+   INCNS_PROFILE("oifs::classify_lists");
    const double* f = fe.HostRead();
    const int* e = ess.HostRead();
    std::vector<int> list, pos;
