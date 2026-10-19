@@ -5,6 +5,8 @@
 #include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
+#include <type_traits>
+
 
 // The kernels below must be compiled by nvcc in a CUDA build, or they run on
 // the host while the data is on the device. See src/CMakeLists.txt's nvcc
@@ -22,6 +24,88 @@ using namespace mfem;
 // enclosing function has internal linkage.
 namespace oifsconv
 {
+
+// The column kernels' launch (Apply3DColumns, Apply3DColumnsFly). On a device
+// with __launch_bounds__(threads, 4): four blocks per SM, which caps the
+// registers at 128 (the kernels hold three Q1D columns of registers, see
+// WindDotGrad; at Q1D 10 they take 128 with 8 bytes of stack). MFEM's
+// forall_2D bounds only the threads: two blocks per SM at 140 registers.
+// Nsight Compute (job 49482720, TGV Q6 at ~25M DOFs, one H100), with
+// WindDotGrad: 3.87 -> 3.37 ms per Apply3DColumns, 5.31 -> 5.19 ms per
+// Apply3DColumnsFly; five blocks (96 registers) spill: 3.64 ms. On the host:
+// forall_2D.
+#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
+template <int MAXT, typename BODY>
+__global__ void __launch_bounds__(MAXT, 4)
+ColumnsKernel(const int N, BODY body)
+{
+   for (int k = blockIdx.x; k < N; k += gridDim.x) { body(k); }
+}
+#endif
+
+template <int MAXT, typename BODY>
+void ColumnsForall(const int N, const int X, const int Y, BODY&& body)
+{
+#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
+   if (N > 0 && Device::Allows(Backend::CUDA_MASK))
+   {
+      using K = typename std::decay<BODY>::type;
+      ColumnsKernel<MAXT, K> <<< N, dim3(X, Y, 1)>>>(N, body);
+      MFEM_GPU_CHECK(cudaGetLastError());
+      return;
+   }
+#endif
+   mfem::forall_2D<MAXT>(N, X, Y, body);
+}
+
+// On a device, the column kernels' r = sum_d sD[d] (d u_c / d xi_d) at the
+// points, one direction at a time: component c's dofs loaded into a, its d-th
+// reference derivative into b (MFEM's Contract3d with G along d, the
+// contraction GradComponent does), then accumulated, ((t0 + t1) + t2) as the
+// kernels' expression sums them. Three Q1D columns of registers (a, b, r)
+// where LoadComponent, GradComponent and the dot product hold eight (g0, g1,
+// r0): 190 -> 140 registers at Q1D 10, and 5.30 -> 3.87 ms per Apply3DColumns
+// (Nsight Compute, job 49482720). The host keeps the kernels' own loops: the
+// CPU build fuses a * b + c by its loop shapes (change 54).
+template <int MQ1, typename TX>
+MFEM_HOST_DEVICE inline void WindDotGrad(
+   const int e, const int d1d, const int q1d, const int c, const TX& X,
+   real_t (&smem)[MQ1][MQ1], const real_t (*B)[MQ1], const real_t (*G)[MQ1],
+   const real_t (&sD)[3][MQ1][MQ1][MQ1],
+   kernels::internal::v_regs3d_t<1, MQ1>& a,
+   kernels::internal::v_regs3d_t<1, MQ1>& b,
+   kernels::internal::v_regs3d_t<1, MQ1>& r)
+{
+   MFEM_UNROLL(3)
+   for (int d = 0; d < 3; ++d)
+   {
+      for (int dz = 0; dz < d1d; ++dz)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(dy, y, d1d)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(dx, x, d1d)
+            {
+               a[0][dz][dy][dx] = X(dx, dy, dz, c, e);
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      kernels::internal::Contract3d<false>(d1d, q1d, smem, d == 0 ? G : B,
+                                           d == 1 ? G : B, d == 2 ? G : B,
+                                           a[0], b[0]);
+      for (int qz = 0; qz < q1d; ++qz)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(qy, y, q1d)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(qx, x, q1d)
+            {
+               const real_t t = sD[d][qz][qy][qx] * b[0][qz][qy][qx];
+               r[0][qz][qy][qx] = (d == 0) ? t : r[0][qz][qy][qx] + t;
+            }
+         }
+      }
+   }
+}
 
 // op(q, i, e) = W(q) (adj(J) u)_i at the points of element e: MFEM's
 // PAConvectionSetup3D with alpha = 1, written into one wind's slice of op_.
@@ -276,8 +360,9 @@ void Apply3D(const int NE, const int nw, const real_t w0, const real_t w1,
 // column, looping over z (the layout of MFEM's kernels::internal): the
 // combined wind stays in shared memory (3 Q1D^3 values, 32 KB at Q1D 11),
 // each component's gradient and the transposed interpolation go through
-// registers one component at a time (operators/component_kernels.hpp). The
-// same terms as Apply3D, contracted in the same order.
+// registers one component at a time (operators/component_kernels.hpp; on a
+// device one direction at a time, WindDotGrad, launched by ColumnsForall).
+// The same terms as Apply3D, contracted in the same order.
 template <int D1D, int Q1D>
 void Apply3DColumns(const int NE, const int nw, const real_t w0,
                     const real_t w1, const real_t w2, const Array<real_t>& b,
@@ -289,13 +374,12 @@ void Apply3DColumns(const int NE, const int nw, const real_t w0,
    const auto op = Reshape(op_.Read(), Q1D, Q1D, Q1D, 3, NE, 3);
    const auto x = Reshape(x_.Read(), D1D, D1D, D1D, 3, NE);
    auto y = Reshape(y_.Write(), D1D, D1D, D1D, 3, NE);
-   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   ColumnsForall<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
    {
       constexpr int MQ1 = Q1D;
       MFEM_SHARED real_t sD[3][MQ1][MQ1][MQ1];
       MFEM_SHARED real_t smem[MQ1][MQ1];
       MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], sBt[MQ1][MQ1];
-      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
       ki::v_regs3d_t<1, MQ1> r0, r1;
       ki::LoadMatrix(D1D, Q1D, B, sB);
       ki::LoadMatrix(D1D, Q1D, G, sG);
@@ -320,6 +404,11 @@ void Apply3DColumns(const int NE, const int nw, const real_t w0,
       MFEM_UNROLL(3)
       for (int c = 0; c < 3; ++c)
       {
+#if defined(__CUDA_ARCH__)
+         ki::v_regs3d_t<1, MQ1> ra, rb;
+         WindDotGrad<MQ1>(e, D1D, Q1D, c, x, smem, sB, sG, sD, ra, rb, r0);
+#else
+         ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
          kernels3d::LoadComponent(e, D1D, c, x, g0);
          kernels3d::GradComponent<false>(D1D, Q1D, smem, sB, sG, g0, g1);
          for (int qz = 0; qz < Q1D; ++qz)
@@ -335,6 +424,7 @@ void Apply3DColumns(const int NE, const int nw, const real_t w0,
                }
             }
          }
+#endif
          MFEM_SYNC_THREAD;
          ki::EvalTranspose3d(D1D, Q1D, smem, sBt, r0, r1);
          for (int dz = 0; dz < D1D; ++dz)
@@ -405,7 +495,7 @@ void Apply3DColumnsFly(const int NE, const int nw, const real_t w0,
    const real_t* U2 = (nw > 2) ? u2_.Read() : U0;
    const auto x = Reshape(x_.Read(), D1D, D1D, D1D, 3, NE);
    auto y = Reshape(y_.Write(), D1D, D1D, D1D, 3, NE);
-   mfem::forall_2D<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
+   ColumnsForall<Q1D* Q1D>(NE, Q1D, Q1D, [ = ] MFEM_HOST_DEVICE(int e)
    {
       constexpr int MQ1 = Q1D;
       MFEM_SHARED real_t sD[3][MQ1][MQ1][MQ1];
@@ -413,7 +503,6 @@ void Apply3DColumnsFly(const int NE, const int nw, const real_t w0,
       MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], sBt[MQ1][MQ1];
       MFEM_SHARED real_t sX[3][2][2][2];
       MFEM_SHARED real_t sNB[MQ1][2], sNG[MQ1][2];
-      ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
       ki::v_regs3d_t<1, MQ1> r0, r1, ru, rv, rw;
       ki::LoadMatrix(D1D, Q1D, B, sB);
       ki::LoadMatrix(D1D, Q1D, G, sG);
@@ -498,6 +587,11 @@ void Apply3DColumnsFly(const int NE, const int nw, const real_t w0,
       MFEM_UNROLL(3)
       for (int c = 0; c < 3; ++c)
       {
+#if defined(__CUDA_ARCH__)
+         ki::v_regs3d_t<1, MQ1> ra, rb;
+         WindDotGrad<MQ1>(e, D1D, Q1D, c, x, smem, sB, sG, sD, ra, rb, r0);
+#else
+         ki::vd_regs3d_t<1, 3, MQ1> g0, g1;
          kernels3d::LoadComponent(e, D1D, c, x, g0);
          kernels3d::GradComponent<false>(D1D, Q1D, smem, sB, sG, g0, g1);
          for (int qz = 0; qz < Q1D; ++qz)
@@ -513,6 +607,7 @@ void Apply3DColumnsFly(const int NE, const int nw, const real_t w0,
                }
             }
          }
+#endif
          MFEM_SYNC_THREAD;
          ki::EvalTranspose3d(D1D, Q1D, smem, sBt, r0, r1);
          for (int dz = 0; dz < D1D; ++dz)
