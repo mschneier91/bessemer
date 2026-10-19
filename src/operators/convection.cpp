@@ -64,48 +64,12 @@ void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
    ddn_true_.UseDevice(true);
 }
 
-void Convection::EnableSubgrid(const SubgridOptions& opts)
-{
-   MFEM_VERIFY(!subgrid_, "convection: subgrid model already enabled");
-   MFEM_VERIFY(opts.Enabled(), "convection: no subgrid model selected");
-   subgrid_ = std::make_unique<SubgridStress>(spaces_, rules_, opts);
-}
-
 void Convection::Mult(const Vector& u, Vector& y) const
 {
    form_->Mult(u, y);
-   if (ddn_form_)
-   {
-      MultDirectionalDoNothing(u, ddn_true_);
-      y += ddn_true_;
-   }
-   if (subgrid_)
-   {
-      // A local: the model keeps no per-step state (its header).
-      Vector sgs;
-      MultSubgrid(u, sgs);
-      y += sgs;
-   }
-}
-
-void Convection::MultSubgrid(const Vector& u, Vector& y) const
-{
-   MFEM_VERIFY(subgrid_, "convection: subgrid model not enabled");
-   subgrid_->Mult(u, y);
-}
-
-void Convection::MultExplicitTerms(const Vector& u, Vector& y) const
-{
-   MFEM_VERIFY(ddn_form_ || subgrid_,
-               "convection: no explicit term besides N is enabled");
-   if (ddn_form_) { MultDirectionalDoNothing(u, y); }
-   if (subgrid_)
-   {
-      if (!ddn_form_) { MultSubgrid(u, y); return; }
-      Vector sgs;
-      MultSubgrid(u, sgs);
-      y += sgs;
-   }
+   if (!ddn_form_) { return; }
+   MultDirectionalDoNothing(u, ddn_true_);
+   y += ddn_true_;
 }
 
 void Convection::MultDirectionalDoNothing(const Vector& u, Vector& y) const

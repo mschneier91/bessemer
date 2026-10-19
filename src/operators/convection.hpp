@@ -4,7 +4,6 @@
  */
 #pragma once
 
-#include "operators/subgrid_stress.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
@@ -163,37 +162,6 @@ public:
    /// @return True when Mult includes the directional do-nothing term.
    bool DirectionalDoNothing() const { return ddn_form_ != nullptr; }
 
-   /**
-    * @brief Add the subgrid stress term of large-eddy simulation
-    *        (SubgridStress): Mult then returns @f$ N(u) + (2\nu_t(u) S(u),
-    *        S(\phi)) @f$ (plus the outflow term), so the IMEX scheme
-    *        extrapolates the model exactly like N. Call once, before the
-    *        first Mult.
-    * @param opts The model (SubgridOptions::Enabled() must hold).
-    */
-   void EnableSubgrid(const SubgridOptions& opts);
-
-   /**
-    * @brief The subgrid stress term alone, LHS-signed (SubgridStress::Mult).
-    * @pre EnableSubgrid() was called.
-    * @param u True-dof velocity (input).
-    * @param y True-dof result (output, resized as needed).
-    */
-   void MultSubgrid(const mfem::Vector& u, mfem::Vector& y) const;
-
-   /**
-    * @brief The explicit terms other than N: the directional do-nothing
-    *        term and the subgrid stress, whichever are enabled (OIFS keeps N
-    *        in its substeps and extrapolates only these in the BDF step).
-    * @pre At least one of them is enabled.
-    * @param u True-dof velocity (input).
-    * @param y True-dof result (output, resized as needed).
-    */
-   void MultExplicitTerms(const mfem::Vector& u, mfem::Vector& y) const;
-
-   /// @return The subgrid model, or null when none is enabled.
-   const SubgridStress* Subgrid() const { return subgrid_.get(); }
-
 private:
    MixedSpaces& spaces_;   ///< Mixed spaces (borrowed).
    const RuleBook& rules_; ///< Quadrature source (borrowed).
@@ -209,8 +177,6 @@ private:
    std::unique_ptr<mfem::ParLinearForm> ddn_form_;
    /// The term on true dofs (Mult scratch).
    mutable mfem::Vector ddn_true_;
-   /// The subgrid stress of large-eddy simulation (null = none).
-   std::unique_ptr<SubgridStress> subgrid_;
 };
 
 } // namespace incns
