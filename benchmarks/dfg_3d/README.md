@@ -9,7 +9,7 @@ the outflow is do-nothing.
 |---|---|
 | 3D-1Z | steady, U_m = 0.45 (Re 20). Reference c_D = 6.18533, c_L = 0.009401 (featflow.de) |
 | 3D-3Z | U_m(t) = 2.25 sin(πt/8), t ∈ [0, 8]. FeatFlow's finest: c_D,max = 3.2978, c_L,min = −0.010999; histories in `reference/featflow_3d3z.csv` |
-| Mesh | the 2D DFG mesh extruded in z (`mesh.dim: 3` with `geometry: cylinder_channel`), curved cylinder of the velocity order |
+| Mesh | the 2D DFG mesh extruded in z (`mesh.dim: 3` with `geometry: cylinder_channel`), curved cylinder of the velocity order. Both decks Q6/Q5 with AMR since 2026-10-19 (the defaults): an event every time unit for t in [1, 5], relative marking θ = 0.5, at most 2,500 elements |
 | Compare | `python3 plot.py 1z <summary.json>`, `python3 plot.py 3z <history.csv>` |
 
 Coefficients: c = 2F / (ρ Ū² D H). Ū = 0.2 for 3D-1Z, and for 3D-3Z Ū = 1, the largest

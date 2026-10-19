@@ -7,9 +7,9 @@ decks.
 
 | Benchmark | Tests | Reference | Decks | Compute |
 |---|---|---|---|---|
-| [tgv_re1600/](tgv_re1600/) | transition to turbulence in a periodic box: E(t), dissipation rate | spectral DNS on 512³ (high-order workshop case C3.5) | 16³, 32³, 64³ elements | 16³ and 32³ fit the desktop limits; 64³ needs GPU/many ranks |
-| [channel/](channel/) | wall-bounded turbulence: U⁺(y⁺), Reynolds stresses, Re_τ | Moser, Kim & Mansour 1999, Re_τ 178 and 392 | Re_τ 180, 395 | 180 fits the desktop limits (slow); 395 needs GPU/many ranks |
-| [dfg_3d/](dfg_3d/) | laminar 3D flow past a cylinder: drag, lift | FeatFlow (Bayraktar, Mierka & Turek 2012) | 3D-1Z (steady, Re 20), 3D-3Z (unsteady) | desktop |
+| [tgv_re1600/](tgv_re1600/) | transition to turbulence in a periodic box: E(t), dissipation rate | spectral DNS on 512³ (high-order workshop case C3.5) | 21³, 32³, 42³ Q6/Q5 elements (126 to 252 nodes per direction) | GPU (one H100) |
+| [channel/](channel/) | wall-bounded turbulence: U⁺(y⁺), Reynolds stresses, Re_τ | Moser, Kim & Mansour 1999, Re_τ 178 and 392 | Re_τ 180, 395 (and 550), Q6/Q5 | GPU; 180 fits the desktop limits (slow) |
+| [dfg_3d/](dfg_3d/) | laminar 3D flow past a cylinder: drag, lift | FeatFlow (Bayraktar, Mierka & Turek 2012) | 3D-1Z (steady, Re 20), 3D-3Z (unsteady); Q6/Q5 with AMR | desktop or GPU |
 | [sphere_re300/](sphere_re300/) | 3D wake and forces with AMR | Johnson & Patel 1999 | needs a hex mesh file first | — |
 
 **Status (2026-10-17):** tgv_re1600, channel (Re_τ 180) and dfg_3d have been run on

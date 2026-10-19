@@ -369,7 +369,7 @@ TEST(BenchmarkSetup, B1_EveryBenchmarkDeckLoads)
       EXPECT_EQ(p.equation, incns::Equation::NavierStokes) << e.path();
       ++decks;
    }
-   // At least the decks named below (tgv n16/n32/n64, channel 180/395, dfg
+   // At least the decks named below (tgv n21/n32/n42, channel 180/395, dfg
    // 3d-1z/3z); benchmarks add decks over time, so not an exact count.
    EXPECT_GE(decks, 7);
    const incns::Parameters ch = incns::Parameters::LoadYAML(
@@ -378,7 +378,7 @@ TEST(BenchmarkSetup, B1_EveryBenchmarkDeckLoads)
    EXPECT_NEAR(1.0 / ch.nu, 178.12, 1e-6); // Re_tau = 1 / nu at u_tau = delta = 1
    EXPECT_NEAR(ch.reference.re_tau, 178.12, 1e-12);
    const incns::Parameters tg = incns::Parameters::LoadYAML(
-                                   (root / "tgv_re1600" / "tgv_re1600_n16.yaml").string());
+                                   (root / "tgv_re1600" / "tgv_re1600_n21.yaml").string());
    EXPECT_NEAR(1.0 / tg.nu, 1600.0, 1e-9);
    EXPECT_TRUE(tg.output.diagnostics);
    EXPECT_FALSE(tg.output.enabled); // no field output for the energy history

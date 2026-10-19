@@ -8,7 +8,8 @@
 #
 # Resolution matched in wall units to channel_retau180.yaml: dx+ ~ 15.8,
 # dz+ ~ 7.9, first velocity node at y+ ~ 2, centre-line nodes ~ 12.5+.
-# 36 x 48 x 36 = 62,208 elements (Q3: 108 x 144 x 108 velocity nodes) in a
+# 18 x 24 x 18 = 7,776 Q6/Q5 elements (108 x 144 x 108 velocity nodes, as the
+# Q3/Q2 deck of 36 x 48 x 36 had; human 2026-10-19: the latest defaults) in a
 # pi x 2 x pi/2 box: 1708 x 854 wall units, the usual smaller box for
 # one-point statistics (Lee & Moser used 8 pi x 2 x 3 pi), and larger in wall
 # units than the Re_tau 180 deck's. OIFS (BDF3, collocated mass) at CFL 2,
@@ -24,12 +25,12 @@ physics:
   nu: 1.83993994e-3         # 1 / 543.496
 
 discretization:
-  order_u: 3
-  order_p: 2
+  order_u: 6
+  order_p: 5
 
 mesh:
   dim: 3
-  elements: [36, 48, 36]
+  elements: [18, 24, 18]
   lengths: [3.141592653589793, 2.0, 1.5707963267948966]
   periodic: [true, false, true]
   stretch: [none, tanh, none]
@@ -49,7 +50,7 @@ time:
   step_control: cfl
   cfl_target: 2.0
   convection: oifs
-  oifs_cfl: 1.5                  # substep CFL (default 0.5): no measurable cost in accuracy here
+  oifs_cfl: 1.5                  # substep CFL (the default)
 
 boundary_conditions:
   - {select: [ymin, ymax], type: no_slip}
@@ -83,8 +84,8 @@ solver:
   # flow's checks (TGV 32^3 dissipation within 1.7e-4 of the reference peak;
   # channel Re_tau 180 statistics over t = 60 to 120 within the sampling
   # noise) and is the fastest measured; instantaneous forces (DFG) want 1e-6.
-  # A restart from a checkpoint matches an uninterrupted run to the solver
-  # tolerance, not bitwise: the projection's solutions are not checkpointed.
+  # A checkpoint holds the projection's solutions too: a restart continues the
+  # uninterrupted run (bitwise on the CPU; GPU runs differ in their iterations).
   tolerance_reference: step
   initial_guess: project
   projection_k: 8

@@ -8,7 +8,7 @@ down into turbulence; the dissipation rate peaks near t = 9.
 | | |
 |---|---|
 | Reference | `reference/spectral_re1600_512.csv`: pseudo-spectral DNS on 512³: E(t), ε(t) = −dE/dt, enstrophy. ε_max = 0.01286 at t = 8.97 |
-| Decks | `tgv_re1600_n16.yaml`, `_n32.yaml`, `_n64.yaml`: Q3/Q2, n³ elements; IMEX convection (BDF2) at CFL 0.25 |
+| Decks | `tgv_re1600_n21.yaml`, `_n32.yaml`, `_n42.yaml`: Q6/Q5, n³ elements (126, 192, 252 velocity nodes per direction); OIFS (BDF3) at CFL 2, the defaults (2026-10-19; the Q3/Q2 IMEX decks of the older results below were `_n16`, `_n32`, `_n64` at CFL 0.25) |
 | Output | `<path>/tgv_diagnostics.csv` every step: t, ½∫\|u\|², ν∫\|∇u\|², ‖∇·u‖ |
 | Compare | `python3 plot.py tgv_n32/tgv_diagnostics.csv [more runs]`: ε_max and its time, max \|ε − ε_ref\| over the run |
 

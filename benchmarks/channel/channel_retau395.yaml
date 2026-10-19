@@ -13,9 +13,10 @@
 # checkpoint; a restart continues the averages.
 #
 # Resolution: dx+ ~ 17, dz+ ~ 8.6 (the MKM 395 domain, 2 pi x 2 x pi);
-# tanh wall clustering, first velocity node at y+ ~ 2.
-# 48 x 30 x 48 = 69,120 elements: beyond the desktop limits (AGENTS.md
-# rule 3) -- a GPU or many-rank run; ask the human first.
+# tanh wall clustering. 24 x 15 x 24 = 8,640 Q6/Q5 elements (144 x 90 x 144
+# velocity nodes, as the Q3/Q2 deck of 48 x 30 x 48 had; human 2026-10-19: the
+# benchmark decks at the latest defaults). A GPU or many-rank run (AGENTS.md
+# rule 3); ask the human first.
 # OIFS (BDF3, collocated mass) at CFL 2.
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/channel/channel_retau395.yaml
@@ -27,12 +28,12 @@ physics:
   nu: 2.54945951458e-3       # 1 / 392.24
 
 discretization:
-  order_u: 3
-  order_p: 2
+  order_u: 6
+  order_p: 5
 
 mesh:
   dim: 3
-  elements: [48, 30, 48]
+  elements: [24, 15, 24]
   lengths: [6.283185307179586, 2.0, 3.141592653589793]
   periodic: [true, false, true]
   stretch: [none, tanh, none]
@@ -52,7 +53,7 @@ time:
   step_control: cfl
   cfl_target: 2.0
   convection: oifs
-  oifs_cfl: 1.5                  # substep CFL (default 0.5): no measurable cost in accuracy here
+  oifs_cfl: 1.5                  # substep CFL (the default)
 
 boundary_conditions:
   - {select: [ymin, ymax], type: no_slip}
@@ -86,8 +87,8 @@ solver:
   # flow's checks (TGV 32^3 dissipation within 1.7e-4 of the reference peak;
   # channel Re_tau 180 statistics over t = 60 to 120 within the sampling
   # noise) and is the fastest measured; instantaneous forces (DFG) want 1e-6.
-  # A restart from a checkpoint matches an uninterrupted run to the solver
-  # tolerance, not bitwise: the projection's solutions are not checkpointed.
+  # A checkpoint holds the projection's solutions too: a restart continues the
+  # uninterrupted run (bitwise on the CPU; GPU runs differ in their iterations).
   tolerance_reference: step
   initial_guess: project
   projection_k: 8

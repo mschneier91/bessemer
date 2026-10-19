@@ -7,8 +7,10 @@
 # Bayraktar, Mierka & Turek 2012): c_D,max = 3.2978, c_L,min = -0.010999, and
 # their full histories in benchmarks/dfg_3d/reference/featflow_3d3z.csv.
 #
-# OIFS (BDF3, collocated mass) at CFL 1; c_D and c_L every step in the
-# history file for plot.py.
+# Q6/Q5 (the cylinder's geometry order follows) with AMR (below), at the
+# defaults (human 2026-10-19: the benchmark decks at the latest defaults, AMR
+# for the cylinder). OIFS (BDF3, collocated mass) at CFL 1; c_D and c_L every
+# step in the history file for plot.py.
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/dfg_3d/dfg_3d_3z.yaml
 #   python3 benchmarks/dfg_3d/plot.py 3z dfg_3d_3z/dfg_3d_3z_history.csv
@@ -19,8 +21,8 @@ physics:
   nu: 1.0e-3
 
 discretization:
-  order_u: 3
-  order_p: 2
+  order_u: 6
+  order_p: 5
 
 mesh:
   dim: 3
@@ -39,6 +41,21 @@ time:
   step_control: cfl
   cfl_target: 1.0
   convection: oifs
+
+amr:
+  # Adaptive refinement (human 2026-10-19: AMR for the cylinder): an event every
+  # time unit for t in [1, 5], marking where the indicator >= 0.5 of its max, at
+  # most 2,500 elements, one hanging-node level; the first event refines the
+  # wake and cylinder region (896 -> ~2,500 elements, 2026-10-17), later events
+  # change little. Hanging nodes on the curved cylinder.
+  enabled: true
+  every_time: 1.0
+  start_time: 1.0
+  end_time: 5.0
+  threshold_mode: relative
+  theta: 0.5
+  max_elements: 2500
+  nc_limit: 1
 
 boundary_conditions:
   - {select: [inflow], type: velocity, profile: parabolic, u_max: 2.25, height: 0.41,

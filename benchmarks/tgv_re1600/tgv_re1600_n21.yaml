@@ -4,16 +4,15 @@
 # turbulence; the dissipation rate peaks near t = 9 (spectral DNS on 512^3:
 # eps_max = 0.01286 at t = 8.97, benchmarks/tgv_re1600/reference).
 #
-# Resolution: 16^3 Q3/Q2 elements (48 velocity nodes per direction).
-# 4 MPI ranks on a desktop (within the default limits; long: hours).
-# IMEX convection (human 2026-10-12: IMEX, not OIFS, for this case) at
-# CFL 0.25 (human 2026-10-13). NOT 0.5: at this Reynolds number BDF2 with
-# explicit convection is unstable there -- the kinetic energy RISES from
-# t ~ 1.3 at 32^3 and t ~ 0.7 at 64^3, and the run carries on, noisy, without
-# aborting. At 0.25 the energy never increases (README, "Time step").
+# Resolution: 21^3 Q6/Q5 elements (126 velocity nodes per direction), at the
+# defaults (human 2026-10-19: the benchmark decks at the latest defaults, not
+# Q3/Q2): OIFS (BDF3, collocated mass) at CFL 2, substeps at CFL 1.5, grad-div
+# gamma = 6 h_K / k_u. The ladder: tgv_re1600_n21, _n32, _n42 (126, 192, 252
+# nodes). A GPU run (one H100; AGENTS.md rule 3 on a desktop). The Q3/Q2 IMEX
+# history of this case (CFL 0.25 against BDF2's instability): README.
 #
-#   mpirun -np 4 build/cpu/apps/run_case benchmarks/tgv_re1600/tgv_re1600_n16.yaml
-#   python3 benchmarks/tgv_re1600/plot.py tgv_n16/tgv_diagnostics.csv
+#   INCNS_DEVICE=cuda mpirun -np 1 build/cuda/apps/run_case benchmarks/tgv_re1600/tgv_re1600_n21.yaml
+#   python3 benchmarks/tgv_re1600/plot.py tgv_n21/tgv_diagnostics.csv
 
 equation: navier_stokes
 
@@ -21,12 +20,12 @@ physics:
   nu: 6.25e-4
 
 discretization:
-  order_u: 3
-  order_p: 2
+  order_u: 6
+  order_p: 5
 
 mesh:
   dim: 3
-  elements: [16, 16, 16]
+  elements: [21, 21, 21]
   lengths: [6.283185307179586, 6.283185307179586, 6.283185307179586]
   periodic: [true, true, true]
 
@@ -36,11 +35,11 @@ time:
   dt: 0.005                    # the first step; CFL control after it
   t_final: 20
   step_control: cfl
-  cfl_target: 0.25
-  convection: imex
+  cfl_target: 2
+  convection: oifs
 
 output:
-  path: tgv_n16
+  path: tgv_n21
   name: tgv
   diagnostics: true            # E(t) and eps(t) for plot.py, every step
   interval: 1
@@ -49,10 +48,10 @@ output:
 
 checkpoint:
   enabled: true
-  path: tgv_n16/chk
-  # Every 1000 steps: a checkpoint holds the solvers' guess state too (up to
-  # 17 system-sized vectors more), ~1.7 s at 64^3 (job 49276194).
-  interval: 1000
+  path: tgv_n21/chk
+  # Every 250 steps (~800 to t = 20 at 32^3): a checkpoint holds the solvers'
+  # guess state too (up to 17 system-sized vectors more).
+  interval: 250
 
 solver:
   # The fast configuration (docs/throughput.md, 2026-10-15): the initial guess
@@ -61,8 +60,8 @@ solver:
   # flow's checks (TGV 32^3 dissipation within 1.7e-4 of the reference peak;
   # channel Re_tau 180 statistics over t = 60 to 120 within the sampling
   # noise) and is the fastest measured; instantaneous forces (DFG) want 1e-6.
-  # A restart from a checkpoint matches an uninterrupted run to the solver
-  # tolerance, not bitwise: the projection's solutions are not checkpointed.
+  # A checkpoint holds the projection's solutions too: a restart continues the
+  # uninterrupted run (bitwise on the CPU; GPU runs differ in their iterations).
   tolerance_reference: step
   initial_guess: project
   projection_k: 8
