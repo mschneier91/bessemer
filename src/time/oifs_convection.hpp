@@ -118,6 +118,30 @@ public:
     */
    void SetChunk(int elements);
 
+   /**
+    * @brief MultSelf on the given local elements only (call once, before
+    *        MultSelf; no Mult or SetWind afterwards): the result is then
+    *        exact at every dof all of whose elements are given -- the same
+    *        values per element, summed in ElementRestriction::MultTranspose's
+    *        order -- and partial elsewhere. OIFS's wall nodes
+    *        (Convection::RestrictToTrueDofs).
+    * @param elems Local elements, sorted, each once (ElementsTouching()).
+    */
+   void RestrictToElements(const mfem::Array<int>& elems);
+
+   /**
+    * @brief The local elements holding a local copy of any of the given true
+    *        dofs (collective). On a conforming mesh the prolongation copies a
+    *        true dof to each of its local dofs, so these are every element
+    *        whose values reach those true dofs.
+    * @param vfes  Velocity space.
+    * @param tdofs True vdofs.
+    * @return The elements, sorted.
+    */
+   static mfem::Array<int> ElementsTouching(const mfem::ParFiniteElementSpace&
+         vfes,
+         const mfem::Array<int>& tdofs);
+
 private:
    /// jchunk_ := the Jacobians at the points of elements [e0, e0 + n) from
    /// their nodes (curved elements, Columns()).
@@ -176,6 +200,12 @@ private:
    mfem::Vector xe_; ///< Input, element vector (scratch).
    mfem::Vector ye_; ///< Output, element vector (scratch).
    mfem::Vector yl_; ///< Output, local dofs (scratch).
+   /// RestrictToElements: MultSelf on ne_ of the elements (subset_), their
+   /// gather map (gather_ points to it), and per local scalar dof its
+   /// (element, node) entries s nd + d in MultTranspose's order (CSR:
+   /// sub_off_, sub_idx_). xn_ / xnodes_ then hold the subset's blocks.
+   bool subset_ = false;
+   mfem::Array<int> sub_gather_, sub_off_, sub_idx_;
 };
 
 } // namespace incns

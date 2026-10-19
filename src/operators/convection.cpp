@@ -107,6 +107,17 @@ void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
    ddn_true_.UseDevice(true);
 }
 
+bool Convection::RestrictToTrueDofs(const Array<int>& tdofs)
+{
+   ParFiniteElementSpace& V = spaces_.Velocity();
+   // Hanging nodes: the prolongation spreads a true dof over constrained
+   // local dofs with weights of either sign; keep the whole mesh there. The
+   // same choice on every rank (the mesh's type), so the collective holds.
+   if (!fly_ || V.Nonconforming()) { return false; }
+   fly_->RestrictToElements(OifsConvection::ElementsTouching(V, tdofs));
+   return true;
+}
+
 void Convection::Mult(const Vector& u, Vector& y) const
 {
    MFEM_VERIFY(fly_ || form_, "convection: built without the volume term "

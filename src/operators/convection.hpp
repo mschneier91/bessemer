@@ -176,6 +176,18 @@ public:
     */
    void MultDirectionalDoNothing(const mfem::Vector& u, mfem::Vector& y) const;
 
+   /**
+    * @brief Mult's volume term only on the elements that hold a local copy
+    *        of the given true dofs (collective; call once): Mult is then
+    *        exact at those true dofs, bit for bit, and partial elsewhere, for
+    *        a caller that reads nothing else (OIFS's wall nodes). Only the
+    *        OIFS kernel's path (orders 6 and 7) on a conforming mesh; anywhere
+    *        else nothing changes.
+    * @param tdofs True vdofs.
+    * @return Whether Mult was restricted.
+    */
+   bool RestrictToTrueDofs(const mfem::Array<int>& tdofs);
+
    /// @return True when Mult includes the directional do-nothing term.
    bool DirectionalDoNothing() const { return ddn_form_ != nullptr; }
 

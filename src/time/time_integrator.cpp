@@ -144,6 +144,13 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
                                              scratch_.get(),
                                              Trap().Blocks().MassDiagonalInverse(),
                                              opts_.oifs_on_the_fly);
+      // The wall nodes' convection (OifsBoundaryValues, the starter) is read
+      // at the Dirichlet dofs only, through a diagonal mass: from the elements
+      // that touch them (the same values there; conforming meshes).
+      if (oifs_walls_ && oifs_->MassIsDiagonal())
+      {
+         oifs_conv_->RestrictToTrueDofs(bc_.EssentialTrueDofs());
+      }
    }
 
    if (opts_.adaptive)

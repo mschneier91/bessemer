@@ -745,6 +745,47 @@ void Values3DColumns(const int NE, const Array<real_t>& b, const Vector& ue_,
    });
 }
 
+// ElementRestriction::Mult (lexicographic, 3 components byNODES) on a subset
+// of the elements: xe(d, c, s) = x(gather[s nd + d] + ndofs c).
+void GatherSubset(const Array<int>& gather, const int nd, const int ndofs,
+                  const Vector& x, Vector& xe)
+{
+   const int n = gather.Size();
+   const auto G = gather.Read();
+   const auto X = x.Read();
+   auto Y = xe.Write();
+   mfem::forall(3 * n, [ = ] MFEM_HOST_DEVICE(int k)
+   {
+      const int c = k / n, j = k - c * n;
+      const int s = j / nd, d = j - s * nd;
+      Y[d + nd * (c + 3 * s)] = X[G[j] + ndofs * c];
+   });
+}
+
+// ElementRestriction::MultTranspose on that subset: y(i + ndofs c) = the sum
+// of ye(d, c, s) over i's entries s nd + d (CSR off, idx), in their order.
+void ScatterSubset(const Array<int>& off, const Array<int>& idx, const int nd,
+                   const int ndofs, const Vector& ye, Vector& y)
+{
+   const auto O = off.Read();
+   const auto I = idx.Read();
+   const auto E = ye.Read();
+   auto Y = y.Write();
+   mfem::forall(ndofs, [ = ] MFEM_HOST_DEVICE(int i)
+   {
+      for (int c = 0; c < 3; ++c)
+      {
+         double v = 0.0;
+         for (int j = O[i]; j < O[i + 1]; ++j)
+         {
+            const int s = I[j] / nd, d = I[j] - s * nd;
+            v += E[d + nd * (c + 3 * s)];
+         }
+         Y[i + ndofs * c] = v;
+      }
+   });
+}
+
 } // namespace oifsconv
 
 bool OifsConvection::Supported(const ParFiniteElementSpace& vfes,
@@ -889,6 +930,8 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
 void OifsConvection::SetWind(int l, const ParGridFunction& u)
 {
    MFEM_VERIFY(!self_, "oifs_convection: built self_only (no wind data)");
+   MFEM_VERIFY(!subset_,
+               "oifs_convection: restricted to elements (MultSelf only)");
    MFEM_VERIFY(l >= 0 && l < 3, "oifs_convection: wind index out of range");
    MFEM_VERIFY(u.ParFESpace() == &vfes_, "oifs_convection: the wind must live "
                "on the bound velocity space");
@@ -957,6 +1000,8 @@ void OifsConvection::Mult(const std::vector<double>& w, const Vector& x,
 {
    const int nw = static_cast<int>(w.size());
    MFEM_VERIFY(nw >= 1 && nw <= 3, "oifs_convection: 1 to 3 weights");
+   MFEM_VERIFY(!subset_,
+               "oifs_convection: restricted to elements (MultSelf only)");
    for (int l = 0; l < nw; ++l)
    {
       MFEM_VERIFY(set_ & (1 << l), "oifs_convection: wind " << l << " not set");
@@ -1051,7 +1096,11 @@ void OifsConvection::MultSelf(const Vector& x, Vector& y)
    }
    if (ne_ > 0)
    {
-      restr_->Mult(*xl, xe_);
+      if (subset_)
+      {
+         oifsconv::GatherSubset(sub_gather_, d1_ * d1_ * d1_, ndofs_, *xl, xe_);
+      }
+      else { restr_->Mult(*xl, xe_); }
       if (self_)
       {
          // Curved: chunk by chunk, the Jacobians, then the input's own wind
@@ -1114,21 +1163,113 @@ void OifsConvection::MultSelf(const Vector& x, Vector& y)
       }
    }
    else { ye_ = 0.0; }
-   if (prolong_)
+   Vector& yl = prolong_ ? yl_ : y;
+   if (subset_)
    {
-      restr_->MultTranspose(ye_, yl_);
-      prolong_->MultTranspose(yl_, y);
+      oifsconv::ScatterSubset(sub_off_, sub_idx_, d1_ * d1_ * d1_, ndofs_, ye_, yl);
    }
-   else
-   {
-      restr_->MultTranspose(ye_, y);
-   }
+   else { restr_->MultTranspose(ye_, yl); }
+   if (prolong_) { prolong_->MultTranspose(yl_, y); }
 }
 
 void OifsConvection::SetChunk(int elements)
 {
    MFEM_VERIFY(elements >= 1, "oifs_convection: a chunk holds an element or more");
    chunk_ = elements;
+}
+
+void OifsConvection::RestrictToElements(const Array<int>& elems)
+{
+   MFEM_VERIFY(fly_ || self_, "oifs_convection: RestrictToElements needs "
+               "MultSelf's paths (on the fly, or self_only on curved elements)");
+   MFEM_VERIFY(!subset_, "oifs_convection: RestrictToElements once");
+   const auto* er = dynamic_cast<const ElementRestriction*>(restr_);
+   MFEM_VERIFY(er,
+               "oifs_convection: RestrictToElements needs an ElementRestriction");
+   const int nd = d1_ * d1_ * d1_;
+   const int ns = elems.Size();
+   const int* gm = er->GatherMap().HostRead();
+   const int* el = elems.HostRead();
+   ndofs_ = vfes_.GetNDofs();
+   // The subset's gather map, and per local dof its entries by element, then
+   // node: the order MultTranspose sums them in (its indices are built that
+   // way), so a dof all of whose elements are here gets the same sum.
+   sub_gather_.SetSize(ns * nd);
+   sub_off_.SetSize(ndofs_ + 1);
+   sub_idx_.SetSize(ns * nd);
+   int* sg = sub_gather_.HostWrite();
+   int* off = sub_off_.HostWrite();
+   int* idx = sub_idx_.HostWrite();
+   for (int i = 0; i <= ndofs_; ++i) { off[i] = 0; }
+   for (int s = 0; s < ns; ++s)
+   {
+      MFEM_VERIFY(el[s] >= 0 && el[s] < ne_ && (s == 0 || el[s] > el[s - 1]),
+                  "oifs_convection: the elements must be local, sorted, each once");
+      for (int d = 0; d < nd; ++d)
+      {
+         const int g = gm[el[s] * nd + d];
+         MFEM_VERIFY(g >= 0, "oifs_convection: an H1 gather map has no "
+                     "orientation signs");
+         sg[s * nd + d] = g;
+         ++off[g + 1];
+      }
+   }
+   for (int i = 0; i < ndofs_; ++i) { off[i + 1] += off[i]; }
+   std::vector<int> next(off, off + ndofs_);
+   for (int j = 0; j < ns * nd; ++j) { idx[next[sg[j]]++] = j; }
+   for (Array<int>* a : {&sub_gather_, &sub_off_, &sub_idx_})
+   {
+      a->GetMemory().UseDevice(true);
+   }
+   // The subset's vertices (straight-sided) or nodes (curved), in its order.
+   for (Vector* v : {&xn_, &xnodes_})
+   {
+      if (v->Size() == 0) { continue; }
+      const int b = v->Size() / ne_;
+      Vector w(ns * b);
+      const double* vh = v->HostRead();
+      double* wh = w.HostWrite();
+      for (int s = 0; s < ns; ++s)
+      {
+         for (int k = 0; k < b; ++k) { wh[s * b + k] = vh[el[s] * b + k]; }
+      }
+      v->Destroy();
+      v->UseDevice(true);
+      v->SetSize(ns * b);
+      *v = w;
+   }
+   gather_ = &sub_gather_; // the on-the-fly kernels read the input through it
+   ne_ = ns;
+   subset_ = true;
+}
+
+Array<int> OifsConvection::ElementsTouching(const ParFiniteElementSpace& vfes,
+      const Array<int>& tdofs)
+{
+   Vector t(vfes.GetTrueVSize());
+   t.UseDevice(true);
+   t = 0.0;
+   t.SetSubVector(tdofs, 1.0);
+   Vector l(vfes.GetVSize());
+   l.UseDevice(true);
+   const Operator* P = vfes.GetProlongationMatrix();
+   if (P) { P->Mult(t, l); }
+   else { l = t; }
+   const double* lh = l.HostRead();
+   Array<int> elems, vdofs;
+   for (int e = 0; e < vfes.GetNE(); ++e)
+   {
+      vfes.GetElementVDofs(e, vdofs);
+      for (const int v : vdofs)
+      {
+         if (lh[v >= 0 ? v : -1 - v] != 0.0)
+         {
+            elems.Append(e);
+            break;
+         }
+      }
+   }
+   return elems;
 }
 
 void OifsConvection::CurvedJacobians(int e0, int n)

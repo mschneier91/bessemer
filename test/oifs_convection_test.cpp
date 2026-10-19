@@ -7,7 +7,8 @@
 // straight-sided elements: the stored path and the on-the-fly path against the
 // same reference; order 6 also on curved elements (their Jacobians formed by
 // element chunks).
-// Roundoff.
+// Roundoff. The self apply on the elements touching one face of the box
+// (RestrictToElements): bit for bit at that face's dofs.
 
 #include <gtest/gtest.h>
 
@@ -224,5 +225,69 @@ TEST(OifsConvection, CurvedChunksAndTheSelfApply)
       }
       EXPECT_EQ(max_diff(ys, yself), 0.0);
       EXPECT_EQ(max_diff(ys, yself5), 0.0);
+   }
+}
+
+TEST(OifsConvection, SelfApplyOnTheElementsTouchingDofs)
+{
+   int rank = 0;
+   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+   for (const bool curved : {true, false})
+   {
+      for (const int k : {6, 7})
+      {
+         SCOPED_TRACE(testing::Message() << (curved ? "curved" : "straight")
+                      << ", order " << k);
+         Mesh serial = Mesh::MakeCartesian3D(3, 3, 3, Element::HEXAHEDRON);
+         if (curved) { serial.SetCurvature(k); }
+         serial.Transform(Deform);
+         ParMesh mesh(MPI_COMM_WORLD, serial);
+         H1_FECollection fec(k, 3);
+         ParFiniteElementSpace V(&mesh, &fec, 3);
+         const IntegrationRule& ir = IntRules.Get(Geometry::CUBE, 3 * k);
+         ASSERT_EQ(incns::OifsConvection::OnTheFlyEligible(V, ir), !curved);
+         // The dofs of one face (boundary attribute 1) and the elements
+         // touching them: one layer of the 27.
+         Array<int> marker(mesh.bdr_attributes.Max()), tdofs;
+         marker = 0;
+         marker[0] = 1;
+         V.GetEssentialTrueDofs(marker, tdofs);
+         const Array<int> elems = incns::OifsConvection::ElementsTouching(V, tdofs);
+         int ns = elems.Size(), ne = V.GetNE();
+         MPI_Allreduce(MPI_IN_PLACE, &ns, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+         MPI_Allreduce(MPI_IN_PLACE, &ne, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+         EXPECT_EQ(ne, 27);
+         EXPECT_EQ(ns, 9);
+         const int n = V.GetTrueVSize();
+         Vector x(n);
+         x.Randomize(41 + rank);
+         x -= 0.5;
+         x.UseDevice(true);
+         Vector yall(n), ysub(n), ysub5(n);
+         for (Vector* y : {&yall, &ysub, &ysub5}) { y->UseDevice(true); }
+         {
+            incns::OifsConvection oc(V, ir, nullptr, !curved, /*self_only=*/true);
+            oc.MultSelf(x, yall);
+         }
+         for (const int chunk : {0, 4})
+         {
+            incns::OifsConvection oc(V, ir, nullptr, !curved, /*self_only=*/true);
+            if (chunk) { oc.SetChunk(chunk); }
+            oc.RestrictToElements(elems);
+            oc.MultSelf(x, chunk ? ysub5 : ysub);
+         }
+         Vector a, b, b5;
+         yall.GetSubVector(tdofs, a);
+         ysub.GetSubVector(tdofs, b);
+         ysub5.GetSubVector(tdofs, b5);
+         double scale = a.Size() ? a.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         EXPECT_GT(scale, 0.0);
+         b -= a;
+         b5 -= a;
+         double d = b.Size() ? std::max(b.Normlinf(), b5.Normlinf()) : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, &d, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         EXPECT_EQ(d, 0.0);
+      }
    }
 }
