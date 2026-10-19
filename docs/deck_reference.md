@@ -8,11 +8,11 @@ Every key a YAML deck (`apps/run_case <deck.yaml>`) understands, with its defaul
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `equation` | stokes \| navier_stokes | `stokes` | Equation set: unsteady Stokes or incompressible Navier-Stokes. |
+| `equation` | stokes \| navier_stokes \| linear_elasticity | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, or a small-strain linear elastic solid, static or dynamic (section solid). |
 | `device` | string | `cpu` | MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins. |
 | `initial_velocity` | string | `zero` | Named initial condition: zero, uniform, channel (see the initial section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, -cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes from Python or C++. |
 | `restart` | string | `""` | Checkpoint directory to restart from (same number of MPI ranks). |
-| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}. Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
+| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}; a solid (equation linear_elasticity) takes type fixed \| displacement \| traction \| free instead, displacement and traction with value: [x, y(, z)] (a traction is sigma n, force per unit area). Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
 
 ## `physics`
 
@@ -295,3 +295,25 @@ Benchmark values the run summary compares against (relative errors; absolute for
 | `reference.t_cl_max` | real | `unset` | Time of the maximum lift. |
 | `reference.pressure_difference` | real | `unset` | The pressure-difference probe's value. |
 | `reference.re_tau` | real | `unset` | Channel: Re_tau from the time-averaged wall shear stress. |
+
+## `solid`
+
+The solid of equation linear_elasticity: small strains, isotropic and homogeneous, displacement-only on the reference configuration (docs/elasticity.md). Units are the deck's own, consistent ones.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `solid.youngs_modulus` | real | `1` | Young's modulus E. |
+| `solid.poisson_ratio` | real | `0.3` | Poisson's ratio (-1 < nu < 1/2). A displacement-only discretization locks as nu -> 1/2; high orders delay it. |
+| `solid.plane` | strain \| stress | `strain` | 2D model: plane strain, or plane stress (lambda* = 2 lambda mu / (lambda + 2 mu)). Ignored in 3D. |
+| `solid.order` | int | `0` | Displacement polynomial order; <= 0: discretization.order_u, so the solid matches the fluid's velocity at a future interface. |
+| `solid.body_force` | real[dim] | `[0, 0]` | A constant body force per unit volume. |
+| `solid.rtol` | real | `1e-10` | CG relative tolerance. |
+| `solid.atol` | real | `0` | CG absolute tolerance. |
+| `solid.max_iter` | int | `2000` | CG iteration cap. |
+| `solid.preconditioner` | loramg \| jacobi | `loramg` | CG preconditioner: one BoomerAMG V-cycle (systems mode) on the low-order-refined operator, or the operator's diagonal (no setup, iterations grow with the resolution). |
+| `solid.probe` | real[dim] | `unset` | A point whose displacement the run summary reports (e.g. the tip of a cantilever). |
+| `solid.analysis` | static \| dynamic | `static` | static: one solve of K u = f. dynamic: rho u_tt + K u = f marched from rest at t = 0 to time.t_final in fixed steps of time.dt (the last one shortened to land on t_final); the loads act from t = 0. |
+| `solid.density` | real | `1` | Mass density rho (dynamic analysis). |
+| `solid.time_scheme` | generalized_alpha \| bdf | `generalized_alpha` | Dynamic time integrator: Chung-Hulbert generalized-alpha (second order, high-frequency damping set by rho_inf), or the fluid's variable-step BDF (order bdf_order) on the first-order system (u, v), started by one trapezoidal step. |
+| `solid.bdf_order` | int | `2` | BDF order, 2 or 3. BDF3 is not A-stable: an undamped mode with omega dt between about 0.5 and 2 grows (4 % per step at omega dt = 1), so it suits short or damped runs only; BDF2 and generalized-alpha are unconditionally stable. |
+| `solid.rho_inf` | real | `0.8` | Generalized-alpha spectral radius at infinite frequency, in [0, 1]: 1 is the trapezoidal rule (energy-conserving, no damping), smaller values damp the unresolved high frequencies more. |
