@@ -193,7 +193,10 @@ endfunction()
 incns_add_verify_test(verify_spatial_test verify_spatial_test.cpp)
 incns_add_verify_test(verify_kovasznay_test verify_kovasznay_test.cpp)
 incns_add_verify_test(verify_temporal_test verify_temporal_test.cpp)
+incns_add_verify_test(verify_elasticity_test verify_elasticity_test.cpp)
 incns_add_mpi_test(nondim_test nondim_test.cpp)
+incns_add_mpi_test(linear_elasticity_test linear_elasticity_test.cpp)
+incns_add_mpi_test(elastodynamics_test elastodynamics_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
 incns_add_mpi_test(run_monitor_test run_monitor_test.cpp)
@@ -237,6 +240,22 @@ foreach(np IN LISTS INCNS_TEST_NPS)
             ${CMAKE_SOURCE_DIR}/cases/cavity.yaml
             --summary run_case_cavity_np${np}_summary.json)
   set_tests_properties(run_case_cavity_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # A solid deck end to end: the 2D cantilever (equation linear_elasticity).
+  add_test(NAME run_case_cantilever_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/cantilever_2d.yaml
+            --summary run_case_cantilever_np${np}_summary.json)
+  set_tests_properties(run_case_cantilever_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # The same cantilever with its load applied suddenly: a dynamic march.
+  add_test(NAME run_case_cantilever_dynamic_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/cantilever_2d_dynamic.yaml
+            --summary run_case_cantilever_dynamic_np${np}_summary.json)
+  set_tests_properties(run_case_cantilever_dynamic_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "status=ok")
   # A walled deck without boundary_conditions must be refused, not run with
