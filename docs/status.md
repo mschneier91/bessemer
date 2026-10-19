@@ -54,7 +54,10 @@ is left, what MFEM changes would have helped) is gpu_memory.md's first section.
 outflow term ran on the host on one rank: changes 48 (OIFS's classification flags on the
 device) and 49 (the outflow term from cached face data), cylinder OIFS np 2 0.524 ->
 0.313 s per step, IMEX -30 %, np 1 -12 to -20 %. Change 50: OIFS's wall-node convection
-on the wall elements only (cylinder -4 % at np 1, -8 % at np 2). Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
+on the wall elements only (cylinder -4 % at np 1, -8 % at np 2). Hot spots per solver path
+(2026-10-19, throughput.md): the GPU is 94-98 % busy; MFEM's consistent vector mass apply was
+17-22 % of IMEX steps -> change 52 (a thread per point, IMEX -5 to -19 % per step); hypre's
+SpMV is 21 % of curved adaptive steps (the assembled hanging-node P). Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
 nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what
 keeps OIFS coupled under 100M), the hanging-node cost in the steady state (+97–146 B/DOF
 at p = 6, not traced).

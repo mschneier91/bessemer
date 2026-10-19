@@ -1321,3 +1321,76 @@ DOFs per GPU) is below the size these targets are set at.
 pressure LOR-AMG at np 4 (`cc::lor_amg` is 23-24 % of the small cases' step); the np-4
 bimodal solver path (docs/multi_gpu.md); the classification's host compaction (5.5 ms);
 batched reductions (docs/multi_gpu.md, Phase 3).
+
+## Hot spots per solver path (2026-10-19)
+
+Human 2026-10-18: "profile the different solver paths ... and see where hot spots are"; "if
+overnight you spot any obvious easy to fix things in your profiling please just do them".
+Nsight Systems (CUDA + NVTX, `output.profile: wall`: no device syncs), ~25M DOFs on one H100,
+the steady steps (3 on), binary B51 (main 8359ef0); jobs 49449512 (np 1, 12 paths; labels
+`hot1_*`) and 49449515 (np 4, 6 paths, ~25M DOFs per GPU; `hot4_*`); `~/bessemer_jobs/hot.py`
+(kernels, regions) and `gaps.py` (GPU idle time, charged to the host region and CUDA call).
+
+| Path (np 1) | ms/step | GPU busy | Largest kernels (share of the step) |
+|---|---|---|---|
+| TGV OIFS coupled | 385 | 98 % | momentum apply 33 %, OIFS substep 20 %, gradient 8 %, divergence 5 % |
+| TGV OIFS Schur | 509 | 98 % | momentum apply 43 %, OIFS substep 24 % |
+| TGV IMEX coupled | 298 | 97 % | momentum apply 28 %, MFEM's vector mass 22 %, gradient 8 % |
+| TGV IMEX Schur | 480 | 97 % | MFEM's vector mass and the momentum apply ~36 % each |
+| Channel (27M) | 391 | 97 % | OIFS substep 27 %, momentum apply 24 %, gradient 8 % |
+| Cylinder OIFS | 579 | 94 % | momentum apply 33 %, OIFS substep 16 %, curved Jacobians 4 % |
+| Cylinder IMEX | 392 | 95 % | momentum apply 26 %, MFEM's vector mass 21 % |
+| Curved adaptive OIFS Schur | 981 | 94 % | momentum apply 30 %, hypre SpMV 21 %, OIFS substep 12 % |
+| Curved adaptive IMEX Schur | 828 | 91 % | momentum apply 24 %, hypre SpMV 21 %, MFEM's vector mass 17 % |
+
+What it shows:
+- **The GPU is busy 94-98 % of every production step**: the time is in kernels, not host
+  gaps. Idle time >= 10 us is under 1 % on Taylor-Green and the channel, 2.7 % on the
+  cylinder (the outflow term's face-dof copy to the host and the classification's list
+  compaction), 3-6 % on the curved adaptive mesh (AMR events' setups).
+- **MFEM's consistent vector mass apply** (`SmemPAVectorMassApply3D<7,7>`, a 49-thread block
+  per element, the components in turn) took 1.7-1.9 ms per apply, ~10 % of what its memory
+  traffic allows: 17-22 % of every IMEX step. **Change 52** (below).
+- **hypre's SpMV is 21 % of the curved adaptive steps** (5 % elsewhere): mostly the assembled
+  hanging-node prolongation P and its stored transpose in every true-dof apply (~0.7 ms per
+  apply, ~250 per step). A structured prolongation (copy the true dofs, apply only the
+  hanging rows) is the fix: gpu_memory.md's MFEM wish list, item 2; not an overnight change.
+- **At np 4** (~25M DOFs per GPU): the same kernels lead, and the GPU is busy 89-91 % (94-98 %
+  at np 1). MFEM's exchange packing (`ExtractSubArray`, `SetSubArray`) adds ~4.5 % of the step;
+  the rest of the difference is waiting for halos and reductions, what halo overlap would
+  hide. On the curved adaptive mesh hypre's SpMV becomes the largest kernel (25 %).
+- **The momentum apply** (change 36's kernel, 3.1-3.6 ms per call) is the largest everywhere;
+  **the OIFS substep kernel** 12-27 % of OIFS steps. Both are ours and already tuned once;
+  further work is kernel-level (registers, shared memory, the points' arithmetic).
+
+**Change 52**: the consistent vector mass apply with a thread per point on a device
+(VectorMassApply3DPoints; the host keeps MFEM's, CPU results unchanged). Per apply 1.91 ->
+0.88 ms (job 49451403, TGV IMEX np 1); s/step:
+
+| Path | np 1 | np 2 |
+|---|---|---|
+| TGV IMEX coupled | 0.261 -> 0.230 (-12 %) | 0.148 -> 0.133 (-10 %) |
+| TGV IMEX Schur | 0.465 -> 0.379 (-19 %) | 0.279 -> 0.234 (-16 %) |
+| Cylinder IMEX coupled | 0.414 -> 0.338 (-18 %) | 0.229 -> 0.218 (-5 %) |
+| Cylinder IMEX Schur | 0.568 -> 0.504 (-11 %) | 0.322 -> 0.282 (-13 %) |
+
+**Tried and dropped: the divergence and gradient with a thread per point** (the same
+approach; their kernels run 64-thread blocks with 37 KB of shared memory). Gradient 2.65 ->
+2.33 ms per call, divergence 1.78 -> 1.75: about 1 % of a step, within the run-to-run
+spread (job 49454242). Not worth a second kernel pair; the patch is kept in
+`~/bessemer_jobs/attic/c53-dropped/`.
+
+**TGV IMEX coupled at np 4** (the 84 % weak, 79 % strong case; Nsight Systems with MPI,
+job 49447587, 25M DOFs per GPU): `cc::bmb`'s own time is 0.22 ms per call at np 1 and at
+np 4 (the profiler's syncs and gauge reads). The 2.4 ms per call the sync profile showed at
+np 4 was ranks waiting for one another at the projector's global sum, not work there. What
+grows is inside every true-dof apply: the Chebyshev velocity mass inverse 9.5 -> 11.2 ms per
+call, the gradient 3.1 -> 3.5, the divergence 2.1 -> 2.5 (the prolongation's exchanges), and
+the right-hand side 8.6 -> 10-10.7 ms per step (one temporary allocated and freed per step
+at np > 1, ~1 ms). No single fix: halo overlap and batched reductions (multi_gpu.md,
+Phases 3-4) are the levers.
+
+**Open after this round**: a structured hanging-node prolongation (curved adaptive meshes,
+21 % of their steps); the momentum and OIFS substep kernels; halo overlap and batched
+reductions at np > 1; TGV IMEX Schur's np-1 time (change 34's iterations); the np-4 bimodal
+solver path (the pressure AMG's hierarchy differs on every GPU run).
