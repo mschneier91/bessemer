@@ -147,6 +147,10 @@ src/
   config/      parameters (+ YAML), deck_reader (declares every key: the generated deck
                reference, unknown-key errors), nondimensionalization, initial_conditions
                (zero, uniform, channel = Reichardt + curl perturbation, taylor_green_2d/3d)
+  solid/       linear_elasticity (small-strain elasticity, static or dynamic: PA
+               operators, CG + LOR-AMG, generalized-alpha or BDF2/BDF3),
+               elasticity_case (equation: linear_elasticity decks;
+               docs/elasticity.md)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
@@ -798,7 +802,12 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
   square-cylinder domain's area, boundary lengths, grading), `deck_test`,
-  `checkpoint_test`, `nondim_test`, `diagnostics_test`, `bc_integration_test`.
+  `checkpoint_test`, `nondim_test`, `diagnostics_test`, `bc_integration_test`,
+  `linear_elasticity_test` (PA = assembled, quadratic exact at Q2, the
+  Timoshenko cantilever exact at Q3, energy identity), `elastodynamics_test`
+  (time orders of every scheme, energy, the bar mode, a dynamic deck) and the
+  verify tier's `verify_elasticity_test` (MMS 2D/3D, Lame cylinder, Cook's
+  membrane, the default scheme's time order, a cantilever's first frequency).
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need
