@@ -57,7 +57,13 @@ device) and 49 (the outflow term from cached face data), cylinder OIFS np 2 0.52
 on the wall elements only (cylinder -4 % at np 1, -8 % at np 2). Hot spots per solver path
 (2026-10-19, throughput.md): the GPU is 94-98 % busy; MFEM's consistent vector mass apply was
 17-22 % of IMEX steps -> change 52 (a thread per point, IMEX -5 to -19 % per step); hypre's
-SpMV is 21 % of curved adaptive steps (the assembled hanging-node P). Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
+SpMV is 21 % of curved adaptive steps (the assembled hanging-node P). Kernel headroom
+(Nsight Compute, 2026-10-19, throughput.md): a quarter of a step is at the DRAM limit, the
+momentum kernel is bound by the L1 pipe and the OIFS kernel by latency; ~1.2-1.5x per step
+is left in kernel work, not 2x. Change 54: the gradient without shared-memory bank
+conflicts on a device (-14 % per call, -1.2 % per TGV OIFS step). Weak scaling on full GPUs
+(~67-75M DOFs per GPU): np 4 at 68-92 %, the losses beyond ~10-14 % from iterations growing
+with the problem. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
 nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what
 keeps OIFS coupled under 100M), the hanging-node cost in the steady state (+97–146 B/DOF
 at p = 6, not traced).

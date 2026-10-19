@@ -1394,3 +1394,69 @@ Phases 3-4) are the levers.
 21 % of their steps); the momentum and OIFS substep kernels; halo overlap and batched
 reductions at np > 1; TGV IMEX Schur's np-1 time (change 34's iterations); the np-4 bimodal
 solver path (the pressure AMG's hierarchy differs on every GPU run).
+
+## Kernel headroom (Nsight Compute, 2026-10-19)
+
+Human 2026-10-19: how much headroom is left in time to solution. `ncu --set full` on one
+late call of each hot kernel (job 49462429, binary B52 = main d4826d8, ~25M DOFs on one H100;
+Taylor-Green OIFS and IMEX, the cylinder OIFS; `~/bessemer_jobs/ncuk.py`). ncu runs at the
+base clock, ~1.24x the Nsight Systems times; the limits below are what each kernel is up
+against, not the clock.
+
+| Kernel (share of a TGV OIFS step) | What limits it |
+|---|---|
+| Momentum apply, `FusedApply3DPointsDynamic` (33 %) | The L1/shared data pipe, 86 % busy (DRAM 20 %, FP64 pipe 13 %). The 1D matrices are read from global memory (L1 hits) inside the contraction loops: 153M global loads per call besides 352M shared wavefronts. Faster only by a redesign (the matrices in registers). |
+| OIFS substep, `Apply3DColumns` (20 %) | Nothing saturated (L1 52 %, FP64 12 %): 12 % occupancy (190 registers, two 100-thread blocks per SM), latency-bound. |
+| Gradient, `ApplyTranspose3DByComponentShared` (8 %) | L1 74 %; 41 % of its shared loads were bank conflicts: **change 54** (below). |
+| Divergence (5 %) | L1 71 %, 12 % occupancy. |
+| Vector updates, element restriction, Chebyshev, block Jacobi, `AddScaledProduct` (~25 %) | DRAM, 80-93 % of the 3.35 TB/s peak: at the limit; only fusing them into neighbours saves traffic. |
+| hypre's SpMV (5 %) | DRAM, 46-70 % of peak (hypre's kernel). |
+
+What it means (estimates from these measurements, not results): a quarter of the step is
+already at the memory bandwidth, and the two large kernels are bound on chip (the L1 pipe;
+latency), not by DRAM or FP64. Per step, ~1.2x is in reach with moderate kernel work; ~1.5x
+needs the momentum kernel redesigned, the OIFS kernel's occupancy raised and kernel fusion
+(weeks). Not 2x: time to solution's larger levers are more GPUs per problem (strong
+scaling), fewer steps (the CFL target; accuracy) and precision (parked).
+
+**Change 54**: the gradient reads its 1D matrices stored by point on a device. MFEM's
+transposed contractions read the shared matrices as B[d][q] with the dof d the thread index,
+64 bytes apart at Q1D 8, four of a warp's dofs in one bank; `kernels3d::
+ContractTranspose3dByPoint` does the same contractions (the same products in the same order)
+from B[q][d]. Job 49464238 (TGV OIFS np 1): bank conflicts 174M -> 0.4M, shared loads 422M ->
+257M wavefronts, 3.10 -> 2.59 ms per call (ncu); 2.66 -> 2.28 ms (Nsight Systems), the step
+385.6 -> 381.1 ms (-1.2 %). Change 53's thread-per-point gradient (2.33 ms, dropped) did no
+better. With the conflicts gone the kernel is latency-bound (L1 58 %, 12 % occupancy). The
+host keeps MFEM's loops: on the host the same products in the same order changed CPU results
+at roundoff, because the CPU build's GCC (the RM nodes' `b2rm` build, `--with-arch=znver2`)
+fuses a * b + c into FMAs wherever its vectorizer leaves one, and the by-point loops vectorize
+otherwise (cylinder IMEX np 1, t at 2.5e-12 after 17 steps; jobs 49464259, 49465852 (fresh
+builds of main and 54 as the control), 49466242 (by file), 49466579 (the kernel alone)). A
+rewrite that keeps the arithmetic is bitwise on the CPU only if it keeps the loops too.
+
+## Weak scaling on full GPUs (2026-10-19)
+
+Human 2026-10-19: "I am only really interested in the case where the GPUs are pretty full."
+Binary B52 (main d4826d8); ~75M DOFs per GPU on Taylor-Green (n 46, 58, 73 at np 1, 2, 4; t_final
+scaled with h, ~35 steps; job 49464400) and ~67M on the cylinder (nz 6, 12, 24; 29 steps; job
+49462428); s/step over steps 3 on, efficiency t(np 1) / t(np k); outer iterations per step
+(velocity iterations for the coupled paths) at np 1 and np 4.
+
+| Path | np 2 | np 4 | Iterations, np 1 -> np 4 |
+|---|---|---|---|
+| TGV OIFS coupled | 89 % | 86 % | 1.56 -> 1.62 (velocity 30.6 -> 31.5) |
+| TGV OIFS Schur | 90 % | 84 % | 1.21 -> 1.59 |
+| TGV IMEX coupled | 96 % | 90 % | 1.34 -> 1.29 (velocity 15.5 -> 15.7) |
+| TGV IMEX Schur | 82 % | 68 % | 2.14 -> 3.29 |
+| Cylinder OIFS coupled | 89 % | 84 % | 2.38 -> 2.83 (velocity 43.2 -> 49.8) |
+| Cylinder OIFS Schur | 96 % | 92 % | 2.21 -> 2.31 |
+| Cylinder IMEX coupled | 98 % | 85 % | 2.79 -> 2.93 (velocity 25.7 -> 28.3) |
+| Cylinder IMEX Schur | 94 % | 81 % | 2.76 -> 3.31 |
+
+What it shows: at np 4 the paths whose iterations stay flat (TGV coupled) lose 10-14 %, the
+parallel overhead proper (at ~25M DOFs per GPU it was 9-16 %, B49). The rest of the spread is
+iterations growing with the 4x larger problem: TGV IMEX Schur +54 % outer iterations (68 %),
+the cylinder's Schur and coupled paths +5-20 %. That part is the solver's (and the GPU AMG's
+per-run hierarchy), not communication. A first Taylor-Green set with ~15 steps per run (job
+49462427) was too short: step times drift 2-3x over a run (the CFL ramp), and single runs
+changed the outer iterations by up to 40 %.
