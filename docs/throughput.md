@@ -1477,3 +1477,41 @@ loops (CPU results unchanged, all 27 decks identical). Job 49483996, Nsight Syst
 The step: TGV OIFS 381.4 -> 352.2 ms (-7.7 %), TGV IMEX 273.7 -> 267.6 ms (-2.2 %; the
 on-the-fly kernel runs once per IMEX step). The launch bound alone (three blocks) gave 4.13 ms
 with spills; by direction alone 3.87 ms; five blocks spill (jobs 49480666, 49482720).
+
+**Change 56**: the fused momentum apply (viscous and grad-div, a third of every step) by lines
+on a device. The thread-per-point kernel was bound by the L1 pipe (86 % busy: 153M loads of the
+1D matrices from global memory and 352M shared-memory wavefronts per call). `LinesApply` gives a
+Q1D x Q1D block per element and each stage's thread a whole line of outputs: inputs in
+registers, the 1D matrices in the kernel's parameter space (constant-bank operands), shared
+memory between stages only, padded against bank conflicts; the gradients are formed twice
+rather than kept; a column's per-point work loops over its points; with a constant viscosity
+the compact data is formed from J at each point (Setup's expressions) instead of read. The host
+keeps the registered kernels (CPU results unchanged, all 27 decks identical). Job 49491904,
+Nsight Systems per apply: TGV 3.56 -> 2.38 ms (-33 %), the curved cylinder 3.13 -> 2.09 ms
+(-33 %); TGV OIFS step 381.3 -> 339.6 ms (-10.9 %). FP64 8.4 -> 24 % of peak, the L1 pipe 86 ->
+41 %. The road (jobs 49482664-49485560): registers for the column's values spilled (6.45 ms);
+register caps for more blocks per SM made every version slower (spills, and more resident
+elements evict each other's Jacobians from the cache). nvcc gotcha: `__launch_bounds__` with
+the thread count alone, or with a literal minimum of 1, capped the kernel at 168 registers with
+spills (2.82 ms); the minimum as a template argument gave 222 and no stack.
+
+**The day's scorecard (2026-10-19)**: job 49487903, B51 (main 8359ef0, before change 52) against
+52-56 (with 56 in its 168-register form, 2.82 ms per apply: a lower bound), the hot-spot
+profile's 11 paths, ~25M DOFs on one H100, ms per step:
+
+| Path | B51 | 52-56 | Speedup |
+|---|---|---|---|
+| TGV OIFS coupled | 384.6 | 309.9 | 1.24x |
+| TGV OIFS Schur | 507.2 | 402.7 | 1.26x |
+| TGV IMEX coupled | 307.0 | 239.2 | 1.28x |
+| TGV IMEX Schur | 476.5 | 349.2 | 1.36x |
+| Channel | 392.8 | 314.8 | 1.25x |
+| Cylinder OIFS coupled | 589.6 | 470.8 | 1.25x |
+| Cylinder OIFS Schur | 753.4 | 609.7 | 1.24x |
+| Cylinder IMEX coupled | 426.3 | 305.8 | 1.39x |
+| Cylinder IMEX Schur | 619.9 | 479.8 | 1.29x |
+| Curved adaptive OIFS Schur | 1008.2 | 845.9 | 1.19x |
+| Curved adaptive IMEX Schur | 785.6 | 674.2 | 1.17x |
+
+The curved adaptive meshes gain least: a fifth of their step is hypre's SpMV of the assembled
+hanging-node prolongation, which none of these changes touch.
