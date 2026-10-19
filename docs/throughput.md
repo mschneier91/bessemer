@@ -1228,11 +1228,67 @@ job 49390028): 151 -> 60 s of step wall time conforming, 698 -> 189 s with AMR
 
 **Held or dropped this round.**
 - Geometry on the fly (Jacobians from the nodes in every kernel, ~74 B/DOF): +26-28 % per
-  step on Taylor-Green, +14 % on curved DFG Q6; held by the human (2026-10-17), a candidate
-  only for the memory profile.
+  step on Taylor-Green, +14 % on curved DFG Q6; held by the human (2026-10-17); the memory
+  and throughput profiles it was meant for were dropped (human 2026-10-18).
 - hypre's prolongation at np 1: helps one rank only; dropped (human 2026-10-17).
 
 **Open, no memory trade-off**: the AMG at np > 1 (instrumentation first); batched
 reductions in FGMRES and CG (docs/multi_gpu.md, Phase 3); the remaining per-step
-allocations (the curved CFL rate, OIFS's classification). **Trade-off candidates** for a
-throughput profile: hypre's keep-transpose (a stored restriction).
+allocations (the curved CFL rate, OIFS's classification). **Trade-off candidates** (no
+profile key: dropped 2026-10-18): hypre's keep-transpose (a stored restriction).
+
+## The solver matrix at np 1, 2 and 4 (2026-10-18, after the memory campaign)
+
+Human 2026-10-18: restart the throughput campaign once the memory campaign closes. The same
+decks as above (`runs/verify/decks/thr_*`, ~22M DOFs, `profile: sync`), binary **B47** (main
+ba9c770's code: changes 17-47), one H100 per rank, np 4 a study (jobs 49430813, 49430814;
+labels `mat1_`, `mat2_`, `mat4_<deck>`; `~/bessemer_jobs/matsum.py`). s/step is the mean
+over steps 3 on; efficiency is np-1 time over (np x np-n time).
+
+| Case | np 1 | np 2 | np 4 | Eff. np 2 | Eff. np 4 | np 1 / np 2 before (above) |
+|---|---|---|---|---|---|---|
+| TGV OIFS coupled | 0.409 | 0.231 | 0.141 | 88 % | 73 % | 0.511 / 0.363 (70 %) |
+| TGV OIFS Schur | 0.532 | 0.294 | 0.182 | 90 % | 73 % | 0.616 / 0.395 (78 %) |
+| TGV IMEX coupled | 0.260 | 0.142 | 0.090 | 92 % | 73 % | 0.308 / 0.225 (69 %) |
+| TGV IMEX Schur | 0.458 | 0.268 | 0.158 | 85 % | 72 % | 0.341 / 0.216 (79 %) |
+| Cylinder OIFS coupled | 0.672 | 0.458 | 0.304 | 73 % | 55 % | 1.118 / 0.730 (77 %) |
+| Cylinder OIFS Schur | 0.892 | 0.568 | 0.365 | 79 % | 61 % | 1.209 / 0.735 (82 %) |
+| Cylinder IMEX coupled | 0.445 | 0.301 | 0.203 | 74 % | 55 % | 0.832 / 0.582 (72 %) |
+| Cylinder IMEX Schur | 0.659 | 0.398 | 0.256 | 83 % | 64 % | diverged (change 34) |
+| DFG 3D-3Z Q3 AMR (~0.3M) | 0.020 | 0.028 | 0.032 | | | latency-bound |
+| Channel Re_tau 180 (small) | 0.026 | 0.027 | 0.028 | | | latency-bound |
+
+What it shows:
+- **Taylor-Green scales at 85-92 % to two GPUs and 72-73 % to four** (it was 69-79 % at
+  two): GPU-aware MPI (37), hypre's own SpMV in the AMG (43), UCX without cuda_ipc (42).
+- **TGV IMEX Schur at np 1 is slower than before** (0.341 -> 0.458): change 34 gave the Schur
+  method's pressure its own target, so it iterates where it stalled before; correctness
+  first. Open.
+- **The cylinder did not scale**: `oifs::advect`'s own time was 140, 151 and 137 ms per step
+  at np 1, 2 and 4, IMEX's convection 111, 110 and 95. Both were the outflow condition
+  (the directional do-nothing term), evaluated on the host face by face, twice per step, on
+  the one rank that owns the outflow: change 49. OIFS's boundary classification was ~9 ms
+  of host loop per step (np 1): change 48. (Profile per-call averages over a 25-step run
+  include each region's first call: `oifs::classify`'s one-time caches, ~0.9 s, made its
+  average 50 ms; steady state it was 14 ms. Nsight Systems NVTX ranges give the steady
+  state: `~/bessemer_jobs/nvtxsum.py`.)
+
+**Changes 48 and 49** (job 49433185; B47 against the two together, s/step):
+
+| Case | np 1 | np 2 |
+|---|---|---|
+| Cylinder OIFS coupled | 0.666 -> 0.585 (-12 %) | 0.524 -> 0.313 (-40 %) |
+| Cylinder OIFS Schur | 0.873 -> 0.743 (-15 %) | 0.562 -> 0.419 (-26 %) |
+| Cylinder IMEX coupled | 0.440 -> 0.353 (-20 %) | 0.331 -> 0.233 (-30 %) |
+| DFG 3D-3Z Q3 AMR | 0.0199 -> 0.0178 (-10 %) | 0.0299 -> 0.0264 (-12 %) |
+
+Steady state (NVTX, cylinder OIFS coupled, the median over steps 3-25): the step 650 -> 526
+ms at np 1 and 437 -> 300 at np 2; `oifs::advect` (inclusive) 319 -> 197 and 254 -> 110;
+`oifs::classify` 14.2 -> 7.0 and 9.1 -> 4.8 (change 48; what remains is the Dirichlet lists'
+host compaction, 5.5 ms at np 1). The cylinder OIFS's np-2 efficiency 64 -> 93 % in this
+job. At np 4 with both (job 49434071): cylinder OIFS coupled 0.304 -> 0.177 s per step (-42 %; np-4 efficiency 55 -> 83 %), OIFS Schur 0.365 -> 0.232 (-36 %; 61 -> 80 %), IMEX coupled 0.203 -> 0.115 (-43 %; 55 -> 77 %), IMEX Schur 0.256 -> 0.171 (-33 %); DFG 3D-3Z Q3 AMR stays latency-bound (0.032 -> 0.031).
+
+**Open after this round**: TGV IMEX Schur's np-1 time (change 34's iterations); the
+pressure LOR-AMG at np 4 (`cc::lor_amg` is 23-24 % of the small cases' step); the np-4
+bimodal solver path (docs/multi_gpu.md); the classification's host compaction (5.5 ms);
+batched reductions (docs/multi_gpu.md, Phase 3).

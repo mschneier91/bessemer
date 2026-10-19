@@ -31,8 +31,9 @@ curved IMEX Schur stalled). The solver matrix at np 1 and 2 and what it found:
 throughput.md ("The solver matrix at Q6"); each memory change, the gaps and the capacities:
 gpu_memory.md; the multi-GPU plan: multi_gpu.md (human: 4–8 GPUs for scaling studies; no
 hard cap on concurrent H100s, the queue is the limit). Held by the human: geometry on the
-fly (+26–28 % per step for ~74 B/DOF). Planned: one `performance.priority: throughput |
-memory` key for trade-offs instead of a key each (human 2026-10-17). Changes 42–45
+fly (+26–28 % per step for ~74 B/DOF). The planned `performance.priority: throughput |
+memory` key for trade-offs (human 2026-10-17) was dropped (human 2026-10-18): only
+`time.oifs_on_the_fly` is such a trade-off, and it stays its own opt-in. Changes 42–45
 (2026-10-18): UCX's cuda_ipc off by default (42; the human chose the memory), hypre's own
 SpMV in the pressure AMG (43; the cylinder's np-2 step −18 %), the AMR history projection
 without a velocity AMG or a Krylov basis (44) and the 3D indicator without a quadrature-point
@@ -45,7 +46,12 @@ Schur on the curved adaptive mesh (84.4M), IMEX Schur there 112.5M. **The memory
 ended with change 47 (human 2026-10-18)**: one pair of work vectors for all the P^T A P
 operators (IMEX Schur −22 B/DOF on the curved adaptive mesh); there OIFS Schur reaches 93.7M
 (~96.8M out of memory), IMEX Schur 118.7M. The summary (start and end, what was dropped, what
-is left, what MFEM changes would have helped) is gpu_memory.md's first section. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
+is left, what MFEM changes would have helped) is gpu_memory.md's first section.
+**Throughput restarted (2026-10-18):** the solver matrix at np 1, 2 and 4 on B47
+(throughput.md): Taylor-Green 85-92 % efficient at np 2, 72-73 % at np 4. The cylinder's
+outflow term ran on the host on one rank: changes 48 (OIFS's classification flags on the
+device) and 49 (the outflow term from cached face data), cylinder OIFS np 2 0.524 ->
+0.313 s per step, IMEX -30 %, np 1 -12 to -20 %. Open for the human: a UCX `+gdrcopy` build (gdrdrv is on the GPU
 nodes; the spack attempts failed), the coupled method's FGMRES and projection bases (what
 keeps OIFS coupled under 100M), the hanging-node cost in the steady state (+97–146 B/DOF
 at p = 6, not traced).

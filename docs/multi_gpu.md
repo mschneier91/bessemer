@@ -42,6 +42,17 @@ What scales worst:
   at 57.3M) only appear when the prolongation is not the identity. That is
   exactly np > 1, so the tabled work-vector pool matters here.
 
+### Update (2026-10-18, B47 and changes 48-49)
+
+The matrix at np 1, 2 and 4 (throughput.md, "The solver matrix at np 1, 2 and 4"):
+Taylor-Green 85-92 % at np 2 and 72-73 % at np 4. The cylinder was 73-83 % and 55-64 %:
+its outflow condition (the directional do-nothing term) ran on the host on the rank that
+owns the outflow, ~120-140 ms per step at any rank count. Changes 48-49 (the
+classification's flags on the device, the outflow term from cached face data): cylinder
+OIFS np 2 0.524 -> 0.313 s per step (np-2 efficiency 64 -> 93 %). At np 4: cylinder OIFS coupled 0.304 -> 0.177 s per step (-42 %; np-4 efficiency 55 -> 83 %), OIFS Schur 0.365 -> 0.232 (-36 %; 61 -> 80 %), IMEX coupled 0.203 -> 0.115 (-43 %; 55 -> 77 %), IMEX Schur 0.256 -> 0.171 (-33 %); DFG 3D-3Z Q3 AMR stays latency-bound (0.032 -> 0.031).
+The "43 ms per step" of `oifs::classify` below was a per-call average including its first
+call; steady state it was ~14 ms.
+
 ## Phase 0: instrumentation (before changing anything)
 
 - **Communication regions** in the profiler: time in MPI waits for MFEM's
@@ -91,6 +102,17 @@ two H100s, Nsight Systems with CUDA, NVTX and MPI tracing):**
   as well. GPU runs differ at roundoff from run to run (hypre; accepted
   2026-10-15), and this case sits near a convergence cliff that roundoff
   tips. Open (np-4 work waits for the p = 6 comparison, human 2026-10-18).
+  **Traced (2026-10-18, job 49434327; B47, six repeats with hypre's setup
+  statistics, `solver.lp_print_level: 1`):** the pressure LOR-AMG's hierarchy
+  differs on every GPU run. Level 0 and level 1's rows are always the same
+  (21.95M, 6.82M rows), but level 1's nonzeros differ by up to 338 of 440.8M
+  and the coarse sizes from level 2 on (1,070,599-1,070,676 rows on level 2,
+  116,891-117,121 on level 3): the first interpolation's sparsity is not
+  reproducible (its truncation near the threshold, or ties on this uniform
+  mesh; not traced further). All six took the fast path this time (`3 2 1 2 4
+  2 2`, once `3 2 1 1 4 2 2`); B41 and B42 took the slow one in 3 of 10. A
+  reproducible setup is an AMG settings question (the human's call): hypre's
+  interpolation truncation and its SpGEMM are where to look.
 
 ## Phase 1: transport (cheap, no trade-offs)
 
@@ -189,8 +211,8 @@ options to measure and bring back, not to switch on:
   and 8 GPUs before proposing it.
 - **Keep the transpose** (`HYPRE_BoomerAMGSetKeepTranspose(1)`): hypre's GPU
   guidance; the restriction is stored explicitly instead of applied as the
-  transposed interpolation, a faster matvec for more memory. A candidate for the
-  throughput profile only (`performance.priority: throughput`).
+  transposed interpolation, a faster matvec for more memory. A candidate only where its
+  memory is affordable (the planned throughput profile was dropped, human 2026-10-18).
 - **Already at MFEM's GPU BoomerAMG defaults**: PMIS coarsening, ext+i
   interpolation with at most 4 entries per row, l1-Jacobi smoothing (relax type
   18), θ 0.25 in 3D, no aggressive levels, hypre's own SpGEMM.
