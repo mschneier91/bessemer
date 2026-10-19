@@ -157,6 +157,12 @@ private:
    /// Compact data, (nq, dim (dim + 1) / 2, ne): 3D xx, xy, xz, yy, yz, zz;
    /// 2D xx, xy, yy. Coefficient, weight and 1/det J included.
    mfem::Vector cpa_;
+   /// The rule's weights (not owned) and the coefficient when it is a
+   /// constant (cnu_const_): on a device the fused apply by lines forms the
+   /// compact data from them and the Jacobians instead of reading cpa_.
+   const mfem::Array<mfem::real_t>* cw_ = nullptr;
+   mfem::real_t cnu_ = 0.0;
+   bool cnu_const_ = false;
    /// The grad-div term applied with this one (FuseGradDiv; not owned).
    const GradDivIntegrator* fused_gd_ = nullptr;
 };

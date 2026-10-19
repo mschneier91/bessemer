@@ -162,14 +162,17 @@ TEST(LeanVectorDiffusion, L2_CompactStorageEqualsMfem)
 //    two integrators applied separately, to roundoff (the sums are formed at
 //    the quadrature points instead of after the contraction), and the
 //    grad-div integrator's own apply is switched off. 2D and 3D, orders 2, 3,
-//    5, 6 and 7, deformed mesh, variable nu and gamma.
-TEST(LeanVectorDiffusion, L3_FusedGradDivMatchesSeparateApplies)
+//    5, 6 and 7, deformed mesh, variable gamma; nu variable (L3) or constant
+//    (L4: on a device at orders 6 and 7 the by-lines kernel then forms the
+//    compact data from J).
+void CheckFusedGradDiv(const bool constant_nu)
 {
    for (const int dim : {2, 3})
    {
       for (const int k : {2, 3, 5, 6, 7})
       {
-         SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << k);
+         SCOPED_TRACE(testing::Message() << "dim " << dim << " order " << k
+                      << (constant_nu ? " constant nu" : " variable nu"));
          Mesh serial = (dim == 2)
                        ? Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true)
                        : Mesh::MakeCartesian3D(3, 2, 2, Element::HEXAHEDRON);
@@ -185,7 +188,10 @@ TEST(LeanVectorDiffusion, L3_FusedGradDivMatchesSeparateApplies)
          ParFiniteElementSpace fes(&mesh, &fec, dim);
          const Geometry::Type geom = (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
          const IntegrationRule& ir = IntRules.Get(geom, 2 * k + dim - 1);
-         FunctionCoefficient nu([](const Vector & x) { return 0.2 + 0.1 * x(0); });
+         ConstantCoefficient nu_c(0.2);
+         FunctionCoefficient nu_f([](const Vector & x) { return 0.2 + 0.1 * x(0); });
+         Coefficient& nu = constant_nu ? static_cast<Coefficient&>(nu_c)
+                           : static_cast<Coefficient&>(nu_f);
          FunctionCoefficient gamma([](const Vector & x)
          {
             return 0.7 + 0.5 * x(0) + 0.3 * x(1) * x(1);
@@ -227,10 +233,21 @@ TEST(LeanVectorDiffusion, L3_FusedGradDivMatchesSeparateApplies)
          if (Mpi::Root())
          {
             mfem::out << "[fused grad-div] dim " << dim << " order " << k
+                      << (constant_nu ? ", constant nu" : ", variable nu")
                       << ": max difference / max entry " << diff / size << std::endl;
          }
          EXPECT_GT(size, 0.0);
          EXPECT_LE(diff, 1e-13 * size);
       }
    }
+}
+
+TEST(LeanVectorDiffusion, L3_FusedGradDivMatchesSeparateApplies)
+{
+   CheckFusedGradDiv(false);
+}
+
+TEST(LeanVectorDiffusion, L4_FusedGradDivConstantNuMatchesSeparateApplies)
+{
+   CheckFusedGradDiv(true);
 }

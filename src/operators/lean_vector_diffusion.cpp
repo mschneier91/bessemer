@@ -859,7 +859,459 @@ void FusedApply3DPointsDynamic(const int NE, const Array<real_t>& b,
    });
 }
 
+
+// ---------------------------------------------------------------------------
+// The fused apply by lines, on a device (change 56, 2026-10-19). The
+// thread-per-point kernel above is bound by the L1 pipe at (7, 8): 86 % busy,
+// 153M loads of the 1D matrices from global memory and 352M shared-memory
+// wavefronts per call, against 13 % of the FP64 pipe and 20 % of DRAM (Nsight
+// Compute, job 49462429): every point re-reads its lines' values and the
+// matrices in each stage. Here a Q1D x Q1D block per element, and in each
+// stage of the sum factorization a thread owns a whole line of outputs: its
+// inputs in registers, the 1D matrices in the kernel's parameter space
+// (constant-bank operands: no loads), shared memory only between stages, its
+// strides padded so that a half-warp's lanes hit distinct banks. The
+// gradients are formed twice (grad-div's sum, then each component's flux)
+// instead of kept: kept, they are 9 Q1D^3 values of shared memory per element,
+// which would cap the blocks per SM. With a constant coefficient the compact
+// data is formed from J at each point with Setup's expressions instead of
+// read: 9 numbers per point in the flux instead of 15. The sums are
+// FusedPointsElement's, in its order (roundoff only where nvcc fuses a * b + c
+// otherwise). On a device only: the host runs the registered kernels (the CPU
+// build fuses a * b + c by its own loop shapes, change 54).
+// ---------------------------------------------------------------------------
+template <int D1D, int Q1D>
+struct LineBasis
+{
+   real_t B[Q1D][D1D], G[Q1D][D1D]; // B[q][d] = B(q, d), as maps->B
+};
+
+// Strides in reals. [dz][dy][qx] arrays: the dy stride odd, the dz stride 8
+// mod 16; [dz][qy][qx] arrays: the dz stride 8 mod 16. Each stage's lanes
+// vary the fastest index, and a half-warp's two rows of lanes then fall in
+// different halves of the 16 8-byte bank slots.
+template <int D1D, int Q1D>
+struct LineStrides
+{
+   static constexpr int XQ = (Q1D % 2 == 0) ? Q1D + 1 : Q1D + 2;
+   static constexpr int XZ = ((D1D * XQ + 7) / 16) * 16 + 8;
+   static constexpr int YZ = ((Q1D * Q1D + 7) / 16) * 16 + 8;
+   // [k][z][qy][qx] arrays hold Q1D z-planes: also a column's gradients and
+   // fluxes ([k][qz][qy][qx], each thread its own column).
+   static constexpr int XS = D1D * XZ, YS = Q1D * YZ, TS = Q1D * YZ;
+   static constexpr int size = 2 * XS + 3 * YS + TS;
+};
+
+// Component c's reference gradient on the thread's column (qx, qy) = (tx,
+// ty), written over that column of sY0, sY1, sY2 ([k][qz][qy][qx]: k = x, y,
+// z): the stages of FusedPointsElement's pass 1, by lines. The z stage reads
+// only its own column, so writing it in place is safe; the next call's x stage
+// writes sX and syncs before its y stage overwrites sY.
+template <int D1D, int Q1D, typename TX>
+MFEM_HOST_DEVICE inline void GradLines(const int e, const int c, const int tx,
+                                       const int ty,
+                                       const LineBasis<D1D, Q1D>& bs,
+                                       const TX& XE, real_t* sXB, real_t* sXG,
+                                       real_t* sY0, real_t* sY1, real_t* sY2)
+{
+   using S = LineStrides<D1D, Q1D>;
+   // x: thread (dy, dz) = (tx, ty), its line of dofs to Q1D points.
+   if (tx < D1D && ty < D1D)
+   {
+      real_t u[D1D];
+      MFEM_UNROLL(D1D)
+      for (int dx = 0; dx < D1D; ++dx) { u[dx] = XE(dx, tx, ty, c, e); }
+      MFEM_UNROLL(Q1D)
+      for (int qx = 0; qx < Q1D; ++qx)
+      {
+         real_t bu = 0.0, gu = 0.0;
+         MFEM_UNROLL(D1D)
+         for (int dx = 0; dx < D1D; ++dx)
+         {
+            bu += bs.B[qx][dx] * u[dx];
+            gu += bs.G[qx][dx] * u[dx];
+         }
+         sXB[ty * S::XZ + tx * S::XQ + qx] = bu;
+         sXG[ty * S::XZ + tx * S::XQ + qx] = gu;
+      }
+   }
+   MFEM_SYNC_THREAD;
+   // y: thread (qx, dz) = (tx, ty); B u then G u.
+   if (ty < D1D)
+   {
+      {
+         real_t bu[D1D];
+         MFEM_UNROLL(D1D)
+         for (int dy = 0; dy < D1D; ++dy) { bu[dy] = sXB[ty * S::XZ + dy * S::XQ + tx]; }
+         MFEM_UNROLL(Q1D)
+         for (int qy = 0; qy < Q1D; ++qy)
+         {
+            real_t bbu = 0.0, gbu = 0.0;
+            MFEM_UNROLL(D1D)
+            for (int dy = 0; dy < D1D; ++dy)
+            {
+               bbu += bs.B[qy][dy] * bu[dy];
+               gbu += bs.G[qy][dy] * bu[dy];
+            }
+            sY0[ty * S::YZ + qy * Q1D + tx] = bbu;
+            sY1[ty * S::YZ + qy * Q1D + tx] = gbu;
+         }
+      }
+      {
+         real_t gu[D1D];
+         MFEM_UNROLL(D1D)
+         for (int dy = 0; dy < D1D; ++dy) { gu[dy] = sXG[ty * S::XZ + dy * S::XQ + tx]; }
+         MFEM_UNROLL(Q1D)
+         for (int qy = 0; qy < Q1D; ++qy)
+         {
+            real_t bgu = 0.0;
+            MFEM_UNROLL(D1D)
+            for (int dy = 0; dy < D1D; ++dy) { bgu += bs.B[qy][dy] * gu[dy]; }
+            sY2[ty * S::YZ + qy * Q1D + tx] = bgu;
+         }
+      }
+   }
+   MFEM_SYNC_THREAD;
+   // z: thread (qx, qy) = (tx, ty): x from B G u (sY2), y from G B u (sY1),
+   // z from B B u (sY0), each written over its input's column.
+   const int col = ty * Q1D + tx;
+   {
+      real_t in[D1D];
+      MFEM_UNROLL(D1D)
+      for (int dz = 0; dz < D1D; ++dz) { in[dz] = sY2[dz * S::YZ + col]; }
+      real_t out[Q1D];
+      MFEM_UNROLL(Q1D)
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         real_t v = 0.0;
+         MFEM_UNROLL(D1D)
+         for (int dz = 0; dz < D1D; ++dz) { v += bs.B[qz][dz] * in[dz]; }
+         out[qz] = v;
+      }
+      // gx goes to sY0 (k = 0), whose B B u the z component still needs:
+      // keep it in sY2 for now, swapped below.
+      MFEM_UNROLL(Q1D)
+      for (int qz = 0; qz < Q1D; ++qz) { sY2[qz * S::YZ + col] = out[qz]; }
+   }
+   {
+      real_t in[D1D];
+      MFEM_UNROLL(D1D)
+      for (int dz = 0; dz < D1D; ++dz) { in[dz] = sY1[dz * S::YZ + col]; }
+      MFEM_UNROLL(Q1D)
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         real_t v = 0.0;
+         MFEM_UNROLL(D1D)
+         for (int dz = 0; dz < D1D; ++dz) { v += bs.B[qz][dz] * in[dz]; }
+         sY1[qz * S::YZ + col] = v; // gy: k = 1 in place
+      }
+   }
+   {
+      real_t in[D1D];
+      MFEM_UNROLL(D1D)
+      for (int dz = 0; dz < D1D; ++dz) { in[dz] = sY0[dz * S::YZ + col]; }
+      MFEM_UNROLL(Q1D)
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         real_t gz = 0.0;
+         MFEM_UNROLL(D1D)
+         for (int dz = 0; dz < D1D; ++dz) { gz += bs.G[qz][dz] * in[dz]; }
+         // k = 0 <- gx (parked in sY2), k = 2 <- gz.
+         const int i = qz * S::YZ + col;
+         const real_t gx = sY2[i];
+         sY0[i] = gx;
+         sY2[i] = gz;
+      }
+   }
+}
+
+// One element by lines: FusedPointsElement's two passes, the gradients
+// formed in each; OTF: the compact data formed from J, W and nu instead of
+// read from DE. A column's per-point work (adj(J), the flux) runs as a loop
+// over its points with the column in shared memory: unrolled with the column
+// in registers, every point's J and DE loads were hoisted together (255
+// registers and spills, job 49482664).
+template <int D1D, int Q1D, bool OTF, typename TD, typename TW, typename TJ,
+          typename TA, typename TX, typename TY>
+MFEM_HOST_DEVICE inline void FusedLinesElement(const int e, real_t* smem,
+      const LineBasis<D1D, Q1D>& bs,
+      const TD& DE, const TW& W,
+      const real_t nu, const TJ& J,
+      const TA& AL, const TX& XE,
+      const TY& YE)
+{
+#if defined(__CUDA_ARCH__)
+   using S = LineStrides<D1D, Q1D>;
+   static constexpr int VDIM = 3, DIM = 3;
+   real_t* sXB = smem;
+   real_t* sXG = smem + S::XS;
+   real_t* sY0 = smem + 2 * S::XS;
+   real_t* sY1 = sY0 + S::YS;
+   real_t* sY2 = sY1 + S::YS;
+   real_t* sT = sY2 + S::YS;
+   real_t* sF[3] = {sY0, sY1, sY2}; // a column's gradients, then fluxes
+   const int tx = MFEM_THREAD_ID(x), ty = MFEM_THREAD_ID(y);
+   const int col = ty * Q1D + tx;
+   // Pass 1: grad-div's term on the column, t = alpha sum_c sum_k
+   // grad_c[k] A[k][c].
+   MFEM_UNROLL(VDIM)
+   for (int c = 0; c < VDIM; ++c)
+   {
+      GradLines<D1D, Q1D>(e, c, tx, ty, bs, XE, sXB, sXG, sY0, sY1, sY2);
+#pragma unroll 1
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         real_t A[3][3];
+         Adjugate3D(J, tx, ty, qz, e, A);
+         real_t acc = 0.0;
+         MFEM_UNROLL(DIM)
+         for (int k = 0; k < DIM; ++k) { acc += sF[k][qz * S::YZ + col] * A[k][c]; }
+         sT[qz * S::YZ + col] = (c == 0) ? acc : sT[qz * S::YZ + col] + acc;
+      }
+   }
+#pragma unroll 1
+   for (int qz = 0; qz < Q1D; ++qz)
+   {
+      sT[qz * S::YZ + col] = AL(tx, ty, qz, e) * sT[qz * S::YZ + col];
+   }
+   // Pass 2, per component: the flux O grad_c + t adj(J)[:, c] on the
+   // column, contracted back along z in the thread, then y and x by lines.
+   MFEM_UNROLL(VDIM)
+   for (int c = 0; c < VDIM; ++c)
+   {
+      GradLines<D1D, Q1D>(e, c, tx, ty, bs, XE, sXB, sXG, sY0, sY1, sY2);
+#pragma unroll 1
+      for (int qz = 0; qz < Q1D; ++qz)
+      {
+         real_t A[3][3];
+         Adjugate3D(J, tx, ty, qz, e, A);
+         const int i = qz * S::YZ + col;
+         const real_t t = sT[i];
+         const real_t gradX = sF[0][i], gradY = sF[1][i], gradZ = sF[2][i];
+         real_t O11, O12, O13, O22, O23, O33;
+         if (OTF)
+         {
+            // leandiff::Setup's expressions (A[i][j] = its A_{i+1, j+1}).
+            const real_t J11 = J(tx, ty, qz, 0, 0, e), J21 = J(tx, ty, qz, 1, 0, e);
+            const real_t J31 = J(tx, ty, qz, 2, 0, e), J12 = J(tx, ty, qz, 0, 1, e);
+            const real_t J22 = J(tx, ty, qz, 1, 1, e), J32 = J(tx, ty, qz, 2, 1, e);
+            const real_t J13 = J(tx, ty, qz, 0, 2, e), J23 = J(tx, ty, qz, 1, 2, e);
+            const real_t J33 = J(tx, ty, qz, 2, 2, e);
+            const real_t detJ = J11 * (J22 * J33 - J32 * J23) -
+                                J21 * (J12 * J33 - J32 * J13) +
+                                J31 * (J12 * J23 - J22 * J13);
+            const real_t c_detJ = W(tx, ty, qz) / detJ;
+            O11 = (c_detJ * (A[0][0] * A[0][0] + A[0][1] * A[0][1] + A[0][2] * A[0][2])) *
+                  nu;
+            O12 = (c_detJ * (A[0][0] * A[1][0] + A[0][1] * A[1][1] + A[0][2] * A[1][2])) *
+                  nu;
+            O13 = (c_detJ * (A[0][0] * A[2][0] + A[0][1] * A[2][1] + A[0][2] * A[2][2])) *
+                  nu;
+            O22 = (c_detJ * (A[1][0] * A[1][0] + A[1][1] * A[1][1] + A[1][2] * A[1][2])) *
+                  nu;
+            O23 = (c_detJ * (A[1][0] * A[2][0] + A[1][1] * A[2][1] + A[1][2] * A[2][2])) *
+                  nu;
+            O33 = (c_detJ * (A[2][0] * A[2][0] + A[2][1] * A[2][1] + A[2][2] * A[2][2])) *
+                  nu;
+         }
+         else
+         {
+            O11 = DE(tx, ty, qz, 0, e);
+            O12 = DE(tx, ty, qz, 1, e);
+            O13 = DE(tx, ty, qz, 2, e);
+            O22 = DE(tx, ty, qz, 3, e);
+            O23 = DE(tx, ty, qz, 4, e);
+            O33 = DE(tx, ty, qz, 5, e);
+         }
+         sF[0][i] = (O11 * gradX) + (O12 * gradY) + (O13 * gradZ) + t * A[0][c];
+         sF[1][i] = (O12 * gradX) + (O22 * gradY) + (O23 * gradZ) + t * A[1][c];
+         sF[2][i] = (O13 * gradX) + (O23 * gradY) + (O33 * gradZ) + t * A[2][c];
+      }
+      // z: B for F0 and F1, G for F2, one component at a time, each written
+      // over its own column (the column read whole first).
+      MFEM_UNROLL(3)
+      for (int k = 0; k < 3; ++k)
+      {
+         real_t fk[Q1D];
+         MFEM_UNROLL(Q1D)
+         for (int qz = 0; qz < Q1D; ++qz) { fk[qz] = sF[k][qz * S::YZ + col]; }
+         MFEM_UNROLL(D1D)
+         for (int dz = 0; dz < D1D; ++dz)
+         {
+            real_t zk = 0.0;
+            MFEM_UNROLL(Q1D)
+            for (int qz = 0; qz < Q1D; ++qz)
+            {
+               zk += ((k == 2) ? bs.G[qz][dz] : bs.B[qz][dz]) * fk[qz];
+            }
+            sF[k][dz * S::YZ + col] = zk;
+         }
+      }
+      MFEM_SYNC_THREAD;
+      // y: thread (qx, dz) = (tx, ty); B for F0, G for F1, B for F2.
+      if (ty < D1D)
+      {
+         {
+            real_t z0[Q1D];
+            MFEM_UNROLL(Q1D)
+            for (int qy = 0; qy < Q1D; ++qy) { z0[qy] = sY0[ty * S::YZ + qy * Q1D + tx]; }
+            MFEM_UNROLL(D1D)
+            for (int dy = 0; dy < D1D; ++dy)
+            {
+               real_t w0 = 0.0;
+               MFEM_UNROLL(Q1D)
+               for (int qy = 0; qy < Q1D; ++qy) { w0 += bs.B[qy][dy] * z0[qy]; }
+               sXB[ty * S::XZ + dy * S::XQ + tx] = w0;
+            }
+         }
+         {
+            real_t z1[Q1D], z2[Q1D];
+            MFEM_UNROLL(Q1D)
+            for (int qy = 0; qy < Q1D; ++qy)
+            {
+               z1[qy] = sY1[ty * S::YZ + qy * Q1D + tx];
+               z2[qy] = sY2[ty * S::YZ + qy * Q1D + tx];
+            }
+            MFEM_UNROLL(D1D)
+            for (int dy = 0; dy < D1D; ++dy)
+            {
+               real_t w1 = 0.0;
+               MFEM_UNROLL(Q1D)
+               for (int qy = 0; qy < Q1D; ++qy)
+               {
+                  w1 += bs.G[qy][dy] * z1[qy] + bs.B[qy][dy] * z2[qy];
+               }
+               sXG[ty * S::XZ + dy * S::XQ + tx] = w1;
+            }
+         }
+      }
+      MFEM_SYNC_THREAD;
+      // x: thread (dy, dz) = (tx, ty); G for F0, B for F1 and F2.
+      if (tx < D1D && ty < D1D)
+      {
+         real_t w0[Q1D], w1[Q1D];
+         MFEM_UNROLL(Q1D)
+         for (int qx = 0; qx < Q1D; ++qx)
+         {
+            w0[qx] = sXB[ty * S::XZ + tx * S::XQ + qx];
+            w1[qx] = sXG[ty * S::XZ + tx * S::XQ + qx];
+         }
+         MFEM_UNROLL(D1D)
+         for (int dx = 0; dx < D1D; ++dx)
+         {
+            real_t v = 0.0;
+            MFEM_UNROLL(Q1D)
+            for (int qx = 0; qx < Q1D; ++qx)
+            {
+               v += bs.G[qx][dx] * w0[qx] + bs.B[qx][dx] * w1[qx];
+            }
+            YE(dx, tx, ty, c, e) += v;
+         }
+      }
+      MFEM_SYNC_THREAD;
+   }
+#else
+   MFEM_CONTRACT_VAR(e);
+   MFEM_CONTRACT_VAR(smem);
+   MFEM_CONTRACT_VAR(bs);
+   MFEM_CONTRACT_VAR(DE);
+   MFEM_CONTRACT_VAR(W);
+   MFEM_CONTRACT_VAR(nu);
+   MFEM_CONTRACT_VAR(J);
+   MFEM_CONTRACT_VAR(AL);
+   MFEM_CONTRACT_VAR(XE);
+   MFEM_CONTRACT_VAR(YE);
+#endif
+}
+
+#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
+// The by-lines kernel: a Q1D x Q1D block per element. The body is a grid
+// constant: its LineBasis is read in place, from the parameter space. The
+// minimum blocks per SM is a template argument (1 here): so declared, nvcc 12.6
+// gives the kernel 222 registers at (7, 8), four blocks per SM, no stack, 2.38
+// ms per apply (Nsight Systems, job 49485560); with the bound written as a
+// literal (MAXT, 1), or as MAXT alone, it capped the kernel at 168 registers
+// with 32 bytes of stack: 2.82 ms (jobs 49486009, 49487162).
+template <int MAXT, int MINB, typename BODY>
+__global__ void __launch_bounds__(MAXT, MINB)
+LinesKernel(const int N, const __grid_constant__ BODY body)
+{
+   for (int k = blockIdx.x; k < N; k += gridDim.x) { body(k); }
+}
+#endif
+
+// The by-lines apply: the compact data read (OTF false, d) or formed from J,
+// the rule's weights w and the constant coefficient nu (OTF true).
+template <int D1D, int Q1D, bool OTF>
+void LinesApply(const int NE, const Array<real_t>& b, const Array<real_t>& g,
+                const Vector& d, const Array<real_t>* w, const real_t nu,
+                const Vector& j, const Vector& alpha, const Vector& x,
+                Vector& y)
+{
+   static constexpr int VDIM = 3;
+   LineBasis<D1D, Q1D> bs;
+   const real_t* hb = b.HostRead();
+   const real_t* hg = g.HostRead();
+   for (int q = 0; q < Q1D; ++q)
+   {
+      for (int dd = 0; dd < D1D; ++dd)
+      {
+         bs.B[q][dd] = hb[q + Q1D * dd];
+         bs.G[q][dd] = hg[q + Q1D * dd];
+      }
+   }
+   const auto DE = Reshape(OTF ? nullptr : d.Read(), Q1D, Q1D, Q1D, 6, NE);
+   const auto W = Reshape(OTF ? w->Read() : nullptr, Q1D, Q1D, Q1D);
+   const auto J = Reshape(j.Read(), Q1D, Q1D, Q1D, 3, 3, NE);
+   const auto AL = Reshape(alpha.Read(), Q1D, Q1D, Q1D, NE);
+   const auto XE = Reshape(x.Read(), D1D, D1D, D1D, VDIM, NE);
+   auto YE = Reshape(y.ReadWrite(), D1D, D1D, D1D, VDIM, NE);
+   const auto body = [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      MFEM_SHARED real_t smem[LineStrides<D1D, Q1D>::size];
+      FusedLinesElement<D1D, Q1D, OTF>(e, smem, bs, DE, W, nu, J, AL, XE, YE);
+   };
+#if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
+   using K = typename std::decay<decltype(body)>::type;
+   LinesKernel<Q1D* Q1D, 1, K> <<< NE, dim3(Q1D, Q1D, 1)>>>(NE, body);
+   MFEM_GPU_CHECK(cudaGetLastError());
+#else
+   MFEM_CONTRACT_VAR(body);
+#endif
+}
+
 } // namespace leandiff
+
+/// The fused apply by lines on a device (leandiff::LinesApply): in 3D at
+/// (D1D, Q1D) = (7, 8) and (8, 9), the compact data @p d read or, with @p w
+/// non-null, formed from J, the rule's weights @p w and the constant
+/// coefficient @p nu. @return Whether it ran (false: the caller applies with
+/// the registered kernels).
+static bool FusedLinesApply(const int dim, const int d1d, const int q1d,
+                            const int NE, const Array<real_t>& b,
+                            const Array<real_t>& g, const Vector& d,
+                            const Array<real_t>* w, const real_t nu,
+                            const Vector& j, const Vector& alpha,
+                            const Vector& x, Vector& y)
+{
+   if (dim != 3 || NE == 0 || !Device::Allows(Backend::DEVICE_MASK))
+   {
+      return false;
+   }
+   if (d1d == 7 && q1d == 8)
+   {
+      if (w) { leandiff::LinesApply<7, 8, true>(NE, b, g, d, w, nu, j, alpha, x, y); }
+      else { leandiff::LinesApply<7, 8, false>(NE, b, g, d, w, nu, j, alpha, x, y); }
+      return true;
+   }
+   if (d1d == 8 && q1d == 9)
+   {
+      if (w) { leandiff::LinesApply<8, 9, true>(NE, b, g, d, w, nu, j, alpha, x, y); }
+      else { leandiff::LinesApply<8, 9, false>(NE, b, g, d, w, nu, j, alpha, x, y); }
+      return true;
+   }
+   return false;
+}
 
 /// \cond DO_NOT_DOCUMENT
 template <int DIM, int D1D, int Q1D>
@@ -991,6 +1443,9 @@ void LeanVectorDiffusionIntegrator::AssemblePA(const FiniteElementSpace& fes)
                   "scalar coefficient required");
       cp = coeff->Read();
    }
+   cw_ = &ir->GetWeights();
+   cnu_const_ = (cp == nullptr);
+   cnu_ = cconst;
    const int ns = (dim == 3) ? 6 : 3;
    cpa_.SetSize(nq * ns * cne_, mt);
    cpa_.UseDevice(true);
@@ -1010,6 +1465,14 @@ void LeanVectorDiffusionIntegrator::AddMultPA(const Vector& x, Vector& y) const
    if (cne_ == 0) { return; }
    if (fused_gd_)
    {
+      // On a device by lines, the compact data formed in the kernel when the
+      // coefficient is a constant; otherwise the registered kernels.
+      if (FusedLinesApply(cdim_, cd1d_, cq1d_, cne_, cmaps_->B, cmaps_->G, cpa_,
+                          cnu_const_ ? cw_ : nullptr, cnu_,
+                          fused_gd_->PAJacobians(), fused_gd_->PAAlpha(), x, y))
+      {
+         return;
+      }
       FusedApplyKernels::Run(cdim_, cd1d_, cq1d_, cne_, cmaps_->B, cmaps_->G,
                              cpa_, fused_gd_->PAJacobians(),
                              fused_gd_->PAAlpha(), x, y, cd1d_, cq1d_);
