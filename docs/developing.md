@@ -844,4 +844,4 @@ under a key of the Spack release and the hash of `environments/ci/spack.yaml`: a
 to either rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes,
 and ccache carries the object files between runs. GitHub evicts caches unused for 7
 days; the scheduled run keeps them warm. Each run uploads the resolved `spack.lock`. No
-GPU tests run in CI (§7.6).
+GPU tests run in CI (§7.4).
