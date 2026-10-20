@@ -18,8 +18,9 @@ resolution indicator, and the plot shows both.
 ## Time step
 
 **Check that the kinetic energy never increases** before reading anything else off a run:
-in a periodic box without forcing it cannot. With the case defaults (IMEX, BDF2 with
-second-order extrapolation of the convection term) this case is **unstable at CFL 0.5**.
+in a periodic box without forcing it cannot. With IMEX (BDF2 with second-order
+extrapolation of the convection term; these decks' setting, at Q3/Q2, until 2026-10-19)
+this case is **unstable at CFL 0.5**.
 The energy rises from t ≈ 1.3 at 32³ (t ≈ 0.7 at 64³), the dissipation and the divergence
 norm jump several-fold, the step controller halves the step, and the run continues in a
 noisy state to t = 20 without any error. The "CFL up to 0.7" guidance in
@@ -36,12 +37,63 @@ viscosity to damp the explicit term. 32³ to t = 2.5, one H100 (2026-10-13):
 
 Grad-div is not the cause (without it the run is worse) and neither is the Schur
 preconditioner's grad-div term (identical physics with it off). OIFS at CFL 2 is clean and
-about 4× cheaper to t = 2.5, but it has not been taken through the turbulent phase, where
-its larger step may cost accuracy. BDF3 probably needs CFL ≈ 0.35; not run.
+about 4× cheaper to t = 2.5. Taken through the turbulent phase since (Results), it is also
+the more accurate at a given node count, and it is the decks' default. BDF3 probably needs
+CFL ≈ 0.35; not run.
 
 The reference CSV is fetched, not committed: `python3 benchmarks/fetch_references.py`.
 
 ## Results
+
+**The decks as committed, at the defaults** (2026-10-19; human: the verification
+benchmarks "using the defaults we agreed on"). `tgv_re1600_n21`, `_n32`, `_n42`: Q6/Q5, OIFS
+(BDF3, collocated mass) at CFL 2, substeps at CFL 1.5, grad-div γ = 6 h_K / k_u, the decks'
+solver settings; no overrides. main a5d8ed0 (the decks) run by the CUDA build of 5da1553
+(changes 28-56; the decks change no code); Bridges-2, one H100 each (GPU-shared), np 1.
+Dissipation against the 512³ DNS by `plot.py`: the error at its peak, and the largest
+error over t ≤ 20 as a fraction of the reference peak. Peak memory: `nvidia-smi` over the run.
+
+| Deck | Velocity nodes | DOFs | Steps | Wall | Peak memory | ε_max (t) | Peak error | Largest error | max \|E − E_ref\| |
+|---|---|---|---|---|---|---|---|---|---|
+| `_n21` | 126³ | 7.2M | 525 | 87 s | 7.8 GiB | 0.012618 (8.82) | 1.86 % | 3.31 % | 0.00090 |
+| `_n32` | 192³ | 25.3M | 764 | 329 s | 22.5 GiB | 0.012829 (8.95) | 0.22 % | 2.42 % | 0.00034 |
+| `_n42` | 252³ | 57.3M | 1,018 | 969 s | 48.4 GiB | 0.012836 (8.93) | **0.17 %** | **1.80 %** | 0.00046 |
+
+The energy never increases in any of the three; the largest ‖∇·u‖/√|Ω| is 0.041, 0.031
+and 0.021. E against the reference (errors of E per deck; the dissipation of `_n42`):
+
+| t | E (252³) | E ref | E err 252³ | E err 192³ | E err 126³ | ν⟨\|∇u\|²⟩ 252³ | ε ref |
+|---|---|---|---|---|---|---|---|
+| 4 | 0.12151 | 0.12151 | 0.00 % | 0.00 % | 0.00 % | 0.00207 | 0.00207 |
+| 8 | 0.09828 | 0.09829 | −0.01 % | −0.06 % | −0.29 % | 0.01036 | 0.01037 |
+| 9 | 0.08640 | 0.08640 | 0.00 % | −0.13 % | −0.62 % | 0.01280 | 0.01285 |
+| 10 | 0.07447 | 0.07448 | −0.01 % | +0.09 % | −0.69 % | 0.01144 | 0.01127 |
+| 12 | 0.05447 | 0.05444 | +0.06 % | +0.08 % | −1.66 % | 0.00836 | 0.00836 |
+| 16 | 0.03206 | 0.03251 | −1.41 % | +0.35 % | −1.53 % | 0.00367 | 0.00362 |
+| 19.5 | 0.02236 | 0.02252 | −0.74 % | −0.22 % | −1.59 % | 0.00198 | 0.00204 |
+
+- **The dissipation converges with the resolution**: peak error 1.86, 0.22, 0.17 %; largest
+  error 3.31, 2.42, 1.80 %. At 252³ the resolved dissipation peaks at 99.8 % of the
+  reference maximum, 0.05 time units early, and E is within 0.06 % of the reference to
+  t = 12, through the peak.
+- **After t ≈ 13 the decks are not ordered by resolution**: at t = 16 E is 1.4 % low at
+  252³ and 0.35 % high at 192³. The 252³ run loses 2.2 % more energy than the reference
+  between t = 12 and 16 (ν⟨|∇u|²⟩ 3.5 % above it at t = 13 and 3.9 % at t = 15): the decay
+  of the under-resolved small scales against a 512³ spectral reference. The largest
+  dissipation error, which covers that phase, still falls with the resolution.
+- **Q6 against Q3 on the same 192³ nodes** (`_n32` against the Q3/Q2 64³ IMEX run below):
+  E at the peak −0.13 % against −0.55 %, at t = 16 +0.35 % against −4.1 %; the resolved
+  dissipation ν⟨|∇u|²⟩ peaks at 99.8 % of the reference maximum against 97 %. 764 steps
+  in 5.5 min against 3,284 steps in 12 h 45 min (the 2026-10-14 code, before the GPU
+  memory and throughput work).
+- **The same answers as the 2026-10-17 Q6 runs below** (deck copies with these settings,
+  on the main of then): peak errors 1.87 / 0.22 / 0.17 % and largest 3.32 / 2.42 / 1.79 %
+  then; 764 steps against 763, 1,018 against 1,019 (roundoff through the solver tolerance).
+  Wall 87 / 329 / 969 s against 127 / 527 / 1,467 s, 1.46 to 1.60× faster with changes
+  28-56 (docs/throughput.md); peak memory 7.8 / 22.5 / 48.4 GiB against 8.2 / 23.6 / 51.0
+  GiB. Shared nodes both days, so the times are indicative.
+
+Earlier results, Q3/Q2 IMEX (the decks' setting until 2026-10-19) and the first Q6 runs:
 
 **32³ Q3/Q2 (96 nodes per direction), IMEX BDF2 at CFL 0.25, γ = 2h** (2026-10-13;
 Bridges-2, one H100, CUDA backend, 57 min, 1924 steps, 14 outer iterations per step; the
@@ -100,8 +152,8 @@ through the instability above and is not a result.
 
 **Q6/Q5 with OIFS, the defaults** (2026-10-17, the 3D verification of the GPU memory work;
 human: "run the 3d verification tests ... to really be sure we didn't introduce any bugs").
-The n32 deck with `--set discretization.order_u=6 --set discretization.order_p=5
---set "mesh.elements=[n,n,n]" --set time.convection=oifs --set time.cfl_target=2` (substep
+Copies of the n32 deck with `order_u: 6`, `order_p: 5`, `elements: [n, n, n]`,
+`convection: oifs` and `cfl_target: 2` written in (the decks' settings since 2026-10-19; substep
 CFL 1.5 and grad-div 6 h_K / k_u by default; the deck's solver settings), each case run with
 main of before the GPU memory work (aa6aa7e) and main after it (changes 17-27), side by side on Bridges-2, one H100 each. Dissipation error against the 512³ DNS (`plot.py`): at its peak, and the largest over
 t <= 20 as a fraction of the peak. Peak memory: `nvidia-smi` over the whole run.

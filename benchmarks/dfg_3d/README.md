@@ -19,8 +19,38 @@ The reference CSV is fetched, not committed: `python3 benchmarks/fetch_reference
 
 ## Results
 
-**2026-10-17, the 3D verification of the GPU memory work**: the decks as committed (Q3/Q2)
-and at Q6/Q5 (`--set discretization.order_u=6 --set discretization.order_p=5`; the cylinder's
+**The decks as committed, at the defaults** (2026-10-19; human: the verification
+benchmarks "using the defaults we agreed on", AMR for the cylinder). Q6/Q5 (the cylinder's
+geometry order follows) with AMR: an event every time unit for t in [1, 5], relative
+marking θ = 0.5, at most 2,500 elements, one hanging-node level; no overrides. main a5d8ed0
+(the decks) run by the CUDA build of 5da1553 (changes 28-56; the decks change no code);
+Bridges-2, one H100 each (GPU-shared), np 1. Errors against FeatFlow's tabulated values;
+peak memory by `nvidia-smi` over the run.
+
+| Deck | Elements | DOFs | Steps | Wall | Peak memory | c_D or c_D,max | Error | c_L or c_L,min | Error |
+|---|---|---|---|---|---|---|---|---|---|
+| 3D-1Z | 896 → 2,506 | 1.97M | 21,245 | 48 min | 6.5 GiB | 6.184972 | **0.006 %** | 0.009398 | **0.03 %** |
+| 3D-3Z | 896 → 2,506 | 1.97M | 19,898 | 27 min | 8.5 GiB | 3.29204 (t = 3.990) | **0.17 %** | −0.011042 (t = 3.891) | 0.39 % |
+
+- **3D-1Z: AMR takes the lift error from 0.3 % to 0.03 %** and the drag's from 0.014 % to
+  0.006 % (the 2026-10-17 Q6 run below, 896 elements, no AMR; 14,920 steps in 27 min). The
+  first event (t = 1) refines the wake and the cylinder region to 2,506 elements; the later
+  ones change nothing (`amr_events` 1 in the summary).
+- **3D-3Z against FeatFlow's own history** (its extremes 3.29777 at t = 3.990 and −0.011026
+  at t = 3.893): 0.17 % and 0.15 %, at the same times to 0.002. From t = 0.5 on, c_D stays
+  within 5.9e-3 of that history (0.18 % of c_D,max) and c_L within 4e-4 (1.2e-4 from
+  t = 1). `plot.py`'s largest gap over the run, 0.10 in c_D, is the first step from rest.
+- **The same answers as the 2026-10-17 AMR run below** (c_D,max 3.29204, c_L,min
+  −0.011041), now to t = 8 (that run stopped at t = 4.0 / 4.5 at its job's limit): the
+  same steps (289, 1,897 and 6,982 in t = 0-1, 1-2, 2-4) and outer iterations (2.45, 3.00,
+  5.28 per step against 2.50, 2.99, 5.34); 2,506 AMR elements against 2,499. 6.6 to 8.4×
+  faster per step (0.068 to 0.092 s against 0.57 to 0.61 s): changes 28-56 between, and
+  the 2026-10-17 lanes shared a node, which slowed the small DFG cases up to 3.5×.
+
+Earlier results, Q3/Q2 (the decks' setting until 2026-10-19) and the first Q6 runs:
+
+**2026-10-17, the 3D verification of the GPU memory work**: the decks as committed then (Q3/Q2)
+and at Q6/Q5 (deck copies with `order_u: 6`, `order_p: 5`; the cylinder's
 geometry order follows), run with main of before the GPU memory work (aa6aa7e) and main after it (changes 17-27), side by side on Bridges-2, one H100 each; 3D-3Z also with AMR (`amr.enabled`, an event every time
 unit from t = 1 to 5, `threshold_mode: relative`, `theta: 0.5`, `max_elements: 2500`: the
 first event refined 896 to 2,499 elements and the later ones changed nothing, so the runs
