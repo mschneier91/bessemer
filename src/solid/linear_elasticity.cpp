@@ -1,5 +1,7 @@
 #include "solid/linear_elasticity.hpp"
 
+#include "solid/element_scaled_coefficient.hpp"
+
 #include "precond/hypre_device.hpp"
 #include "time/multistep_coeffs.hpp"
 #include "util/profiler.hpp"
@@ -89,8 +91,7 @@ private:
 };
 
 LinearElasticity::LinearElasticity(ParMesh& mesh, const Options& opts)
-   : mesh_(mesh), opts_(opts), lambda_(opts.lambda), mu_(opts.mu),
-     rho_(opts.density)
+   : mesh_(mesh), opts_(opts), rho_(opts.density)
 {
    INCNS_PROFILE("solid::setup");
    const int dim = mesh_.Dimension();
@@ -103,6 +104,16 @@ LinearElasticity::LinearElasticity(ParMesh& mesh, const Options& opts)
                "linear_elasticity: bdf_order must be 2 or 3");
    MFEM_VERIFY(opts_.rho_inf >= 0.0 && opts_.rho_inf <= 1.0,
                "linear_elasticity: rho_inf must be in [0, 1]");
+   if (opts_.element_stiffness)
+   {
+      MFEM_VERIFY(opts_.element_stiffness->Size() == mesh_.GetNE(),
+                  "linear_elasticity: element_stiffness needs one factor per "
+                  "local element");
+      MFEM_VERIFY(mesh_.GetNE() == 0 || opts_.element_stiffness->Min() > 0.0,
+                  "linear_elasticity: element_stiffness must be positive");
+   }
+   lambda_ = Lame(opts_.lambda, 1);
+   mu_ = Lame(opts_.mu, 1);
    // GLL nodal basis: the LOR preconditioner refines on the GLL nodes.
    fec_ = std::make_unique<H1_FECollection>(opts_.order, dim);
    // byNODES: MFEM's elasticity partial assembly requires it.
@@ -111,7 +122,7 @@ LinearElasticity::LinearElasticity(ParMesh& mesh, const Options& opts)
 
    a_ = std::make_unique<ParBilinearForm>(fes_.get());
    a_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
-   auto* integ = new ElasticityIntegrator(lambda_, mu_);
+   auto* integ = new ElasticityIntegrator(*lambda_, *mu_);
    integ->SetIntRule(&DomainRule());
    a_->AddDomainIntegrator(integ);
    a_->Assemble();
@@ -132,6 +143,17 @@ LinearElasticity::~LinearElasticity()
 {
    // The cached geometric factors are keyed by addresses of rules_' rules.
    mesh_.DeleteGeometricFactors();
+}
+
+std::unique_ptr<Coefficient>
+LinearElasticity::Lame(double value, int children) const
+{
+   if (!opts_.element_stiffness)
+   {
+      return std::make_unique<ConstantCoefficient>(value);
+   }
+   return std::make_unique<ElementScaledCoefficient>(
+             value, *opts_.element_stiffness, children);
 }
 
 const IntegrationRule& LinearElasticity::DomainRule() const
@@ -263,7 +285,16 @@ void LinearElasticity::SetupPreconditioner(double c)
       // reuses a form's integrators on the LOR mesh with a GLL order-1 rule,
       // which must not touch the partially assembled ones.
       ParBilinearForm lor_form(fes_.get());
-      lor_form.AddDomainIntegrator(new ElasticityIntegrator(lambda_, mu_));
+      if (!lor_lambda_)
+      {
+         // The LOR mesh splits each element into k^dim (MakeRefined order).
+         int children = 1;
+         for (int d = 0; d < mesh_.Dimension(); ++d) { children *= opts_.order; }
+         lor_lambda_ = Lame(opts_.lambda, children);
+         lor_mu_ = Lame(opts_.mu, children);
+      }
+      lor_form.AddDomainIntegrator(
+         new ElasticityIntegrator(*lor_lambda_, *lor_mu_));
       if (c != 0.0)
       {
          lor_mass_.constant = c * opts_.density;
@@ -350,14 +381,16 @@ void LinearElasticity::SyncFields()
    v_gf_->SetFromTrueDofs(v_hist_[0]);
 }
 
-bool LinearElasticity::Solve()
+bool LinearElasticity::Solve() { return Solve(time_); }
+
+bool LinearElasticity::Solve(double t)
 {
    INCNS_PROFILE("solid::solve");
    Finalize();
    Vector& x = work2_;
    x = 0.0;
-   ApplyDirichlet(time_, x);
-   AssembleLoad(time_, load_);
+   ApplyDirichlet(t, x);
+   AssembleLoad(t, load_);
    rhs_ = load_;
    const bool ok = SolveShifted(0.0, rhs_, x);
    u_->SetFromTrueDofs(x);

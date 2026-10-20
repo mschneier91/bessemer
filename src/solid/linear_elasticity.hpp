@@ -48,6 +48,10 @@ public:
       SolidTimeScheme scheme = SolidTimeScheme::GeneralizedAlpha;
       int bdf_order = 2;    ///< BDF order, 2 or 3 (scheme Bdf).
       double rho_inf = 0.8; ///< Generalized-alpha high-frequency radius.
+      /// Per-element stiffness factors (one per local element; borrowed,
+      /// must outlive the solver), multiplying lambda and mu on each element
+      /// (the Jacobian stiffening of mesh motion); null: none.
+      const mfem::Vector* element_stiffness = nullptr;
    };
 
    /**
@@ -87,6 +91,15 @@ public:
     * @return Whether CG reached its tolerance.
     */
    bool Solve();
+
+   /**
+    * @brief A static solve with the Dirichlet data and the load at time
+    *        @p t (their coefficients' SetTime), from a zero initial guess.
+    *        Collective. Does not change Time(), which is the dynamic state's.
+    * @param t Time of the data.
+    * @return Whether CG reached its tolerance.
+    */
+   bool Solve(double t);
 
    /**
     * @brief Start a dynamic march: the time, the initial displacement and
@@ -219,8 +232,18 @@ private:
    RuleBook rules_;      ///< Owns every quadrature rule used here.
    std::unique_ptr<mfem::H1_FECollection> fec_;          ///< GLL nodal H1.
    std::unique_ptr<mfem::ParFiniteElementSpace> fes_;    ///< Vector H1, byNODES.
-   mfem::ConstantCoefficient lambda_; ///< First Lame parameter.
-   mfem::ConstantCoefficient mu_;     ///< Shear modulus.
+   /**
+    * @param value A Lame parameter.
+    * @param children Sub-elements per element of the mesh it is evaluated on
+    *        (1, or k^dim on the LOR mesh).
+    * @return The constant, or value times Options::element_stiffness.
+    */
+   std::unique_ptr<mfem::Coefficient> Lame(double value, int children) const;
+
+   std::unique_ptr<mfem::Coefficient> lambda_; ///< First Lame parameter.
+   std::unique_ptr<mfem::Coefficient> mu_;     ///< Shear modulus.
+   std::unique_ptr<mfem::Coefficient> lor_lambda_; ///< lambda on the LOR mesh.
+   std::unique_ptr<mfem::Coefficient> lor_mu_;     ///< mu on the LOR mesh.
    std::unique_ptr<mfem::ParBilinearForm> a_;     ///< PA elasticity form.
    mfem::ConstantCoefficient rho_;                ///< Density.
    std::unique_ptr<mfem::ParBilinearForm> m_;     ///< PA mass form (dynamics).

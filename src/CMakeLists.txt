@@ -69,6 +69,8 @@ add_library(incns STATIC
   precond/viscous_ratio.cpp
   solid/linear_elasticity.cpp
   solid/elasticity_case.cpp
+  ale/linear_elastic_motion.cpp
+  ale/mesh_motion.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and
