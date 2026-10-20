@@ -16,6 +16,7 @@
 #include "post/body_force.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
+#include "time/cfl.hpp"
 #include "util/device.hpp"
 #include "mfem.hpp"
 
@@ -175,6 +176,9 @@ int main(int argc, char* argv[])
    stepper.SetInitialVelocity(zero);
 
    incns::BodyForce body(spaces.Velocity(), {incns::kCylinderBody});
+   // bessemer's convective CFL (Nek5000's definition, as dfg_cylinder reports).
+   incns::ConvectiveCfl cfl(spaces.Velocity(), rules);
+   double cfl_max = 0.0;
    const HYPRE_BigInt ndofs = spaces.GlobalVelocityTDofs() +
                               spaces.GlobalPressureTDofs();
    const long long nelem = mesh->GetGlobalNE(); // collective: outside Root()
@@ -211,6 +215,8 @@ int main(int argc, char* argv[])
       stepper.MomentumResidual(r);
       const Vector F = body.Force(r);
       const Vector C = incns::BodyForce::Coefficients(F, 1.0, 0.1);
+      const double cfl_now = dt * cfl.Rate(stepper.Velocity()); // collective
+      cfl_max = std::max(cfl_max, cfl_now);
       ts.push_back(stepper.Time());
       cds.push_back(C(0));
       cls.push_back(C(1));
@@ -233,10 +239,10 @@ int main(int argc, char* argv[])
       std::printf("RESULT dt %g: c_D,max %.9f at t %.5f (ref 2.950921575 at 3.93625, "
                   "err %.2e) | c_L,max %.6f at t %.5f (ref 0.47795 at 5.693125, err %.2e) | "
                   "dp(8) %.6f (ref -0.1116) | steps %d, FGMRES its %.2f/step, Picard %.2f/step, "
-                  "unconverged %d | wall %.1f s (%.4f s/step, LOR %.1f s)\n",
+                  "unconverged %d | CFL max %.2f | wall %.1f s (%.4f s/step, LOR %.1f s)\n",
                   dt, cdm.second, cdm.first, (cdm.second - 2.950921575) / 2.950921575,
                   clm.second, clm.first, (clm.second - 0.47795) / 0.47795, dp, nsteps,
-                  double(lin_total) / nsteps, double(picard_total) / nsteps, failed,
+                  double(lin_total) / nsteps, double(picard_total) / nsteps, failed, cfl_max,
                   wall, wall / nsteps, wall_lor);
    }
    return 0;

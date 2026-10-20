@@ -129,8 +129,12 @@ void OseenPcdSchurPC::Mult(const Vector& r, Vector& z) const
    w_.SetSize(n);
    // t = M_p^-1 r; s = sigma r + N_p t (+ inflow t).
    mp_inv_->Mult(r, t_);
-   np_->Mult(t_, s_);
-   if (inflow_) { inflow_->AddMult(t_, s_); }
+   if (opts_.convection)
+   {
+      np_->Mult(t_, s_);
+      if (inflow_) { inflow_->AddMult(t_, s_); }
+   }
+   else { s_ = 0.0; }
    s_.Add(sigma_, r);
    if (singular_) { proj_->Project(s_); }
    // w = A_p^-1 s; z = w + nu~ t.

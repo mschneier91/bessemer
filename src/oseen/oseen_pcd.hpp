@@ -53,6 +53,9 @@ public:
       int mp_chebyshev = 3;  ///< Chebyshev order of M_p^-1.
       bool oss = true;       ///< Stabilize N_p.
       bool inflow_term = true; ///< The -((w.n)_- p, q) boundary term.
+      /// Include N_p at all; false leaves Cahouet-Chabard (sigma A_p^-1 +
+      /// nu~ M_p^-1), for comparisons.
+      bool convection = true;
    };
 
    /**

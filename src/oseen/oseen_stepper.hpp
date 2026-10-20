@@ -55,6 +55,8 @@ struct OseenStepperOptions
    bool oss = true;          ///< OSS stabilization (momentum and N_p).
    OseenAmgMode amg_mode = OseenAmgMode::Auto; ///< The velocity V-cycle.
    int n_inner = 2;          ///< PCD: CG iterations on A_p.
+   /// PCD's convection N_p; false: Cahouet-Chabard (comparisons).
+   bool pcd_convection = true;
    int print_level = -1;     ///< FGMRES print level.
 };
 

@@ -252,9 +252,12 @@ void OseenLorPreconditioner::Update(const Vector& wind, double sigma)
    std::unique_ptr<HypreParMatrix> Fk(f.ParallelAssemble());
 
    // + sigma D: the high-order GLL mass diagonal on the same dofs.
+   // Scaled where the data lives, then read on the host: SparseMatrix takes
+   // the host array without synchronizing (on a GPU the scaling would
+   // otherwise never reach it).
    Vector sd_diag(d_gll_);
-   sd_diag.HostReadWrite();
    sd_diag *= sigma;
+   sd_diag.HostRead();
    SparseMatrix Dsp(sd_diag);
    HypreParMatrix D(vfes_.GetComm(), Fk->GetGlobalNumRows(), Fk->GetRowStarts(),
                     &Dsp);

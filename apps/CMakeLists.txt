@@ -42,3 +42,8 @@ endif()
 # docs/design/oseen_bdf2.md).
 add_executable(oseen_cylinder oseen_cylinder.cpp)
 target_link_libraries(oseen_cylinder PRIVATE incns)
+
+# A deck through the Oseen schemes (mesh, BCs, forces from the deck; step and
+# scheme from the command line).
+add_executable(oseen_case oseen_case.cpp)
+target_link_libraries(oseen_case PRIVATE incns)

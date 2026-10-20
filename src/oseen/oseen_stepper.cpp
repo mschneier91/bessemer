@@ -62,6 +62,7 @@ OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
    po.nu_tilde = opts.nu * (1.0 + opts.grad_div_nu);
    po.n_inner = opts.n_inner;
    po.oss = opts.oss;
+   po.convection = opts.pcd_convection;
    pcd_ = std::make_unique<OseenPcdSchurPC>(vfes, pfes, rules, op_->Divergence(),
           bc.OutflowAttributes(),
           bc.PressureNullspaceExists(), po);

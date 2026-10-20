@@ -143,7 +143,10 @@ TEST(OseenOperator, O1_TrueDofsByComponent)
       y.HostRead();
       for (int c = 0; c < dim; c++)
       {
-         for (int i = 0; i < n; i++) { xc(i) = x(c * n + i); }
+         // Through HostWrite: operator() writes the host copy without
+         // invalidating the device one, which a GPU apply would then read.
+         real_t* xh = xc.HostWrite();
+         for (int i = 0; i < n; i++) { xh[i] = x(c * n + i); }
          p.op.Mult(xc, yc);
          yc.HostRead();
          for (int i = 0; i < n; i++) { ASSERT_EQ(y(c * n + i), yc(i)); }
