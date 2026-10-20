@@ -113,6 +113,7 @@ incns_add_mpi_test(kernel_specializations_test kernel_specializations_test.cpp)
 # Self-contained: MFEM + the integrator header only.
 incns_add_mpi_test(grad_div_integrator_elasticity_test grad_div_integrator_elasticity_test.cpp)
 incns_add_mpi_test(rotational_convection_test rotational_convection_test.cpp)
+incns_add_mpi_test(oseen_operator_test oseen_operator_test.cpp)
 incns_add_mpi_test(point_block_jacobi_test point_block_jacobi_test.cpp)
 incns_add_mpi_test(pbj_grad_div_test pbj_grad_div_test.cpp)
 incns_add_mpi_test(rotational_schur_test rotational_schur_test.cpp)

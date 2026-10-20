@@ -40,6 +40,11 @@ add_library(incns STATIC
   operators/rotational_convection.cpp
   operators/pressure_schur.cpp
   operators/block_preconditioner.cpp
+  oseen/oseen_wind.cpp
+  oseen/oseen_convection.cpp
+  oseen/oseen_lor_pc.cpp
+  oseen/oseen_pcd.cpp
+  oseen/oseen_stepper.cpp
   solver/persistent_fgmres.cpp
   solver/solution_projection.cpp
   solver/schur_complement.cpp
@@ -122,6 +127,8 @@ if(USE_CUDA)
                               time/oifs_convection.cpp
                               precond/rotational_schur.cpp
                               util/device_sync.cpp
+                              oseen/oseen_wind.cpp
+                              oseen/oseen_convection.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
 endif()

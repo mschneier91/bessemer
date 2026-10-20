@@ -37,3 +37,8 @@ target_link_libraries(dfem_probe PRIVATE incns)
 if(USE_CUDA)
   set_source_files_properties(dfem_probe.cpp PROPERTIES LANGUAGE CUDA)
 endif()
+
+# DFG 2D-3 with the semi-implicit / implicit BDF2 Oseen schemes (src/oseen/,
+# docs/design/oseen_bdf2.md).
+add_executable(oseen_cylinder oseen_cylinder.cpp)
+target_link_libraries(oseen_cylinder PRIVATE incns)
