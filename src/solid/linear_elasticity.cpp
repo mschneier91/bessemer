@@ -288,13 +288,14 @@ void LinearElasticity::SetupPreconditioner(double c)
       if (!lor_lambda_)
       {
          // The LOR mesh splits each element into k^dim (MakeRefined order).
-         int children = 1;
-         for (int d = 0; d < mesh_.Dimension(); ++d) { children *= opts_.order; }
+         const int k = opts_.order;
+         int children = k;
+         for (int d = 1; d < mesh_.Dimension(); ++d) { children *= k; }
          lor_lambda_ = Lame(opts_.lambda, children);
          lor_mu_ = Lame(opts_.mu, children);
       }
-      lor_form.AddDomainIntegrator(
-         new ElasticityIntegrator(*lor_lambda_, *lor_mu_));
+      auto* lor_integ = new ElasticityIntegrator(*lor_lambda_, *lor_mu_);
+      lor_form.AddDomainIntegrator(lor_integ);
       if (c != 0.0)
       {
          lor_mass_.constant = c * opts_.density;
