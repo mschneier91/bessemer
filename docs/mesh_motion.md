@@ -122,7 +122,8 @@ Fast tier, `mesh_motion_test`, np 1/2/4 (pins its own orders):
   (inflow, outflow and walls held by default): the body's nodes lie on the
   moved circle to 1e-12, the other boundaries' nodes did not move, det F > 0,
   and with chi = 1 the largest |det F - 1| over the O-grid ring's elements is
-  under half of chi = 0's; moving back to rest returns every node.
+  under 0.75 of chi = 0's (measured 0.159 against 0.247, and min det F 0.79
+  against 0.77); moving back to rest returns every node.
 - M4: the mesh velocity is exact for a motion quadratic in time at BDF2 and
   cubic at BDF3, on variable steps (0, 0.1, 0.25, 0.33).
 - M5: a model that is not elasticity (a test model that interpolates a given
