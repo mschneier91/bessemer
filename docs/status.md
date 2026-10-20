@@ -4,13 +4,34 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-18)
+## Where development left off (2026-10-20)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**ALE mesh motion (2026-10-20, branch `claude/mesh-motion-tc3hlq`, PR #5;
+human: "add the capability to deform a mesh using the linear elasticity solver
+... make it general that a different type of solver (hyper elasticity etc) can
+be used").** `src/ale/`: `MeshMotionModel` (the interface: fixed and displaced
+boundaries, `Solve(t)`, a displacement on the reference mesh; built by a
+factory), `LinearElasticMotion` (LinearElasticity with Jacobian stiffening
+(V_mean / V_K)^chi, Stein-Tezduyar-Benney 2003), `MeshMotion` (copies the mesh
+as the reference, moves the nodes to X + d at the nodal order, NodesUpdated,
+BDF mesh velocity from the kept node displacements, det F range).
+`LinearElasticity` gained `Options::element_stiffness` and `Solve(t)`.
+Choices made by the agent and stated to the human, not yet reviewed: the solve
+is total displacement on the reference mesh (no drift, one AMG setup; large
+rotations are the hyperelastic model's job), any boundary not named is fixed
+(no sliding yet), nu 0.3 and chi 1, no deck keys until the ALE fluid. Test
+`mesh_motion_test` (fast, M1-M5). Written in a cloud session without the
+toolchain: type-checked against MFEM 4.10's headers, never linked or run
+there; CI is the gate. Never run on a GPU. Docs: docs/mesh_motion.md.
+**Next:** the ALE fluid (u - w in the convection, GCL with BDF, the flow
+operators refreshed after each move, a `mesh_motion:` deck section,
+a moving-domain MMS), then a hyperelastic model.
+
 **Linear elasticity, static and dynamic (2026-10-19, branch
-`claude/linear-elasticity-qqgghm`, draft PR; human: "scope and then add a linear
+`claude/linear-elasticity-qqgghm`, PR #4, merged 2026-10-19; human: "scope and then add a linear
 elasticity solver", the first step toward FSI with ALE; "I want A and C
 implemented" for the time schemes).** `src/solid/` (`LinearElasticity`,
 `ElasticityCase`), `equation: linear_elasticity` in `run_case`, deck section `solid`
