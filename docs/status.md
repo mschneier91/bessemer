@@ -9,6 +9,36 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Verification at the defaults (2026-10-19/20; human: "run the full Verification
+benchmarks ... using the defaults we agreed on", "write up basically each of them
+individually").** The benchmark decks are the defaults now (a5d8ed0; human: "these options
+... should just become the defaults", AMR for the cylinder, not the channel or
+Taylor-Green): Q6/Q5, OIFS at CFL 2; Taylor-Green `_n21`, `_n32`, `_n42`; the channel at Q6
+on half the elements; DFG 3D-1Z and 3D-3Z with AMR. Run as committed, one H100 each (the
+CUDA build of 5da1553): Taylor-Green dissipation peak error 1.86 / 0.22 / 0.17 % and
+largest error 3.31 / 2.42 / 1.80 % at 126³ / 192³ / 252³ nodes (87 s, 5.5 min, 16 min to
+t = 20); the channel U⁺ within 1.47 % at Re_τ 180 and 0.66 % at Re_τ 395 (the deck's first
+run), Re_τ within 0.13 % (17 min, 2 h 34 min); DFG 3D-1Z c_D 0.006 %, c_L 0.03 % (0.3 %
+without AMR), 3D-3Z c_D,max 0.17 %, c_L,min 0.39 % (0.15 % against FeatFlow's history) to
+t = 8 in 27 min (the 2026-10-17 AMR run had stopped at t = 4.5). Write-ups:
+benchmarks/*/README.md, "Results". `run_case` takes no `--set` overrides: the 2026-10-17 runs
+used deck copies, and the READMEs no longer say otherwise.
+
+**Linear elasticity on a GPU (2026-10-19; human: "check that all the linear elasticity
+stuff added can run on GPUs").** main a5d8ed0 (before the ALE merge), two H100s: the whole
+GPU suite passes at np 1 and 2 (78/78, the first GPU suite since the elasticity merge), and
+the 2D example decks run and match the CPU to 5e-9 in every result (CG iterations 40-70 %
+higher on the GPU: hypre's device AMG). **Every 3D run at the default order (Q6) stops at
+its first operator apply**: MFEM 4.10's `ElasticityAddMultPA_`
+(fem/integ/bilininteg_elasticity_kernels.hpp) launches dim × (p+1)^dim threads per block,
+3 × 343 = 1,029 > 1,024 ("invalid configuration argument"); its diagonal and EA kernels
+have the same shape, and MFEM's master is unchanged. In 3D only orders up to Q5 fit
+(3 × 216 = 648; the Q5 runs were still queued at this writing); `verify_elasticity_test` V2
+(3D) stops at its default-order level, after Q2 and Q3 pass. The ALE mesh motion
+uses the same operator. Reported, not changed (the elasticity thread's code); the fix is
+open (an own sum-factorized elasticity operator, or upstream block limits; MFEM's kernel is
+not sum-factorized either).
+
 **ALE mesh motion (2026-10-20, branch `claude/mesh-motion-tc3hlq`, PR #5;
 human: "add the capability to deform a mesh using the linear elasticity solver
 ... make it general that a different type of solver (hyper elasticity etc) can
