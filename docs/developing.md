@@ -151,6 +151,10 @@ src/
                operators, CG + LOR-AMG, generalized-alpha or BDF2/BDF3),
                elasticity_case (equation: linear_elasticity decks;
                docs/elasticity.md)
+  ale/         mesh_motion_model (the model interface + factory), linear_elastic_motion
+               (LinearElasticity with Jacobian stiffening), mesh_motion (moves the
+               nodes to X + d from a reference copy; BDF mesh velocity;
+               docs/mesh_motion.md)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
@@ -807,7 +811,10 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   Timoshenko cantilever exact at Q3, energy identity), `elastodynamics_test`
   (time orders of every scheme, energy, the bar mode, a dynamic deck) and the
   verify tier's `verify_elasticity_test` (MMS 2D/3D, Lame cylinder, Cook's
-  membrane, the default scheme's time order, a cantilever's first frequency).
+  membrane, the default scheme's time order, a cantilever's first frequency),
+  `mesh_motion_test` (M1 translation exact with stiffening, M2 affine motion
+  exact on the curved DFG mesh, M3 the DFG cylinder moved and back, M4 the BDF
+  mesh velocity, M5 a non-elastic model through the factory).
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need
@@ -837,4 +844,4 @@ under a key of the Spack release and the hash of `environments/ci/spack.yaml`: a
 to either rebuilds the stack once (1-3 hours), otherwise a run restores it in minutes,
 and ccache carries the object files between runs. GitHub evicts caches unused for 7
 days; the scheduled run keeps them warm. Each run uploads the resolved `spack.lock`. No
-GPU tests run in CI (§7.4).
+GPU tests run in CI (§7.6).
