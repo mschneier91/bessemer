@@ -105,7 +105,7 @@ void Pointwise2D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                  const Vector& mu, const Vector& x, Vector* y, Vector* fs,
                  Vector* we)
 {
-   constexpr int DIM = 2, VDIM = 2, D2 = DIM * DIM;
+   constexpr int DIM = 2, VDIM = 2, NF = DIM * DIM; // entries of F
    const auto B = b.Read(), G = g.Read();
    const auto JI = Reshape(jinv.Read(), N, N, DIM, DIM, NE);
    const auto WD = Reshape(wdet.Read(), N, N, NE);
@@ -113,13 +113,19 @@ void Pointwise2D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    const auto XE = Reshape(x.Read(), N, N, VDIM, NE);
    auto YE = Reshape(RESIDUAL ? y->ReadWrite() : nullptr, N, N, VDIM, NE);
    auto FS = Reshape(STORE ? fs->Write() : nullptr, N, N,
-                     STORE > 0 ? STORE* D2 : 1, NE);
+                     STORE > 0 ? STORE* NF : 1, NE);
    auto WE = Reshape(ENERGY ? we->Write() : nullptr, N, N, NE);
 
    mfem::forall_2D<N* N>(NE, N, N, [ = ] MFEM_HOST_DEVICE(int e)
    {
-      constexpr int MQ1 = SetMaxOf(N);
+      constexpr int MQ1 = SetMaxOf(N), D2 = DIM * DIM;
       MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], smem[MQ1][MQ1];
+      // nvcc rejects capturing an outer variable first inside an if
+      // constexpr: these are captured here, and D2 is the lambda's own.
+      MFEM_CONTRACT_VAR(YE);
+      MFEM_CONTRACT_VAR(FS);
+      MFEM_CONTRACT_VAR(WE);
+      MFEM_CONTRACT_VAR(WD);
       kernels::internal::vd_regs2d_t<VDIM, DIM, MQ1> r0, r1;
       kernels::internal::LoadMatrix(N, N, B, sB);
       kernels::internal::LoadMatrix(N, N, G, sG);
@@ -189,21 +195,25 @@ void Tangent2D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                const Vector& jinv, const Vector& wdet, const Vector& lam,
                const Vector& mu, const Vector& lin, const Vector& x, Vector& y)
 {
-   constexpr int DIM = 2, VDIM = 2, D2 = DIM * DIM;
+   constexpr int DIM = 2, VDIM = 2, NF = DIM * DIM; // entries of F
    const auto B = b.Read(), G = g.Read();
    const auto JI = Reshape(jinv.Read(), N, N, DIM, DIM, NE);
    const auto WD = Reshape(wdet.Read(), N, N, NE);
    const auto L = lam.Read(), MU = mu.Read();
    const auto FS = Reshape(lin.Read(), N, N,
-                           MODE == 0 ? 2 * D2 : (MODE == 1 ? D2 : VDIM), NE);
+                           MODE == 0 ? 2 * NF : (MODE == 1 ? NF : VDIM), NE);
    const auto UL = Reshape(lin.Read(), N, N, VDIM, NE);
    const auto XE = Reshape(x.Read(), N, N, VDIM, NE);
    auto YE = Reshape(y.ReadWrite(), N, N, VDIM, NE);
 
    mfem::forall_2D<N* N>(NE, N, N, [ = ] MFEM_HOST_DEVICE(int e)
    {
-      constexpr int MQ1 = SetMaxOf(N);
+      constexpr int MQ1 = SetMaxOf(N), D2 = DIM * DIM;
       MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], smem[MQ1][MQ1];
+      // nvcc rejects capturing an outer variable first inside an if
+      // constexpr: these are captured here, and D2 is the lambda's own.
+      MFEM_CONTRACT_VAR(FS);
+      MFEM_CONTRACT_VAR(UL);
       kernels::internal::vd_regs2d_t<VDIM, DIM, MQ1> r0, r1, r2;
       kernels::internal::LoadMatrix(N, N, B, sB);
       kernels::internal::LoadMatrix(N, N, G, sG);
@@ -282,7 +292,7 @@ void Pointwise3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                  const Vector& mu, const Vector& x, Vector* y, Vector* fs,
                  Vector* we)
 {
-   constexpr int DIM = 3, VDIM = 3, D2 = DIM * DIM;
+   constexpr int DIM = 3, VDIM = 3, NF = DIM * DIM; // entries of F
    const auto B = b.Read(), G = g.Read();
    const auto JI = Reshape(jinv.Read(), N, N, N, DIM, DIM, NE);
    const auto WD = Reshape(wdet.Read(), N, N, N, NE);
@@ -290,14 +300,20 @@ void Pointwise3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    const auto XE = Reshape(x.Read(), N, N, N, VDIM, NE);
    auto YE = Reshape(RESIDUAL ? y->ReadWrite() : nullptr, N, N, N, VDIM, NE);
    auto FS = Reshape(STORE ? fs->Write() : nullptr, N, N, N,
-                     STORE > 0 ? STORE* D2 : 1,
+                     STORE > 0 ? STORE* NF : 1,
                      NE);
    auto WE = Reshape(ENERGY ? we->Write() : nullptr, N, N, NE);
 
    mfem::forall_2D<N* N>(NE, N, N, [ = ] MFEM_HOST_DEVICE(int e)
    {
-      constexpr int MQ1 = SetMaxOf(N);
+      constexpr int MQ1 = SetMaxOf(N), D2 = DIM * DIM;
       MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], smem[MQ1][MQ1];
+      // nvcc rejects capturing an outer variable first inside an if
+      // constexpr: these are captured here, and D2 is the lambda's own.
+      MFEM_CONTRACT_VAR(YE);
+      MFEM_CONTRACT_VAR(FS);
+      MFEM_CONTRACT_VAR(WE);
+      MFEM_CONTRACT_VAR(WD);
       kernels::internal::vd_regs3d_t<VDIM, DIM, MQ1> r0, r1;
       kernels::internal::LoadMatrix(N, N, B, sB);
       kernels::internal::LoadMatrix(N, N, G, sG);
@@ -378,13 +394,13 @@ void Tangent3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                const Vector& jinv, const Vector& wdet, const Vector& lam,
                const Vector& mu, const Vector& lin, const Vector& x, Vector& y)
 {
-   constexpr int DIM = 3, VDIM = 3, D2 = DIM * DIM;
+   constexpr int DIM = 3, VDIM = 3, NF = DIM * DIM; // entries of F
    const auto B = b.Read(), G = g.Read();
    const auto JI = Reshape(jinv.Read(), N, N, N, DIM, DIM, NE);
    const auto WD = Reshape(wdet.Read(), N, N, N, NE);
    const auto L = lam.Read(), MU = mu.Read();
    const auto FS = Reshape(lin.Read(), N, N, N,
-                           MODE == 0 ? 2 * D2 : (MODE == 1 ? D2 : VDIM),
+                           MODE == 0 ? 2 * NF : (MODE == 1 ? NF : VDIM),
                            NE);
    const auto UL = Reshape(lin.Read(), N, N, N, VDIM, NE);
    const auto XE = Reshape(x.Read(), N, N, N, VDIM, NE);
@@ -392,8 +408,12 @@ void Tangent3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
 
    mfem::forall_2D<N* N>(NE, N, N, [ = ] MFEM_HOST_DEVICE(int e)
    {
-      constexpr int MQ1 = SetMaxOf(N);
+      constexpr int MQ1 = SetMaxOf(N), D2 = DIM * DIM;
       MFEM_SHARED real_t sB[MQ1][MQ1], sG[MQ1][MQ1], smem[MQ1][MQ1];
+      // nvcc rejects capturing an outer variable first inside an if
+      // constexpr: these are captured here, and D2 is the lambda's own.
+      MFEM_CONTRACT_VAR(FS);
+      MFEM_CONTRACT_VAR(UL);
       kernels::internal::vd_regs3d_t<VDIM, DIM, MQ1> r0, r1, r2;
       kernels::internal::LoadMatrix(N, N, B, sB);
       kernels::internal::LoadMatrix(N, N, G, sG);
