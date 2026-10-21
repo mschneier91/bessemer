@@ -92,6 +92,8 @@ double NodeError(const ParMesh& mesh, const Vector& x0,
    const GridFunction& nodes = *mesh.GetNodes();
    const FiniteElementSpace& fes = *nodes.FESpace();
    const int sdim = fes.GetVDim();
+   nodes.HostRead(); // operator() reads the host copies without syncing
+   x0.HostRead();
    Vector X(sdim), dv(sdim);
    double err = 0.0;
    for (int i = 0; i < fes.GetNDofs(); ++i)
@@ -295,6 +297,8 @@ TEST(MeshMotion, M3_CylinderTranslatedAcrossTheChannel)
       const GridFunction& nodes = *mesh->GetNodes();
       const FiniteElementSpace& fes = *nodes.FESpace();
       const Vector& x0 = motion.ReferenceNodes();
+      nodes.HostRead();
+      x0.HostRead();
       double circle = 0.0, walls = 0.0;
       Array<int> vdofs;
       for (int be = 0; be < mesh->GetNBE(); ++be)
@@ -407,6 +411,8 @@ TEST(MeshMotion, M4_MeshVelocityIsTheExactBdfDerivative)
       motion.MeshVelocity(order, w);
       const FiniteElementSpace& fes = *mesh->GetNodes()->FESpace();
       const Vector& x0 = motion.ReferenceNodes();
+      x0.HostRead();
+      w.HostRead();
       Vector X(dim), we;
       double err = 0.0, ref = 0.0;
       for (int i = 0; i < fes.GetNDofs(); ++i)

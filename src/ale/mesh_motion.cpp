@@ -41,6 +41,7 @@ MeshMotion::MeshMotion(ParMesh& mesh, const Options& opts,
                "is " << mesh_.SpaceDimension());
 
    x0_ = *nodes;
+   x0_.HostRead(); // valid on the host too: ReferenceNodes() is read there
    disp_ = std::make_unique<ParGridFunction>(nodes->ParFESpace());
    *disp_ = 0.0;
    history_.assign(1, Vector(disp_->Size()));
@@ -112,10 +113,18 @@ bool MeshMotion::Move(double t)
       INCNS_PROFILE("mesh_motion::nodes");
       // Interpolation at the nodes (the identity when the model's space is
       // the nodal space); element numbering is the reference copy's.
-      disp_->ProjectGridFunction(model_->Displacement());
+      // ProjectGridFunction runs on the host: the model's displacement (a
+      // device solve) must be current there, and disp_'s host copy becomes
+      // the valid one.
+      const ParGridFunction& d = model_->Displacement();
+      d.HostRead();
+      disp_->HostReadWrite();
+      disp_->ProjectGridFunction(d);
       GridFunction& nodes = *mesh_.GetNodes();
       nodes = x0_;
       nodes += *disp_;
+      // Both copies current: element transformations read the host one.
+      nodes.HostRead();
       mesh_.NodesUpdated();
       if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
    }
