@@ -123,6 +123,8 @@ src/
   spaces/      mixed_spaces (velocity/pressure ParFESpaces, block offsets)
   operators/   stokes_operator (blocks, PA; grad-div; LOR source; rotation term N),
                convection (dealiased (u.grad)u), rotational_convection (N(w*), nvcc),
+               subgrid_model + subgrid_stress (LES: sigma / WALE eddy viscosity, the
+               explicit stress (2 nu_t S(u), S(v)), nvcc; docs/les.md),
                grad_div_integrator (sum-factorized, nvcc, upstream-bound), pressure_schur
                (mass Schur), block_preconditioner (mass-path block PC)
   precond/     cahouet_chabard (CC Schur PC + config), mixed_poisson_op (B M_v^-1 B^T,
@@ -174,6 +176,7 @@ docs/          using.md (running cases), developing.md (this guide), status.md (
                decision log), install/ (desktop.md, bridges2.md), design/ (specs);
                precond_cc.md (CC conventions), imex_vs_semi_implicit.md (DFG 2D-3 study),
                outflow_conditions.md (classical / directional do-nothing),
+               les.md (the subgrid models of large-eddy simulation),
                oifs_implementation.md (OIFS: how it works, the edge cases)
 AGENTS.md      entry point for coding agents; CLAUDE.md imports it with this guide and status.md
 test/          gtest MPI tests (np 1/2/4) + baselines.yaml
@@ -226,7 +229,7 @@ additive term inside `StokesTimeIntegrator`.
   EXT-extrapolated together with N. Identical to classical where u·n ≥ 0; it removes the
   backflow energy flux. Not applied to the rotational form (classical on its Bernoulli
   head). Under OIFS the same term is subtracted explicitly and EXT-extrapolated in the
-  BDF step (`SubtractOifsDirectionalDoNothing`; N itself lives in the substeps). `directional_do_nothing_test` reproduces the paper's Table 5.1 (j₁, j₂ for both
+  BDF step (`SubtractOifsExplicitTerms`; N itself lives in the substeps). `directional_do_nothing_test` reproduces the paper's Table 5.1 (j₁, j₂ for both
   conditions to < 0.1%). Full write-up (derivation, usage, implementation, tests):
   `docs/outflow_conditions.md`. **Dirichlet data may be time-dependent:** `SetTime(t)` + re-elimination
   every step (stale elimination silently drops temporal order; only the unsteady MMS sees it).
@@ -681,6 +684,28 @@ Tier 1 plain callables `f(x, t)` (slow, GIL) or Tier 2 `@incns.field(dim)` (numb
 C ABI `void(const double* x, double t, double* out)`, no GIL; `run/step` release the GIL).
 Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` (np 1/2/4).
 
+### 5.8 Large-eddy simulation (`physics.subgrid`; `docs/les.md`; human 2026-10-16)
+
+Off by default (bitwise unchanged). **One explicit stress term**, `(2 ν_t S(u), S(v))`
+with `S` the symmetric gradient (human: "don't forget the symmetric gradient"), added to
+the convection's explicit path: EXT-extrapolated with N under IMEX (`Convection::Mult`),
+with the directional do-nothing term in the BDF step under OIFS
+(`SubtractOifsExplicitTerms`). The implicit block, the preconditioners and the solver
+baselines are untouched; nothing is assembled or kept per step (the apply's scratch,
+~150 B per velocity dof at Q3 and Q6, is freed on return; 8 B per element persist).
+Models (`subgrid::Wale`, `subgrid::Sigma` in `operators/subgrid_model.hpp`, pointwise
+`MFEM_HOST_DEVICE`): **sigma (Nicoud et al. 2011) is the recommended one**, zero in pure
+shear (y³ at walls), solid rotation, axisymmetric/isotropic expansion and 2D flow; WALE
+for comparison. `Δ_K = filter_width · h_K / k_u` (the node spacing), the published
+constants (1.35, 0.5) by default. Needs `navier_stokes` + the convective form (refused
+otherwise). **Singular values by one-sided Jacobi, not Cardano** (Nicoud's appendix):
+the closed form lost σ₃ near walls (0 at y = 1e-3 where the truth is 2e-9), i.e. the
+y³ behaviour that is the model's point. The kernels (`operators/subgrid_stress.cpp`,
+nvcc list) interpolate directly (O(k⁶) per element; sum factorization is the follow-up
+if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_t,
+ν_t/ν, the subgrid dissipation). Tests `subgrid_test` S1–S5 (§7.3). Not yet: a
+turbulent validation (TGV Re 1600 on a coarse mesh), a GPU run, the Python bindings.
+
 ## 6. Coding conventions
 
 - C++17, MFEM style, RAII, no raw `new`/`delete` in new code (MFEM ownership idioms aside).
@@ -693,7 +718,7 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
 - **NEVER hand-write `mfem::forall` outside the nvcc TU list** in `src/CMakeLists.txt`
   (`grad_div_integrator.cpp`, `rotational_convection.cpp`, `point_block_jacobi.cpp`,
   `kinetic_head.cpp`, `amr/gradient_indicator.cpp`, `time/cfl.cpp`,
-  `precond/rotational_schur.cpp`). Elsewhere `MFEM_HOST_DEVICE` is empty and `forall`'s CUDA
+  `precond/rotational_schur.cpp`, `operators/subgrid_stress.cpp`). Elsewhere `MFEM_HOST_DEVICE` is empty and `forall`'s CUDA
   dispatch is preprocessed out: a host loop over device pointers that compiles clean,
   passes every CPU and debug-device test, and segfaults on a GPU (38/62 tests on an H100,
   2026-07-21). Prefer device-aware `Vector`/`Operator` ops (`Set`, `Add`, `/=`, `Max`,
@@ -807,6 +832,10 @@ Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` 
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
   square-cylinder domain's area, boundary lengths, grading), `deck_test`,
   `checkpoint_test`, `nondim_test`, `diagnostics_test`, `bc_integration_test`,
+  `subgrid_test` (S1 the pointwise LES models and their vanishing cases, S2 the stress
+  operator = `ElasticityIntegrator(λ = 0, μ = ν_t)` to 1e-12, S3 dissipation =
+  ⟨y, u⟩ ≥ 0, S4 explicit constant ν_t → implicit ν + ν_t at order 2, S5 sigma through
+  `Case`),
   `linear_elasticity_test` (PA = assembled, quadratic exact at Q2, the
   Timoshenko cantilever exact at Q3, energy identity), `elastodynamics_test`
   (time orders of every scheme, energy, the bar mode, a dynamic deck) and the
