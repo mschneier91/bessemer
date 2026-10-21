@@ -21,6 +21,24 @@ void Block(const Vector& x, const Array<int>& offsets, int b, Vector& part)
    part.MakeRef(const_cast<Vector&>(x), offsets[b], offsets[b + 1] - offsets[b]);
 }
 
+/// An inner solver that adds its iteration counts to a counter.
+class CountingSolver : public Solver
+{
+public:
+   CountingSolver(IterativeSolver& s, long& count)
+      : Solver(s.Height()), s_(s), count_(count) {}
+   void Mult(const Vector& x, Vector& y) const override
+   {
+      s_.Mult(x, y);
+      count_ += s_.GetNumIterations();
+   }
+   void SetOperator(const Operator&) override {}
+
+private:
+   IterativeSolver& s_;
+   long& count_;
+};
+
 } // namespace
 
 OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
@@ -40,7 +58,7 @@ OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
    sop.nu = opts.nu;
    sop.collocated_mass = true;
    sop.mass_coeff = 1.0 / opts.dt;
-   sop.grad_div = 0.0;
+   sop.grad_div = opts.grad_div_h;
    sop.grad_div_nu = opts.grad_div_nu;
    op_ = std::make_unique<StokesOperator>(spaces, rules, sop, &ess_);
    c0_ = sop.mass_coeff;
@@ -57,16 +75,69 @@ OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
    lo.nu = opts.nu;
    lo.mode = opts.amg_mode;
    lor_pc_ = std::make_unique<OseenLorPreconditioner>(vfes, rules, ess_, lo);
+   // gamma per element (constant on each): the LOR's diagonal grad-div blocks.
+   if (opts.lor_grad_div && op_->GradDivCoefficient())
+   {
+      ParMesh& mesh = *vfes.GetParMesh();
+      const Geometry::Type geom = (dim_ == 3) ? Geometry::CUBE : Geometry::SQUARE;
+      Vector gamma_e(mesh.GetNE());
+      for (int e = 0; e < mesh.GetNE(); e++)
+      {
+         ElementTransformation* T = mesh.GetElementTransformation(e);
+         T->SetIntPoint(&Geometries.GetCenter(geom));
+         gamma_e(e) = op_->GradDivCoefficient()->Eval(*T, Geometries.GetCenter(geom));
+      }
+      lor_pc_->SetGradDiv(gamma_e);
+   }
    OseenPcdSchurPC::Options po;
    po.nu = opts.nu;
    po.nu_tilde = opts.nu * (1.0 + opts.grad_div_nu);
    po.n_inner = opts.n_inner;
-   po.oss = opts.oss;
+   po.oss = opts.oss && opts.pcd_oss;
    po.convection = opts.pcd_convection;
-   pcd_ = std::make_unique<OseenPcdSchurPC>(vfes, pfes, rules, op_->Divergence(),
-          bc.OutflowAttributes(),
-          bc.PressureNullspaceExists(), po);
-   pc_ = std::make_unique<BlockStokesPC>(offsets_, *lor_pc_, *pcd_,
+   mfem::Solver* schur = nullptr;
+   if (opts.schur == OseenSchur::Pcd)
+   {
+      pcd_ = std::make_unique<OseenPcdSchurPC>(vfes, pfes, rules, op_->Divergence(),
+             bc.OutflowAttributes(),
+             bc.PressureNullspaceExists(), po);
+      schur = pcd_.get();
+   }
+   else
+   {
+      // As StokesSolver builds it: sigma and nu from here, the grad-div
+      // weighting from the operator's gamma(x).
+      CahouetChabardConfig cc;
+      cc.sigma = c0_;
+      cc.nu = opts.nu;
+      cc.n_inner = opts.n_inner;
+      cc.schur_grad_div = true;
+      cc_ = std::make_unique<CahouetChabardSchurPC>(
+               cc, vfes, pfes, rules, op_->Divergence(), op_->Mass(),
+               op_->MassDiagonal(), bc.OutflowAttributes(),
+               bc.PressureNullspaceExists(), op_->MassDiagonalInverse());
+      if (op_->GradDivCoefficient())
+      {
+         cc_->SetGradDiv(*op_->GradDivCoefficient());
+         cc_->ReleasePlainMass();
+      }
+      schur = cc_.get();
+   }
+   mfem::Solver* a_inv = lor_pc_.get();
+   if (opts.velocity_inner_rtol > 0.0)
+   {
+      vel_inner_ = std::make_unique<FGMRESSolver>(vfes.GetComm());
+      vel_inner_->SetKDim(50);
+      vel_inner_->SetMaxIter(opts.velocity_inner_maxit);
+      vel_inner_->SetRelTol(opts.velocity_inner_rtol);
+      vel_inner_->SetAbsTol(0.0);
+      vel_inner_->SetPrintLevel(-1);
+      vel_inner_->iterative_mode = false;
+      vel_inner_->SetPreconditioner(*lor_pc_);
+      vel_count_ = std::make_unique<CountingSolver>(*vel_inner_, vel_inner_its_);
+      a_inv = vel_count_.get(); // the inner solver's operator: BuildSystem
+   }
+   pc_ = std::make_unique<BlockStokesPC>(offsets_, *a_inv, *schur,
                                          op_->Divergence(), BlockPCShape::UpperTri);
    fgmres_ = std::make_unique<FGMRESSolver>(vfes.GetComm());
    fgmres_->SetKDim(opts.kdim);
@@ -90,6 +161,27 @@ OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
       v->UseDevice(true);
       *v = 0.0;
    }
+
+   // A constant body force f: its functional (f, v) is M f exactly (the
+   // collocated rule integrates the degree-k basis exactly).
+   bool force = false;
+   for (double f : opts.body_force) { force = force || f != 0.0; }
+   if (force)
+   {
+      Vector fv(dim_);
+      for (int c = 0; c < dim_; c++)
+      {
+         fv(c) = c < (int) opts.body_force.size() ? opts.body_force[c] : 0.0;
+      }
+      VectorConstantCoefficient fc(fv);
+      ParGridFunction fg(&vfes);
+      fg.ProjectCoefficient(fc);
+      Vector ft;
+      fg.GetTrueDofs(ft);
+      forcing_.SetSize(nu_);
+      forcing_.UseDevice(true);
+      op_->Mass().Mult(ft, forcing_);
+   }
 }
 
 OseenStepper::~OseenStepper() = default;
@@ -106,6 +198,7 @@ void OseenStepper::BuildSystem()
    sys_->SetBlock(0, 1, Bt_.get());
    sys_->SetBlock(1, 0, &op_->Divergence());
    fgmres_->SetOperator(*sys_);
+   if (vel_inner_) { vel_inner_->SetOperator(*F_); }
 }
 
 void OseenStepper::SetInitialVelocity(VectorCoefficient& u0)
@@ -136,7 +229,7 @@ void OseenStepper::SetWind(const Vector& W)
    wind_gf_.SetFromTrueDofs(W);
    wind_->Update(wind_gf_);
    nscalar_->Assemble();
-   pcd_->Update(wind_gf_, c0_);
+   if (pcd_) { pcd_->Update(wind_gf_, c0_); }
 }
 
 void OseenStepper::Residual(const Vector& X, Vector& R) const
@@ -175,6 +268,7 @@ void OseenStepper::Step()
    StopWatch sw;
    sw.Start();
    stats_ = Stats();
+   vel_inner_its_ = 0;
    const double dt = opts_.dt;
    const double t_new = t_ + dt;
    const bool first = (step_ == 0);
@@ -184,6 +278,7 @@ void OseenStepper::Step()
    {
       op_->SetMassCoeff(c0);
       c0_ = c0;
+      if (cc_) { cc_->Reset(c0, opts_.nu); }
       BuildSystem();
       lor_age_ = 0;
    }
@@ -195,6 +290,7 @@ void OseenStepper::Step()
    if (first) { hist_.Set(1.0 / dt, un); }
    else { add(2.0 / dt, un, -0.5 / dt, unm1, hist_); }
    op_->Mass().Mult(hist_, b_);
+   if (forcing_.Size() > 0) { b_ += forcing_; }
 
    // The guess X = 2 X^n - X^{n-1} (X^n on the first step), Dirichlet data
    // at t^{n+1}.
@@ -254,6 +350,7 @@ void OseenStepper::Step()
       rn = Norm(R_);
    }
    stats_.r_final = rn;
+   stats_.velocity_inner_iterations = vel_inner_its_;
    MFEM_VERIFY(std::isfinite(rn), "OseenStepper: non-finite residual at t = "
                << t_new);
 

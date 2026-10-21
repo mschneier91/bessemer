@@ -12,11 +12,13 @@
 #include "oseen/oseen_pcd.hpp"
 #include "oseen/oseen_wind.hpp"
 #include "precond/block_stokes_pc.hpp"
+#include "precond/cahouet_chabard.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "mfem.hpp"
 
 #include <memory>
+#include <vector>
 
 namespace incns
 {
@@ -30,6 +32,18 @@ enum class OseenScheme
    /// tolerance or a fixed count; the first iteration is the semi-implicit
    /// step's solve with the wind of the extrapolated guess.
    Implicit
+};
+
+/// The pressure Schur preconditioner of the Oseen schemes.
+enum class OseenSchur
+{
+   /// OseenPcdSchurPC: PCD (or, with pcd_convection off, Cahouet-Chabard with
+   /// a constant nu + gamma).
+   Pcd,
+   /// bessemer's CahouetChabardSchurPC with the grad-div weighting (the
+   /// pressure mass by 1/(nu + gamma(x))): with a strong grad-div term, the
+   /// augmented-Lagrangian Schur approximation.
+   CahouetChabardGradDiv
 };
 
 /// Options of OseenStepper.
@@ -52,11 +66,30 @@ struct OseenStepperOptions
    /// componentwise velocity preconditioner leaves it out, so it must stay
    /// of the viscosity's size.
    double grad_div_nu = 1.0;
+   /// Grad-div's part proportional to the element size, gamma += c h_K
+   /// (bessemer's grad_div_h; 6 / k_u is its default): 0 = none.
+   double grad_div_h = 0.0;
+   /// The Schur preconditioner.
+   OseenSchur schur = OseenSchur::Pcd;
+   /// Give each velocity component's LOR operator its diagonal grad-div block
+   /// gamma (d_c u_c, d_c v_c) (with grad-div on).
+   bool lor_grad_div = true;
    bool oss = true;          ///< OSS stabilization (momentum and N_p).
    OseenAmgMode amg_mode = OseenAmgMode::Auto; ///< The velocity V-cycle.
    int n_inner = 2;          ///< PCD: CG iterations on A_p.
    /// PCD's convection N_p; false: Cahouet-Chabard (comparisons).
    bool pcd_convection = true;
+   /// Stabilize N_p (with oss); false: N_p without OSS (diagnostics).
+   bool pcd_oss = true;
+   /// > 0: the velocity block solved by an inner FGMRES on F to this
+   /// relative tolerance (preconditioned by the V-cycles) instead of one
+   /// V-cycle -- a diagnostic that takes the velocity preconditioner out of
+   /// the outer iteration count.
+   double velocity_inner_rtol = 0.0;
+   int velocity_inner_maxit = 100; ///< Its iteration cap.
+   /// A constant body force per unit mass (dim values; empty: none), e.g. a
+   /// channel's mean pressure gradient.
+   std::vector<double> body_force;
    int print_level = -1;     ///< FGMRES print level.
 };
 
@@ -88,6 +121,7 @@ public:
       double cell_re = 0.0;      ///< Its cell Reynolds number.
       double t_lor = 0.0;        ///< LOR assembly + V-cycle setup (s; 0 if reused).
       double t_step = 0.0;       ///< The whole step (s).
+      long velocity_inner_iterations = 0; ///< Inner velocity FGMRES iterations.
    };
 
    /**
@@ -148,10 +182,15 @@ private:
    std::unique_ptr<mfem::BlockOperator> sys_;
    std::unique_ptr<OseenLorPreconditioner> lor_pc_;
    std::unique_ptr<OseenPcdSchurPC> pcd_;
+   std::unique_ptr<CahouetChabardSchurPC> cc_; ///< OseenSchur::CahouetChabardGradDiv.
+   std::unique_ptr<mfem::Solver> vel_count_;   ///< Counts the inner iterations.
+   mutable long vel_inner_its_ = 0;
+   std::unique_ptr<mfem::FGMRESSolver> vel_inner_; ///< velocity_inner_rtol > 0.
    std::unique_ptr<BlockStokesPC> pc_;
    std::unique_ptr<mfem::FGMRESSolver> fgmres_;
    mfem::ParGridFunction u_, p_, wind_gf_;
    mfem::Vector X_, Xn_, Xnm1_, R_, D_, b_, hist_, W_;
+   mfem::Vector forcing_; ///< M f for the constant body force (empty: none).
    double t_ = 0.0, c0_ = -1.0;
    int step_ = 0, lor_age_ = 0;
    Stats stats_;

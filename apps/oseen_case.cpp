@@ -15,6 +15,7 @@
 #include "mesh/case_mesh.hpp"
 #include "oseen/oseen_stepper.hpp"
 #include "post/body_force.hpp"
+#include "post/channel_statistics.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
 #include "time/cfl.hpp"
@@ -27,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -69,7 +71,11 @@ int main(int argc, char* argv[])
    const char* amg = "auto";
    int nlit = 10, reuse = 10, print_every = 50, n_inner = 2;
    double dt = 0.01, t_final = -1.0, nl = 1e-3, plin = 1e-1, lin = 1e-6, gd = 1.0;
-   bool oss = true, pcd = true;
+   bool oss = true, pcd = true, pcd_oss = true;
+   const char* u0_add = "";
+   double vin = 0.0, gdh = 0.0;
+   const char* schur = "pcd";
+   bool lgd = true;
    OptionsParser args(argc, argv);
    args.AddOption(&deck, "-deck", "--deck", "The deck (YAML).", true);
    args.AddOption(&dt, "-dt", "--dt", "Step size.");
@@ -86,6 +92,18 @@ int main(int argc, char* argv[])
    args.AddOption(&n_inner, "-ni", "--n-inner", "PCD: CG iterations on A_p.");
    args.AddOption(&pcd, "-pcd", "--pcd", "-cc", "--cahouet-chabard",
                   "Schur: PCD, or Cahouet-Chabard (no N_p).");
+   args.AddOption(&pcd_oss, "-pcd-oss", "--pcd-oss", "-no-pcd-oss", "--no-pcd-oss",
+                  "Stabilize PCD's N_p (diagnostics).");
+   args.AddOption(&gdh, "-gdh", "--grad-div-h",
+                  "Grad-div gamma += c h_K (bessemer's grad_div_h; 6 / k_u its default).");
+   args.AddOption(&schur, "-schur", "--schur",
+                  "pcd (OseenPcdSchurPC; -cc drops N_p) | al (bessemer's Cahouet-Chabard, grad-div weighted).");
+   args.AddOption(&lgd, "-lgd", "--lor-grad-div", "-no-lgd", "--no-lor-grad-div",
+                  "Diagonal grad-div blocks in the velocity LOR operators.");
+   args.AddOption(&vin, "-vin", "--velocity-inner-rtol",
+                  "> 0: inner FGMRES on the velocity block to this tolerance (diagnostics).");
+   args.AddOption(&u0_add, "-u0", "--add-velocity",
+                  "A uniform velocity \"Ux Uy [Uz]\" added to the initial one (diagnostics).");
    args.AddOption(&print_every, "-pe", "--print-every", "Progress every N steps.");
    args.Parse();
    if (!args.Good())
@@ -125,12 +143,36 @@ int main(int argc, char* argv[])
    so.oss = oss;
    so.n_inner = n_inner;
    so.pcd_convection = pcd;
+   so.pcd_oss = pcd_oss;
+   so.velocity_inner_rtol = vin;
+   so.grad_div_h = gdh;
+   so.lor_grad_div = lgd;
+   so.schur = std::strcmp(schur, "al") == 0 ? incns::OseenSchur::CahouetChabardGradDiv
+              : incns::OseenSchur::Pcd;
+   if (p.forcing.Active())
+   {
+      so.body_force.assign(p.forcing.body_force.begin(),
+                           p.forcing.body_force.begin() + spaces.Dim());
+   }
    so.amg_mode = std::strcmp(amg, "air") == 0 ? incns::OseenAmgMode::Air
                  : std::strcmp(amg, "amg") == 0 ? incns::OseenAmgMode::Amg
                  : incns::OseenAmgMode::Auto;
    incns::OseenStepper stepper(spaces, rules, bc, so);
    std::unique_ptr<VectorCoefficient> u0 = incns::MakeInitialVelocity(p);
-   stepper.SetInitialVelocity(*u0);
+   // -u0: the deck's initial velocity plus a uniform one (Galilean shift).
+   Vector shift(spaces.Dim());
+   shift = 0.0;
+   {
+      std::istringstream in(u0_add);
+      for (int c = 0; c < spaces.Dim() && in >> shift(c); c++) {}
+   }
+   if (shift.Normlinf() > 0.0)
+   {
+      VectorConstantCoefficient sc(shift);
+      VectorSumCoefficient sum(*u0, sc);
+      stepper.SetInitialVelocity(sum);
+   }
+   else { stepper.SetInitialVelocity(*u0); }
 
    std::unique_ptr<incns::BodyForce> force;
    if (!body.empty())
@@ -138,6 +180,12 @@ int main(int argc, char* argv[])
       force = std::make_unique<incns::BodyForce>(spaces.Velocity(), body);
    }
    incns::ConvectiveCfl cfl(spaces.Velocity(), rules);
+   std::unique_ptr<incns::ChannelStatistics> chan;
+   if (p.channel_statistics.enabled)
+   {
+      chan = std::make_unique<incns::ChannelStatistics>(
+                spaces.Velocity(), p.nu, p.channel_statistics.start_time);
+   }
    const HYPRE_BigInt ndofs = spaces.GlobalVelocityTDofs() +
                               spaces.GlobalPressureTDofs();
    const long long nelem = mesh->GetGlobalNE(); // collective: outside Root()
@@ -183,17 +231,38 @@ int main(int argc, char* argv[])
          cd = C(0);
          cl = C(1);
       }
+      if (chan && (s + 1) % std::max(p.channel_statistics.interval, 1) == 0)
+      {
+         chan->Sample(stepper.Velocity(), stepper.Time());
+      }
+      // The profiles so far, now and then: a run cut short keeps its averages.
+      if (chan && chan->Samples() > 0 && (s + 1) % 2000 == 0)
+      {
+         chan->WriteCsv("chan_profiles.csv");
+      }
       ts.push_back(stepper.Time());
       cds.push_back(cd);
       cls.push_back(cl);
       if (Mpi::Root() && ((s + 1) % std::max(print_every, 1) == 0 || s + 1 == nsteps))
       {
          std::printf("t %7.4f  c_D %10.6f  c_L %10.6f  its %3d  picard %d  r0 %.2e "
-                     "r %.2e  %s Re_h %.1f  step %.3f s (LOR %.3f s)%s\n",
+                     "r %.2e  %s Re_h %.1f  vin %ld  step %.3f s (LOR %.3f s)%s\n",
                      stepper.Time(), cd, cl, st.linear_iterations, st.picard_iterations,
-                     st.r0, st.r_final, st.air ? "AIR" : "AMG", st.cell_re, st.t_step,
+                     st.r0, st.r_final, st.air ? "AIR" : "AMG", st.cell_re,
+                     st.velocity_inner_iterations, st.t_step,
                      st.t_lor, st.converged ? "" : "  NOT CONVERGED");
          std::fflush(stdout);
+      }
+   }
+   if (chan)
+   {
+      chan->WriteCsv("chan_profiles.csv"); // rank 0 writes
+      if (Mpi::Root())
+      {
+         std::printf("CHANNEL Re_tau %.2f (target %.2f), u_tau %.5f, U_bulk %.5f, "
+                     "averaging time %.2f (%ld samples) -> chan_profiles.csv\n",
+                     chan->ReTau(), chan->Delta() / p.nu, chan->UTau(),
+                     chan->BulkVelocity(), chan->AveragingTime(), chan->Samples());
       }
    }
    const auto cdmax = PeakOf(ts, cds, 1.0);

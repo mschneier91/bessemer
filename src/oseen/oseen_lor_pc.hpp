@@ -77,6 +77,16 @@ public:
     */
    void Update(const mfem::Vector& wind, double sigma);
 
+   /**
+    * @brief Include each component's diagonal grad-div block
+    *        gamma (d_c u_c, d_c v_c) in its LOR operator (anisotropic
+    *        diffusion, at the vertex rule), with gamma constant on each
+    *        high-order element. Assembled once here, added at every Update.
+    *        The components' operators then differ: no sharing.
+    * @param gamma_elem gamma per high-order element (local elements).
+    */
+   void SetGradDiv(const mfem::Vector& gamma_elem);
+
    /// z = F^-1 r, one V-cycle per component.
    void Mult(const mfem::Vector& r, mfem::Vector& z) const override;
    void SetOperator(const mfem::Operator&) override {}
@@ -108,6 +118,8 @@ private:
    std::vector<mfem::Array<int>> ess_;   ///< Essential tdofs per component.
    std::vector<int> block_;              ///< Component -> matrix index.
    std::vector<std::unique_ptr<mfem::HypreParMatrix>> F_;
+   /// The diagonal grad-div blocks per component (SetGradDiv; empty: none).
+   std::vector<std::unique_ptr<mfem::HypreParMatrix>> G_;
    std::vector<std::unique_ptr<mfem::HypreBoomerAMG>> amg_;
    bool air_ = false;
    double re_h_ = 0.0, t_assembly_ = 0.0, t_setup_ = 0.0;

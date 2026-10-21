@@ -51,6 +51,28 @@ private:
    Vector wv_;
 };
 
+/// gamma of the parent element times e_c e_c^T on the LOR mesh: the diagonal
+/// grad-div block of component c.
+class LorGradDivDiagonal : public MatrixCoefficient
+{
+public:
+   LorGradDivDiagonal(int dim, int c, const Vector& gamma, const Array<int>& parent)
+      : MatrixCoefficient(dim), c_(c), gamma_(gamma), parent_(parent) {}
+
+   void Eval(DenseMatrix& K, ElementTransformation& T,
+             const IntegrationPoint&) override
+   {
+      K.SetSize(height);
+      K = 0.0;
+      K(c_, c_) = gamma_(parent_[T.ElementNo]);
+   }
+
+private:
+   int c_;
+   const Vector& gamma_;
+   const Array<int>& parent_;
+};
+
 /// hypre relax-point pattern: F -> -1, C -> 1, A -> 0 (host memory: hypre
 /// owns it after HYPRE_BoomerAMGSetGridRelaxPoints).
 HYPRE_Int* RelaxPoints(const std::string& pattern)
@@ -196,6 +218,28 @@ OseenLorPreconditioner::OseenLorPreconditioner(ParFiniteElementSpace& vfes,
 
 OseenLorPreconditioner::~OseenLorPreconditioner() = default;
 
+void OseenLorPreconditioner::SetGradDiv(const Vector& gamma_elem)
+{
+   MFEM_VERIFY(gamma_elem.Size() == vfes_.GetParMesh()->GetNE(),
+               "OseenLorPreconditioner: gamma per local element");
+   Vector gamma(gamma_elem);
+   gamma.HostRead();
+   ParFiniteElementSpace& lfes = lor_->GetParFESpace();
+   G_.resize(dim_);
+   for (int c = 0; c < dim_; c++)
+   {
+      LorGradDivDiagonal gc(dim_, c, gamma, parent_);
+      ParBilinearForm g(&lfes);
+      auto* di = new DiffusionIntegrator(gc);
+      di->SetIntRule(vertex_rule_);
+      g.AddDomainIntegrator(di);
+      g.Assemble();
+      g.Finalize();
+      G_[c].reset(g.ParallelAssemble());
+      block_[c] = c; // the components' operators now differ
+   }
+}
+
 double OseenLorPreconditioner::CellReynolds(const ParGridFunction& w) const
 {
    ParMesh& mesh = *vfes_.GetParMesh();
@@ -273,6 +317,11 @@ void OseenLorPreconditioner::Update(const Vector& wind, double sigma)
       if (block_[c] != c) { F_[c].reset(); amg_[c].reset(); continue; }
       amg_[c].reset();
       F_[c].reset(Add(1.0, *Fk, 1.0, D));
+      if (!G_.empty())
+      {
+         std::unique_ptr<HypreParMatrix> FG(Add(1.0, *F_[c], 1.0, *G_[c]));
+         F_[c] = std::move(FG);
+      }
       DiagonalFirst(*F_[c]);
       delete F_[c]->EliminateRowsCols(ess_[c]);
       amg_[c] = std::make_unique<HypreBoomerAMG>();
