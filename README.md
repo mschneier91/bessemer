@@ -1,7 +1,8 @@
 # bessemer
 
 A high-order finite element solver for the **incompressible Navier–Stokes equations** (and
-unsteady Stokes), built on [MFEM](https://mfem.org).
+unsteady Stokes), with linear elastic solids and mesh motion as the first steps toward
+fluid-structure interaction, built on [MFEM](https://mfem.org) and running on CPUs and GPUs.
 
 **bessemer is used through a coding agent.** You describe the flow you want; an agent
 (Claude Code, Codex, Cursor or similar) running in this checkout sets up the machine,
@@ -42,20 +43,50 @@ forces, shedding statistics and errors against reference values when the case ha
 The agent reports from that file, not from the log. Runs can also write ParaView output
 and per-step history.
 
-## The solver
+## What it solves
+
+**Incompressible flow** (`equation: navier_stokes` or `stokes`)
 
 - **Monolithic:** velocity and pressure are solved together as one saddle-point system per
-  step, with no projection or splitting error. FGMRES with a Cahouet–Chabard block
-  preconditioner.
-- **High order on quads and hexes:** Taylor–Hood Q6/Q5 by default (orders are runtime
-  options), partial assembly throughout.
-- **Time stepping:** OIFS sub-stepped convection with BDF3 at CFL 2 by default; BDF2 with
-  explicit convection (IMEX) for Stokes, the rotational form, error-controlled steps or on
-  request. CFL-controlled, fixed or error-controlled steps.
-- **Adaptive mesh refinement** (refinement only, anisotropic), lift/drag, a directional
-  do-nothing outflow, checkpoint/restart.
-- **Cases** are YAML decks, Python scripts or small C++ drivers. MPI-parallel; the GPU
-  path is built in but not yet validated on a GPU.
+  step, with no projection or splitting error.
+- **High order on quads and hexes:** continuous Taylor–Hood spaces with the orders as
+  runtime options, partial assembly throughout, grad-div stabilization (on or off, scaled
+  with h, ν or both).
+- **Time stepping:** BDF with convection either sub-stepped along characteristics (OIFS,
+  Nek5000's approach, at CFL numbers above 1) or explicit and extrapolated (IMEX); the
+  convective or the semi-implicit rotational form; CFL-controlled, fixed or
+  error-controlled steps; a failed solve cuts the step and retries.
+- **Linear solvers:** two outer methods, FGMRES on the coupled system or flexible CG on the
+  pressure Schur complement (Uzawa, [docs/uzawa.md](docs/uzawa.md)); a Cahouet–Chabard or
+  pressure-mass Schur preconditioner; several velocity-block preconditioners (Jacobi-PCG,
+  point-block Jacobi, Chebyshev, low-order-refined AMG); projected initial guesses across
+  steps.
+- **Large-eddy simulation:** the sigma and WALE subgrid models as an explicit eddy-viscosity
+  stress ([docs/les.md](docs/les.md)); off means DNS.
+- **Geometry and boundaries:** boxes (periodic, stretched), the DFG cylinder channel in 2D
+  and 3D, a square cylinder in a large domain, and Gmsh or MFEM mesh files with named
+  boundaries; inflow profiles, no-slip, and a directional do-nothing outflow that stays
+  stable under backflow.
+- **Adaptive mesh refinement** (refinement only, isotropic or anisotropic, hanging nodes),
+  lift and drag, shedding statistics, channel statistics, checkpoint and restart.
+
+**Solids** (`equation: linear_elasticity`): small-strain linear elasticity, static or
+dynamic (generalized-alpha or BDF), plane strain or plane stress
+([docs/elasticity.md](docs/elasticity.md)).
+
+**Mesh motion:** a pseudo-solid mesh deformation with Jacobian stiffening, the first piece
+of an ALE formulation toward fluid-structure interaction. It is a library feature for now,
+with no deck keys ([docs/mesh_motion.md](docs/mesh_motion.md)); the ALE fluid and a
+hyperelastic solid ([docs/design/hyperelasticity_spec.md](docs/design/hyperelasticity_spec.md))
+come next.
+
+**Running it:** MPI-parallel on CPUs and NVIDIA GPUs (CUDA). Cases are YAML decks, Python
+scripts (module `incns`: `run_deck`, `Parameters.from_dict`, or step a `Case` yourself) or
+small C++ drivers.
+
+The defaults (orders, time scheme, CFL target, solver settings) are measured choices that
+change as the studies move; the generated [deck reference](docs/deck_reference.md) lists
+every key with its current default, and the method docs in [docs/](docs/) say why.
 
 ## Without an agent
 
@@ -66,17 +97,32 @@ scripts/doctor.sh --run                             # check the setup, build, sm
                                                     # (on a cluster: on a compute node)
 . scripts/env.sh                                    # the Spack toolchain in this shell
 mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d1.yaml
+build/cpu/apps/run_case --deck-reference            # every deck key
 ```
 
-[benchmarks/](benchmarks/README.md) holds the standard benchmarks (decks, reference data,
-comparison scripts). [docs/using.md](docs/using.md) covers running cases, [docs/install/spack.md](docs/install/spack.md)
-the setup (`scripts/setup.sh`), [docs/developing.md](docs/developing.md) changing the solver, and
-[docs/deck_reference.md](docs/deck_reference.md) lists every deck key.
+| To | Read |
+|---|---|
+| Run cases: decks, Python, C++ drivers, the example decks, outputs | [docs/using.md](docs/using.md) |
+| Every deck key and its default | [docs/deck_reference.md](docs/deck_reference.md) |
+| Run the standard benchmarks (Taylor–Green Re 1600, turbulent channel, DFG 3D) | [benchmarks/](benchmarks/README.md) |
+| Install: the Spack setup (`scripts/setup.sh`), machines with their own page | [docs/install/spack.md](docs/install/spack.md), [environments/](environments/README.md) |
+| Change the solver: rules, design decisions, tests | [docs/developing.md](docs/developing.md) |
+
+## Testing
+
+Tests are MPI gtests run at 1, 2 and 4 ranks, in tiers: a **fast** tier (every module, the
+order and exactness oracles), a **verify** tier (convergence rates against exact solutions,
+run through the case-level defaults so it follows them as they change), a **slow** tier,
+and the **Python** tests. GitHub Actions runs the style check, a warnings-as-errors build,
+Doxygen, the fast tier and the Python tests on every push and pull request, and the verify
+tier every third day and on request ([docs/developing.md](docs/developing.md) §7).
 
 ## Status
 
-The CPU path is validated; the GPU path hasn't been run on a GPU yet. Where development
-stands and what's open: [docs/status.md](docs/status.md).
+The flow solver, the solid solver, mesh motion and LES all run on CPUs and on GPUs (NVIDIA
+H100); the benchmarks have been run at the defaults with results in each benchmark's
+README. Where development stands, what was decided and what is open:
+[docs/status.md](docs/status.md).
 
 ## License
 
