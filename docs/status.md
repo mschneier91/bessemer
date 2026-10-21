@@ -31,7 +31,12 @@ The two decks at np 4 (cloud scratch build, MFEM v4.10 from GitHub, apt hypre/Op
 MPI, not the Spack toolchain): rectangle 16 x 8 Q4, parabola peak 0.3, min det F 0.68,
 0.07 s; cube 8^3 Q3, bump peak 0.2, min det F 0.45, 2.5 s; boundary error <= 1e-16 in
 both. Rendered with headless ParaView. Not run on a GPU; the expression evaluation and
-the boundary-error check are host loops (setup and once per move). **Next:** the ALE fluid driven by the same section.
+the boundary-error check are host loops (setup and once per move). Stiffening and
+Poisson-ratio guidance, measured on the DFG cylinder and a graded rectangle (chi 0/1/2):
+docs/mesh_motion.md §1, "Choosing the settings" (human: "put in comments about the
+stiffening ... when it should be used and recommendation for settings"). **Next:** test it
+on a GPU (human 2026-10-21: "next step is to have it tested on GPU"), then the ALE fluid
+driven by the same section.
 
 **README rewrite (2026-10-21, PR #8, merged).** The README now describes the fluid,
 solid, mesh-motion, LES and Schur capabilities on CPUs and GPUs, the solver options,
