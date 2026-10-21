@@ -607,9 +607,13 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
    {
       for (Vector* v : {&ue_, &ye_}) { v->SetSize(ne_size); v->UseDevice(true); }
    }
-   if (!fes.GetProlongationMatrix())
+   // One rank, conforming: MFEM's prolongation is an IdentityOperator, and
+   // the true dofs are the local dofs -- no L-vectors at all.
+   const Operator* P = fes.GetProlongationMatrix();
+   p_identity_ = !P || dynamic_cast<const IdentityOperator*>(P) != nullptr;
+   if (p_identity_)
    {
-      own_l_ = false; // true dofs are the local dofs: no L-vectors at all
+      own_l_ = false;
    }
    else if (scratch && scratch->LocalSize() >= nl)
    {
@@ -637,9 +641,9 @@ std::size_t HyperelasticOperator::MemoryBytes() const
 
 void HyperelasticOperator::ToElements(const Vector& u) const
 {
-   const Operator* P = fes_.GetProlongationMatrix();
-   if (P)
+   if (!p_identity_)
    {
+      const Operator* P = fes_.GetProlongationMatrix();
       P->Mult(u, ul_);
       restriction_->Mult(ul_, ue_);
    }
@@ -648,10 +652,10 @@ void HyperelasticOperator::ToElements(const Vector& u) const
 
 void HyperelasticOperator::FromElements(Vector& y) const
 {
-   const Operator* P = fes_.GetProlongationMatrix();
    y.SetSize(Height());
-   if (P)
+   if (!p_identity_)
    {
+      const Operator* P = fes_.GetProlongationMatrix();
       restriction_->MultTranspose(ye_, yl_);
       P->MultTranspose(yl_, y);
    }

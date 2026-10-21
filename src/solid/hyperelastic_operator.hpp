@@ -120,6 +120,7 @@ private:
    mutable mfem::Vector qe_; ///< Energy partial sums (allocated by Energy()).
    mutable mfem::Vector ul_, ue_, ye_, yl_; ///< Work (borrowed or own).
    bool own_e_ = true, own_l_ = true; ///< Whether ue_/ye_ and ul_/yl_ are own.
+   bool p_identity_ = false; ///< Whether the prolongation is the identity.
    std::unique_ptr<Tangent> tangent_;
 };
 
