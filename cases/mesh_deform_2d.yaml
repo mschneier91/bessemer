@@ -1,0 +1,39 @@
+# Mesh deformation in 2D: a 2 x 1 rectangle whose bottom boundary is pushed
+# up by a parabola, d_y = A t 4 x (L - x) / L^2 (peak A = 0.3 at x = 1, zero
+# at the corners), ramped over four moves to t = 1. The other three sides are
+# held. The displacement is extended into the domain by the linear elastic
+# pseudo-solid with Jacobian stiffening (docs/mesh_motion.md); the summary
+# reports det F, the element Jacobian ratio and how well the moved boundary
+# matches the expression. Seconds on one rank; a ctest runs it at np 1/2/4.
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/mesh_deform_2d.yaml
+#   -> mesh_deform_2d/mesh_deform_2d_summary.json, ParaView output in the
+#      same directory (cycle 0 is the reference mesh)
+
+equation: mesh_motion
+
+mesh:
+  dim: 2
+  elements: [16, 8]
+  lengths: [2.0, 1.0]
+  periodic: [false, false]
+
+mesh_motion:
+  order: 4
+  steps: 4
+
+time:
+  t_final: 1.0
+
+boundary_conditions:
+  - select: [ymin]
+    type: displacement
+    expression: ["0", "A * t * 4 * x * (L - x) / L^2"]
+    parameters: {A: 0.3, L: 2.0}
+  - {select: [xmin, xmax, ymax], type: fixed}
+
+output:
+  enabled: true
+  history: true
+  path: mesh_deform_2d
+  name: mesh_deform_2d

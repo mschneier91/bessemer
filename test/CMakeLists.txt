@@ -198,6 +198,8 @@ incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(linear_elasticity_test linear_elasticity_test.cpp)
 incns_add_mpi_test(elastodynamics_test elastodynamics_test.cpp)
 incns_add_mpi_test(mesh_motion_test mesh_motion_test.cpp)
+incns_add_mpi_test(mesh_motion_case_test mesh_motion_case_test.cpp)
+incns_add_mpi_test(expression_test expression_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
 incns_add_mpi_test(run_monitor_test run_monitor_test.cpp)
@@ -250,6 +252,17 @@ foreach(np IN LISTS INCNS_TEST_NPS)
             ${CMAKE_SOURCE_DIR}/cases/cantilever_2d.yaml
             --summary run_case_cantilever_np${np}_summary.json)
   set_tests_properties(run_case_cantilever_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # A mesh deformation deck end to end (equation mesh_motion). It writes
+  # ParaView output, so each rank count runs in its own directory.
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mesh_deform_np${np})
+  add_test(NAME run_case_mesh_deform_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/mesh_deform_2d.yaml
+            --summary run_case_mesh_deform_np${np}_summary.json
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mesh_deform_np${np})
+  set_tests_properties(run_case_mesh_deform_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "status=ok")
   # The same cantilever with its load applied suddenly: a dynamic march.

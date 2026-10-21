@@ -8,11 +8,11 @@ Every key a YAML deck (`apps/run_case <deck.yaml>`) understands, with its defaul
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `equation` | stokes \| navier_stokes \| linear_elasticity | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, or a small-strain linear elastic solid, static or dynamic (section solid). |
+| `equation` | stokes \| navier_stokes \| linear_elasticity \| mesh_motion | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, a small-strain linear elastic solid, static or dynamic (section solid), or mesh_motion: deform the mesh by prescribed boundary displacements (section mesh_motion). |
 | `device` | string | `cpu` | MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins. |
 | `initial_velocity` | string | `zero` | Named initial condition: zero, uniform, channel (see the initial section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, -cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes from Python or C++. |
 | `restart` | string | `""` | Checkpoint directory to restart from (same number of MPI ranks). |
-| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}; a solid (equation linear_elasticity) takes type fixed \| displacement \| traction \| free instead, displacement and traction with value: [x, y(, z)] (a traction is sigma n, force per unit area). Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
+| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}; a solid (equation linear_elasticity) takes type fixed \| displacement \| traction \| free instead, displacement and traction with value: [x, y(, z)] (a traction is sigma n, force per unit area); a displacement may instead give expression: one string per component in x, y, z, t (+ - * / ^, sin, cos, exp, sqrt, abs, min, max, ..., pi), with optional parameters: {name: value} usable in it. equation mesh_motion takes fixed \| displacement. Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
 
 ## `physics`
 
@@ -320,3 +320,19 @@ The solid of equation linear_elasticity: small strains, isotropic and homogeneou
 | `solid.time_scheme` | generalized_alpha \| bdf | `generalized_alpha` | Dynamic time integrator: Chung-Hulbert generalized-alpha (second order, high-frequency damping set by rho_inf), or the fluid's variable-step BDF (order bdf_order) on the first-order system (u, v), started by one trapezoidal step. |
 | `solid.bdf_order` | int | `2` | BDF order, 2 or 3. BDF3 is not A-stable: an undamped mode with omega dt between about 0.5 and 2 grows (4 % per step at omega dt = 1), so it suits short or damped runs only; BDF2 and generalized-alpha are unconditionally stable. |
 | `solid.rho_inf` | real | `0.8` | Generalized-alpha spectral radius at infinite frequency, in [0, 1]: 1 is the trapezoidal rule (energy-conserving, no damping), smaller values damp the unresolved high frequencies more. |
+
+## `mesh_motion`
+
+Equation mesh_motion: the mesh is deformed by the boundary groups of type displacement, every other boundary held (type fixed), the displacement extended into the domain by a pseudo-solid (docs/mesh_motion.md).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `mesh_motion.model` | linear_elastic | `linear_elastic` | The extension model: small-strain linear elasticity on the reference mesh with Jacobian stiffening (Stein, Tezduyar and Benney 2003). |
+| `mesh_motion.poisson_ratio` | real | `0.3` | Poisson's ratio of the pseudo-solid (-1 < nu < 1/2); its Young's modulus does not matter (the problem is displacement-driven). |
+| `mesh_motion.stiffening` | real | `1` | Jacobian stiffening exponent chi >= 0: each element's stiffness times (V_mean / V_K)^chi, so small elements move nearly rigidly; 0 is a homogeneous solid. |
+| `mesh_motion.order` | int | `0` | Displacement and geometry order; <= 0: discretization.order_u. A curved geometry (which has its own nodes) keeps its order. |
+| `mesh_motion.steps` | int | `1` | Moves at t_k = k time.t_final / steps, k = 1..steps (the expressions' t); 1 is a single static deformation at t_final. |
+| `mesh_motion.rtol` | real | `1e-10` | CG relative tolerance. |
+| `mesh_motion.atol` | real | `0` | CG absolute tolerance. |
+| `mesh_motion.max_iter` | int | `2000` | CG iteration cap. |
+| `mesh_motion.preconditioner` | loramg \| jacobi | `loramg` | CG preconditioner: one BoomerAMG V-cycle on the low-order-refined operator, or its diagonal. |

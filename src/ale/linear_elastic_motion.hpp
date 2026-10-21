@@ -22,7 +22,11 @@ namespace incns
  *
  * chi = 0 is a homogeneous solid; chi = 1 (the default) makes the small
  * elements, typically the boundary layer at a moving body, nearly rigid, so
- * the larger elements away from it absorb the deformation. The operator and
+ * the larger elements away from it absorb the deformation. Stiffening does not
+ * improve the mesh as a whole: it moves distortion from small elements into
+ * large ones, which is the trade wanted for a boundary layer, and chi = 2
+ * costs the far field more than it usually buys (docs/mesh_motion.md §1,
+ * "Choosing the settings", with measurements). The operator and
  * its LOR-AMG are built once (the reference mesh never moves); each Solve()
  * is one CG from a zero guess.
  */

@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "ale/mesh_motion_parameters.hpp"
 #include "amr/amr_parameters.hpp"
 #include "config/deck_key.hpp"
 #include "config/nondimensionalization.hpp"
@@ -24,6 +25,7 @@
 
 #include <array>
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -37,7 +39,9 @@ enum class Equation
 {
    Stokes,          ///< Unsteady Stokes (Sprint 1).
    NavierStokes,    ///< Incompressible Navier-Stokes (Sprint 2.2; IMEX BDF/AB).
-   LinearElasticity ///< Small-strain linear elasticity (ElasticityCase).
+   LinearElasticity, ///< Small-strain linear elasticity (ElasticityCase).
+   /// Deform the mesh by prescribed boundary displacements (MeshMotionCase).
+   MeshMotion
 };
 
 /// How the time step is chosen (deck `time.step_control`).
@@ -69,7 +73,9 @@ enum class BcType
    NoSlip,            ///< Zero velocity wall (no field needed).
    Outflow,           ///< Do-nothing / natural traction (no field).
    Fixed,             ///< Solid: zero displacement (clamped).
-   Displacement,      ///< Solid: a constant displacement (`value`).
+   /// Solid or mesh motion: a displacement, constant (`value`) or an
+   /// expression of x, y, z, t (`expression`).
+   Displacement,
    Traction,          ///< Solid: a constant traction sigma n (`value`).
    Free               ///< Solid: traction-free.
 };
@@ -109,6 +115,11 @@ struct BcSpec
    /// BcType::Velocity: the constant value (Constant profile); the
    /// displacement or traction of the solid types Displacement and Traction.
    std::array<double, 3> value = {0.0, 0.0, 0.0};
+   /// BcType::Displacement: one expression of (x, y, z, t) per component
+   /// (config/expression.hpp) instead of `value`; empty when `value` is used.
+   std::vector<std::string> expression;
+   /// Named constants the expressions may use (deck `parameters`).
+   std::map<std::string, double> expression_parameters;
    BcProfile profile = BcProfile::Constant;           ///< BcType::Velocity shape.
    double u_max = 1.0;   ///< Parabolic: peak velocity.
    double height = 1.0;  ///< Parabolic: channel height (y from 0 to height).
@@ -546,6 +557,8 @@ struct Parameters
 
    /// The solid of an equation: linear_elasticity case (deck section `solid`).
    ElasticityParameters solid;
+   /// The mesh deformation of equation mesh_motion (deck `mesh_motion`).
+   MeshMotionParameters mesh_motion;
 
    CheckpointParameters checkpoint; ///< Rolling checkpoint settings.
    /// When non-empty, restore the marching state from this checkpoint

@@ -1,6 +1,7 @@
 #include "config/parameters.hpp"
 
 #include "config/deck_reader.hpp"
+#include "config/expression.hpp"
 #include "mesh/mesh_file.hpp"
 
 #include "mfem.hpp" // MFEM_VERIFY
@@ -9,6 +10,7 @@
 
 #include <cmath>
 #include <set>
+#include <stdexcept>
 
 namespace incns
 {
@@ -26,10 +28,13 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    {
       {"stokes", Equation::Stokes}, {"navier_stokes", Equation::NavierStokes},
       {"linear_elasticity", Equation::LinearElasticity},
+      {"mesh_motion", Equation::MeshMotion},
       {"nse", Equation::NavierStokes}
    },
-   "Equation set: unsteady Stokes, incompressible Navier-Stokes, or a "
-   "small-strain linear elastic solid, static or dynamic (section solid).");
+   "Equation set: unsteady Stokes, incompressible Navier-Stokes, a "
+   "small-strain linear elastic solid, static or dynamic (section solid), or "
+   "mesh_motion: deform the mesh by prescribed boundary displacements "
+   "(section mesh_motion).");
    r.Read(root, "device", p.device,
           "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
    r.Read(root, "initial_velocity", p.initial_velocity,
@@ -671,7 +676,11 @@ void FillFromDeck(DeckReader& r, Parameters& p)
              "outflow | velocity | velocity_dirichlet, ...}; a solid (equation "
              "linear_elasticity) takes type fixed | displacement | traction | free "
              "instead, displacement and traction with value: [x, y(, z)] (a "
-             "traction is sigma n, force per unit area). Names: box faces xmin, "
+             "traction is sigma n, force per unit area); a displacement may "
+             "instead give expression: one string per component in x, y, z, t "
+             "(+ - * / ^, sin, cos, exp, sqrt, abs, min, max, ..., pi), with "
+             "optional parameters: {name: value} usable in it. equation "
+             "mesh_motion takes fixed | displacement. Names: box faces xmin, "
              "xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. "
              "type velocity takes value: [u, v] (constant), or profile: parabolic "
              "with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D "
@@ -702,7 +711,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          static const std::set<std::string> entry_keys =
          {
             "group", "type", "select", "value", "profile", "u_max", "height",
-            "width", "time_profile", "time_scale"
+            "width", "time_profile", "time_scale", "expression", "parameters"
          };
          for (const auto& kv : e)
          {
@@ -710,7 +719,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
             MFEM_VERIFY(entry_keys.count(k), "parameters: unknown "
                         "boundary_conditions key '" << k << "' (group, type, "
                         "select, value, profile, u_max, height, width, "
-                        "time_profile, time_scale)");
+                        "time_profile, time_scale, expression, parameters)");
          }
          BcSpec s;
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
@@ -731,12 +740,59 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                         "solid: fixed|displacement|traction|free)");
             s.type = BcType::VelocityDirichlet;
          }
-         if (s.type == BcType::Displacement || s.type == BcType::Traction)
+         const bool by_expression = s.type == BcType::Displacement &&
+                                    e["expression"];
+         MFEM_VERIFY(by_expression || (!e["expression"] && !e["parameters"]),
+                     "parameters: boundary keys 'expression' and 'parameters' "
+                     "need type displacement (and parameters needs expression)");
+         if (by_expression)
+         {
+            const YAML::Node ex = e["expression"];
+            MFEM_VERIFY(!e["value"], "parameters: a displacement boundary "
+                        "takes value or expression, not both");
+            MFEM_VERIFY(ex.IsSequence() &&
+                        static_cast<int>(ex.size()) == p.mesh.dim,
+                        "parameters: a displacement expression needs one "
+                        "string per component (" << p.mesh.dim << ")");
+            for (const auto& c : ex) { s.expression.push_back(c.as<std::string>()); }
+            if (e["parameters"])
+            {
+               MFEM_VERIFY(e["parameters"].IsMap(), "parameters: a boundary's "
+                           "parameters must be a map {name: value}");
+               for (const auto& kv : e["parameters"])
+               {
+                  s.expression_parameters[kv.first.as<std::string>()] =
+                     kv.second.as<double>();
+               }
+            }
+            try
+            {
+               VectorExpression check(s.expression, s.expression_parameters);
+            }
+            catch (const std::invalid_argument& err)
+            {
+               MFEM_ABORT("parameters: boundary_conditions: " << err.what());
+            }
+         }
+         if (by_expression)
+         {
+            for (const char* k :
+                 {"profile", "u_max", "height", "width", "time_profile",
+                  "time_scale"
+                 })
+            {
+               MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
+                           << "' needs type velocity");
+            }
+         }
+         else if (s.type == BcType::Displacement || s.type == BcType::Traction)
          {
             MFEM_VERIFY(e["value"] && e["value"].IsSequence() &&
                         static_cast<int>(e["value"].size()) == p.mesh.dim,
                         "parameters: a " << ty << " boundary needs value: a "
-                        "list of " << p.mesh.dim << " components");
+                        "list of " << p.mesh.dim << " components"
+                        << (s.type == BcType::Displacement ?
+                            " (or expression: one string per component)" : ""));
             for (int d = 0; d < p.mesh.dim; ++d)
             {
                s.value[d] = e["value"][d].as<double>();
@@ -1028,6 +1084,39 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Generalized-alpha spectral radius at infinite frequency, in [0, 1]: "
           "1 is the trapezoidal rule (energy-conserving, no damping), smaller "
           "values damp the unresolved high frequencies more.");
+
+   MeshMotionParameters& mm = p.mesh_motion;
+   const DeckSection motion = r.Section(root, "mesh_motion",
+                                        "Equation mesh_motion: the mesh is "
+                                        "deformed by the boundary groups of "
+                                        "type displacement, every other "
+                                        "boundary held (type fixed), the "
+                                        "displacement extended into the domain "
+                                        "by a pseudo-solid (docs/mesh_motion.md).");
+   r.ReadEnum(motion, "model", mm.model,
+   {{"linear_elastic", MeshMotionModelType::LinearElastic}},
+   "The extension model: small-strain linear elasticity on the reference "
+   "mesh with Jacobian stiffening (Stein, Tezduyar and Benney 2003).");
+   r.Read(motion, "poisson_ratio", mm.poisson_ratio,
+          "Poisson's ratio of the pseudo-solid (-1 < nu < 1/2); its Young's "
+          "modulus does not matter (the problem is displacement-driven).");
+   r.Read(motion, "stiffening", mm.stiffening,
+          "Jacobian stiffening exponent chi >= 0: each element's stiffness "
+          "times (V_mean / V_K)^chi, so small elements move nearly rigidly; 0 "
+          "is a homogeneous solid.");
+   r.Read(motion, "order", mm.order,
+          "Displacement and geometry order; <= 0: discretization.order_u. A "
+          "curved geometry (which has its own nodes) keeps its order.");
+   r.Read(motion, "steps", mm.steps,
+          "Moves at t_k = k time.t_final / steps, k = 1..steps (the "
+          "expressions' t); 1 is a single static deformation at t_final.");
+   r.Read(motion, "rtol", mm.rtol, "CG relative tolerance.");
+   r.Read(motion, "atol", mm.atol, "CG absolute tolerance.");
+   r.Read(motion, "max_iter", mm.max_iter, "CG iteration cap.");
+   r.ReadEnum(motion, "preconditioner", mm.preconditioner,
+   {{"loramg", ElasticityPC::LorAmg}, {"jacobi", ElasticityPC::Jacobi}},
+   "CG preconditioner: one BoomerAMG V-cycle on the low-order-refined "
+   "operator, or its diagonal.");
 }
 
 // Abort with every unknown key a deck sets, each with its closest valid key.
@@ -1155,8 +1244,10 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(!p.channel_statistics.enabled || !p.amr.enabled,
                "parameters: channel_statistics needs a fixed mesh (amr off): "
                "every node height must span the whole x-z plane");
-   // A solid takes the solid boundary types, a flow the flow ones.
+   // A solid takes the solid boundary types, a flow the flow ones, a mesh
+   // motion fixed and displacement.
    const bool solid = (p.equation == Equation::LinearElasticity);
+   const bool motion = (p.equation == Equation::MeshMotion);
    bool held = false;
    for (const BcSpec& s : p.boundary_conditions)
    {
@@ -1164,10 +1255,33 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                               s.type == BcType::Displacement ||
                               s.type == BcType::Traction ||
                               s.type == BcType::Free;
-      MFEM_VERIFY(solid_type == solid, "parameters: boundary types fixed, "
-                  "displacement, traction and free are for equation "
-                  "linear_elasticity, and only they are");
+      MFEM_VERIFY(solid_type == (solid || motion), "parameters: boundary types "
+                  "fixed, displacement, traction and free are for equation "
+                  "linear_elasticity (and fixed, displacement for "
+                  "mesh_motion), and only they are");
+      MFEM_VERIFY(!motion || s.type == BcType::Fixed ||
+                  s.type == BcType::Displacement, "parameters: equation "
+                  "mesh_motion takes boundary types fixed and displacement only "
+                  "(a mesh boundary is held or moved)");
       held = held || s.type == BcType::Fixed || s.type == BcType::Displacement;
+   }
+   if (motion)
+   {
+      const MeshMotionParameters& mm = p.mesh_motion;
+      MFEM_VERIFY(mm.poisson_ratio > -1.0 && mm.poisson_ratio < 0.5,
+                  "parameters: mesh_motion.poisson_ratio must be in (-1, 1/2)");
+      MFEM_VERIFY(mm.stiffening >= 0.0,
+                  "parameters: mesh_motion.stiffening must be >= 0");
+      MFEM_VERIFY(mm.steps >= 1, "parameters: mesh_motion.steps must be >= 1");
+      MFEM_VERIFY(p.t_final > 0.0, "parameters: mesh_motion needs time.t_final "
+                  "> 0 (the time of the last move)");
+      MFEM_VERIFY(mm.rtol > 0.0 && mm.atol >= 0.0 && mm.max_iter >= 1,
+                  "parameters: bad mesh_motion.rtol, atol or max_iter");
+      MFEM_VERIFY(p.nondim.mode == ScalingMode::Dimensionless,
+                  "parameters: mesh_motion uses the deck's own units "
+                  "(nondimensionalization.mode dimensionless)");
+      MFEM_VERIFY(!p.amr.enabled, "parameters: AMR is not available for "
+                  "mesh_motion");
    }
    if (solid)
    {

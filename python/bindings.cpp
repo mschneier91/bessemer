@@ -8,6 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ale/mesh_motion_case.hpp"
 #include "bc/boundary_conditions.hpp"
 #include "bc/boundary_names.hpp"
 #include "bc/deck_boundary.hpp"
@@ -458,8 +459,8 @@ void SeqToArray(const py::sequence& s, std::array<T, 3>& a)
    }
 }
 
-// Run a deck end to end as apps/run_case does: a solid (static solve or
-// dynamic march) or a flow (the deck's named initial condition and boundary
+// Run a deck end to end as apps/run_case does: a mesh deformation, a solid
+// (static solve or dynamic march) or a flow (the deck's named initial condition and boundary
 // groups, coverage required), with the summary written at the start
 // ("running") and the end, and the profile next to it. Collective.
 // @return The summary path and whether the run succeeded.
@@ -487,6 +488,14 @@ std::pair<std::string, bool> RunDeck(Parameters params, std::string summary)
       solid.WriteSummary(summary, "running");
       const bool ok = solid.Run();
       solid.WriteSummary(summary, ok ? "ok" : "diverged");
+      return {summary, ok};
+   }
+   if (params.equation == Equation::MeshMotion)
+   {
+      MeshMotionCase motion(*pmesh, params);
+      motion.WriteSummary(summary, "running");
+      const bool ok = motion.Run();
+      motion.WriteSummary(summary, ok ? "ok" : "diverged");
       return {summary, ok};
    }
    Case flow(*pmesh, params);
@@ -557,7 +566,8 @@ PYBIND11_MODULE(_core, m)
    py::enum_<Equation>(m, "Equation")
    .value("Stokes", Equation::Stokes)
    .value("NavierStokes", Equation::NavierStokes)
-   .value("LinearElasticity", Equation::LinearElasticity);
+   .value("LinearElasticity", Equation::LinearElasticity)
+   .value("MeshMotion", Equation::MeshMotion);
 
    py::enum_<StepControl>(m, "StepControl")
    .value("Fixed", StepControl::Fixed)

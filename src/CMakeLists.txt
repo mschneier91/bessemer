@@ -53,6 +53,7 @@ add_library(incns STATIC
   time/cfl.cpp
   config/deck_reader.cpp
   config/parameters.cpp
+  config/expression.cpp
   config/nondimensionalization.cpp
   config/initial_conditions.cpp
   post/output.cpp
@@ -72,6 +73,7 @@ add_library(incns STATIC
   solid/elasticity_case.cpp
   ale/linear_elastic_motion.cpp
   ale/mesh_motion.cpp
+  ale/mesh_motion_case.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and

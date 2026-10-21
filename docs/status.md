@@ -9,6 +9,40 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
+human: "add the capability to deform a given mesh using the structural solver ...
+specify like a function on the boundary which will then deform the mesh using jacobian
+stiffening"; demos: a rectangle with its bottom deformed by a parabola, and a 3D cube).**
+`equation: mesh_motion` makes `run_case` (and `incns.run_deck`) deform the deck's mesh
+with the existing `MeshMotion` + `LinearElasticMotion` (docs/mesh_motion.md §3):
+boundary groups `displacement` (a constant `value` or, new, an `expression` per
+component in x, y, z, t with named `parameters`; `config/expression`, a small parser
+of our own) and `fixed`; section `mesh_motion` (model, poisson_ratio, stiffening,
+order, steps, CG settings); moves at t_k = k t_final / steps. Output: ParaView of the
+deformed high-order mesh with `displacement` and `det_F`, a per-move history CSV, and
+summary `results` (det F range, the smallest element Jacobian ratio, max displacement,
+the boundary error against the expression); an inverted mesh stops the run as
+`diverged`. Displacement expressions work in `linear_elasticity` decks too. Choices
+made by the agent: expressions rather than named profiles, moves solved from the
+reference mesh (the existing total-displacement design), no free or sliding mesh
+boundaries. Decks `cases/mesh_deform_2d.yaml`, `cases/mesh_deform_cube.yaml`; tests
+`mesh_motion_case_test` C1-C3, `expression_test` E1-E4, `run_case_mesh_deform` (fast).
+The two decks at np 4 (cloud scratch build, MFEM v4.10 from GitHub, apt hypre/Open
+MPI, not the Spack toolchain): rectangle 16 x 8 Q4, parabola peak 0.3, min det F 0.68,
+0.07 s; cube 8^3 Q3, bump peak 0.2, min det F 0.45, 2.5 s; boundary error <= 1e-16 in
+both. Rendered with headless ParaView. Not run on a GPU; the expression evaluation and
+the boundary-error check are host loops (setup and once per move). Stiffening and
+Poisson-ratio guidance, measured on the DFG cylinder and a graded rectangle (chi 0/1/2):
+docs/mesh_motion.md §1, "Choosing the settings" (human: "put in comments about the
+stiffening ... when it should be used and recommendation for settings"). **Next:** test it
+on a GPU (human 2026-10-21: "next step is to have it tested on GPU"), then the ALE fluid
+driven by the same section.
+
+**README rewrite (2026-10-21, PR #8, merged).** The README now describes the fluid,
+solid, mesh-motion, LES and Schur capabilities on CPUs and GPUs, the solver options,
+elasticity, mesh motion and Python, names no default values (it points at
+docs/deck_reference.md), and has a doc index and a Testing section.
+
 **Python bindings brought up to date, and built in CI (2026-10-21, branch
 `claude/project-thread-048nzj`; human: "go do the python stuff", the bindings item the
 LES plan left open).** The reading taken: Python access to drive a case and read its
