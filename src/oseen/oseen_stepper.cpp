@@ -77,6 +77,8 @@ OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
    lo.coupling = opts.velocity_coupling;
    lo.block_rtol = opts.lor_block_rtol;
    lo.block_maxit = opts.lor_block_maxit;
+   lo.sd_scale = opts.lor_sd_scale;
+   lo.half_div = opts.lor_half_div;
    MFEM_VERIFY(opts.velocity_coupling == OseenVelocityCoupling::BlockJacobi ||
                (opts.lor_grad_div && op_->GradDivCoefficient()),
                "OseenStepper: the upper Gauss-Seidel velocity coupling needs "

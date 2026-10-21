@@ -77,8 +77,9 @@ int main(int argc, char* argv[])
    const char* schur = "pcd";
    bool lgd = true;
    const char* coupling = "jacobi";
-   double lbt = 0.0;
-   int lbm = 100;
+   double lbt = 0.0, lsd = 1.0;
+   int lbm = 100, vim = 100;
+   bool lhd = false;
    OptionsParser args(argc, argv);
    args.AddOption(&deck, "-deck", "--deck", "The deck (YAML).", true);
    args.AddOption(&dt, "-dt", "--dt", "Step size.");
@@ -115,6 +116,12 @@ int main(int argc, char* argv[])
                   "> 0: each component's LOR block solved by GMRES to this tolerance (diagnostics).");
    args.AddOption(&lbm, "-lbm", "--lor-block-maxit",
                   "Those GMRES solves' iteration cap.");
+   args.AddOption(&vim, "-vim", "--velocity-inner-maxit",
+                  "The inner velocity FGMRES's iteration cap (-vin; tiny -vin: a fixed count).");
+   args.AddOption(&lsd, "-lsd", "--lor-sd-scale",
+                  "The LOR streamline diffusion's factor (1 the recipe's, 0 none).");
+   args.AddOption(&lhd, "-lhd", "--lor-half-div", "-no-lhd", "--no-lor-half-div",
+                  "1/2 (div w) u in the LOR operator.");
    args.AddOption(&u0_add, "-u0", "--add-velocity",
                   "A uniform velocity \"Ux Uy [Uz]\" added to the initial one (diagnostics).");
    args.AddOption(&print_every, "-pe", "--print-every", "Progress every N steps.");
@@ -167,6 +174,9 @@ int main(int argc, char* argv[])
                           : incns::OseenVelocityCoupling::BlockJacobi;
    so.lor_block_rtol = lbt;
    so.lor_block_maxit = lbm;
+   so.velocity_inner_maxit = vim;
+   so.lor_sd_scale = lsd;
+   so.lor_half_div = lhd;
    so.schur = std::strcmp(schur,
                           "al") == 0 ? incns::OseenSchur::CahouetChabardGradDiv
               : incns::OseenSchur::Pcd;

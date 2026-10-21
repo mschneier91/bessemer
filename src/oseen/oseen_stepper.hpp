@@ -82,6 +82,9 @@ struct OseenStepperOptions
    /// instead of one V-cycle (diagnostics; see OseenLorPreconditioner).
    double lor_block_rtol = 0.0;
    int lor_block_maxit = 100; ///< Its iteration cap.
+   /// The LOR streamline diffusion's factor (OseenLorPreconditioner::Options).
+   double lor_sd_scale = 1.0;
+   bool lor_half_div = false; ///< 1/2 (div w) u in the LOR operator.
    bool oss = true;          ///< OSS stabilization (momentum and N_p).
    OseenAmgMode amg_mode = OseenAmgMode::Auto; ///< The velocity V-cycle.
    int n_inner = 2;          ///< PCD: CG iterations on A_p.

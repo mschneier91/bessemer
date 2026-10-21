@@ -80,6 +80,12 @@ public:
       /// a diagnostic that takes the V-cycle out of the coupling's effect.
       double block_rtol = 0.0;
       int block_maxit = 100;    ///< Those GMRES solves' iteration cap.
+      /// The LOR streamline diffusion's factor: 1 the recipe's, 0 none. (The
+      /// high-order OSS term removes the resolved part of
+      /// tau (w.grad u, w.grad v); the LOR term keeps all of it.)
+      double sd_scale = 1.0;
+      /// Include 1/2 (div w) u, as the high-order skew-symmetric form has.
+      bool half_div = false;
    };
 
    /**

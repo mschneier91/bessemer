@@ -19,22 +19,22 @@ using namespace mfem;
 namespace
 {
 
-/// tau(w(x), J^-1 of the parent) w w^T on the LOR mesh (host evaluation).
+/// s tau(w(x), J^-1 of the parent) w w^T on the LOR mesh (host evaluation).
 class LorStreamlineDiffusion : public MatrixCoefficient
 {
 public:
    LorStreamlineDiffusion(const ParGridFunction& w, const DenseTensor& jparent,
-                          const Array<int>& parent, double nu, int k)
+                          const Array<int>& parent, double nu, int k, double s)
       : MatrixCoefficient(w.ParFESpace()->GetVDim()), w_(w),
-        jparent_(jparent), parent_(parent), nu_(nu), k_(k) {}
+        jparent_(jparent), parent_(parent), nu_(nu), k_(k), s_(s) {}
 
    void Eval(DenseMatrix& K, ElementTransformation& T,
              const IntegrationPoint& ip) override
    {
       w_.GetVectorValue(T, ip, wv_);
       const int d = height;
-      const real_t tau = OssTau(d, wv_.GetData(),
-                                jparent_(parent_[T.ElementNo]).Data(), nu_, k_);
+      const real_t tau = s_ * OssTau(d, wv_.GetData(),
+                                     jparent_(parent_[T.ElementNo]).Data(), nu_, k_);
       K.SetSize(d);
       for (int j = 0; j < d; j++)
       {
@@ -48,7 +48,22 @@ private:
    const Array<int>& parent_;
    double nu_;
    int k_;
+   double s_;
    Vector wv_;
+};
+
+/// 1/2 div w of the LOR wind (host evaluation).
+class LorHalfDivWind : public Coefficient
+{
+public:
+   explicit LorHalfDivWind(const ParGridFunction& w) : w_(w) {}
+   real_t Eval(ElementTransformation& T, const IntegrationPoint&) override
+   {
+      return 0.5 * w_.GetDivergence(T);
+   }
+
+private:
+   const ParGridFunction& w_;
 };
 
 /// gamma of the parent element times e_i e_j^T on the LOR mesh: through
@@ -341,13 +356,16 @@ void OseenLorPreconditioner::Update(const Vector& wind, double sigma)
    ParFiniteElementSpace& lfes = lor_->GetParFESpace();
    ConstantCoefficient nu(opts_.nu);
    VectorGridFunctionCoefficient w(wind_lor_.get());
-   LorStreamlineDiffusion sd(*wind_lor_, jparent_, parent_, opts_.nu, k_);
+   LorStreamlineDiffusion sd(*wind_lor_, jparent_, parent_, opts_.nu, k_,
+                             opts_.sd_scale);
+   LorHalfDivWind hd(*wind_lor_);
    ParBilinearForm f(&lfes);
    auto* di = new DiffusionIntegrator(nu);
    di->SetIntRule(vertex_rule_);
    f.AddDomainIntegrator(di);
    f.AddDomainIntegrator(new ConvectionIntegrator(w, 1.0));
-   f.AddDomainIntegrator(new DiffusionIntegrator(sd));
+   if (opts_.sd_scale != 0.0) { f.AddDomainIntegrator(new DiffusionIntegrator(sd)); }
+   if (opts_.half_div) { f.AddDomainIntegrator(new MassIntegrator(hd)); }
    f.Assemble();
    f.Finalize();
    std::unique_ptr<HypreParMatrix> Fk(f.ParallelAssemble());
