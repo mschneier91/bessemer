@@ -12,6 +12,11 @@
 #error "oseen_wind.cpp defines device kernels and must be compiled by nvcc -- see the nvcc TU list in src/CMakeLists.txt"
 #endif
 
+#include "operators/kernel_specializations.hpp"
+
+#include "mfem/fem/qinterp/eval.hpp"
+#include "mfem/fem/qinterp/grad.hpp"
+
 namespace incns
 {
 
@@ -23,6 +28,47 @@ namespace
 Geometry::Type TensorGeometry(int dim)
 {
    return (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
+}
+
+// The wind's values and physical derivatives (byVDIM, vdim = dim) at D1D
+// dofs and Q1D points per direction.
+template <int DIM, int D1D, int Q1D>
+void AddWindInterpolation()
+{
+   using QI = QuadratureInterpolator;
+   constexpr auto byVDIM = QVectorLayout::byVDIM;
+   QI::AddTensorEvalSpecializations<DIM, byVDIM, DIM, D1D, Q1D>();
+   QI::AddGradSpecializations<DIM, byVDIM, true, DIM, D1D, Q1D>();
+}
+
+// MFEM's quadrature interpolator holds 8 points per direction in its
+// runtime-size kernels on a GPU (DofQuadLimits::MAX_INTERP_1D), dofs and
+// points alike, unchecked: the wind at the convection rule k + 2m (10 points
+// per direction at Q6, 9 for PCD's m = k - 1) wrote past its shared arrays,
+// and every Q6 oseen_case run stopped with an illegal address in its first
+// step (2026-10-20). Compile-time kernels at the sizes the rules reach for
+// velocity orders 6 and 7 (7 and 8 dofs; the OSS rule 2m + 2 has 9 points
+// at Q7); not 11 points in 3D (MFEM's kernel launches 11^3 threads per
+// element, more than a block holds). The mesh Jacobians at these rules are
+// AddInterpolationKernels'. Registered by the Oseen code only, so nothing
+// else dispatches differently. Process-wide and idempotent.
+void AddWindInterpolationKernels()
+{
+   static const bool added = []
+   {
+      AddInterpolationKernels();
+      AddWindInterpolation<2, 7, 9>();
+      AddWindInterpolation<2, 7, 10>();
+      AddWindInterpolation<2, 8, 9>();
+      AddWindInterpolation<2, 8, 10>();
+      AddWindInterpolation<2, 8, 11>();
+      AddWindInterpolation<3, 7, 9>();
+      AddWindInterpolation<3, 7, 10>();
+      AddWindInterpolation<3, 8, 9>();
+      AddWindInterpolation<3, 8, 10>();
+      return true;
+   }();
+   (void)added;
 }
 
 } // namespace
@@ -95,6 +141,7 @@ OseenWindData::OseenWindData(ParFiniteElementSpace& vfes, const RuleBook& rules,
    MFEM_VERIFY(vfes.GetVDim() == dim_ && vfes.GetOrdering() == Ordering::byNODES,
                "OseenWindData: a vector velocity space ordered by nodes");
    MFEM_VERIFY(ir_center_->GetNPoints() == 1, "OseenWindData: one centre point");
+   AddWindInterpolationKernels(); // before the first interpolation
    for (QuadratureFunction* q :
         {
            &wind_conv_, &half_divw_, &wind_oss_, &tau_ww_, &tau_w_, &tau_gll_,

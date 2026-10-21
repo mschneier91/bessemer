@@ -14,7 +14,10 @@
 //     varying Jacobian breaks that bound: this strongly curved test mesh
 //     gives eigenvalues down to -0.3 % of the largest (2026-10-20), bounded
 //     here at 1 %;
-//  O5 two applies agree bitwise (no atomics on a device).
+//  O5 two applies agree bitwise (no atomics on a device);
+//  O6 at Q6 the wind data -- 10 convection points per direction, past what
+//     MFEM's runtime-size GPU interpolation kernels hold -- equals the
+//     velocity field evaluated on the host.
 // Runs on whatever device the test main configures (INCNS_DEVICE=cuda).
 
 #include <gtest/gtest.h>
@@ -154,13 +157,15 @@ TEST(OseenOperator, O1_TrueDofsByComponent)
    }
 }
 
-// O2
+// O2 (also at Q6: 10 convection points per direction, past MFEM's
+// runtime-size GPU interpolation kernels)
 TEST(OseenOperator, O2_PartialAssemblyMatchesFullAssembly)
 {
-   for (int dim : {2, 3})
+   const int cases[][3] = {{2, 4, 3}, {3, 3, 3}, {2, 6, 2}, {3, 6, 2}}; // dim, k, n
+   for (const auto& c : cases)
    {
-      const int k = (dim == 2) ? 4 : 3;
-      Problem p(MPI_COMM_WORLD, dim, 3, k, true, 1e-3);
+      const int dim = c[0], k = c[1];
+      Problem p(MPI_COMM_WORLD, dim, c[2], k, true, 1e-3);
       OseenWindData& d = p.data;
       // Full assembly evaluates the coefficients at ip.index: make sure the
       // rules carry their point indices.
@@ -212,7 +217,51 @@ TEST(OseenOperator, O2_PartialAssemblyMatchesFullAssembly)
       Vector e(r);
       e -= y;
       const real_t rel = std::sqrt(Dot(e, e) / Dot(r, r));
-      EXPECT_LT(rel, 1e-12) << "dim " << dim;
+      EXPECT_LT(rel, 1e-12) << "dim " << dim << " k " << k;
+   }
+}
+
+// O6: the wind data at Q6 (the convection rule's 10 points per direction)
+// equals the velocity field evaluated on the host: w and 1/2 div w. O2
+// cannot see wrong wind data -- its full assembly reads the same.
+TEST(OseenOperator, O6_WindDataAtQ6MatchesHostEvaluation)
+{
+   for (int dim : {2, 3})
+   {
+      Problem p(MPI_COMM_WORLD, dim, 2, 6, true, 1e-3);
+      OseenWindData& d = p.data;
+      const IntegrationRule& ir = d.ConvRule();
+      const_cast<IntegrationRule&>(ir).SetPointIndices();
+      ASSERT_EQ(ir.GetNPoints(), (dim == 3) ? 1000 : 100);
+      p.wind_gf.HostRead();
+      Vector w(dim), wref(dim);
+      real_t err_w = 0.0, err_d = 0.0, wmax = 0.0, dmax = 0.0;
+      for (int e = 0; e < p.mesh.GetNE(); e++)
+      {
+         ElementTransformation* T = p.mesh.GetElementTransformation(e);
+         for (int q = 0; q < ir.GetNPoints(); q++)
+         {
+            const IntegrationPoint& ip = ir.IntPoint(q);
+            T->SetIntPoint(&ip);
+            d.Wind().Eval(w, *T, ip);
+            p.wind_gf.GetVectorValue(*T, ip, wref);
+            for (int c = 0; c < dim; c++)
+            {
+               err_w = std::max(err_w, std::fabs(w(c) - wref(c)));
+               wmax = std::max(wmax, std::fabs(wref(c)));
+            }
+            const real_t hd = 0.5 * p.wind_gf.GetDivergence(*T);
+            err_d = std::max(err_d, std::fabs(d.HalfDivWind().Eval(*T, ip) - hd));
+            dmax = std::max(dmax, std::fabs(hd));
+         }
+      }
+      real_t m[4] = {err_w, err_d, -wmax, -dmax};
+      MPI_Allreduce(MPI_IN_PLACE, m, 4, MPITypeMap<real_t>::mpi_type, MPI_MAX,
+                    MPI_COMM_WORLD);
+      ASSERT_GT(-m[2], 0.5);
+      ASSERT_GT(-m[3], 1e-2);
+      EXPECT_LT(m[0], 1e-11 * -m[2]) << "dim " << dim << ": w";
+      EXPECT_LT(m[1], 1e-10 * -m[3]) << "dim " << dim << ": 1/2 div w";
    }
 }
 
