@@ -79,7 +79,7 @@ int main(int argc, char* argv[])
    const char* coupling = "jacobi";
    double lbt = 0.0, lsd = 1.0;
    int lbm = 100, vim = 100;
-   bool lhd = false;
+   bool lhd = false, ke = false;
    OptionsParser args(argc, argv);
    args.AddOption(&deck, "-deck", "--deck", "The deck (YAML).", true);
    args.AddOption(&dt, "-dt", "--dt", "Step size.");
@@ -122,6 +122,8 @@ int main(int argc, char* argv[])
                   "The LOR streamline diffusion's factor (1 the recipe's, 0 none).");
    args.AddOption(&lhd, "-lhd", "--lor-half-div", "-no-lhd", "--no-lor-half-div",
                   "1/2 (div w) u in the LOR operator.");
+   args.AddOption(&ke, "-ke", "--kinetic-energy", "-no-ke", "--no-kinetic-energy",
+                  "Prefix each progress line with int |u|^2 / 2 (\"ke\").");
    args.AddOption(&u0_add, "-u0", "--add-velocity",
                   "A uniform velocity \"Ux Uy [Uz]\" added to the initial one (diagnostics).");
    args.AddOption(&print_every, "-pe", "--print-every", "Progress every N steps.");
@@ -277,11 +279,25 @@ int main(int argc, char* argv[])
       ts.push_back(stepper.Time());
       cds.push_back(cd);
       cls.push_back(cl);
-      if (Mpi::Root() && ((s + 1) % std::max(print_every, 1) == 0 || s + 1 == nsteps))
+      const bool report = (s + 1) % std::max(print_every, 1) == 0 || s + 1 == nsteps;
+      // int |u|^2 / 2, the TGV diagnostics' kinetic_energy (collective).
+      double kin = 0.0;
+      if (ke && report)
       {
-         std::printf("t %7.4f  c_D %10.6f  c_L %10.6f  its %3d  picard %d  r0 %.2e "
+         Vector zero(spaces.Dim());
+         zero = 0.0;
+         VectorConstantCoefficient zc(zero);
+         stepper.Velocity().HostRead();
+         const double l2 = stepper.Velocity().ComputeL2Error(zc);
+         kin = 0.5 * l2 * l2;
+      }
+      if (Mpi::Root() && report)
+      {
+         std::printf("t %7.4f  c_D %10.6f  c_L %10.6f  ", stepper.Time(), cd, cl);
+         if (ke) { std::printf("ke %.12e  ", kin); }
+         std::printf("its %3d  picard %d  r0 %.2e "
                      "r %.2e  %s Re_h %.1f  vc %ld  vin %ld  step %.3f s (LOR %.3f s)%s\n",
-                     stepper.Time(), cd, cl, st.linear_iterations, st.picard_iterations,
+                     st.linear_iterations, st.picard_iterations,
                      st.r0, st.r_final, st.air ? "AIR" : "AMG", st.cell_re,
                      st.vcycles, st.velocity_inner_iterations, st.t_step,
                      st.t_lor, st.converged ? "" : "  NOT CONVERGED");
