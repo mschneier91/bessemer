@@ -90,7 +90,22 @@ mpirun -np 4 python examples/python/start_here.py     # a fully commented first 
 Python is a job driver: it sets parameters and analytic initial/boundary/forcing fields,
 and all numerics stay in C++. Run it as `mpirun -np N python case.py`; there is no
 `mpi4py`. Fields are plain callables `f(x, t)` or, for speed, `@incns.field(dim)`
-(numba-compiled). More examples: `examples/python/stokes_ex/`.
+(numba-compiled). Three entry points:
+
+- `incns.run_deck(deck)` runs a deck (a path, a dict or `Parameters`) exactly as
+  `run_case` does, flows and `linear_elasticity` solids alike, and returns the summary
+  as a dict.
+- `incns.Parameters.from_dict({...})` (or `from_yaml`, `from_yaml_string`) reaches every
+  deck key, nested as in the YAML; an unknown key raises `ValueError`.
+  `incns.deck_keys()` lists them. The common keys are also attributes of `Parameters`
+  (`p.subgrid.model`, `p.outer`, `p.output.history`, ...).
+- `incns.Case(params)` steps a flow from Python: `step()`/`run()`, the deck's named
+  initial condition unless `set_initial_velocity` replaces it, scalars
+  (`kinetic_energy()`, `cfl_number()`, `subgrid_statistics()`, forces, ...) and
+  `summary()`, the run summary as a dict.
+
+Examples: `examples/python/drive/` (a deck run from a dict, an LES stepped from Python),
+`examples/python/stokes_ex/`.
 
 ### A C++ driver (complex geometry)
 
@@ -180,7 +195,7 @@ and the subgrid dissipation. Details and when it is worth it: [les.md](les.md).
   (or `--summary <file>`): `status` (`running` while it runs, then `ok` or `diverged`,
   exit code 2), the case settings, time-step statistics, mesh size, diagnostics, forces,
   probes, and `reference` errors. Read this rather than the log. From Python:
-  `case.write_summary(path, status)`.
+  `incns.run_deck(...)` returns it, `case.summary()` writes it and returns it as a dict.
 - **Progress lines:** `output.progress: <time interval>` prints t, dt and its range, the
   CFL number and where it peaks, forces, iterations, cells, wall time and an ETA.
 - **History:** `output.history: true` writes `<path>/<name>_history.csv`, one row per step:

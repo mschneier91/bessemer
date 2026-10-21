@@ -1,24 +1,32 @@
-// pybind11 bindings for the incns unsteady Stokes job driver. Thin layer over
-// Case/Parameters: Python configures a case and supplies analytic
-// IC/BC/forcing, C++ does all numerics. No MFEM type crosses the boundary; the
-// case builds its own ParMesh from Parameters. See CLAUDE.md "Python interface".
+// pybind11 bindings for the incns job driver. Thin layer over Case,
+// ElasticityCase and Parameters: Python configures a case (fields, or any
+// deck key through a deck text) and supplies analytic IC/BC/forcing, C++ does
+// all numerics, and results come back as scalars and the run summary. No MFEM
+// type crosses the boundary; a case builds its own ParMesh from Parameters.
+// See docs/developing.md section 5.7.
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "bc/boundary_conditions.hpp"
+#include "bc/boundary_names.hpp"
 #include "bc/deck_boundary.hpp"
+#include "config/initial_conditions.hpp"
 #include "config/nondimensionalization.hpp"
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
 #include "mesh/periodic_box.hpp"
+#include "solid/elasticity_case.hpp"
 #include "solver/case.hpp"
 #include "util/device.hpp"
 #include "mfem.hpp"
 
 #include <cstdint>
+#include <fstream>
 #include <map>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -105,6 +113,47 @@ std::unique_ptr<VectorCoefficient> MakeCoefficient(const py::object& f, int dim)
    return std::make_unique<CallbackVectorCoefficient>(f, dim);
 }
 
+// A deck from its text, with the loader's own checks; an unknown key raises
+// ValueError (with the loader's suggestion) instead of aborting the process.
+Parameters ParametersFromDeck(const std::string& text, const std::string& where)
+{
+   const std::vector<std::string> unknown = Parameters::UnknownDeckKeys(text);
+   if (!unknown.empty())
+   {
+      std::string msg = "incns: unknown deck key(s) in " + where + ":";
+      for (const std::string& k : unknown) { msg += "\n  " + k; }
+      throw py::value_error(msg);
+   }
+   return Parameters::LoadYAMLString(text);
+}
+
+Parameters ParametersFromFile(const std::string& path)
+{
+   std::ifstream in(path);
+   if (!in) { throw py::value_error("incns: cannot read the deck " + path); }
+   std::stringstream text;
+   text << in.rdbuf();
+   return ParametersFromDeck(text.str(), path);
+}
+
+// The summary path run_case uses: <output.path>/<output.name>_summary.json.
+std::string DefaultSummaryPath(const Parameters& p)
+{
+   return p.output.path + "/" + p.output.name + "_summary.json";
+}
+
+// Read a summary JSON (written on rank 0) on every rank, as a dict.
+py::object ReadSummary(const std::string& path)
+{
+   MPI_Barrier(MPI_COMM_WORLD); // rank 0 has written and closed the file
+   py::object json = py::module_::import("json");
+   py::object open = py::module_::import("builtins").attr("open");
+   py::object f = open(path, "r");
+   py::object d = json.attr("load")(f);
+   f.attr("close")();
+   return d;
+}
+
 // Owns the mesh + case + boundary conditions built from a Parameters block. The
 // Python-facing Case: the ParMesh is an internal detail.
 class PyCase
@@ -117,6 +166,13 @@ public:
       pmesh_ = MakeCaseMesh(params_); // nonconforming-ready when AMR is on
       case_ = std::make_unique<Case>(*pmesh_, params_);
       bc_ = std::make_unique<BoundaryConditions>(case_->Spaces().Velocity());
+      // The deck's named initial condition, as run_case applies it;
+      // set_initial_velocity replaces it.
+      if (params_.initial_velocity != "zero")
+      {
+         ic_ = MakeInitialVelocity(params_);
+         case_->SetInitialVelocity(*ic_);
+      }
    }
 
    void SetInitialVelocity(const py::object& f)
@@ -214,6 +270,58 @@ public:
    double KineticEnergy() { Wire(); return case_->KineticEnergy(); }
    double DissipationRate() { Wire(); return case_->DissipationRate(); }
    double DivergenceNorm() { Wire(); return case_->DivergenceNorm(); }
+
+   // The subgrid model on the current velocity (physics.subgrid), as in the
+   // summary's `subgrid` section; None without a model. Collective.
+   py::object SubgridStatistics()
+   {
+      Wire();
+      StokesTimeIntegrator& ti = case_->Integrator();
+      if (!ti.Subgrid()) { return py::none(); }
+      const SubgridOptions& so = ti.Subgrid()->Options();
+      SubgridStress::Values v;
+      {
+         py::gil_scoped_release rel;
+         v = ti.SubgridStatistics();
+      }
+      py::dict d;
+      d["model"] = so.model == SubgridModel::Sigma ? "sigma" :
+                   so.model == SubgridModel::Wale ? "wale" : "constant";
+      d["coefficient"] = so.Coefficient();
+      d["filter_width"] = so.filter_width;
+      d["nu_t_max"] = v.nu_t_max;
+      d["nu_t_mean"] = v.nu_t_mean;
+      d["nu_t_max_over_nu"] = v.nu_t_max / params_.nu;
+      d["dissipation"] = v.dissipation;
+      d["volume"] = v.volume;
+      return d;
+   }
+
+   // The directional convective CFL number c*dt of the current velocity at
+   // the current step size (Nek's measure, time/cfl). Collective.
+   double CflNumber()
+   {
+      Wire();
+      py::gil_scoped_release rel;
+      return case_->ConvectiveCflNumber();
+   }
+
+   // Write the run summary and return it as a dict, on every rank. Collective.
+   py::object Summary(const std::string& path, const std::string& status)
+   {
+      const std::string file = path.empty() ? DefaultSummaryPath(params_) : path;
+      WriteSummary(file, status);
+      return ReadSummary(file);
+   }
+
+   // The profiler's regions (output.profile) as CSV. Collective.
+   void WriteProfile(const std::string& path)
+   {
+      py::gil_scoped_release rel;
+      case_->WriteProfile(path);
+   }
+
+   const Parameters& Params() const { return params_; }
 
    // Box-face name -> boundary attribute (geometric; robust to MFEM numbering).
    int Face(const std::string& name) { return ResolveFace(name); }
@@ -350,11 +458,61 @@ void SeqToArray(const py::sequence& s, std::array<T, 3>& a)
    }
 }
 
+// Run a deck end to end as apps/run_case does: a solid (static solve or
+// dynamic march) or a flow (the deck's named initial condition and boundary
+// groups, coverage required), with the summary written at the start
+// ("running") and the end, and the profile next to it. Collective.
+// @return The summary path and whether the run succeeded.
+std::pair<std::string, bool> RunDeck(Parameters params, std::string summary)
+{
+   if (summary.empty()) { summary = DefaultSummaryPath(params); }
+   ConfigureDevice(params.device);
+   params.Normalize(); // idempotent
+   std::unique_ptr<ParMesh> pmesh = MakeCaseMesh(params);
+   if (params.boundary_conditions.empty())
+   {
+      const std::vector<std::string> names = BoundaryNames(params);
+      if (!names.empty())
+      {
+         std::string list;
+         for (const std::string& n : names) { list += (list.empty() ? "" : ", ") + n; }
+         throw py::value_error("incns: the mesh has boundaries (" + list +
+                               ") but the deck declares no boundary_conditions");
+      }
+   }
+   py::gil_scoped_release rel;
+   if (params.equation == Equation::LinearElasticity)
+   {
+      ElasticityCase solid(*pmesh, params);
+      solid.WriteSummary(summary, "running");
+      const bool ok = solid.Run();
+      solid.WriteSummary(summary, ok ? "ok" : "diverged");
+      return {summary, ok};
+   }
+   Case flow(*pmesh, params);
+   std::unique_ptr<VectorCoefficient> u0 = MakeInitialVelocity(params);
+   flow.SetInitialVelocity(*u0);
+   flow.WriteSummary(summary, "running");
+   flow.Run();
+   const bool diverged = flow.Diverged();
+   flow.WriteSummary(summary, diverged ? "diverged" : "ok");
+   if (params.output.profile != ProfileOutput::Off)
+   {
+      const std::string tail = "_summary.json";
+      const bool named = summary.size() >= tail.size() &&
+                         summary.compare(summary.size() - tail.size(),
+                                         tail.size(), tail) == 0;
+      flow.WriteProfile(named ? summary.substr(0, summary.size() - tail.size()) +
+                        "_profile.csv" : summary + ".profile.csv");
+   }
+   return {summary, !diverged};
+}
+
 } // namespace
 
 PYBIND11_MODULE(_core, m)
 {
-   m.doc() = "incns unsteady Stokes -- Python job driver (see CLAUDE.md)";
+   m.doc() = "incns -- Python job driver for bessemer (docs/developing.md 5.7)";
 
    // Initialize MPI + HYPRE once at import (SPMD: every rank imports).
    static bool initialized = false;
@@ -372,6 +530,25 @@ PYBIND11_MODULE(_core, m)
    m.def("rank", [] { return Mpi::WorldRank(); }, "This rank's index.");
    m.def("size", [] { return Mpi::WorldSize(); }, "Number of ranks.");
    m.def("on_root", [] { return Mpi::Root(); }, "True on rank 0.");
+   m.def("_run", &RunDeck, py::arg("params"), py::arg("summary") = "",
+         "Run a deck as run_case does; returns (summary path, success).");
+   m.def("_read_summary", &ReadSummary, py::arg("path"),
+         "Read a summary JSON on every rank (after a barrier). Collective.");
+   m.def("deck_keys", []
+   {
+      py::list out;
+      for (const DeckKey& k : Parameters::DeckSchema())
+      {
+         py::dict d;
+         d["path"] = k.path;
+         d["type"] = k.type;
+         d["default"] = k.default_value;
+         d["values"] = k.values;
+         d["description"] = k.description;
+         out.append(d);
+      }
+      return out;
+   }, "Every deck key: path, type, default, allowed values, description.");
 
    py::enum_<ScalingMode>(m, "ScalingMode")
    .value("Dimensionless", ScalingMode::Dimensionless)
@@ -379,12 +556,108 @@ PYBIND11_MODULE(_core, m)
 
    py::enum_<Equation>(m, "Equation")
    .value("Stokes", Equation::Stokes)
-   .value("NavierStokes", Equation::NavierStokes);
+   .value("NavierStokes", Equation::NavierStokes)
+   .value("LinearElasticity", Equation::LinearElasticity);
 
    py::enum_<StepControl>(m, "StepControl")
    .value("Fixed", StepControl::Fixed)
    .value("Error", StepControl::Error)
    .value("Cfl", StepControl::Cfl);
+
+   py::enum_<SolverFailure>(m, "SolverFailure")
+   .value("Abort", SolverFailure::Abort)
+   .value("CutStep", SolverFailure::CutStep);
+
+   py::enum_<OuterMethod>(m, "OuterMethod")
+   .value("Coupled", OuterMethod::Coupled)
+   .value("Schur", OuterMethod::Schur);
+
+   py::enum_<InnerTolerance>(m, "InnerTolerance")
+   .value("Tight", InnerTolerance::Tight)
+   .value("Loose", InnerTolerance::Loose)
+   .value("Relaxed", InnerTolerance::Relaxed);
+
+   py::enum_<ToleranceReference>(m, "ToleranceReference")
+   .value("InitialResidual", ToleranceReference::InitialResidual)
+   .value("Rhs", ToleranceReference::Rhs)
+   .value("Step", ToleranceReference::Step);
+
+   py::enum_<InitialGuess>(m, "InitialGuess")
+   .value("Previous", InitialGuess::Previous)
+   .value("Extrapolate", InitialGuess::Extrapolate)
+   .value("Project", InitialGuess::Project);
+
+   py::enum_<ProfileOutput>(m, "ProfileOutput")
+   .value("Off", ProfileOutput::Off)
+   .value("Wall", ProfileOutput::Wall)
+   .value("Sync", ProfileOutput::Sync);
+
+   py::enum_<HangingMass>(m, "HangingMass")
+   .value("Lumped", HangingMass::Lumped)
+   .value("Exact", HangingMass::Exact);
+
+   py::enum_<VectorDiffusionStorage>(m, "VectorDiffusionStorage")
+   .value("Compact", VectorDiffusionStorage::Compact)
+   .value("Mfem", VectorDiffusionStorage::Mfem);
+
+   py::enum_<MeshGeometry>(m, "MeshGeometry")
+   .value("Box", MeshGeometry::Box)
+   .value("SquareCylinder", MeshGeometry::SquareCylinder)
+   .value("CylinderChannel", MeshGeometry::CylinderChannel)
+   .value("File", MeshGeometry::File);
+
+   py::enum_<SubgridModel>(m, "SubgridModel")
+   .value("Off", SubgridModel::None) // deck `none` (None is reserved in Python)
+   .value("Constant", SubgridModel::Constant)
+   .value("Wale", SubgridModel::Wale)
+   .value("Sigma", SubgridModel::Sigma);
+
+   py::enum_<APcgPC>(m, "APcgPC")
+   .value("Auto", APcgPC::Auto)
+   .value("Jacobi", APcgPC::Jacobi)
+   .value("PointBlockJacobi", APcgPC::PointBlockJacobi);
+
+   py::class_<SubgridOptions>(m, "SubgridOptions")
+   .def_readwrite("model", &SubgridOptions::model)
+   .def_readwrite("coefficient", &SubgridOptions::coefficient,
+                  "The model constant; < 0 = the model's published default.")
+   .def_readwrite("filter_width", &SubgridOptions::filter_width)
+   .def("coefficient_in_effect", &SubgridOptions::Coefficient);
+
+   py::class_<SchurSolveOptions>(m, "SchurSolveOptions")
+   .def_readwrite("inner", &SchurSolveOptions::inner)
+   .def_readwrite("eps_tight", &SchurSolveOptions::eps_tight)
+   .def_readwrite("eps_loose", &SchurSolveOptions::eps_loose)
+   .def_readwrite("eps_max", &SchurSolveOptions::eps_max)
+   .def_readwrite("relax_c", &SchurSolveOptions::relax_c)
+   .def_readwrite("inner_max_iter", &SchurSolveOptions::inner_max_iter)
+   .def_readwrite("max_cycles", &SchurSolveOptions::max_cycles)
+   .def_readwrite("history", &SchurSolveOptions::history);
+
+   py::class_<InitialFlowParameters>(m, "InitialFlowParameters")
+   .def_property(
+      "velocity",
+   [](const InitialFlowParameters & s) { return ArrayToTuple(s.velocity, 3); },
+   [](InitialFlowParameters & s, const py::sequence & v) { SeqToArray(v, s.velocity); })
+   .def_readwrite("perturbation", &InitialFlowParameters::perturbation)
+   .def_property(
+      "perturbation_center",
+      [](const InitialFlowParameters & s)
+   { return ArrayToTuple(s.perturbation_center, 3); },
+   [](InitialFlowParameters & s, const py::sequence & v)
+   { SeqToArray(v, s.perturbation_center); })
+   .def_readwrite("seed", &InitialFlowParameters::seed);
+
+   py::class_<ForcingParameters>(m, "ForcingParameters")
+   .def_property(
+      "body_force",
+   [](const ForcingParameters & s) { return ArrayToTuple(s.body_force, 3); },
+   [](ForcingParameters & s, const py::sequence & v) { SeqToArray(v, s.body_force); });
+
+   py::class_<ChannelStatisticsParameters>(m, "ChannelStatisticsParameters")
+   .def_readwrite("enabled", &ChannelStatisticsParameters::enabled)
+   .def_readwrite("start_time", &ChannelStatisticsParameters::start_time)
+   .def_readwrite("interval", &ChannelStatisticsParameters::interval);
 
    py::enum_<GradDivScale>(m, "GradDivScale")
    .value("OrderH", GradDivScale::OrderH)
@@ -452,7 +725,12 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("pc_quadrature", &CahouetChabardConfig::pc_quadrature)
    .def_readwrite("a_pc", &CahouetChabardConfig::a_pc)
    .def_readwrite("a_pcg_rtol", &CahouetChabardConfig::a_pcg_rtol)
-   .def_readwrite("a_pcg_max_iter", &CahouetChabardConfig::a_pcg_max_iter);
+   .def_readwrite("a_pcg_max_iter", &CahouetChabardConfig::a_pcg_max_iter)
+   .def_readwrite("a_pcg_pc", &CahouetChabardConfig::a_pcg_pc)
+   .def_readwrite("schur_grad_div", &CahouetChabardConfig::schur_grad_div)
+   .def_readwrite("lp_strong_threshold",
+                  &CahouetChabardConfig::lp_strong_threshold)
+   .def_readwrite("lp_agg_levels", &CahouetChabardConfig::lp_agg_levels);
 
    py::class_<Nondimensionalization>(m, "Nondimensionalization")
    .def_readwrite("mode", &Nondimensionalization::mode)
@@ -518,7 +796,10 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("path", &OutputParameters::path)
    .def_readwrite("name", &OutputParameters::name)
    .def_readwrite("interval", &OutputParameters::interval)
-   .def_readwrite("diagnostics", &OutputParameters::diagnostics);
+   .def_readwrite("diagnostics", &OutputParameters::diagnostics)
+   .def_readwrite("progress", &OutputParameters::progress)
+   .def_readwrite("history", &OutputParameters::history)
+   .def_readwrite("profile", &OutputParameters::profile);
 
    py::class_<CheckpointParameters>(m, "CheckpointParameters")
    .def_readwrite("enabled", &CheckpointParameters::enabled)
@@ -589,8 +870,18 @@ PYBIND11_MODULE(_core, m)
 
    py::class_<Parameters>(m, "Parameters")
    .def(py::init<>())
-   .def_static("from_yaml", &Parameters::LoadYAML, py::arg("path"))
+   .def_static("from_yaml", &ParametersFromFile, py::arg("path"),
+               "Load a YAML deck (unknown keys raise ValueError).")
+   .def_static("from_yaml_string",
+   [](const std::string & text) { return ParametersFromDeck(text, "<string>"); },
+   py::arg("text"),
+   "Load deck text (YAML, or JSON, which is YAML too): every deck key.")
    .def("normalize", &Parameters::Normalize)
+   .def("convection_in_effect", &Parameters::Convection,
+        "The convection treatment `auto` resolves to.")
+   .def("cfl_target_in_effect", &Parameters::CflTarget)
+   .def("grad_div_h_in_effect", &Parameters::GradDivH)
+   .def("cfl_steps", &Parameters::CflSteps)
    .def_readwrite("device", &Parameters::device)
    .def_readwrite("equation", &Parameters::equation)
    .def_readwrite("nu", &Parameters::nu)
@@ -598,11 +889,17 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("grad_div_nu", &Parameters::grad_div_nu)
    .def_readwrite("convective_form", &Parameters::convective_form)
    .def_readwrite("outflow", &Parameters::outflow)
+   .def_readwrite("subgrid", &Parameters::subgrid)
    .def_readwrite("convection_treatment", &Parameters::convection_treatment)
    .def_readwrite("oifs_cfl", &Parameters::oifs_cfl)
    .def_readwrite("order_u", &Parameters::order_u)
    .def_readwrite("order_p", &Parameters::order_p)
    .def_readwrite("mass", &Parameters::mass)
+   .def_readwrite("hanging_mass", &Parameters::hanging_mass)
+   .def_readwrite("vector_diffusion", &Parameters::vector_diffusion)
+   .def_readwrite("fuse_grad_div", &Parameters::fuse_grad_div)
+   .def_readwrite("geometry", &Parameters::geometry)
+   .def_readwrite("mesh_file", &Parameters::mesh_file)
    .def("collocated_mass_in_effect", &Parameters::CollocatedMass)
    .def_readwrite("dt", &Parameters::dt)
    .def_readwrite("t_final", &Parameters::t_final)
@@ -610,10 +907,24 @@ PYBIND11_MODULE(_core, m)
    .def("bdf_order", &Parameters::BdfOrder)
    .def_readwrite("step_control", &Parameters::step_control)
    .def_readwrite("cfl_max", &Parameters::cfl_max)
+   .def_readwrite("on_solver_failure", &Parameters::on_solver_failure)
+   .def_readwrite("retry_factor", &Parameters::retry_factor)
+   .def_readwrite("retry_hold", &Parameters::retry_hold)
+   .def_readwrite("retry_max", &Parameters::retry_max)
+   .def_readwrite("retry_dt_min", &Parameters::retry_dt_min)
+   .def_readwrite("oifs_on_the_fly", &Parameters::oifs_on_the_fly)
    .def_readwrite("krylov_rtol", &Parameters::krylov_rtol)
    .def_readwrite("krylov_atol", &Parameters::krylov_atol)
    .def_readwrite("max_iter", &Parameters::max_iter)
    .def_readwrite("kdim", &Parameters::kdim)
+   .def_readwrite("tolerance_reference", &Parameters::tolerance_reference)
+   .def_readwrite("initial_guess", &Parameters::initial_guess)
+   .def_readwrite("projection_k", &Parameters::projection_k)
+   .def_readwrite("projection_rebuild_threshold",
+                  &Parameters::projection_rebuild_threshold)
+   .def_readwrite("outer", &Parameters::outer)
+   .def_readwrite("uzawa", &Parameters::uzawa)
+   .def_readwrite("solver_log_interval", &Parameters::solver_log_interval)
    .def_readwrite("velocity_prec", &Parameters::velocity_prec)
    .def_readwrite("amg_reuse", &Parameters::amg_reuse)
    .def_readwrite("rotation_pc", &Parameters::rotation_pc)
@@ -627,6 +938,9 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("cc", &Parameters::cc)
    .def_readwrite("print_level", &Parameters::print_level)
    .def_readwrite("initial_velocity", &Parameters::initial_velocity)
+   .def_readwrite("initial", &Parameters::initial)
+   .def_readwrite("forcing", &Parameters::forcing)
+   .def_readwrite("channel_statistics", &Parameters::channel_statistics)
    .def_readwrite("restart_from", &Parameters::restart_from)
    .def_readwrite("mesh", &Parameters::mesh)
    .def_readwrite("controller", &Parameters::controller)
@@ -646,7 +960,7 @@ PYBIND11_MODULE(_core, m)
       "from_yaml",
       [](const std::string & path)
    {
-      return std::make_unique<PyCase>(Parameters::LoadYAML(path));
+      return std::make_unique<PyCase>(ParametersFromFile(path));
    },
    py::arg("path"),
    "Build a case from a YAML deck (config + boundary-condition topology).")
@@ -669,6 +983,21 @@ PYBIND11_MODULE(_core, m)
    .def("kinetic_energy", &PyCase::KineticEnergy)
    .def("dissipation_rate", &PyCase::DissipationRate)
    .def("divergence_norm", &PyCase::DivergenceNorm)
+   .def("subgrid_statistics", &PyCase::SubgridStatistics,
+        "The subgrid model on the current velocity (nu_t max/mean, the "
+        "subgrid dissipation), or None without a model. Collective.")
+   .def("cfl_number", &PyCase::CflNumber,
+        "The directional convective CFL number c*dt at the current step "
+        "size. Collective.")
+   .def("summary", &PyCase::Summary, py::arg("path") = "",
+        py::arg("status") = "ok",
+        "Write the run summary (default <output.path>/<output.name>_summary"
+        ".json) and return it as a dict on every rank. Collective.")
+   .def("write_profile", &PyCase::WriteProfile, py::arg("path"),
+        "Write the profiler's regions as CSV. Collective.")
+   .def_property_readonly("parameters", &PyCase::Params,
+                          py::return_value_policy::copy,
+                          "A copy of the case's (normalized) parameters.")
    .def("face", &PyCase::Face, py::arg("name"))
    .def("faces", &PyCase::Faces)
    .def("all_faces", &PyCase::AllFaces)
