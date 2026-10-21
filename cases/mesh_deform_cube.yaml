@@ -1,0 +1,38 @@
+# Mesh deformation in 3D: a unit cube whose bottom face (y = 0) is pushed up
+# by a smooth bump, d_y = A t sin^2(pi x) sin^2(pi z) (peak A = 0.2 at the
+# face's centre, zero with zero slope along its edges), ramped over four
+# moves to t = 1. The other five faces are held. The displacement is
+# extended into the domain by the linear elastic pseudo-solid with Jacobian
+# stiffening (docs/mesh_motion.md).
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/mesh_deform_cube.yaml
+#   -> mesh_deform_cube/mesh_deform_cube_summary.json, ParaView output in
+#      the same directory (cycle 0 is the reference mesh)
+
+equation: mesh_motion
+
+mesh:
+  dim: 3
+  elements: [8, 8, 8]
+  lengths: [1.0, 1.0, 1.0]
+  periodic: [false, false, false]
+
+mesh_motion:
+  order: 3
+  steps: 4
+
+time:
+  t_final: 1.0
+
+boundary_conditions:
+  - select: [ymin]
+    type: displacement
+    expression: ["0", "A * t * sin(pi * x)^2 * sin(pi * z)^2", "0"]
+    parameters: {A: 0.2}
+  - {select: [xmin, xmax, ymax, zmin, zmax], type: fixed}
+
+output:
+  enabled: true
+  history: true
+  path: mesh_deform_cube
+  name: mesh_deform_cube
