@@ -40,7 +40,8 @@ enum class TangentStorage
  * Each apply is one fused kernel per element: the reference gradients of all
  * components by sum factorization, the material law at every point, the
  * transposed gradient back to the dofs (MFEM's kernels::internal helpers, as
- * GradDivIntegrator's apply). Tensor-product elements (quads, hexes) with as
+ * GradDivIntegrator's apply; in 3D on a device by lines, the gradients kept in
+ * shared memory, as the momentum apply of change 56). Tensor-product elements (quads, hexes) with as
  * many points per direction as dofs (the Gauss rule of order 2k + 1, the
  * linear solver's), k from 1 to 7. Lambda and mu are per element (the mesh
  * motion's stiffening).
