@@ -14,6 +14,9 @@
 //     eps^2) and the residual the energy's (a central difference), 2D Q3, 3D Q2,
 //     3D Q6;
 //  HD two applies agree bitwise (no atomics on a device).
+//  HM the three tangent storages give the same tangent (to roundoff), the
+//     displacement storage keeps the least memory, and borrowed work buffers
+//     (ElementScratch) give bitwise the results of owned ones.
 // Runs on whatever device the test main configures (INCNS_DEVICE=cuda).
 
 #include <gtest/gtest.h>
@@ -29,6 +32,8 @@ using namespace mfem;
 using incns::HyperelasticMaterial;
 using incns::HyperelasticOperator;
 using incns::RuleBook;
+using incns::TangentStorage;
+using incns::ElementScratch;
 using incns::StVenantKirchhoff;
 
 namespace
@@ -445,5 +450,52 @@ TEST(Hyperelasticity, HD_ApplyIsDeterministic)
    {
       ASSERT_EQ(r1(i), r2(i));
       ASSERT_EQ(k1(i), k2(i));
+   }
+}
+
+// HM
+TEST(Hyperelasticity, HM_TangentStoragesAgreeAndScratchIsTransparent)
+{
+   const int cases[][3] = {{2, 3, 4}, {3, 2, 3}}; // dim, n, order
+   for (const auto& c : cases)
+   {
+      const int dim = c[0], k = c[2];
+      Problem p(dim, c[1], k);
+      const int n = p.fes.GetTrueVSize();
+      Vector u = Random(n, 29, 0.1), w = Random(n, 31, 1.0);
+      ElementScratch scratch(p.fes);
+      Vector kref(n);
+      kref.UseDevice(true);
+      p.op->GetGradient(u).Mult(w, kref);
+      size_t prev_bytes = p.op->MemoryBytes();
+      for (TangentStorage s : {TangentStorage::Deformation, TangentStorage::Displacement})
+      {
+         HyperelasticOperator op(p.fes, *p.ir, HyperelasticMaterial::StVenantKirchhoff,
+                                 p.lambda, p.mu, s);
+         Vector kw(n), e(n);
+         kw.UseDevice(true);
+         op.GetGradient(u).Mult(w, kw);
+         add(kw, -1.0, kref, e);
+         EXPECT_LT(Norm(e), 1e-13 * Norm(kref)) << "dim " << dim << " storage "
+                                                << static_cast<int>(s);
+         EXPECT_LT(op.MemoryBytes(), prev_bytes) << "dim " << dim;
+         prev_bytes = op.MemoryBytes();
+      }
+      // Borrowed buffers: the same bits, and less memory owned.
+      HyperelasticOperator lent(p.fes, *p.ir, HyperelasticMaterial::StVenantKirchhoff,
+                                p.lambda, p.mu, TangentStorage::StressAndDeformation,
+                                &scratch);
+      Vector r1(n), r2(n), k2(n);
+      for (Vector* v : {&r1, &r2, &k2}) { v->UseDevice(true); }
+      p.op->Mult(u, r1);
+      lent.Mult(u, r2);
+      lent.GetGradient(u).Mult(w, k2);
+      EXPECT_LT(lent.MemoryBytes(), p.op->MemoryBytes());
+      r1.HostRead(); r2.HostRead(); k2.HostRead(); kref.HostRead();
+      for (int i = 0; i < n; i++)
+      {
+         ASSERT_EQ(r1(i), r2(i));
+         ASSERT_EQ(k2(i), kref(i));
+      }
    }
 }

@@ -7,13 +7,28 @@
  */
 #pragma once
 
+#include "operators/element_scratch.hpp"
 #include "solid/hyperelastic_material.hpp"
 #include "mfem.hpp"
 
+#include <cstddef>
 #include <memory>
 
 namespace incns
 {
+
+/// What the tangent keeps from its linearization point: memory against
+/// work per apply (per quadrature point in 3D: 18, 9 or about 3 numbers).
+enum class TangentStorage
+{
+   /// F and S at every point: the least work per apply.
+   StressAndDeformation,
+   /// F at every point; S recomputed in every apply.
+   Deformation,
+   /// The displacement's element vector; F and S recomputed in every apply
+   /// (one more gradient pass).
+   Displacement
+};
 
 /**
  * @brief R(u) = int_Omega0 P(F(u)) : grad_X v dX on true dofs, F = I +
@@ -42,11 +57,18 @@ public:
     * @param material The material model.
     * @param lambda   First Lame parameter per local element.
     * @param mu       Shear modulus per local element.
+    * @param storage  What the tangent keeps (TangentStorage).
+    * @param scratch  Work buffers to borrow (sized for @p fes; borrowed, must
+    *                 outlive this; null: own them). No apply of this
+    *                 operator may run inside another borrower's.
     */
    HyperelasticOperator(mfem::ParFiniteElementSpace& fes,
                         const mfem::IntegrationRule& ir,
                         HyperelasticMaterial material,
-                        const mfem::Vector& lambda, const mfem::Vector& mu);
+                        const mfem::Vector& lambda, const mfem::Vector& mu,
+                        TangentStorage storage =
+                           TangentStorage::StressAndDeformation,
+                        ElementScratch* scratch = nullptr);
    ~HyperelasticOperator() override;
 
    /// r = R(u) on true dofs.
@@ -54,7 +76,7 @@ public:
 
    /**
     * @brief The tangent K_T(u) w = int dP(F(u))[grad_X w] : grad_X v, from
-    *        F and S stored at every point. Valid until the next call (one
+    *        what TangentStorage keeps of @p u. Valid until the next call (one
     *        tangent per operator).
     * @param u Linearization point (true dofs).
     */
@@ -65,6 +87,14 @@ public:
 
    /// @return The vector space.
    mfem::ParFiniteElementSpace& Space() const { return fes_; }
+
+   /// @return The tangent storage in use.
+   TangentStorage Storage() const { return storage_; }
+
+   /// @return Bytes of device data this operator owns now (geometry, the
+   ///         linearization, the energy partial sums, its own work vectors;
+   ///         not borrowed buffers).
+   std::size_t MemoryBytes() const;
 
 private:
    class Tangent;
@@ -77,14 +107,19 @@ private:
    mfem::ParFiniteElementSpace& fes_;
    const mfem::IntegrationRule& ir_;
    HyperelasticMaterial material_;
+   TangentStorage storage_;
    int dim_ = 0, n1d_ = 0, ne_ = 0;
    const mfem::DofToQuad* maps_ = nullptr;
    const mfem::Operator* restriction_ = nullptr; ///< Lexicographic E-vectors.
    mfem::Vector lambda_, mu_; ///< Per element.
    mfem::Vector jinv_;        ///< J^-1 at the points, (nq, dim, dim, ne).
    mfem::Vector wdet_;        ///< w det J at the points, (nq, ne).
-   mutable mfem::Vector fs_;  ///< F and S of the linearization, (nq, 2 dim^2, ne).
-   mutable mfem::Vector ul_, ue_, ye_, yl_, qe_; ///< Work.
+   /// The linearization: (nq, 2 dim^2, ne), (nq, dim^2, ne) or the
+   /// displacement's E-vector, by storage_.
+   mutable mfem::Vector lin_;
+   mutable mfem::Vector qe_; ///< Energy partial sums (allocated by Energy()).
+   mutable mfem::Vector ul_, ue_, ye_, yl_; ///< Work (borrowed or own).
+   bool own_e_ = true, own_l_ = true; ///< Whether ue_/ye_ and ul_/yl_ are own.
    std::unique_ptr<Tangent> tangent_;
 };
 
