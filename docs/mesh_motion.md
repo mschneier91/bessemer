@@ -4,9 +4,12 @@ The mesh-motion half of an ALE (arbitrary Lagrangian-Eulerian) formulation, the
 second step toward fluid-structure interaction after the linear elasticity
 solver ([elasticity.md](elasticity.md)). Human 2026-10-20: "add the capability
 to deform a mesh using the linear elasticity solver ... make it general that a
-different type of solver (hyper elasticity etc) can be used". It is a library
-feature today: nothing in the flow solver moves its mesh yet (that is the ALE
-fluid, the next step), and there are no deck keys.
+different type of solver (hyper elasticity etc) can be used". Since
+2026-10-21 a deck can deform its mesh by prescribed boundary displacements
+(`equation: mesh_motion`, section 3; human: "add the capability to deform a
+given mesh using the structural solver ... specify like a function on the
+boundary"). Nothing in the flow solver moves its mesh yet: that is the ALE
+fluid, the next step.
 
 ## 1. Formulation
 
@@ -100,12 +103,61 @@ move (a flow `Case`'s operators, the grad-div coefficient's element sizes, the
 CFL estimator's Jacobians) is stale after it: rebuilding or refreshing those is
 the ALE fluid's work. Refinement after construction aborts (the reference copy
 would have to be refined in step). Sliding boundaries (zero normal
-displacement along flat walls), deck keys, the Python bindings and a GPU run
-are not done. Memory: the reference copy (topology and nodes), the node
+displacement along flat walls) are not done. Memory: the reference copy (topology and nodes), the node
 history (`history` node vectors) and the elasticity solver (its LOR-AMG
 dominates, elasticity.md section 3).
 
-## 3. Verification
+## 3. Deforming a mesh from a deck
+
+`equation: mesh_motion` makes `run_case` deform the deck's mesh instead of
+solving a flow (`ale/mesh_motion_case`, `MeshMotionCase`). Every real boundary
+is in exactly one `boundary_conditions` group, of type `displacement` (moved
+by the given displacement of its reference coordinates) or `fixed`. A
+displacement is a constant `value: [dx, dy(, dz)]` or an `expression`, one
+string per component in x, y, z (the reference coordinates) and t, with
+optional named `parameters` (`config/expression`: `+ - * / ^`, sin, cos, tan,
+their inverses and hyperbolic forms, exp, log, sqrt, abs, min, max, pow,
+atan2, pi, e). The `mesh_motion` section picks the model (`linear_elastic`,
+the only one today), its Poisson ratio and stiffening exponent, the order
+(default `discretization.order_u`; a curved geometry keeps its own nodes'
+order), the CG settings, and `steps`: the moves are at t_k = k t_final / steps
+(`time.t_final`), so an expression with t ramps the deformation in and one
+without it is a single static deformation. Every move solves from the
+reference mesh (total displacement), so the result at t_final does not depend
+on the number of steps.
+
+```yaml
+equation: mesh_motion
+mesh: {dim: 2, elements: [16, 8], lengths: [2.0, 1.0], periodic: [false, false]}
+mesh_motion: {order: 4, steps: 4}
+time: {t_final: 1.0}
+boundary_conditions:
+  - select: [ymin]
+    type: displacement
+    expression: ["0", "A * t * 4 * x * (L - x) / L^2"]
+    parameters: {A: 0.3, L: 2.0}
+  - {select: [xmin, xmax, ymax], type: fixed}
+output: {enabled: true, history: true, path: mesh_deform_2d, name: mesh_deform_2d}
+```
+
+Output: ParaView (`output.enabled`; cycle 0 is the reference mesh, then every
+`output.interval` moves and the last) with the fields `displacement` and
+`det_F` on the deformed high-order mesh; `<name>_history.csv` per move
+(`output.history`: CG iterations, det F range, the smallest element Jacobian
+ratio, the largest displacement, the boundary error); the summary's
+`results`: `det_f_min`, `det_f_max`, `det_f_min_over_moves`,
+`jacobian_ratio_min` (min det J / max det J over an element, smallest over
+the mesh; the reference mesh's is under `mesh`), `max_displacement` and
+`boundary_error` (the largest |x - X - g(X, t)| over the displaced boundaries'
+nodes: roundoff when the mesh reproduces the data). A move that inverts the
+mesh (min det F <= 0) stops the run with status `diverged`. Example decks:
+`cases/mesh_deform_2d.yaml` (a rectangle's bottom pushed up by a parabola)
+and `cases/mesh_deform_cube.yaml` (a cube's bottom face pushed up by a sin^2
+bump). The `displacement` expressions work in `equation: linear_elasticity`
+decks too. Not yet: free or sliding mesh boundaries, AMR or periodic meshes
+(refused), velocity boundary groups given by expressions.
+
+## 4. Verification
 
 Fast tier, `mesh_motion_test`, np 1/2/4 (pins its own orders):
 
@@ -130,11 +182,20 @@ Fast tier, `mesh_motion_test`, np 1/2/4 (pins its own orders):
   field) plugs in through the factory, the nodes follow it exactly, and the
   boundaries nobody named reach the model as fixed.
 
-## 4. Next
+`mesh_motion_case_test` (decks with the defaults, a small order): C1 the 2D
+rectangle with a ramped parabola, C2 the 3D cube with a sin^2 bump (the
+displaced boundary's nodes at X + g(X, t) to roundoff, the held faces' nodes
+unmoved, det F > 0, the peak node moved by the peak), C3 a constant
+displacement of every boundary is a translation (det F = 1).
+`expression_test` E1-E4 pins the expression parser. `run_case_mesh_deform`
+runs `cases/mesh_deform_2d.yaml` end to end.
+
+## 5. Next
 
 1. The ALE fluid: the convective velocity u - w, the mesh velocity's
    geometric conservation law with BDF, the flow operators refreshed after
-   each move, a `mesh_motion:` deck section; verified on a moving-domain MMS.
+   each move, the `mesh_motion:` deck section driving a flow case; verified on
+   a moving-domain MMS.
 2. A hyperelastic mesh-motion model (shares the large-deformation solid of
    the Turek-Hron step).
 3. Sliding boundaries; an incremental (current-configuration) mode if large

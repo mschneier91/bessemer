@@ -2,6 +2,7 @@
 
 #include "bc/boundary_names.hpp"
 #include "bc/deck_boundary.hpp"
+#include "config/expression.hpp"
 #include "util/json.hpp"
 #include "util/profiler.hpp"
 
@@ -77,7 +78,16 @@ ElasticityCase::ElasticityCase(ParMesh& mesh, const Parameters& params)
             for (int a : attrs) { solver_->AddFixed(a); }
             break;
          case BcType::Displacement:
-            coeffs_.push_back(std::make_unique<VectorConstantCoefficient>(v));
+            if (s.expression.empty())
+            {
+               coeffs_.push_back(std::make_unique<VectorConstantCoefficient>(v));
+            }
+            else
+            {
+               coeffs_.push_back(VectorExpression::Coefficient(
+                                    std::make_shared<VectorExpression>(
+                                       s.expression, s.expression_parameters)));
+            }
             for (int a : attrs) { solver_->AddDisplacement(a, *coeffs_.back()); }
             break;
          case BcType::Traction:

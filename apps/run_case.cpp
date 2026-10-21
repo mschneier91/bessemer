@@ -1,13 +1,15 @@
 // Generic YAML-driven driver: `run_case <deck.yaml>` -- no recompilation per
 // case. The deck supplies parameters, mesh, initial condition (by name), and
 // output settings; the case goes through the same Case surface as any
-// in-code driver, and equation: linear_elasticity runs a solid instead
-// (ElasticityCase). `run_case --deck-reference` prints every deck key with its
+// in-code driver, equation: linear_elasticity runs a solid instead
+// (ElasticityCase), and equation: mesh_motion deforms the mesh
+// (MeshMotionCase). `run_case --deck-reference` prints every deck key with its
 // default (docs/deck_reference.md is that output). Every run writes a
 // machine-readable summary (<output.path>/<output.name>_summary.json, or
 // --summary <file>): "running" at the start, then "ok" or "diverged" (exit
 // code 2).
 
+#include "ale/mesh_motion_case.hpp"
 #include "bc/boundary_names.hpp"
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
@@ -88,6 +90,23 @@ int main(int argc, char* argv[])
       if (Mpi::Root())
       {
          std::cout << "run_case: linear_elasticity  status="
+                   << (ok ? "ok" : "diverged") << "  summary: " << summary
+                   << std::endl;
+      }
+      return ok ? 0 : 2;
+   }
+
+   // A mesh deformation: prescribed boundary displacements extended into the
+   // domain (ale/mesh_motion_case).
+   if (params.equation == incns::Equation::MeshMotion)
+   {
+      incns::MeshMotionCase motion(mesh, params);
+      motion.WriteSummary(summary, "running");
+      const bool ok = motion.Run();
+      motion.WriteSummary(summary, ok ? "ok" : "diverged");
+      if (Mpi::Root())
+      {
+         std::cout << "run_case: mesh_motion  status="
                    << (ok ? "ok" : "diverged") << "  summary: " << summary
                    << std::endl;
       }
