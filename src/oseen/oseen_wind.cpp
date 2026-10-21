@@ -30,15 +30,14 @@ Geometry::Type TensorGeometry(int dim)
    return (dim == 3) ? Geometry::CUBE : Geometry::SQUARE;
 }
 
-// The wind's values and physical derivatives (byVDIM, vdim = dim) at D1D
-// dofs and Q1D points per direction.
+// The wind's values (byVDIM, vdim = dim) at D1D dofs and Q1D points per
+// direction.
 template <int DIM, int D1D, int Q1D>
 void AddWindInterpolation()
 {
    using QI = QuadratureInterpolator;
    constexpr auto byVDIM = QVectorLayout::byVDIM;
    QI::AddTensorEvalSpecializations<DIM, byVDIM, DIM, D1D, Q1D>();
-   QI::AddGradSpecializations<DIM, byVDIM, true, DIM, D1D, Q1D>();
 }
 
 // MFEM's quadrature interpolator holds 8 points per direction in its
@@ -46,12 +45,13 @@ void AddWindInterpolation()
 // points alike, unchecked: the wind at the convection rule k + 2m (10 points
 // per direction at Q6, 9 for PCD's m = k - 1) wrote past its shared arrays,
 // and every Q6 oseen_case run stopped with an illegal address in its first
-// step (2026-10-20). Compile-time kernels at the sizes the rules reach for
-// velocity orders 6 and 7 (7 and 8 dofs; the OSS rule 2m + 2 has 9 points
-// at Q7); not 11 points in 3D (MFEM's kernel launches 11^3 threads per
-// element, more than a block holds). The mesh Jacobians at these rules are
-// AddInterpolationKernels'. Registered by the Oseen code only, so nothing
-// else dispatches differently. Process-wide and idempotent.
+// step (2026-10-20). Compile-time kernels for the wind's values at the
+// sizes the rules reach for velocity orders 6 and 7 (7 and 8 dofs; the OSS
+// rule 2m + 2 has 9 points at Q7); not 11 points in 3D (MFEM's kernel
+// launches 11^3 threads per element, more than a block holds). Its
+// derivatives go through the mesh Jacobians' kernels
+// (AddInterpolationKernels; see Update). Registered by the Oseen code only,
+// so nothing else dispatches differently. Process-wide and idempotent.
 void AddWindInterpolationKernels()
 {
    static const bool added = []
@@ -69,6 +69,33 @@ void AddWindInterpolationKernels()
       return true;
    }();
    (void)added;
+}
+
+// J^-1 of a column-major D x D Jacobian (D = 2, 3): adj(J) / det J.
+MFEM_HOST_DEVICE inline void InvertJacobian(int D, const real_t* Jm, real_t* Ji)
+{
+   if (D == 2)
+   {
+      const real_t det = Jm[0] * Jm[3] - Jm[1] * Jm[2];
+      Ji[0] = Jm[3] / det; Ji[1] = -Jm[1] / det;
+      Ji[2] = -Jm[2] / det; Ji[3] = Jm[0] / det;
+      return;
+   }
+   // Column-major J: a(i, j) = Jm[i + 3 j].
+   auto a = [&](int i, int j) { return Jm[i + 3 * j]; };
+   const real_t c00 = a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1);
+   const real_t c01 = a(1, 2) * a(2, 0) - a(1, 0) * a(2, 2);
+   const real_t c02 = a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0);
+   const real_t det = a(0, 0) * c00 + a(0, 1) * c01 + a(0, 2) * c02;
+   Ji[0 + 3 * 0] = c00 / det;
+   Ji[0 + 3 * 1] = (a(0, 2) * a(2, 1) - a(0, 1) * a(2, 2)) / det;
+   Ji[0 + 3 * 2] = (a(0, 1) * a(1, 2) - a(0, 2) * a(1, 1)) / det;
+   Ji[1 + 3 * 0] = c01 / det;
+   Ji[1 + 3 * 1] = (a(0, 0) * a(2, 2) - a(0, 2) * a(2, 0)) / det;
+   Ji[1 + 3 * 2] = (a(0, 2) * a(1, 0) - a(0, 0) * a(1, 2)) / det;
+   Ji[2 + 3 * 0] = c02 / det;
+   Ji[2 + 3 * 1] = (a(0, 1) * a(2, 0) - a(0, 0) * a(2, 1)) / det;
+   Ji[2 + 3 * 2] = (a(0, 0) * a(1, 1) - a(0, 1) * a(1, 0)) / det;
 }
 
 } // namespace
@@ -168,24 +195,42 @@ void OseenWindData::Update(const ParGridFunction& wind)
    wind_oss_.ProjectGridFunction(wind);
    wind_center_.ProjectGridFunction(wind);
 
-   // 1/2 div w at the convection rule, from the physical derivatives
-   // (byVDIM: component, derivative direction, point, element).
+   // 1/2 div w at the convection rule: the wind's reference derivatives
+   // (byNODES: point, component, direction, element -- the layout and the
+   // compile-time kernels of the mesh Jacobians, AddInterpolationKernels)
+   // contracted with J^-1. MFEM's physical-derivative kernel at 10 points
+   // per direction launches 10^3 threads per element and asks for more
+   // registers than a block has (job 49531904).
    const Operator* R = vfes_.GetElementRestriction(GetEVectorOrdering(vfes_));
    e_vec_.SetSize(R->Height());
    R->Mult(wind, e_vec_);
    const QuadratureInterpolator* qi = vfes_.GetQuadratureInterpolator(*ir_conv_);
-   qi->SetOutputLayout(QVectorLayout::byVDIM);
+   qi->SetOutputLayout(QVectorLayout::byNODES);
    const int NQc = ir_conv_->GetNPoints();
-   q_der_.SetSize(D * D * NQc * NE);
-   qi->PhysDerivatives(e_vec_, q_der_);
+   q_der_.SetSize(NQc * D * D * NE);
+   qi->Derivatives(e_vec_, q_der_);
+   if (NE > 0)
    {
-      const auto der = Reshape(q_der_.Read(), D, D, NQc, NE);
+      const GeometricFactors* gc =
+         mesh.GetGeometricFactors(*ir_conv_, GeometricFactors::JACOBIANS);
+      const auto der = Reshape(q_der_.Read(), NQc, D, D, NE);
+      const auto J = Reshape(gc->J.Read(), NQc, D, D, NE);
       auto hd = Reshape(half_divw_.Write(), NQc, NE);
       mfem::forall(NQc * NE, [ = ] MFEM_HOST_DEVICE(int i)
       {
          const int q = i % NQc, e = i / NQc;
+         real_t Jm[9] = {}, Ji[9] = {};
+         for (int j = 0; j < D; j++)
+         {
+            for (int a = 0; a < D; a++) { Jm[a + D * j] = J(q, a, j, e); }
+         }
+         InvertJacobian(D, Jm, Ji);
+         // d w_c / d x_c = sum_r (d w_c / d xi_r) (J^-1)_{r c}.
          real_t s = 0.0;
-         for (int c = 0; c < D; c++) { s += der(c, c, q, e); }
+         for (int c = 0; c < D; c++)
+         {
+            for (int r = 0; r < D; r++) { s += der(q, c, r, e) * Ji[r + D * c]; }
+         }
          hd(q, e) = 0.5 * s;
       });
    }
@@ -200,35 +245,12 @@ void OseenWindData::Update(const ParGridFunction& wind)
       auto tc = tau_c_.Write();
       mfem::forall(NE, [ = ] MFEM_HOST_DEVICE(int e)
       {
-         real_t Jm[9], Ji[9], w[3];
+         real_t Jm[9] = {}, Ji[9] = {}, w[3] = {};
          for (int j = 0; j < D; j++)
          {
             for (int i = 0; i < D; i++) { Jm[i + D * j] = J(0, i, j, e); }
          }
-         if (D == 2)
-         {
-            const real_t det = Jm[0] * Jm[3] - Jm[1] * Jm[2];
-            Ji[0] = Jm[3] / det; Ji[1] = -Jm[1] / det;
-            Ji[2] = -Jm[2] / det; Ji[3] = Jm[0] / det;
-         }
-         else
-         {
-            // Column-major J: a(i, j) = Jm[i + 3 j]; J^{-1} = adj(J) / det J.
-            auto a = [&](int i, int j) { return Jm[i + 3 * j]; };
-            const real_t c00 = a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1);
-            const real_t c01 = a(1, 2) * a(2, 0) - a(1, 0) * a(2, 2);
-            const real_t c02 = a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0);
-            const real_t det = a(0, 0) * c00 + a(0, 1) * c01 + a(0, 2) * c02;
-            Ji[0 + 3 * 0] = c00 / det;
-            Ji[0 + 3 * 1] = (a(0, 2) * a(2, 1) - a(0, 1) * a(2, 2)) / det;
-            Ji[0 + 3 * 2] = (a(0, 1) * a(1, 2) - a(0, 2) * a(1, 1)) / det;
-            Ji[1 + 3 * 0] = c01 / det;
-            Ji[1 + 3 * 1] = (a(0, 0) * a(2, 2) - a(0, 2) * a(2, 0)) / det;
-            Ji[1 + 3 * 2] = (a(0, 2) * a(1, 0) - a(0, 0) * a(1, 2)) / det;
-            Ji[2 + 3 * 0] = c02 / det;
-            Ji[2 + 3 * 1] = (a(0, 1) * a(2, 0) - a(0, 0) * a(2, 1)) / det;
-            Ji[2 + 3 * 2] = (a(0, 0) * a(1, 1) - a(0, 1) * a(1, 0)) / det;
-         }
+         InvertJacobian(D, Jm, Ji);
          for (int d = 0; d < D; d++) { w[d] = W(d, 0, e); }
          tc[e] = OssTau(D, w, Ji, nu, k);
       });
