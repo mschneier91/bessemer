@@ -112,11 +112,6 @@ struct TimeIntegratorOptions
    ConvectionTreatment convection_treatment = ConvectionTreatment::Imex;
    /// OIFS: CFL number of each RK4 substep.
    double oifs_cfl = 0.5;
-   /// Large-eddy simulation: the subgrid stress (2 nu_t S(u), S(v)) of a
-   /// model, explicit and EXT-extrapolated with the convection (IMEX) or
-   /// with the outflow term (OIFS); SubgridStress, docs/les.md. Needs
-   /// convection and the convective form. Off (None) by default.
-   SubgridOptions subgrid;
    /// Velocity-block PC with the rotational form (see RotationVelocityPC).
    RotationVelocityPC rotation_pc = RotationVelocityPC::Symmetric;
    /// Rotational form + LOR-AMG velocity PC: include the rotation term in the
@@ -296,17 +291,6 @@ public:
 
    /// @return Current time.
    double Time() const { return t_; }
-
-   /// @return The subgrid model of a large-eddy simulation, or null.
-   const SubgridStress* Subgrid() const;
-
-   /**
-    * @brief The subgrid model's statistics on the current velocity
-    *        (collective).
-    * @pre Subgrid() is not null.
-    * @return SubgridStress::Statistics of Velocity().
-    */
-   SubgridStress::Values SubgridStatistics();
 
    /// @return True once t_final is reached.
    bool Done() const;
@@ -531,14 +515,13 @@ private:
                            mfem::Vector& phi);
 
    /**
-    * @brief OIFS: b -= EXT[explicit terms other than N] -- the directional
-    *        do-nothing outflow term and the subgrid stress, explicit and
-    *        extrapolated in the BDF step, as IMEX treats them (OIFS keeps
-    *        only N in its substeps). No-op when neither is enabled.
+    * @brief OIFS: b -= EXT[directional do-nothing term] -- the outflow term
+    *        explicit and extrapolated in the BDF step, as IMEX treats it (OIFS
+    *        keeps only N in its substeps). No-op without the condition.
     * @param t_new Time the step solves for.
     * @param b     Momentum right-hand side (modified).
     */
-   void SubtractOifsExplicitTerms(double t_new, mfem::Vector& b);
+   void SubtractOifsDirectionalDoNothing(double t_new, mfem::Vector& b);
 
    /**
     * @brief Rotational form: set the lagged velocity w* to the EXT
@@ -626,9 +609,9 @@ private:
    std::unique_ptr<Convection> oifs_conv_;
    /// OIFS: some rank has Dirichlet true dofs (oifs_conv_ exists only then).
    bool oifs_walls_ = false;
-   /// OIFS with the directional do-nothing outflow or a subgrid model:
-   /// evaluates those terms alone (SubtractOifsExplicitTerms); null otherwise.
-   std::unique_ptr<Convection> oifs_explicit_;
+   /// OIFS + directional do-nothing outflow: evaluates that boundary term
+   /// alone (SubtractOifsDirectionalDoNothing); null otherwise.
+   std::unique_ptr<Convection> oifs_ddn_;
    /// Rotational form active (convection on, ConvectiveForm::Rotational).
    bool rotational_ = false;
 
