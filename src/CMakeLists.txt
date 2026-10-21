@@ -70,6 +70,7 @@ add_library(incns STATIC
   precond/rotational_schur.cpp
   precond/viscous_ratio.cpp
   solid/linear_elasticity.cpp
+  solid/hyperelastic_operator.cpp
   solid/elasticity_case.cpp
   ale/linear_elastic_motion.cpp
   ale/mesh_motion.cpp
@@ -96,7 +97,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
 # points and the rotation-number statistics; operators/subgrid_stress.cpp --
 # the LES subgrid stress at the quadrature points and its contraction with
-# the test functions; util/device_sync.cpp -- no kernel,
+# the test functions; solid/hyperelastic_operator.cpp -- the hyperelastic
+# residual, energy and tangent kernels; util/device_sync.cpp -- no kernel,
 # but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
@@ -127,6 +129,7 @@ if(USE_CUDA)
                               time/oifs.cpp
                               time/oifs_convection.cpp
                               precond/rotational_schur.cpp
+                              solid/hyperelastic_operator.cpp
                               util/device_sync.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)

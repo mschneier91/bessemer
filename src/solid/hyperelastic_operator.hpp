@@ -1,0 +1,91 @@
+/**
+ * @file hyperelastic_operator.hpp
+ * @brief The internal force R(u) = int P(F(u)) : grad_X v of a hyperelastic
+ *        solid on the reference configuration and its tangent, matrix-free in
+ *        partial assembly on the device (docs/design/hyperelasticity_spec.md
+ *        section 3).
+ */
+#pragma once
+
+#include "solid/hyperelastic_material.hpp"
+#include "mfem.hpp"
+
+#include <memory>
+
+namespace incns
+{
+
+/**
+ * @brief R(u) = int_Omega0 P(F(u)) : grad_X v dX on true dofs, F = I +
+ *        grad_X u, for a vector H1 space ordered by nodes, without boundary
+ *        conditions (the solver constrains it).
+ *
+ * Each apply is one fused kernel per element: the reference gradients of all
+ * components by sum factorization, the material law at every point, the
+ * transposed gradient back to the dofs (MFEM's kernels::internal helpers, as
+ * GradDivIntegrator's apply). Tensor-product elements (quads, hexes) with as
+ * many points per direction as dofs (the Gauss rule of order 2k + 1, the
+ * linear solver's), k from 1 to 7. Lambda and mu are per element (the mesh
+ * motion's stiffening).
+ *
+ * The geometry (J^-1 and w det J at every point) is computed once from the
+ * mesh's geometric factors at the rule and kept; the mesh's cache is left as
+ * it is (the owner of the rule clears it, as LinearElasticity does).
+ */
+class HyperelasticOperator : public mfem::Operator
+{
+public:
+   /**
+    * @param fes      Vector H1 space, vdim = dim, ordered by nodes (borrowed).
+    * @param ir       Tensor rule with as many points per direction as the
+    *                 space has dofs (borrowed; must outlive this).
+    * @param material The material model.
+    * @param lambda   First Lame parameter per local element.
+    * @param mu       Shear modulus per local element.
+    */
+   HyperelasticOperator(mfem::ParFiniteElementSpace& fes,
+                        const mfem::IntegrationRule& ir,
+                        HyperelasticMaterial material,
+                        const mfem::Vector& lambda, const mfem::Vector& mu);
+   ~HyperelasticOperator() override;
+
+   /// r = R(u) on true dofs.
+   void Mult(const mfem::Vector& u, mfem::Vector& r) const override;
+
+   /**
+    * @brief The tangent K_T(u) w = int dP(F(u))[grad_X w] : grad_X v, from
+    *        F and S stored at every point. Valid until the next call (one
+    *        tangent per operator).
+    * @param u Linearization point (true dofs).
+    */
+   mfem::Operator& GetGradient(const mfem::Vector& u) const override;
+
+   /// @return The strain energy int W(F(u)) dX (true dofs). Collective.
+   double Energy(const mfem::Vector& u) const;
+
+   /// @return The vector space.
+   mfem::ParFiniteElementSpace& Space() const { return fes_; }
+
+private:
+   class Tangent;
+
+   /// u (true dofs) to the E-vector ue_.
+   void ToElements(const mfem::Vector& u) const;
+   /// The E-vector ye_ added into y (true dofs; y is overwritten).
+   void FromElements(mfem::Vector& y) const;
+
+   mfem::ParFiniteElementSpace& fes_;
+   const mfem::IntegrationRule& ir_;
+   HyperelasticMaterial material_;
+   int dim_ = 0, n1d_ = 0, ne_ = 0;
+   const mfem::DofToQuad* maps_ = nullptr;
+   const mfem::Operator* restriction_ = nullptr; ///< Lexicographic E-vectors.
+   mfem::Vector lambda_, mu_; ///< Per element.
+   mfem::Vector jinv_;        ///< J^-1 at the points, (nq, dim, dim, ne).
+   mfem::Vector wdet_;        ///< w det J at the points, (nq, ne).
+   mutable mfem::Vector fs_;  ///< F and S of the linearization, (nq, 2 dim^2, ne).
+   mutable mfem::Vector ul_, ue_, ye_, yl_, qe_; ///< Work.
+   std::unique_ptr<Tangent> tangent_;
+};
+
+} // namespace incns
