@@ -90,6 +90,7 @@ void Case::BuildIntegrator()
    opts.outflow = params_.outflow;
    opts.convection_treatment = params_.Convection();
    opts.oifs_cfl = params_.oifs_cfl;
+   opts.subgrid = params_.subgrid;
    opts.oifs_on_the_fly = params_.oifs_on_the_fly;
    opts.rotation_pc = params_.rotation_pc;
    opts.rotation_in_lor = params_.rotation_in_lor;
@@ -1123,6 +1124,21 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
    Json& d = j["diagnostics"];
    d["kinetic_energy"].Set(KineticEnergy());
    d["divergence_norm"].Set(DivergenceNorm());
+   if (integrator_->Subgrid())
+   {
+      // The subgrid model on the current velocity: how much the model does.
+      const SubgridOptions& so = integrator_->Subgrid()->Options();
+      const SubgridStress::Values v = integrator_->SubgridStatistics();
+      Json& sg = j["subgrid"];
+      sg["model"].Set(so.model == SubgridModel::Sigma ? "sigma" :
+                      so.model == SubgridModel::Wale ? "wale" : "constant");
+      sg["coefficient"].Set(so.Coefficient());
+      sg["filter_width"].Set(so.filter_width);
+      sg["nu_t_max"].Set(v.nu_t_max);
+      sg["nu_t_mean"].Set(v.nu_t_mean);
+      sg["nu_t_max_over_nu"].Set(v.nu_t_max / params_.nu);
+      sg["dissipation"].Set(v.dissipation);
+   }
 
    // Computed values the reference section may compare against.
    std::vector<std::pair<std::string, double>> got;
