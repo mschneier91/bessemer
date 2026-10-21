@@ -206,7 +206,7 @@ is about $6|u\cdot n|/h$ for Q3.
   the step is large. On the paper's §5.1 square, $j_1$ was 2.3% off at CFL 2 and converged
   only as the CFL fell to 0.25. Removed.
 - **Explicit and extrapolated in the BDF step**, exactly IMEX's treatment
-  (`SubtractOifsDirectionalDoNothing`, using `Convection::MultDirectionalDoNothing`): it
+  (`SubtractOifsExplicitTerms`, using `Convection::MultExplicitTerms`; the LES subgrid stress, when a model is on, rides the same path): it
   reproduces IMEX's steady state at every CFL ($j_1$, $j_2$ equal to IMEX's to 5e-5 at
   CFL 2; `directional_do_nothing_test` D4) and was stable to CFL 8 on that problem. It is
   only conditionally stable: backflow much faster than the local flow could need the
