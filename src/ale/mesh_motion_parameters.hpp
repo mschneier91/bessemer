@@ -27,8 +27,17 @@ struct MeshMotionParameters
 {
    /// The model.
    MeshMotionModelType model = MeshMotionModelType::LinearElastic;
-   double poisson_ratio = 0.3; ///< The pseudo-solid's Poisson ratio.
-   double stiffening = 1.0;    ///< Jacobian stiffening exponent chi (>= 0).
+   /// The pseudo-solid's Poisson ratio. 0.3 suits most meshes; 0.4-0.45
+   /// resists compression at the cost of more shear and CG iterations; near
+   /// 0.5 the displacement formulation locks (docs/mesh_motion.md §1).
+   double poisson_ratio = 0.3;
+   /// Jacobian stiffening exponent chi (>= 0): 1 for a mesh graded toward a
+   /// moving body or wall (keeps its small elements nearly rigid, pushes the
+   /// distortion into the large ones), 0 for the best overall det F, 2 only
+   /// when the near-body elements must stay almost undeformed. No effect on a
+   /// uniform mesh. Measurements: docs/mesh_motion.md §1, "Choosing the
+   /// settings".
+   double stiffening = 1.0;
    /// Displacement and geometry order; <= 0: discretization.order_u. A mesh
    /// that already has nodes (a curved geometry) keeps its own order.
    int order = 0;

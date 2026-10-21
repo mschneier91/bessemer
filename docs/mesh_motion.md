@@ -61,6 +61,56 @@ determinant, at the Gauss-Lobatto points of every element. min > 0 is
 necessary for a valid mesh; it is sampled, not a bound (a positive Bernstein
 bound would be).
 
+**Choosing the settings.** What the stiffening buys, and what it costs, depends
+on the mesh, so here is what was measured (2026-10-21, 2D, np 4, one move,
+`cases/`-style decks; det F is the minimum over an element's nodes):
+
+| Mesh and motion | chi | min det F near the body / wall layer | min det F elsewhere | CG its |
+|---|---|---|---|---|
+| DFG cylinder (208 Q3), cylinder moved 0.05 (one radius) | 0 | 0.62 | 0.68 | 27 |
+| | 1 | 0.90 | 0.62 | 29 |
+| | 2 | 0.95 | 0.58 | 32 |
+| same, moved 0.1 (two radii, 0.05 from the wall) | 0 | 0.17 | 0.22 | 27 |
+| | 1 | 0.84 | 0.12 | 29 |
+| | 2 | 0.91 | 0.10 | 32 |
+| 2 x 1 rectangle, 16 x 16 Q4, tanh layer (beta 3) at the bottom, parabola 0.3 | 0 | 0.68 | 0.68 | 22 |
+| | 1 | 0.84 | 0.63 | 23 |
+| | 2 | 0.75 | 0.54 | 22 |
+
+("Near the body": elements with their centre within 0.08 of the cylinder's;
+"wall layer": the bottom row.) So stiffening does not make the mesh as a whole
+better: it moves the distortion out of the small elements into the large ones.
+That is the trade wanted when the small elements are a boundary layer whose
+shape the flow needs, and the large ones have room.
+
+- **`stiffening` (chi).** Keep the default **1** when the mesh is graded toward
+  a moving body or wall (the usual case): it kept the cylinder's ring 2.6 times
+  less distorted (max |det F - 1| 0.15 against 0.39) at the same overall
+  minimum. On a uniform mesh it does nothing (s_K = 1 everywhere; the example
+  decks). **0** gives the best overall minimum det F and suits a mesh whose
+  small elements do not matter more than the rest. **2** protects the body's
+  ring further (0.09) but costs the far field, can make a graded wall layer
+  worse than chi = 1 (the rectangle), and adds CG iterations (up to +19 %); use it
+  only when the ring must stay nearly rigid, and check `det_f_min`. In these
+  runs chi = 1 was the better balance.
+- **`poisson_ratio`.** Keep **0.3**. Raising it resists volume change: on the
+  uniform rectangle 0.45 lifted min det F from 0.68 to 0.74 but lowered the
+  element Jacobian ratio from 0.89 to 0.84 (more shear) and took 33 % more CG
+  iterations. Try 0.4-0.45 only when compression (det F well below 1) is what
+  fails; never near 0.5, where the displacement formulation locks.
+- **Order.** The default (the velocity order) keeps the geometry isoparametric
+  with the flow; a lower order is cheaper but gives the fluid a coarser
+  geometry than its velocity space.
+- **`steps`.** They do not change the final shape (total displacement); use
+  them to see the motion in ParaView or to find when det F drops.
+- **When it is not enough.** The second cylinder case is near the limit: two
+  radii of motion leave min det F 0.1-0.2, close to inversion. Watch
+  `det_f_min` and `jacobian_ratio_min`, and treat values below about 0.2 as
+  a warning (a working rule; its effect on a flow is not measured yet). Large
+  motions and rotations (which linear elasticity on the reference mesh treats
+  as strain) need the hyperelastic model, a finer mesh where the deformation
+  lands, or a remesh; none of these is built yet.
+
 ## 2. Code
 
 - `src/ale/mesh_motion_model.hpp`: `MeshMotionModel`, the interface a model
@@ -192,6 +242,9 @@ runs `cases/mesh_deform_2d.yaml` end to end.
 
 ## 5. Next
 
+0. Run the decks and tests on a GPU (human 2026-10-21: "next step is to have
+   it tested on GPU"); the expression evaluation and the boundary-error check
+   are host loops, at setup and once per move.
 1. The ALE fluid: the convective velocity u - w, the mesh velocity's
    geometric conservation law with BDF, the flow operators refreshed after
    each move, the `mesh_motion:` deck section driving a flow case; verified on
