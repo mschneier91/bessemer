@@ -148,7 +148,8 @@ src/
                (the deck's groups -> BoundaryConditions + coverage check; Case and Python)
   config/      parameters (+ YAML), deck_reader (declares every key: the generated deck
                reference, unknown-key errors), nondimensionalization, initial_conditions
-               (zero, uniform, channel = Reichardt + curl perturbation, taylor_green_2d/3d)
+               (zero, uniform, channel = Reichardt + curl perturbation, taylor_green_2d/3d),
+               expression (deck expressions of x, y, z, t: boundary displacements)
   solid/       linear_elasticity (small-strain elasticity, static or dynamic: PA
                operators, CG + LOR-AMG, generalized-alpha or BDF2/BDF3),
                elasticity_case (equation: linear_elasticity decks;
@@ -156,7 +157,8 @@ src/
   ale/         mesh_motion_model (the model interface + factory), linear_elastic_motion
                (LinearElasticity with Jacobian stiffening), mesh_motion (moves the
                nodes to X + d from a reference copy; BDF mesh velocity;
-               docs/mesh_motion.md)
+               docs/mesh_motion.md), mesh_motion_case (equation: mesh_motion decks:
+               prescribed boundary displacements, det F and quality, ParaView)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
@@ -860,7 +862,9 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   membrane, the default scheme's time order, a cantilever's first frequency),
   `mesh_motion_test` (M1 translation exact with stiffening, M2 affine motion
   exact on the curved DFG mesh, M3 the DFG cylinder moved and back, M4 the BDF
-  mesh velocity, M5 a non-elastic model through the factory).
+  mesh velocity, M5 a non-elastic model through the factory),
+  `mesh_motion_case_test` (C1 2D rectangle with a ramped parabola, C2 3D cube
+  with a bump, C3 a translation; deck defaults), `expression_test` (E1-E4).
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need
