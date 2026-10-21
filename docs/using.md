@@ -166,6 +166,14 @@ stability limit; pass `-dt 0.001`.)
   state (up to 2 `projection_k` + 1 system-sized vectors per solver), so a restart repeats
   the uninterrupted run's solves exactly ([throughput.md](throughput.md)).
 
+### Large-eddy simulation
+
+For a flow the mesh cannot resolve, `physics.subgrid.model: sigma` adds an eddy-viscosity
+subgrid term (the sigma model; `wale` is the alternative), explicit beside the
+convection, with the published constant and the node spacing as the filter width. The
+summary's `subgrid` section reports the maximum and mean eddy viscosity against `nu`
+and the subgrid dissipation. Details and when it is worth it: [les.md](les.md).
+
 ## 5. Outputs
 
 - **Run summary (always):** `run_case` writes `<output.path>/<output.name>_summary.json`
