@@ -55,7 +55,7 @@ std::pair<double, double> PeakOf(const std::vector<double>& t,
    if (sign * a >= 0.0) { return {t1, f1}; }
    const double b = d01 - a * (t0 + t1);
    const double ts = -b / (2.0 * a);
-   return {ts, f1 + (ts - t1) * (b + a * (ts + t1))};
+   return {ts, f1 + (ts - t1)* (b + a * (ts + t1))};
 }
 
 } // namespace
@@ -76,18 +76,25 @@ int main(int argc, char* argv[])
    double vin = 0.0, gdh = 0.0;
    const char* schur = "pcd";
    bool lgd = true;
+   const char* coupling = "jacobi";
+   double lbt = 0.0;
+   int lbm = 100;
    OptionsParser args(argc, argv);
    args.AddOption(&deck, "-deck", "--deck", "The deck (YAML).", true);
    args.AddOption(&dt, "-dt", "--dt", "Step size.");
    args.AddOption(&t_final, "-tf", "--t-final", "End time (< 0: the deck's).");
    args.AddOption(&scheme, "-s", "--scheme", "semi | implicit.");
-   args.AddOption(&nl, "-nl", "--nl-rtol", "Picard tolerance (<= 0: -nlit iterations).");
+   args.AddOption(&nl, "-nl", "--nl-rtol",
+                  "Picard tolerance (<= 0: -nlit iterations).");
    args.AddOption(&nlit, "-nlit", "--nl-maxit", "Picard iteration cap.");
-   args.AddOption(&plin, "-plin", "--picard-lin-rtol", "FGMRES tolerance per Picard step.");
+   args.AddOption(&plin, "-plin", "--picard-lin-rtol",
+                  "FGMRES tolerance per Picard step.");
    args.AddOption(&lin, "-lin", "--lin-rtol", "FGMRES tolerance (semi-implicit).");
-   args.AddOption(&reuse, "-reuse", "--lor-reuse", "LOR rebuild interval (steps).");
+   args.AddOption(&reuse, "-reuse", "--lor-reuse",
+                  "LOR rebuild interval (steps).");
    args.AddOption(&gd, "-gd", "--grad-div-nu", "Grad-div gamma = gd * nu.");
-   args.AddOption(&oss, "-oss", "--oss", "-no-oss", "--no-oss", "OSS stabilization.");
+   args.AddOption(&oss, "-oss", "--oss", "-no-oss", "--no-oss",
+                  "OSS stabilization.");
    args.AddOption(&amg, "-amg", "--amg", "auto | air | amg (velocity V-cycle).");
    args.AddOption(&n_inner, "-ni", "--n-inner", "PCD: CG iterations on A_p.");
    args.AddOption(&pcd, "-pcd", "--pcd", "-cc", "--cahouet-chabard",
@@ -102,6 +109,12 @@ int main(int argc, char* argv[])
                   "Diagonal grad-div blocks in the velocity LOR operators.");
    args.AddOption(&vin, "-vin", "--velocity-inner-rtol",
                   "> 0: inner FGMRES on the velocity block to this tolerance (diagnostics).");
+   args.AddOption(&coupling, "-vc", "--velocity-coupling",
+                  "jacobi | ugs (modified AL: the upper grad-div blocks, one Gauss-Seidel sweep).");
+   args.AddOption(&lbt, "-lbt", "--lor-block-rtol",
+                  "> 0: each component's LOR block solved by GMRES to this tolerance (diagnostics).");
+   args.AddOption(&lbm, "-lbm", "--lor-block-maxit",
+                  "Those GMRES solves' iteration cap.");
    args.AddOption(&u0_add, "-u0", "--add-velocity",
                   "A uniform velocity \"Ux Uy [Uz]\" added to the initial one (diagnostics).");
    args.AddOption(&print_every, "-pe", "--print-every", "Progress every N steps.");
@@ -147,7 +160,15 @@ int main(int argc, char* argv[])
    so.velocity_inner_rtol = vin;
    so.grad_div_h = gdh;
    so.lor_grad_div = lgd;
-   so.schur = std::strcmp(schur, "al") == 0 ? incns::OseenSchur::CahouetChabardGradDiv
+   const bool ugs = std::strcmp(coupling, "ugs") == 0;
+   MFEM_VERIFY(ugs || std::strcmp(coupling, "jacobi") == 0,
+               "oseen_case: -vc is jacobi or ugs, not " << coupling);
+   so.velocity_coupling = ugs ? incns::OseenVelocityCoupling::UpperGaussSeidel
+                          : incns::OseenVelocityCoupling::BlockJacobi;
+   so.lor_block_rtol = lbt;
+   so.lor_block_maxit = lbm;
+   so.schur = std::strcmp(schur,
+                          "al") == 0 ? incns::OseenSchur::CahouetChabardGradDiv
               : incns::OseenSchur::Pcd;
    if (p.forcing.Active())
    {
@@ -200,13 +221,15 @@ int main(int argc, char* argv[])
          std::printf(" (Picard: %s %g, max %d, linear %g)", nl > 0 ? "tol" : "fixed",
                      nl, nlit, plin);
       }
-      std::printf(", oss %d, grad-div %g nu, np %d\n", oss ? 1 : 0, gd,
-                  Mpi::WorldSize());
+      std::printf(", oss %d, grad-div %g nu, velocity coupling %s", oss ? 1 : 0, gd,
+                  ugs ? "upper Gauss-Seidel" : "block Jacobi");
+      if (lbt > 0.0) { std::printf(" (LOR block GMRES %g)", lbt); }
+      std::printf(", np %d\n", Mpi::WorldSize());
       std::fflush(stdout);
    }
 
    std::vector<double> ts, cds, cls;
-   long lin_total = 0, picard_total = 0;
+   long lin_total = 0, picard_total = 0, vc_total = 0;
    int failed = 0;
    double wall = 0.0, wall_lor = 0.0, cfl_max = 0.0;
    Vector r;
@@ -217,6 +240,7 @@ int main(int argc, char* argv[])
       const auto& st = stepper.LastStats();
       lin_total += st.linear_iterations;
       picard_total += st.picard_iterations;
+      vc_total += st.vcycles;
       failed += st.converged ? 0 : 1;
       wall += st.t_step;
       wall_lor += st.t_lor;
@@ -246,10 +270,10 @@ int main(int argc, char* argv[])
       if (Mpi::Root() && ((s + 1) % std::max(print_every, 1) == 0 || s + 1 == nsteps))
       {
          std::printf("t %7.4f  c_D %10.6f  c_L %10.6f  its %3d  picard %d  r0 %.2e "
-                     "r %.2e  %s Re_h %.1f  vin %ld  step %.3f s (LOR %.3f s)%s\n",
+                     "r %.2e  %s Re_h %.1f  vc %ld  vin %ld  step %.3f s (LOR %.3f s)%s\n",
                      stepper.Time(), cd, cl, st.linear_iterations, st.picard_iterations,
                      st.r0, st.r_final, st.air ? "AIR" : "AMG", st.cell_re,
-                     st.velocity_inner_iterations, st.t_step,
+                     st.vcycles, st.velocity_inner_iterations, st.t_step,
                      st.t_lor, st.converged ? "" : "  NOT CONVERGED");
          std::fflush(stdout);
       }
@@ -272,11 +296,12 @@ int main(int argc, char* argv[])
    {
       std::printf("RESULT dt %g: c_D,max %.6f at t %.4f | c_L,min %.6f at t %.4f | "
                   "c_L,max %.6f at t %.4f | steps %d, FGMRES its %.2f/step, Picard "
-                  "%.2f/step, unconverged %d | CFL max %.2f | wall %.1f s (%.4f s/step, "
-                  "LOR %.1f s)\n", dt, cdmax.second, cdmax.first, clmin.second,
-                  clmin.first, clmax.second, clmax.first, nsteps,
-                  double(lin_total) / nsteps, double(picard_total) / nsteps, failed,
-                  cfl_max, wall, wall / nsteps, wall_lor);
+                  "%.2f/step, V-cycles %.1f/step, unconverged %d | CFL max %.2f | wall "
+                  "%.1f s (%.4f s/step, LOR %.1f s)\n", dt, cdmax.second, cdmax.first,
+                  clmin.second, clmin.first, clmax.second, clmax.first, nsteps,
+                  double(lin_total) / nsteps, double(picard_total) / nsteps,
+                  double(vc_total) / nsteps, failed, cfl_max, wall, wall / nsteps,
+                  wall_lor);
    }
    return 0;
 }

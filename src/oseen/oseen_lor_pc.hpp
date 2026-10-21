@@ -24,6 +24,17 @@ enum class OseenAmgMode
    Amg   ///< Classical AMG (PMIS, extended+i, l1-Jacobi).
 };
 
+/// How OseenLorPreconditioner couples the velocity components.
+enum class OseenVelocityCoupling
+{
+   /// Each component alone: the grad-div coupling between them is dropped.
+   BlockJacobi,
+   /// The modified augmented-Lagrangian preconditioner (Benzi, Olshanskii,
+   /// Wang, IJNMF 66, 2011): the block upper triangle of the grad-div
+   /// coupling kept, one back-substitution sweep from the last component.
+   UpperGaussSeidel
+};
+
 /**
  * @brief F^-1 for the Oseen momentum block, one V-cycle per component.
  *
@@ -40,6 +51,12 @@ enum class OseenAmgMode
  * (MFEM's batched LOR has no convection), so rebuild it every few steps.
  *
  * Components with the same Dirichlet dofs share one matrix and V-cycle.
+ *
+ * With a grad-div term (SetGradDiv) each component's operator carries its
+ * diagonal block gamma (d_c u_c, d_c v_c). UpperGaussSeidel also keeps the
+ * blocks above the diagonal, G_ij = gamma (d_j u_j, d_i v_i) for i < j, and
+ * applies the block upper-triangular inverse: z_{d-1} first, then
+ * z_c = F_c^-1 (r_c - sum_{j > c} G_cj z_j).
  */
 class OseenLorPreconditioner : public mfem::Solver
 {
@@ -56,6 +73,13 @@ public:
       /// communication package (the recipe's pitfall 5).
       double air_drop_tol = -1.0;
       int print_level = 0;      ///< BoomerAMG print level.
+      /// The coupling of the components (UpperGaussSeidel needs SetGradDiv).
+      OseenVelocityCoupling coupling = OseenVelocityCoupling::BlockJacobi;
+      /// > 0: each component's block solved by GMRES (its V-cycle the
+      /// preconditioner) to this relative tolerance instead of one V-cycle --
+      /// a diagnostic that takes the V-cycle out of the coupling's effect.
+      double block_rtol = 0.0;
+      int block_maxit = 100;    ///< Those GMRES solves' iteration cap.
    };
 
    /**
@@ -82,12 +106,16 @@ public:
     *        gamma (d_c u_c, d_c v_c) in its LOR operator (anisotropic
     *        diffusion, at the vertex rule), with gamma constant on each
     *        high-order element. Assembled once here, added at every Update.
-    *        The components' operators then differ: no sharing.
+    *        The components' operators then differ: no sharing. With
+    *        UpperGaussSeidel, also the blocks above the diagonal (same
+    *        coefficient and rule; the Dirichlet rows of i and columns of j
+    *        eliminated).
     * @param gamma_elem gamma per high-order element (local elements).
     */
    void SetGradDiv(const mfem::Vector& gamma_elem);
 
-   /// z = F^-1 r, one V-cycle per component.
+   /// z = F^-1 r: one V-cycle (or block solve) per component, coupled as
+   /// Options::coupling says.
    void Mult(const mfem::Vector& r, mfem::Vector& z) const override;
    void SetOperator(const mfem::Operator&) override {}
 
@@ -98,10 +126,27 @@ public:
    /// @return Seconds of the last Update: host assembly, V-cycle setup.
    double AssemblySeconds() const { return t_assembly_; }
    double SetupSeconds() const { return t_setup_; } ///< See AssemblySeconds.
+   /// @return V-cycles applied (all components) since ResetVCycles.
+   long VCycles() const { return vcycles_; }
+   void ResetVCycles() { vcycles_ = 0; } ///< See VCycles.
+
+   /// @return Component c's LOR operator, Dirichlet dofs eliminated (after
+   ///         Update; for tests).
+   const mfem::HypreParMatrix& DiagonalBlock(int c) const { return *F_[block_[c]]; }
+   /// @return The grad-div block (i, j): i == j the diagonal one as
+   ///         assembled (nothing eliminated), i < j the coupling block of
+   ///         UpperGaussSeidel (eliminated); null where there is none.
+   const mfem::HypreParMatrix* GradDivBlock(int i, int j) const;
 
 private:
    /// Max over elements of |w|_K h_K / (k nu) (collective).
    double CellReynolds(const mfem::ParGridFunction& w) const;
+   /// gamma (d_j u, d_i v) on the scalar LOR space, gamma that of the parent
+   /// element, at the vertex rule.
+   std::unique_ptr<mfem::HypreParMatrix> AssembleGradDiv(const mfem::Vector& gamma,
+         int i, int j) const;
+   /// x = F_c^-1 b: one counted V-cycle, or the GMRES block solve.
+   void SolveBlock(int c, const mfem::Vector& b, mfem::Vector& x) const;
 
    mfem::ParFiniteElementSpace& vfes_; ///< Velocity space (borrowed).
    Options opts_;
@@ -120,7 +165,14 @@ private:
    std::vector<std::unique_ptr<mfem::HypreParMatrix>> F_;
    /// The diagonal grad-div blocks per component (SetGradDiv; empty: none).
    std::vector<std::unique_ptr<mfem::HypreParMatrix>> G_;
+   /// UpperGaussSeidel's coupling blocks, (i, j) at i * dim + j for i < j.
+   std::vector<std::unique_ptr<mfem::HypreParMatrix>> Gup_;
    std::vector<std::unique_ptr<mfem::HypreBoomerAMG>> amg_;
+   std::vector<std::unique_ptr<mfem::Solver>> vcycle_; ///< amg_, counted.
+   std::vector<std::unique_ptr<mfem::GMRESSolver>>
+   block_solver_; ///< block_rtol > 0.
+   mutable mfem::Vector t_;       ///< One component's right-hand side.
+   mutable long vcycles_ = 0;
    bool air_ = false;
    double re_h_ = 0.0, t_assembly_ = 0.0, t_setup_ = 0.0;
 };

@@ -51,26 +51,46 @@ private:
    Vector wv_;
 };
 
-/// gamma of the parent element times e_c e_c^T on the LOR mesh: the diagonal
-/// grad-div block of component c.
-class LorGradDivDiagonal : public MatrixCoefficient
+/// gamma of the parent element times e_i e_j^T on the LOR mesh: through
+/// DiffusionIntegrator (K grad u, grad v), the grad-div block
+/// gamma (d_j u, d_i v) of test component i and trial component j.
+class LorGradDivBlock : public MatrixCoefficient
 {
 public:
-   LorGradDivDiagonal(int dim, int c, const Vector& gamma, const Array<int>& parent)
-      : MatrixCoefficient(dim), c_(c), gamma_(gamma), parent_(parent) {}
+   LorGradDivBlock(int dim, int i, int j, const Vector& gamma,
+                   const Array<int>& parent)
+      : MatrixCoefficient(dim), i_(i), j_(j), gamma_(gamma), parent_(parent) {}
 
    void Eval(DenseMatrix& K, ElementTransformation& T,
              const IntegrationPoint&) override
    {
       K.SetSize(height);
       K = 0.0;
-      K(c_, c_) = gamma_(parent_[T.ElementNo]);
+      K(i_, j_) = gamma_(parent_[T.ElementNo]);
    }
 
 private:
-   int c_;
+   int i_, j_;
    const Vector& gamma_;
    const Array<int>& parent_;
+};
+
+/// One V-cycle, counted.
+class CountedVCycle : public Solver
+{
+public:
+   CountedVCycle(HypreBoomerAMG& amg, long& count)
+      : Solver(amg.Height()), amg_(amg), count_(count) {}
+   void Mult(const Vector& x, Vector& y) const override
+   {
+      amg_.Mult(x, y);
+      count_++;
+   }
+   void SetOperator(const Operator&) override {}
+
+private:
+   HypreBoomerAMG& amg_;
+   long& count_;
 };
 
 /// hypre relax-point pattern: F -> -1, C -> 1, A -> 0 (host memory: hypre
@@ -214,9 +234,26 @@ OseenLorPreconditioner::OseenLorPreconditioner(ParFiniteElementSpace& vfes,
    }
    F_.resize(dim_);
    amg_.resize(dim_);
+   vcycle_.resize(dim_);
+   block_solver_.resize(dim_);
+   t_.SetSize(n_);
+   t_.UseDevice(true);
 }
 
 OseenLorPreconditioner::~OseenLorPreconditioner() = default;
+
+std::unique_ptr<HypreParMatrix> OseenLorPreconditioner::AssembleGradDiv(
+   const Vector& gamma, int i, int j) const
+{
+   LorGradDivBlock gij(dim_, i, j, gamma, parent_);
+   ParBilinearForm g(&lor_->GetParFESpace());
+   auto* di = new DiffusionIntegrator(gij);
+   di->SetIntRule(vertex_rule_);
+   g.AddDomainIntegrator(di);
+   g.Assemble();
+   g.Finalize();
+   return std::unique_ptr<HypreParMatrix>(g.ParallelAssemble());
+}
 
 void OseenLorPreconditioner::SetGradDiv(const Vector& gamma_elem)
 {
@@ -224,20 +261,37 @@ void OseenLorPreconditioner::SetGradDiv(const Vector& gamma_elem)
                "OseenLorPreconditioner: gamma per local element");
    Vector gamma(gamma_elem);
    gamma.HostRead();
-   ParFiniteElementSpace& lfes = lor_->GetParFESpace();
    G_.resize(dim_);
    for (int c = 0; c < dim_; c++)
    {
-      LorGradDivDiagonal gc(dim_, c, gamma, parent_);
-      ParBilinearForm g(&lfes);
-      auto* di = new DiffusionIntegrator(gc);
-      di->SetIntRule(vertex_rule_);
-      g.AddDomainIntegrator(di);
-      g.Assemble();
-      g.Finalize();
-      G_[c].reset(g.ParallelAssemble());
+      G_[c] = AssembleGradDiv(gamma, c, c);
       block_[c] = c; // the components' operators now differ
    }
+   Gup_.clear();
+   if (opts_.coupling == OseenVelocityCoupling::UpperGaussSeidel)
+   {
+      // Rows of i and columns of j at their Dirichlet dofs: what the sweep
+      // subtracts there is nothing (EliminateCols is collective: every rank
+      // calls it, whatever its list).
+      Gup_.resize(dim_ * dim_);
+      for (int i = 0; i < dim_; i++)
+      {
+         for (int j = i + 1; j < dim_; j++)
+         {
+            std::unique_ptr<HypreParMatrix> g = AssembleGradDiv(gamma, i, j);
+            g->EliminateRows(ess_[i]);
+            delete g->EliminateCols(ess_[j]);
+            Gup_[i * dim_ + j] = std::move(g);
+         }
+      }
+   }
+}
+
+const HypreParMatrix* OseenLorPreconditioner::GradDivBlock(int i, int j) const
+{
+   if (i == j) { return (i < (int) G_.size()) ? G_[i].get() : nullptr; }
+   if (i > j || Gup_.empty()) { return nullptr; }
+   return Gup_[i * dim_ + j].get();
 }
 
 double OseenLorPreconditioner::CellReynolds(const ParGridFunction& w) const
@@ -272,6 +326,9 @@ double OseenLorPreconditioner::CellReynolds(const ParGridFunction& w) const
 
 void OseenLorPreconditioner::Update(const Vector& wind, double sigma)
 {
+   MFEM_VERIFY(opts_.coupling != OseenVelocityCoupling::UpperGaussSeidel ||
+               !Gup_.empty(), "OseenLorPreconditioner: UpperGaussSeidel "
+               "couples through the grad-div blocks: SetGradDiv() first");
    StopWatch sw;
    sw.Start();
    wind_ho_->SetFromTrueDofs(wind);
@@ -314,8 +371,11 @@ void OseenLorPreconditioner::Update(const Vector& wind, double sigma)
                        : (nranks > 1 ? 0.0 : 1e-2);
    for (int c = 0; c < dim_; c++)
    {
-      if (block_[c] != c) { F_[c].reset(); amg_[c].reset(); continue; }
+      // The block solver and the counted V-cycle hold the V-cycle: first.
+      block_solver_[c].reset();
+      vcycle_[c].reset();
       amg_[c].reset();
+      if (block_[c] != c) { F_[c].reset(); continue; }
       F_[c].reset(Add(1.0, *Fk, 1.0, D));
       if (!G_.empty())
       {
@@ -334,9 +394,32 @@ void OseenLorPreconditioner::Update(const Vector& wind, double sigma)
       b = 0.0;
       x = 0.0;
       amg_[c]->Setup(b, x);
+      vcycle_[c] = std::make_unique<CountedVCycle>(*amg_[c], vcycles_);
+      if (opts_.block_rtol > 0.0)
+      {
+         // SetOperator before SetPreconditioner: MFEM forwards SetOperator
+         // to the preconditioner (a second AMG setup).
+         auto g = std::make_unique<GMRESSolver>(vfes_.GetComm());
+         g->SetKDim(50);
+         g->SetMaxIter(opts_.block_maxit);
+         g->SetRelTol(opts_.block_rtol);
+         g->SetAbsTol(0.0);
+         g->SetPrintLevel(-1);
+         g->iterative_mode = false;
+         g->SetOperator(*F_[c]);
+         g->SetPreconditioner(*vcycle_[c]);
+         block_solver_[c] = std::move(g);
+      }
    }
    MFEM_DEVICE_SYNC;
    t_setup_ = sw.RealTime();
+}
+
+void OseenLorPreconditioner::SolveBlock(int c, const Vector& b, Vector& x) const
+{
+   const int m = block_[c];
+   if (block_solver_[m]) { block_solver_[m]->Mult(b, x); }
+   else { vcycle_[m]->Mult(b, x); }
 }
 
 void OseenLorPreconditioner::Mult(const Vector& r, Vector& z) const
@@ -344,12 +427,27 @@ void OseenLorPreconditioner::Mult(const Vector& r, Vector& z) const
    MFEM_VERIFY(amg_[0], "OseenLorPreconditioner: Update() first");
    r.Read();
    z.Write();
-   Vector rc, zc;
-   for (int c = 0; c < dim_; c++)
+   const bool gs = opts_.coupling == OseenVelocityCoupling::UpperGaussSeidel;
+   Vector rc, zc, zj;
+   // Upper Gauss-Seidel: the last component first; each earlier one's
+   // right-hand side less its coupling to the components already solved.
+   for (int s = 0; s < dim_; s++)
    {
+      const int c = gs ? dim_ - 1 - s : s;
       rc.MakeRef(const_cast<Vector&>(r), c * n_, n_);
       zc.MakeRef(z, c * n_, n_);
-      amg_[block_[c]]->Mult(rc, zc);
+      if (!gs || c == dim_ - 1)
+      {
+         SolveBlock(c, rc, zc);
+         continue;
+      }
+      t_ = rc;
+      for (int j = c + 1; j < dim_; j++)
+      {
+         zj.MakeRef(z, j * n_, n_);
+         Gup_[c * dim_ + j]->Mult(-1.0, zj, 1.0, t_);
+      }
+      SolveBlock(c, t_, zc);
    }
 }
 

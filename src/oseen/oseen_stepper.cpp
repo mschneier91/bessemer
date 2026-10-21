@@ -74,6 +74,13 @@ OseenStepper::OseenStepper(MixedSpaces& spaces, const RuleBook& rules,
    OseenLorPreconditioner::Options lo;
    lo.nu = opts.nu;
    lo.mode = opts.amg_mode;
+   lo.coupling = opts.velocity_coupling;
+   lo.block_rtol = opts.lor_block_rtol;
+   lo.block_maxit = opts.lor_block_maxit;
+   MFEM_VERIFY(opts.velocity_coupling == OseenVelocityCoupling::BlockJacobi ||
+               (opts.lor_grad_div && op_->GradDivCoefficient()),
+               "OseenStepper: the upper Gauss-Seidel velocity coupling needs "
+               "a grad-div term and lor_grad_div");
    lor_pc_ = std::make_unique<OseenLorPreconditioner>(vfes, rules, ess_, lo);
    // gamma per element (constant on each): the LOR's diagonal grad-div blocks.
    if (opts.lor_grad_div && op_->GradDivCoefficient())
@@ -269,6 +276,7 @@ void OseenStepper::Step()
    sw.Start();
    stats_ = Stats();
    vel_inner_its_ = 0;
+   lor_pc_->ResetVCycles();
    const double dt = opts_.dt;
    const double t_new = t_ + dt;
    const bool first = (step_ == 0);
@@ -351,6 +359,7 @@ void OseenStepper::Step()
    }
    stats_.r_final = rn;
    stats_.velocity_inner_iterations = vel_inner_its_;
+   stats_.vcycles = lor_pc_->VCycles();
    MFEM_VERIFY(std::isfinite(rn), "OseenStepper: non-finite residual at t = "
                << t_new);
 

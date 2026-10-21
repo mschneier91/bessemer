@@ -74,6 +74,14 @@ struct OseenStepperOptions
    /// Give each velocity component's LOR operator its diagonal grad-div block
    /// gamma (d_c u_c, d_c v_c) (with grad-div on).
    bool lor_grad_div = true;
+   /// How the velocity preconditioner couples the components:
+   /// UpperGaussSeidel (modified AL) keeps the grad-div blocks above the
+   /// diagonal; it needs lor_grad_div and a grad-div term.
+   OseenVelocityCoupling velocity_coupling = OseenVelocityCoupling::BlockJacobi;
+   /// > 0: each component's LOR block solved by GMRES to this tolerance
+   /// instead of one V-cycle (diagnostics; see OseenLorPreconditioner).
+   double lor_block_rtol = 0.0;
+   int lor_block_maxit = 100; ///< Its iteration cap.
    bool oss = true;          ///< OSS stabilization (momentum and N_p).
    OseenAmgMode amg_mode = OseenAmgMode::Auto; ///< The velocity V-cycle.
    int n_inner = 2;          ///< PCD: CG iterations on A_p.
@@ -122,6 +130,7 @@ public:
       double t_lor = 0.0;        ///< LOR assembly + V-cycle setup (s; 0 if reused).
       double t_step = 0.0;       ///< The whole step (s).
       long velocity_inner_iterations = 0; ///< Inner velocity FGMRES iterations.
+      long vcycles = 0;          ///< Velocity V-cycles, all components.
    };
 
    /**
@@ -182,7 +191,8 @@ private:
    std::unique_ptr<mfem::BlockOperator> sys_;
    std::unique_ptr<OseenLorPreconditioner> lor_pc_;
    std::unique_ptr<OseenPcdSchurPC> pcd_;
-   std::unique_ptr<CahouetChabardSchurPC> cc_; ///< OseenSchur::CahouetChabardGradDiv.
+   std::unique_ptr<CahouetChabardSchurPC>
+   cc_; ///< OseenSchur::CahouetChabardGradDiv.
    std::unique_ptr<mfem::Solver> vel_count_;   ///< Counts the inner iterations.
    mutable long vel_inner_its_ = 0;
    std::unique_ptr<mfem::FGMRESSolver> vel_inner_; ///< velocity_inner_rtol > 0.
