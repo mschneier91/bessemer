@@ -417,6 +417,10 @@ struct Parameters
    /// Convection(). OIFS: fixed or CFL step control, BDF3 by default
    /// (time_order).
    ConvectionTreatment convection_treatment = ConvectionTreatment::Auto;
+   /// The mesh moves (ALE; Case::SetMeshMotion sets it): Auto convection is
+   /// then IMEX, since OIFS on a moving mesh is not built
+   /// (docs/ale_fluid.md).
+   bool moving_mesh = false;
    /// OIFS: CFL number of each RK4 substep (deck `time.oifs_cfl`; 1.5, the
    /// polynomial-order study's and the channel decks' setting).
    double oifs_cfl = 1.5;
@@ -588,7 +592,8 @@ struct Parameters
 
    /// @return The convection treatment in effect: convection_treatment, or
    ///         under Auto (the default) OIFS where it applies -- Navier-Stokes,
-   ///         the convective form, fixed or CFL steps -- and IMEX otherwise.
+   ///         the convective form, fixed or CFL steps, a mesh that does not
+   ///         move -- and IMEX otherwise.
    ConvectionTreatment Convection() const
    {
       if (convection_treatment != ConvectionTreatment::Auto)
@@ -597,7 +602,7 @@ struct Parameters
       }
       return (equation == Equation::NavierStokes &&
               convective_form == ConvectiveForm::Convective &&
-              step_control != StepControl::Error) ?
+              step_control != StepControl::Error && !moving_mesh) ?
              ConvectionTreatment::Oifs : ConvectionTreatment::Imex;
    }
 

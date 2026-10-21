@@ -155,12 +155,40 @@ void Case::BuildIntegrator()
    opts.uzawa = params_.uzawa;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
+   if (motion_) { integrator_->SetMeshMotion(*motion_, *mesh_w_); }
    body_force_.reset();
    if (params_.forces.enabled)
    {
       body_force_ = std::make_unique<BodyForce>(spaces_.Velocity(),
                     params_.forces.attributes);
    }
+}
+
+void Case::SetMeshMotion(MeshMotion& motion)
+{
+   MFEM_VERIFY(!integrator_, "case: SetMeshMotion() before the first step");
+   MFEM_VERIFY(!params_.amr.enabled, "case: AMR on a moving mesh is not "
+               "supported");
+   MFEM_VERIFY(params_.Convection() == ConvectionTreatment::Imex ||
+               params_.convection_treatment == ConvectionTreatment::Auto,
+               "case: a moving mesh needs time.convection: imex (or auto)");
+   params_.moving_mesh = true;
+   motion_ = &motion;
+   mesh_w_ = std::make_unique<MeshVelocityField>(spaces_.Velocity());
+   relative_u_ = std::make_unique<ParGridFunction>(&spaces_.Velocity());
+}
+
+VectorCoefficient& Case::MeshVelocityCoefficient()
+{
+   MFEM_VERIFY(mesh_w_, "case: MeshVelocityCoefficient() needs "
+               "SetMeshMotion()");
+   return mesh_w_->Coefficient();
+}
+
+const ParGridFunction& Case::MeshVelocity() const
+{
+   MFEM_VERIFY(mesh_w_, "case: MeshVelocity() needs SetMeshMotion()");
+   return mesh_w_->Field();
 }
 
 void Case::BuildOutput(bool restart)
@@ -917,7 +945,11 @@ void Case::SetupCfl()
       // state carries its dt) the initial dt is capped to the target too.
       integrator_->SetCflRate([this]()
       {
-         return cfl_->Rate(integrator_->Velocity());
+         if (!mesh_w_) { return cfl_->Rate(integrator_->Velocity()); }
+         // ALE: the convective velocity is u - w.
+         *relative_u_ = integrator_->Velocity();
+         *relative_u_ -= mesh_w_->Field();
+         return cfl_->Rate(*relative_u_);
       });
       if (integrator_->StepCount() == 0)
       {

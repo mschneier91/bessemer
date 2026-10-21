@@ -158,7 +158,9 @@ src/
                (LinearElasticity with Jacobian stiffening), mesh_motion (moves the
                nodes to X + d from a reference copy; BDF mesh velocity;
                docs/mesh_motion.md), mesh_motion_case (equation: mesh_motion decks:
-               prescribed boundary displacements, det F and quality, ParaView)
+               prescribed boundary displacements, det F and quality, ParaView),
+               mesh_convection (the ALE fluid's mesh velocity on the velocity space
+               and its explicit convection C(w)u; docs/ale_fluid.md)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
@@ -864,7 +866,12 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   exact on the curved DFG mesh, M3 the DFG cylinder moved and back, M4 the BDF
   mesh velocity, M5 a non-elastic model through the factory),
   `mesh_motion_case_test` (C1 2D rectangle with a ramped parabola, C2 3D cube
-  with a bump, C3 a translation; deck defaults), `expression_test` (E1-E4).
+  with a bump, C3 a translation; deck defaults), `expression_test` (E1-E4),
+  `ale_fluid_test` (the IMEX ALE fluid, docs/ale_fluid.md: A1 zero motion =
+  fixed mesh, A2 free stream on an oscillating mesh (the GCL) 2D/3D, A3 a
+  rigidly moved box carries the fluid, A4 a linear flow on a mesh moved at
+  constant rates, A5 a cut step moves the mesh back, A6/A7 Taylor-Green
+  spatial order 4 at Q3 and temporal order 2 on a moving mesh).
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need

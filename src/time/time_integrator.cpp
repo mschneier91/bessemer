@@ -16,6 +16,16 @@ namespace incns
 
 using namespace mfem;
 
+namespace
+{
+// A device-aware work vector of size n (no reallocation when it has it).
+void Scratch(Vector& v, int n)
+{
+   v.UseDevice(true);
+   v.SetSize(n);
+}
+} // namespace
+
 
 StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
       const RuleBook& rules,
@@ -115,16 +125,7 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
    }
    else if (opts_.convection && !rotational_)
    {
-      INCNS_PROFILE("time_integrator::convection_setup");
-      convection_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get());
-      // Directional do-nothing: the boundary part of the convective flux on
-      // the outflow, explicit and extrapolated together with N.
-      if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
-      {
-         convection_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
-      }
-      // Large-eddy simulation: the subgrid stress, explicit with N.
-      if (opts_.subgrid.Enabled()) { convection_->EnableSubgrid(opts_.subgrid); }
+      BuildConvection();
    }
    else
    {
@@ -174,6 +175,98 @@ StokesTimeIntegrator::StokesTimeIntegrator(MixedSpaces& spaces,
 
    u_ = 0.0;
    p_ = 0.0;
+}
+
+void StokesTimeIntegrator::BuildConvection()
+{
+   INCNS_PROFILE("time_integrator::convection_setup");
+   convection_ = std::make_unique<Convection>(spaces_, rules_, scratch_.get());
+   // Directional do-nothing: the boundary part of the convective flux on
+   // the outflow, explicit and extrapolated together with N.
+   if (opts_.outflow == OutflowCondition::Directional && bc_.HasOutflow())
+   {
+      convection_->EnableDirectionalDoNothing(bc_.OutflowAttributes());
+   }
+   // Large-eddy simulation: the subgrid stress, explicit with N.
+   if (opts_.subgrid.Enabled()) { convection_->EnableSubgrid(opts_.subgrid); }
+}
+
+void StokesTimeIntegrator::SetMeshMotion(MeshMotion& motion,
+      MeshVelocityField& w)
+{
+   MFEM_VERIFY(step_count_ == 0, "time_integrator: SetMeshMotion() before "
+               "the first step");
+   MFEM_VERIFY(!oifs_, "time_integrator: a moving mesh needs IMEX convection "
+               "(time.convection: imex); OIFS on a moving mesh is not built");
+   MFEM_VERIFY(!rotational_, "time_integrator: a moving mesh needs the "
+               "convective form");
+   MFEM_VERIFY(!opts_.adaptive, "time_integrator: a moving mesh supports "
+               "fixed and CFL-controlled steps, not error control");
+   MFEM_VERIFY(std::abs(motion.Time() - t_) <= 1e-12 * std::max(1.0,
+               std::abs(t_)), "time_integrator: the mesh motion is at t = "
+               << motion.Time() << ", the integrator at t = " << t_);
+   motion_ = &motion;
+   mesh_w_ = &w;
+   mesh_w_->Zero();
+   mesh_conv_ = std::make_unique<MeshConvection>(spaces_, rules_);
+}
+
+void StokesTimeIntegrator::MoveMesh(double t_new, int order)
+{
+   mesh_moved_ = false;
+   if (!motion_) { return; }
+   INCNS_PROFILE("time_integrator::move_mesh");
+   motion_->Move(t_new);
+   mesh_moved_ = true;
+   mesh_w_->Update(*motion_, std::min(order, motion_->States() - 1));
+   // Everything built on the old geometry goes: the solvers (their operators
+   // and preconditioners), the convection. A full rebuild per step, for
+   // now (docs/ale_fluid.md: the in-place refresh is the next stage); a
+   // solver's projection basis does not survive it either.
+   if (last_solver_) { last_solver_ = nullptr; }
+   trap_.reset();
+   bdf2_.solver.reset();
+   bdf2_.c0 = -1.0;
+   bdf3_.solver.reset();
+   bdf3_.c0 = -1.0;
+   if (convection_) { BuildConvection(); }
+   mesh_conv_->SetWind(mesh_w_->Field());
+}
+
+void StokesTimeIntegrator::RevertMesh()
+{
+   if (!motion_ || !mesh_moved_) { return; }
+   motion_->Revert();
+   mesh_moved_ = false;
+   // The solvers of the failed attempt were built on the moved mesh.
+   last_solver_ = nullptr;
+   trap_.reset();
+   bdf2_.solver.reset();
+   bdf2_.c0 = -1.0;
+   bdf3_.solver.reset();
+   bdf3_.c0 = -1.0;
+   if (convection_) { BuildConvection(); }
+}
+
+void StokesTimeIntegrator::AddMeshConvection(double t_new, Vector& b, int ext)
+{
+   if (!motion_) { return; }
+   INCNS_PROFILE("time_integrator::mesh_convection");
+   // The convective velocity of the ALE form is u - w: -C(w) u on the left,
+   // C(w) u* on the right, u* extrapolated at SubtractConvection's order
+   // (C is linear in the wind, so this is that term's extrapolation with
+   // w at the new time). Stokes too: the ALE time derivative needs it.
+   const std::size_t k = (ext > 0) ? std::min<std::size_t>(hist_.size(),
+                         static_cast<std::size_t>(ext))
+                         : ExtrapolationOrder();
+   std::vector<double> times(hist_times_.begin(), hist_times_.begin() + k);
+   const std::vector<double> g = ExtrapolationWeights(t_new, times);
+   const int n_u = spaces_.Velocity().GetTrueVSize();
+   Scratch(ale_ustar_, n_u);
+   ale_ustar_ = 0.0;
+   for (std::size_t j = 0; j < k; ++j) { ale_ustar_.Add(g[j], hist_[j]); }
+   mesh_conv_->Mult(ale_ustar_, ale_y_);
+   b += ale_y_;
 }
 
 void StokesTimeIntegrator::SetInitialVelocity(VectorCoefficient& u0)
@@ -520,16 +613,6 @@ StokesSolver& StokesTimeIntegrator::EnsureBdfSolver(SolverCache& cache,
    return *cache.solver;
 }
 
-namespace
-{
-// A device-aware work vector of size n (no reallocation when it has it).
-void Scratch(Vector& v, int n)
-{
-   v.UseDevice(true);
-   v.SetSize(n);
-}
-} // namespace
-
 void StokesTimeIntegrator::AssembleForcing(double t, Vector& F)
 {
    INCNS_PROFILE("time_integrator::forcing");
@@ -615,6 +698,7 @@ void StokesTimeIntegrator::AssembleBdfRhs(const std::vector<double>& c,
    b -= tmp;
 
    SubtractConvection(t_new, b, ext);
+   AddMeshConvection(t_new, b, ext);
 }
 
 void StokesTimeIntegrator::OifsBoundaryValues(const std::vector<double>& c,
@@ -871,7 +955,9 @@ bool StokesTimeIntegrator::AcceptSolve(StokesSolver& solver, double t_new)
                << t_new << " (" << solver.Iterations() << " iterations; "
                "time.on_solver_failure: cut_step retries with a smaller step)");
    // Back to the last accepted state: nothing was committed, and the next
-   // attempt must not start from a half-converged iterate.
+   // attempt must not start from a half-converged iterate (nor on a mesh
+   // moved for this attempt).
+   RevertMesh();
    u_.SetFromTrueDofs(hist_[0]);
    static_cast<Vector&>(p_) = p_saved_;
    return false;
@@ -881,6 +967,7 @@ bool StokesTimeIntegrator::StepStartup()
 {
    const double t_new = t_ + dt_;
    const int n_u = spaces_.Velocity().GetTrueVSize();
+   MoveMesh(t_new, step_count_ == 0 ? 1 : 2);
    bc_.SetTime(t_new);
 
    Vector b(n_u);
@@ -929,6 +1016,7 @@ bool StokesTimeIntegrator::StepStartup()
       // -- otherwise step 1 would silently solve Stokes and cost the march its
       // temporal order. Only one history entry exists, so this is EXT1.
       SubtractConvection(t_new, b);
+      AddMeshConvection(t_new, b);
       SubtractOifsExplicitTerms(t_new, b); // OIFS: EXT1 here
       // The starter's momentum block is (1/dt) M + (nu/2) K; refresh it if the
       // first step is (re)tried at a different dt (adaptive rejection).
@@ -987,6 +1075,7 @@ bool StokesTimeIntegrator::StepFixed()
 
    const bool use_bdf3 = (opts_.order == 3 && step_count_ >= 2);
    const int k = use_bdf3 ? 3 : 2;
+   MoveMesh(t_new, k);
    std::vector<double> times;
    times.push_back(t_new);
    for (int j = 0; j < k; ++j) { times.push_back(hist_times_[j]); }

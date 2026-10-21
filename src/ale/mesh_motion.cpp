@@ -128,11 +128,19 @@ bool MeshMotion::Move(double t)
       mesh_.NodesUpdated();
       if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
    }
-   // The new state at the front; the oldest dropped beyond the history.
+   // The new state at the front; the oldest dropped beyond the history (and
+   // kept aside, so that Revert() restores every level).
    if (static_cast<int>(history_.size()) < opts_.history)
    {
       history_.emplace_back(disp_->Size());
       times_.push_back(0.0);
+      has_dropped_ = false;
+   }
+   else
+   {
+      dropped_ = history_.back();
+      dropped_time_ = times_.back();
+      has_dropped_ = true;
    }
    std::rotate(history_.rbegin(), history_.rbegin() + 1, history_.rend());
    std::rotate(times_.rbegin(), times_.rbegin() + 1, times_.rend());
@@ -140,6 +148,32 @@ bool MeshMotion::Move(double t)
    times_[0] = t;
    ++moves_;
    return ok;
+}
+
+void MeshMotion::Revert()
+{
+   INCNS_PROFILE("mesh_motion::revert");
+   MFEM_VERIFY(moves_ > 0 && history_.size() > 1, "mesh_motion: Revert() "
+               "needs a move to undo");
+   history_.erase(history_.begin());
+   times_.erase(times_.begin());
+   // The state the move dropped comes back (one level only: a second
+   // Revert() in a row loses it).
+   if (has_dropped_)
+   {
+      history_.push_back(dropped_);
+      times_.push_back(dropped_time_);
+      has_dropped_ = false;
+   }
+   --moves_;
+   disp_->HostReadWrite();
+   static_cast<Vector&>(*disp_) = history_[0];
+   GridFunction& nodes = *mesh_.GetNodes();
+   nodes = x0_;
+   nodes += *disp_;
+   nodes.HostRead();
+   mesh_.NodesUpdated();
+   if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
 }
 
 void MeshMotion::MeshVelocity(int order, Vector& w) const

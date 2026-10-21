@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "ale/mesh_convection.hpp"
+#include "ale/mesh_motion.hpp"
 #include "amr/refinement_marker.hpp"
 #include "bc/boundary_conditions.hpp"
 #include "bc/deck_boundary.hpp"
@@ -89,6 +91,26 @@ public:
     * @param bc Boundary conditions over this case's velocity space.
     */
    void SetBoundaryConditions(BoundaryConditions& bc);
+
+   /**
+    * @brief Move the mesh with @p motion at every step: the ALE fluid
+    *        (docs/ale_fluid.md). Before the first Step()/Run(). Under
+    *        convection Auto the case then runs IMEX (OIFS on a moving mesh
+    *        is not built); OIFS, the rotational form, error control and AMR
+    *        are refused. A moving wall's no-slip condition is u = w: give its
+    *        attribute MeshVelocityCoefficient() as Dirichlet data.
+    * @param motion The motion of this case's mesh (borrowed; built on it
+    *        before this case caches any geometry, at the case's start time).
+    */
+   void SetMeshMotion(MeshMotion& motion);
+
+   /// @return The mesh velocity w as a coefficient (u = w on a moving
+   ///         wall). @pre SetMeshMotion().
+   mfem::VectorCoefficient& MeshVelocityCoefficient();
+
+   /// @return The mesh velocity w on the velocity space (zero before the
+   ///         first step). @pre SetMeshMotion().
+   const mfem::ParGridFunction& MeshVelocity() const;
 
    /**
     * @brief Set the initial velocity (t = 0). Pressure has no independent
@@ -307,6 +329,12 @@ private:
    mfem::VectorCoefficient* initial_;  ///< Initial velocity (null = zero).
 
    std::unique_ptr<StokesTimeIntegrator> integrator_; ///< Built lazily.
+   /// ALE: the mesh motion (borrowed; null: fixed mesh).
+   MeshMotion* motion_ = nullptr;
+   /// ALE: the mesh velocity on the velocity space.
+   std::unique_ptr<MeshVelocityField> mesh_w_;
+   /// ALE: u - w for the CFL rate.
+   std::unique_ptr<mfem::ParGridFunction> relative_u_;
    std::unique_ptr<OutputWriter> output_;             ///< Built when enabled.
    std::unique_ptr<DiagnosticsLog> diag_log_;         ///< Built when enabled.
    /// The diagnostics' assembled forms; rebuilt when the mesh changes.

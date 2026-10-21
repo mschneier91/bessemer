@@ -9,6 +9,33 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**ALE fluid, IMEX, on the CPU (2026-10-21, branch `claude/project-thread-xnsz2c`;
+human: "can you go scope out what needs to be done to implement ALE now?", then
+"Alright can you go get started on this on CPUs").** Stages 0-1 of the scope
+(decisions: IMEX first; mesh moved every step by pseudo-elasticity with stiffening;
+cached geometry kept for fixed meshes plus a refresh path for moving ones; then the
+partitioned FSI to all nine Turek-Hron problems). Landed ([ale_fluid.md](ale_fluid.md)):
+`Case::SetMeshMotion(MeshMotion&)` and `StokesTimeIntegrator::SetMeshMotion`, the
+non-conservative ALE form on the current mesh: each step moves the mesh, takes w as
+the BDF derivative of the nodes (`MeshVelocityField`), rebuilds every solver and the
+convection on the moved mesh, and adds the explicit, extrapolated mesh convection
+C(w) u* (`src/ale/mesh_convection`); u = w on moving walls
+(`Case::MeshVelocityCoefficient`); a cut step moves the mesh back
+(`MeshMotion::Revert`, new); the CFL uses u - w; `time.convection: auto` picks IMEX
+on a moving mesh; OIFS, the rotational form, error control and AMR are refused.
+Test `ale_fluid_test` A1-A7 (fast): the free stream stays uniform (GCL) in 2D and 3D,
+a rigid box carries the fluid, Taylor-Green on an oscillating mesh converges at
+order 4.3 in h (Q3) and 2.2 in dt. Run in the cloud on a scratch build (MFEM v4.10
+from GitHub, apt hypre and Open MPI, not the Spack toolchain) at np 1/2/4; its fast
+tier fails 10 tests that fail the same way on main there (the unpatched MFEM 4.10
+AnisotropicConflict segfault, apt hypre's "Error during solve"); CI is the gate.
+Never run on a GPU. No deck keys. **Slow by design for now:** every solver, the
+pressure LOR-AMG included, is rebuilt after each move (bessemer's divergence, grad-div
+and OIFS kernels keep raw pointers to MFEM's geometric factors, which a move frees).
+**Next:** the deck section and checkpointed node history (stage 2), the in-place
+refresh (stage 3), modal motion (4), the oscillating-cylinder validation (5), then
+the FSI stages.
+
 **Hyperelasticity, milestone 1 and a memory step (2026-10-21; human: "start specking on
 adding hyperelasticity and at venant Kirkhoff model", "go with your recommendations,
 commit the spec and start M1", "after this is a good time to also start optimizing memory

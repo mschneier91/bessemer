@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "ale/mesh_convection.hpp"
 #include "bc/boundary_conditions.hpp"
 #include "operators/convection.hpp"
 #include "post/kinetic_head.hpp"
@@ -274,6 +275,28 @@ public:
     * @param ceiling Callback returning the max admissible dt at a time.
     */
    void SetDtCeiling(AdaptiveController::DtCeilingFn ceiling);
+
+   /**
+    * @brief Move the mesh with @p motion at every step: the ALE fluid
+    *        (docs/ale_fluid.md). Each step first moves the mesh to the new
+    *        time, takes the mesh velocity w as the BDF derivative of the node
+    *        positions at the step's own BDF order (into @p w), rebuilds every
+    *        operator and solver on the moved mesh, and adds the mesh
+    *        velocity's convection -C(w) u to the momentum equation, explicit
+    *        and extrapolated like the convection (the non-conservative ALE
+    *        form). A moving wall's u = w comes from the boundary conditions:
+    *        give it w.Coefficient(). A failed solve that cuts the step moves
+    *        the mesh back first.
+    *
+    * IMEX only (OIFS, the rotational form and error control are refused);
+    * call before the first step, with the motion at the integrator's time.
+    * @param motion The mesh motion of this integrator's mesh (borrowed).
+    * @param w      The mesh velocity on the velocity space (borrowed).
+    */
+   void SetMeshMotion(MeshMotion& motion, MeshVelocityField& w);
+
+   /// @return Whether the mesh moves (SetMeshMotion).
+   bool MovingMesh() const { return motion_ != nullptr; }
 
    /// The convective CFL rate c(u) of the current velocity (dt * c = CFL).
    using CflRateFn = std::function<double()>;
@@ -588,6 +611,32 @@ private:
     */
    bool AcceptSolve(StokesSolver& solver, double t_new);
 
+   /**
+    * @brief ALE: move the mesh to @p t_new, update the mesh velocity at BDF
+    *        order @p order, and drop everything built on the old geometry
+    *        (the solvers and the convection operators), which are rebuilt on
+    *        first use. Nothing happens without a mesh motion.
+    * @param t_new Time of the step's new state.
+    * @param order BDF order of the step (1 for the trapezoidal starter).
+    */
+   void MoveMesh(double t_new, int order);
+
+   /// Build convection_ (IMEX) with its outflow and subgrid terms.
+   void BuildConvection();
+
+   /// ALE: undo MoveMesh() after a failed solve (the step is retried).
+   void RevertMesh();
+
+   /**
+    * @brief ALE: b += C(w) u*, u* the history extrapolated to @p t_new at the
+    *        order of SubtractConvection.
+    * @param t_new Time of the step's new state.
+    * @param b     Momentum right-hand side (added to).
+    * @param ext   Extrapolation order cap, as in SubtractConvection (0: the
+    *              step's own order).
+    */
+   void AddMeshConvection(double t_new, mfem::Vector& b, int ext = 0);
+
    /// Apply krylov_memory_cap to @p solver from the free memory now.
    /// Collective (the smallest value over the ranks is used).
    void CapKrylovDim(StokesSolver& solver);
@@ -697,6 +746,13 @@ private:
    bool vetoed_ = false;      ///< The last rejection came from the hook.
    int logged_kdim_ = -1;     ///< Restart length last reported by CapKrylovDim.
    int last_iterations_ = 0;  ///< Iterations of the most recent solve.
+   MeshMotion* motion_ = nullptr;       ///< ALE: the mesh motion (borrowed).
+   MeshVelocityField* mesh_w_ = nullptr; ///< ALE: the mesh velocity (borrowed).
+   /// ALE: C(w) for the current mesh and w (rebuilt after each move).
+   std::unique_ptr<MeshConvection> mesh_conv_;
+   mfem::Vector ale_ustar_; ///< ALE: the extrapolated velocity u*.
+   mfem::Vector ale_y_;     ///< ALE: C(w) u*.
+   bool mesh_moved_ = false; ///< ALE: the current attempt moved the mesh.
 };
 
 } // namespace incns

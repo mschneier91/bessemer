@@ -90,6 +90,15 @@ public:
    bool Move(double t);
 
    /**
+    * @brief Undo the last Move(): drop the newest state and put the nodes
+    *        back at the previous one (a fluid step that is retried with a
+    *        smaller step, or a coupling subiteration that moves again).
+    *        Collective.
+    * @pre MoveCount() > 0 and more than one state kept.
+    */
+   void Revert();
+
+   /**
     * @brief The BDF derivative of the node positions at the newest state,
     *        w = sum_j c_j x^{n+1-j} with the variable-step weights of the
     *        kept states' times (time/multistep_coeffs). Exact for node
@@ -146,6 +155,10 @@ private:
    /// Node displacements of the kept states, newest first.
    std::vector<mfem::Vector> history_;
    std::vector<double> times_;                 ///< Their times.
+   /// The state the last Move() dropped from a full history (Revert()).
+   mfem::Vector dropped_;
+   double dropped_time_ = 0.0; ///< Its time.
+   bool has_dropped_ = false;  ///< Whether dropped_ holds one.
    /// Gauss-Lobatto rules of JacobianRange().
    mutable mfem::IntegrationRules gll_rules_;
 };
