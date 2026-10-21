@@ -669,20 +669,36 @@ Python is a **job driver only**: configure parameters + analytic IC/BC/forcing a
 C++ recompile. **Hard principles:** never PyMFEM; no MFEM type crosses the boundary (the
 Python `Case` builds its own mesh via `MakeCaseMesh`); pure SPMD (`mpirun -np N python …`;
 all MPI below the binding line; no mpi4py; `incns.rank()/size()/on_root()`); **no bulk
-solution data in Python** — numerics and diagnostics are C++ routines surfaced as scalars.
-Surface: `incns.Parameters` (all fields incl. `mesh.box(...)`, `amr`, `forces`, `cc`,
-`rotation_schur`, `step_control` (enum `StepControl`), `cfl_target`, `dt_max`, `ext_order`,
-`from_yaml`, `normalize`; enums
-re-exported from `incns/__init__.py` — add new ones there, the AMR work forgot
-`AmrThreshold` until 2026-10-07); `incns.Case(p)` / `Case.from_yaml(path)`;
+solution data in Python** — numerics and diagnostics are C++ routines surfaced as scalars
+and the run summary (a dict).
+**Every deck key is reachable** without a binding: `Parameters.from_dict(d)` (JSON is
+YAML: the deck loader itself, unknown keys raise `ValueError` with its suggestion),
+`from_yaml`, `from_yaml_string`; `incns.deck_keys()` is the deck reference. So a new deck
+key needs no binding; a new *attribute* binding is a convenience for the common ones.
+Surface: `incns.run_deck(deck)` (path | dict | Parameters; `run_case`'s sequence, flows
+and solids, summary at start and end, returns the summary dict); `incns.Parameters`
+(fields incl. `mesh.box(...)`, `amr`, `forces`, `cc` (+ `a_pcg_pc`, `schur_grad_div`),
+`subgrid`, `outer`, `uzawa`, `initial_guess`, `tolerance_reference`, `on_solver_failure`,
+`output` (+ `progress`, `history`, `profile`), `initial`, `forcing`, `channel_statistics`,
+`step_control` (enum `StepControl`), `cfl_target`, `dt_max`, `ext_order`; the resolved
+`convection_in_effect()`, `cfl_target_in_effect()`, `grad_div_h_in_effect()`); enums
+re-exported from `incns/__init__.py` — add new ones there (`SubgridModel.Off` is the
+deck's `none`); `incns.Case(p)` / `Case.from_yaml(path)` (applies the deck's named
+`initial_velocity`, as `run_case` does; `set_initial_velocity` replaces it);
 `set_initial_velocity`, `set_forcing`, `set_dirichlet_field(group, f)`,
 `velocity_dirichlet(attrs, f)`, `outflow`, `no_slip`, `face/faces/all_faces` (box names),
 `run/step`, scalars (`time`, `time_dimensional`, `done`, `step_count`, `iterations`,
 `element_count`, `velocity_l2_error`, `kinetic_energy`, `dissipation_rate`,
-`divergence_norm`), forces (`set_force_body`, `forces`, `force_coefficients`). Fields:
+`divergence_norm`, `cfl_number`, `subgrid_statistics` (dict or None)), `summary(path,
+status)` (dict), `write_summary`, `write_profile`, forces (`set_force_body`, `forces`,
+`force_coefficients`). Fields:
 Tier 1 plain callables `f(x, t)` (slow, GIL) or Tier 2 `@incns.field(dim)` (numba `cfunc`,
 C ABI `void(const double* x, double t, double* out)`, no GIL; `run/step` release the GIL).
-Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr` (np 1/2/4).
+Tests `py_stokes_ex`, `py_stokes_ex_yaml`, `py_channel_noslip`, `py_stokes_amr`,
+`py_run_deck` (a flow and a solid from dicts, unknown keys), `py_run_les` (sigma model on
+a coarse 3D Taylor-Green, statistics = summary, energy only removed) (np 1/2/4). **CI
+builds the module and runs them** (§7.6): pybind11 and Python from the container's apt,
+numba from pip, outside the Spack stack.
 
 ### 5.8 Large-eddy simulation (`physics.subgrid`; `docs/les.md`; human 2026-10-16)
 
@@ -703,8 +719,9 @@ the closed form lost σ₃ near walls (0 at y = 1e-3 where the truth is 2e-9), i
 y³ behaviour that is the model's point. The kernels (`operators/subgrid_stress.cpp`,
 nvcc list) interpolate directly (O(k⁶) per element; sum factorization is the follow-up
 if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_t,
-ν_t/ν, the subgrid dissipation). Tests `subgrid_test` S1–S5 (§7.3). Not yet: a
-turbulent validation (TGV Re 1600 on a coarse mesh), a GPU run, the Python bindings.
+ν_t/ν, the subgrid dissipation). Tests `subgrid_test` S1–S5 (§7.3); from Python
+`physics.subgrid` / `Parameters.subgrid` and `Case.subgrid_statistics()` (§5.7,
+`py_run_les`). Not yet: a turbulent validation (TGV Re 1600 on a coarse mesh), a GPU run.
 
 ## 6. Coding conventions
 
@@ -863,7 +880,8 @@ setups before it (status.md): write reproducibility checks with `incns_test::Rep
 
 ### 7.6 Continuous integration (GitHub Actions, `.github/workflows/ci.yml`)
 One CPU job in an `ubuntu:24.04` container: style check, `cpu` build (warnings are
-errors), Doxygen, the fast tier; the verify tier every third day (days 1, 4, 7, ... of
+errors), Doxygen, the fast tier, then the Python module (`cpu-python` tree, only
+`incns_pymodule` and libincns) and its `py_*` tests; the verify tier every third day (days 1, 4, 7, ... of
 the month), by manual dispatch (input `verify`) and on pull requests labelled `verify`,
 with the rates in the run summary and the CSVs as an artifact. The machine is
 `environments/ci` (the portable stack without the Python packages, the container's gcc

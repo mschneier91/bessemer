@@ -4,10 +4,34 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-20)
+## Where development left off (2026-10-21)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Python bindings brought up to date, and built in CI (2026-10-21, branch
+`claude/project-thread-048nzj`; human: "go do the python stuff", the bindings item the
+LES plan left open).** The reading taken: Python access to drive a case and read its
+results, covering what landed since 2026-10-10, not every C++ class
+(developing.md §5.7). The module had never been built in CI, so nothing guarded it.
+Landed: `incns.run_deck(deck)` (path, dict or Parameters; `run_case`'s sequence for flows
+and `linear_elasticity` solids; returns the summary dict); `Parameters.from_dict` /
+`from_yaml_string` (every deck key through the deck loader; unknown keys raise
+`ValueError` instead of aborting) and `incns.deck_keys()`; attribute bindings for the
+LES (`subgrid`), the Schur method (`outer`, `uzawa`), `initial_guess`,
+`tolerance_reference`, `on_solver_failure` + retries, `output.progress/history/profile`,
+`initial`, `forcing`, `channel_statistics`, `cc.a_pcg_pc` / `schur_grad_div` and more;
+`Case.subgrid_statistics()`, `cfl_number()`, `summary()` (dict), `write_profile()`.
+**Behaviour change:** `incns.Case` now applies the deck's named `initial_velocity`, as
+`run_case` does (it started from zero; `set_initial_velocity` still replaces it). New
+tests `py_run_deck`, `py_run_les` (np 1/2/4). CI (§7.6) now builds `incns_pymodule` in
+`build/cpu-python` after the fast tier and runs the `py_*` tests; pybind11 and Python from
+apt, numba from pip, so the Spack stack and its cache key are unchanged. Pre-checked in
+the cloud session on a scratch MFEM (1c19aba, apt hypre 2.28 and Open MPI 4.1, not the
+Spack toolchain): the module builds under `-Werror`, all 18 `py_*` tests pass at np 1/2/4,
+astyle 3.4.11 clean. Not exposed: geometry specs other than the box (use a deck), AMR
+history, channel profiles (all in the summary or its files). **Next:** the Python side of
+the ALE work when it gets deck keys.
 
 **Large-eddy simulation: the sigma and WALE subgrid models (2026-10-17, branch
 `claude/project-thread-jjlvl5`, PR #3, rebased onto main 2026-10-21; human: "ok you can
@@ -32,7 +56,8 @@ S1-S5 (models, operator = elasticity(λ = 0, μ = ν_t) to 1e-12, dissipation id
 explicit constant ν_t → implicit at order 2 under IMEX and OIFS, sigma through `Case`).
 **Not done:** a turbulent validation (TGV Re 1600 on a coarse mesh against the DNS
 dissipation curve is the first candidate), any GPU run or timing (the kernels interpolate
-directly, O(k⁶) per element; sum factorization if a profile asks), the Python bindings.
+directly, O(k⁶) per element; sum factorization if a profile asks). (The Python
+bindings followed on 2026-10-21, below.)
 Defaults unchanged (model off); bitwise neutral with the model off. Its apply allocates
 its own scratch rather than borrowing the time integrator's `ElementScratch` (change 41's
 pattern): a follow-up if the allocations show in a profile.

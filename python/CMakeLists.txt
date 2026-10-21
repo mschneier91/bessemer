@@ -66,4 +66,30 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
     PASS_REGULAR_EXPRESSION "stokes_amr: PASSED"
     DEPENDS incns_pymodule)
+
+  # Decks run end to end from Python (a flow and a solid, as run_case runs
+  # them), summaries back as dicts, unknown keys as Python errors.
+  add_test(
+    NAME py_run_deck_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+            ${CMAKE_SOURCE_DIR}/examples/python/drive/run_deck.py)
+  set_tests_properties(py_run_deck_np${np} PROPERTIES
+    LABELS "fast"
+    PROCESSORS ${np}
+    ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
+    PASS_REGULAR_EXPRESSION "run_deck: PASSED"
+    DEPENDS incns_pymodule)
+
+  # The sigma subgrid model stepped from Python (3D Taylor-Green, coarse):
+  # the subgrid statistics as scalars and in the summary.
+  add_test(
+    NAME py_run_les_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+            ${CMAKE_SOURCE_DIR}/examples/python/drive/run_les.py)
+  set_tests_properties(py_run_les_np${np} PROPERTIES
+    LABELS "fast"
+    PROCESSORS ${np}
+    ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
+    PASS_REGULAR_EXPRESSION "run_les: PASSED"
+    DEPENDS incns_pymodule)
 endforeach()

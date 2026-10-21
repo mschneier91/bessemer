@@ -1,6 +1,6 @@
-# CI: the CPU build and the fast tier on every push and pull request, the
-# verification tier every third day, on demand, and on pull requests labelled `verify`
-# (docs/developing.md §7.2, §7.6).
+# CI: the CPU build and the fast tier on every push and pull request, then the
+# Python module and its tests; the verification tier every third day, on demand,
+# and on pull requests labelled `verify` (docs/developing.md §7.2, §7.6).
 #
 # The Spack stack (environments/ci) takes 1-3 hours to build from source, so it
 # is cached: the key is the pinned Spack release plus environments/ci/spack.yaml,
@@ -45,7 +45,7 @@ jobs:
       SPACK_ROOT: /opt/spack
       SPACK_DISABLE_LOCAL_CONFIG: "1"
       CCACHE_DIR: /opt/ccache
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 3G
       INCNS_JOBS: "4"
       # Open MPI in a container: root, and up to 4 ranks on 4 cores.
       OMPI_ALLOW_RUN_AS_ROOT: "1"
@@ -58,7 +58,12 @@ jobs:
           apt-get update -q
           DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
             build-essential gfortran git python3 curl ca-certificates file patch \
-            unzip bzip2 xz-utils zstd ccache doxygen graphviz
+            unzip bzip2 xz-utils zstd ccache doxygen graphviz \
+            python3-dev python3-pip pybind11-dev
+          # The Python module's tests compile their fields with numba
+          # (@incns.field); Ubuntu 24.04 has no numba package. Not part of the
+          # Spack stack (environments/ci), whose cache key it would change.
+          pip3 install -q --break-system-packages numba
 
       - uses: actions/checkout@v4
 
@@ -137,6 +142,19 @@ jobs:
 
       - name: Fast tier
         run: scripts/test.sh cpu -L fast --timeout 1800
+
+      - name: Python module and its tests
+        # The cpu-python preset's own tree (build/cpu-python), only the module
+        # and the library it links: libincns compiles from ccache after the
+        # first run. The tests are the py_* ones (fast tier, np 1, 2, 4).
+        if: "!cancelled() && steps.build.outcome == 'success'"
+        env:
+          CXXFLAGS: -march=x86-64-v3
+        run: |
+          . scripts/env.sh
+          cmake --preset cpu-python
+          cmake --build build/cpu-python --target incns_pymodule
+          scripts/test.sh cpu-python -L fast -R '^py_' --timeout 1800
 
       - name: Verification tier
         # Runs when the build did, even if a fast test failed.
