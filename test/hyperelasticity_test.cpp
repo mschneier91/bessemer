@@ -464,10 +464,13 @@ TEST(Hyperelasticity, HM_TangentStoragesAgreeAndScratchIsTransparent)
       const int n = p.fes.GetTrueVSize();
       Vector u = Random(n, 29, 0.1), w = Random(n, 31, 1.0);
       ElementScratch scratch(p.fes);
+      // The reference keeps F and S (the most memory), whatever the default.
+      HyperelasticOperator ref(p.fes, *p.ir, HyperelasticMaterial::StVenantKirchhoff,
+                               p.lambda, p.mu, TangentStorage::StressAndDeformation);
       Vector kref(n);
       kref.UseDevice(true);
-      p.op->GetGradient(u).Mult(w, kref);
-      size_t prev_bytes = p.op->MemoryBytes();
+      ref.GetGradient(u).Mult(w, kref);
+      size_t prev_bytes = ref.MemoryBytes();
       for (TangentStorage s : {TangentStorage::Deformation, TangentStorage::Displacement})
       {
          HyperelasticOperator op(p.fes, *p.ir, HyperelasticMaterial::StVenantKirchhoff,
@@ -487,10 +490,10 @@ TEST(Hyperelasticity, HM_TangentStoragesAgreeAndScratchIsTransparent)
                                 &scratch);
       Vector r1(n), r2(n), k2(n);
       for (Vector* v : {&r1, &r2, &k2}) { v->UseDevice(true); }
-      p.op->Mult(u, r1);
+      ref.Mult(u, r1);
       lent.Mult(u, r2);
       lent.GetGradient(u).Mult(w, k2);
-      EXPECT_LT(lent.MemoryBytes(), p.op->MemoryBytes());
+      EXPECT_LT(lent.MemoryBytes(), ref.MemoryBytes());
       r1.HostRead(); r2.HostRead(); k2.HostRead(); kref.HostRead();
       for (int i = 0; i < n; i++)
       {

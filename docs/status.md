@@ -9,6 +9,19 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Hyperelasticity, milestone 1 and a memory step (2026-10-21; human: "start specking on
+adding hyperelasticity and at venant Kirkhoff model", "go with your recommendations,
+commit the spec and start M1", "after this is a good time to also start optimizing memory
+and then do performance engineering").** St. Venant-Kirchhoff material and matrix-free
+residual and tangent operators, one fused sum-factorized kernel per apply
+(`src/solid/hyperelastic_*`; [hyperelasticity.md](hyperelasticity.md); spec
+design/hyperelasticity_spec.md). `hyperelasticity_test` checks them against MFEM's
+`HyperelasticNLFIntegrator` (CPU np 1/2/4, H100 np 1/2). 3D Q6 on one H100: 104 B per
+vector dof (the default storage, F), residual 3.8 and tangent 3.7 Gdof/s; MFEM's linear
+elasticity PA cannot launch there and is 2.4-5.9x slower at Q3-Q5. No solver or deck yet.
+**Next:** profiling the kernels (the performance step), then milestone 2 (Newton, the
+deck, Turek-Hron CSM1/CSM2).
+
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...
 specify like a function on the boundary which will then deform the mesh using jacobian

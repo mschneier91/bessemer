@@ -21,9 +21,11 @@ namespace incns
 /// work per apply (per quadrature point in 3D: 18, 9 or about 3 numbers).
 enum class TangentStorage
 {
-   /// F and S at every point: the least work per apply.
+   /// F and S at every point: the least arithmetic per apply.
    StressAndDeformation,
-   /// F at every point; S recomputed in every apply.
+   /// F at every point; S recomputed in every apply. The default: half the
+   /// data of StressAndDeformation and, on an H100 at Q6, 5 % faster (less to
+   /// read); as fast on the CPU (docs/hyperelasticity.md section 3).
    Deformation,
    /// The displacement's element vector; F and S recomputed in every apply
    /// (one more gradient pass).
@@ -66,8 +68,7 @@ public:
                         const mfem::IntegrationRule& ir,
                         HyperelasticMaterial material,
                         const mfem::Vector& lambda, const mfem::Vector& mu,
-                        TangentStorage storage =
-                           TangentStorage::StressAndDeformation,
+                        TangentStorage storage = TangentStorage::Deformation,
                         ElementScratch* scratch = nullptr);
    ~HyperelasticOperator() override;
 
