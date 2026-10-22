@@ -131,9 +131,11 @@ SM, then overlapped the exchange with the interior elements. 3D Q6 on one H100: 
 vector dof (the default storage, F), residual 20.2 and tangent 17.2 Gdof/s (5.3x and
 4.7x the first kernels). On two H100s it reaches 89-93 % of one (it was 76-79 %). MFEM's
 linear elasticity PA cannot launch there and is 11-25x slower at Q3-Q5. Geometry on the
-fly is shelved (human 2026-10-21: under 2 % of the solver's memory). No solver or deck
-yet. **Next:** a 4-8 GPU scaling measurement, then milestone 2 (Newton, the deck,
-Turek-Hron CSM1/CSM2).
+fly is shelved (human 2026-10-21: under 2 % of the solver's memory). Milestone 2 began
+on 2026-10-22 with the static solver, `Hyperelasticity` (Newton, load steps, line search,
+the reference LOR-AMG; tests H4-H6: an exact homogeneous finite deformation, a strain-free
+180-degree rotation, and the linear limit at O(load^2)). **Next:** the deck
+(`equation: hyperelasticity`), then Turek-Hron CSM1/CSM2.
 
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...

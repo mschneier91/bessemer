@@ -17,16 +17,32 @@
 //  HM the three tangent storages give the same tangent (to roundoff), the
 //     displacement storage keeps the least memory, and borrowed work buffers
 //     (ElementScratch) give bitwise the results of owned ones.
+// The static solver (solid/hyperelasticity.hpp), milestone M2:
+//  H4 a homogeneous finite deformation (stretch and shear, det F != 1),
+//     displacement on the faces through the origin and the exact traction P N
+//     on the others, is reproduced to roundoff, Newton converging in a few
+//     steps: the full load at once, and in three load steps with the line
+//     search;
+//  H5 a large rigid rotation (90 and 180 degrees, prescribed on the whole
+//     boundary in steps of its angle) rotates the interior exactly with no
+//     strain energy, where the linear model stores a lot;
+//  H6 small loads give the linear solution: the difference to
+//     LinearElasticity falls as the load squared.
 // Runs on whatever device the test main configures (INCNS_DEVICE=cuda).
 
 #include <gtest/gtest.h>
 
 #include "quadrature/rule_book.hpp"
 #include "solid/hyperelastic_operator.hpp"
+#include "solid/hyperelasticity.hpp"
+#include "solid/linear_elasticity.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
 #include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
 
 using namespace mfem;
 using incns::HyperelasticMaterial;
@@ -502,3 +518,248 @@ TEST(Hyperelasticity, HM_TangentStoragesAgreeAndScratchIsTransparent)
       }
    }
 }
+
+namespace
+{
+
+/// An n^dim unit box (straight elements; attributes as MFEM's Cartesian
+/// meshes: 2D bottom 1, right 2, top 3, left 4; 3D z = 0 1, y = 0 2, x = 1 3,
+/// y = 1 4, x = 0 5, z = 1 6).
+std::unique_ptr<ParMesh> UnitBox(int dim, int n)
+{
+   Mesh m = (dim == 3) ? Mesh::MakeCartesian3D(n, n, n, Element::HEXAHEDRON)
+            : Mesh::MakeCartesian2D(n, n, Element::QUADRILATERAL);
+   return std::make_unique<ParMesh>(MPI_COMM_WORLD, m);
+}
+
+/// max |a - b| over the true dofs (global).
+double MaxDiff(const Vector& a, const Vector& b)
+{
+   const real_t* pa = a.HostRead();
+   const real_t* pb = b.HostRead();
+   double m = 0.0;
+   for (int i = 0; i < a.Size(); ++i) { m = std::max(m, std::abs(pa[i] - pb[i])); }
+   MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   return m;
+}
+
+/// The true dofs of @p g's interpolant on @p fes.
+Vector Interpolant(ParFiniteElementSpace& fes, VectorCoefficient& g)
+{
+   ParGridFunction x(&fes);
+   x.ProjectCoefficient(g);
+   Vector t(fes.GetTrueVSize());
+   t.UseDevice(true);
+   x.GetTrueDofs(t);
+   return t;
+}
+
+Vector TrueDofs(const ParGridFunction& u)
+{
+   Vector t(u.ParFESpace()->GetTrueVSize());
+   t.UseDevice(true);
+   u.GetTrueDofs(t);
+   return t;
+}
+
+/// The solver's residual history, for messages.
+std::string History(const incns::Hyperelasticity& s)
+{
+   std::ostringstream o;
+   o << "Newton residuals:";
+   for (double r : s.ResidualHistory()) { o << " " << r; }
+   return o.str();
+}
+
+incns::Hyperelasticity::Options SolverOptions(int order)
+{
+   incns::Hyperelasticity::Options o;
+   o.order = order;
+   o.lambda = kLambda;
+   o.mu = kMu;
+   o.newton_rtol = 1e-12;
+   o.rtol = 1e-12;
+   return o;
+}
+
+} // namespace
+
+// H4
+TEST(Hyperelasticity, H4_HomogeneousFiniteDeformationIsExact)
+{
+   for (int dim = 2; dim <= 3; ++dim)
+   {
+      auto mesh = UnitBox(dim, dim == 2 ? 3 : 2);
+      DenseMatrix F(dim);
+      if (dim == 2)
+      {
+         F(0, 0) = 1.2; F(0, 1) = 0.3;
+         F(1, 0) = 0.1; F(1, 1) = 0.9;
+      }
+      else
+      {
+         F(0, 0) = 1.15; F(0, 1) = 0.2;   F(0, 2) = -0.1;
+         F(1, 0) = 0.05; F(1, 1) = 0.9;   F(1, 2) = 0.1;
+         F(2, 0) = 0.1;  F(2, 1) = -0.05; F(2, 2) = 1.1;
+      }
+      ASSERT_GT(std::abs(F.Det() - 1.0), 0.03);
+      DenseMatrix E, S, P(dim);
+      Strain(F, E);
+      SecondPiola(E, kLambda, kMu, S);
+      Mult(F, S, P);
+      VectorFunctionCoefficient exact(dim, [F, dim](const Vector & X, Vector & u)
+      {
+         for (int i = 0; i < dim; i++)
+         {
+            u(i) = -X(i);
+            for (int j = 0; j < dim; j++) { u(i) += F(i, j) * X(j); }
+         }
+      });
+      // The faces through the origin prescribed; the others carry P N.
+      const std::vector<int> held = (dim == 2) ? std::vector<int> {1, 4} :
+                                    std::vector<int> {1, 2, 5};
+      const std::vector<std::pair<int, int>> loaded = (dim == 2) ?
+std::vector<std::pair<int, int>> {{2, 0}, {3, 1}} :
+      std::vector<std::pair<int, int>> {{3, 0}, {4, 1}, {6, 2}};
+      std::vector<std::unique_ptr<VectorConstantCoefficient>> t;
+      for (const auto& l : loaded)
+      {
+         Vector pn(dim);
+         P.GetColumn(l.second, pn); // P N, N the face's unit normal e_c
+         t.push_back(std::make_unique<VectorConstantCoefficient>(pn));
+      }
+      // The full load at once; then three load steps with the line search.
+      for (int steps : {1, 3})
+      {
+         incns::Hyperelasticity::Options o = SolverOptions(2);
+         o.load_steps = steps;
+         o.line_search = steps > 1;
+         incns::Hyperelasticity solid(*mesh, o);
+         for (int a : held) { solid.AddDisplacement(a, exact); }
+         for (size_t i = 0; i < loaded.size(); i++)
+         {
+            solid.AddTraction(loaded[i].first, *t[i]);
+         }
+         ASSERT_TRUE(solid.Solve()) << "dim " << dim << " steps " << steps << " "
+                                    << History(solid);
+         const Vector ue = Interpolant(solid.Space(), exact);
+         const Vector uh = TrueDofs(solid.Displacement());
+         EXPECT_LT(MaxDiff(uh, ue), 1e-10) << "dim " << dim << " steps " << steps;
+         EXPECT_LE(solid.MaxNewtonIterations(), 8) << "dim " << dim << " steps "
+               << steps << " " << History(solid);
+         if (Mpi::Root())
+         {
+            std::cout << "[H4] dim " << dim << " steps " << steps << " "
+                      << History(solid) << std::endl;
+         }
+      }
+   }
+}
+
+// H5
+TEST(Hyperelasticity, H5_RigidRotationIsStrainFree)
+{
+   for (int dim = 2; dim <= 3; ++dim)
+   {
+      for (double degrees : {90.0, 180.0})
+      {
+         auto mesh = UnitBox(dim, 2);
+         const double angle = degrees * M_PI / 180.0;
+         // (Q(angle t) - I)(X - c), c the box's centre.
+         VectorFunctionCoefficient g(dim, [dim, angle](const Vector & X, double t,
+                                     Vector & u)
+         {
+            const DenseMatrix Q = Rotation(dim, angle * t);
+            Vector Y(dim), QY(dim);
+            for (int i = 0; i < dim; i++) { Y(i) = X(i) - 0.5; }
+            Q.Mult(Y, QY);
+            for (int i = 0; i < dim; i++) { u(i) = QY(i) - Y(i); }
+         });
+         incns::Hyperelasticity solid(*mesh, SolverOptions(2));
+         for (int a = 1; a <= mesh->bdr_attributes.Max(); a++)
+         {
+            solid.AddDisplacement(a, g);
+         }
+         const int steps = 8;
+         for (int k = 1; k <= steps; k++)
+         {
+            ASSERT_TRUE(solid.Solve(static_cast<double>(k) / steps))
+                  << "dim " << dim << " degrees " << degrees << " step " << k;
+         }
+         g.SetTime(1.0);
+         const Vector ue = Interpolant(solid.Space(), g);
+         const Vector uh = TrueDofs(solid.Displacement());
+         EXPECT_LT(MaxDiff(uh, ue), 1e-10) << "dim " << dim << " degrees " << degrees;
+         EXPECT_LT(std::abs(solid.StrainEnergy()), 1e-16)
+               << "dim " << dim << " degrees " << degrees;
+         // The linear model on the same data stores spurious strain energy.
+         incns::LinearElasticity::Options lo;
+         lo.order = 2;
+         lo.lambda = kLambda;
+         lo.mu = kMu;
+         lo.rtol = 1e-12;
+         incns::LinearElasticity linear(*mesh, lo);
+         for (int a = 1; a <= mesh->bdr_attributes.Max(); a++)
+         {
+            linear.AddDisplacement(a, g);
+         }
+         ASSERT_TRUE(linear.Solve(1.0));
+         EXPECT_GT(linear.StrainEnergy(),
+                   0.1) << "dim " << dim << " degrees " << degrees;
+      }
+   }
+}
+
+// H6
+TEST(Hyperelasticity, H6_SmallLoadsGiveTheLinearSolution)
+{
+   // A 4 x 1 cantilever clamped on the left (attribute 4), under its weight.
+   Mesh serial = Mesh::MakeCartesian2D(8, 2, Element::QUADRILATERAL, true, 4.0,
+                                       1.0);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   serial.Clear();
+   double diff[2], scale = 0.0;
+   const double loads[2] = {1e-4, 5e-5};
+   for (int i = 0; i < 2; i++)
+   {
+      Vector fv(2);
+      fv(0) = 0.0;
+      fv(1) = -loads[i];
+      VectorConstantCoefficient f(fv);
+      // Newton at its default tolerance: the residual's roundoff floor here is
+      // ~3e-11 of the load, above SolverOptions' 1e-12.
+      incns::Hyperelasticity::Options o = SolverOptions(3);
+      o.newton_rtol = incns::Hyperelasticity::Options().newton_rtol;
+      incns::Hyperelasticity solid(mesh, o);
+      solid.AddFixed(4);
+      solid.SetBodyForce(f);
+      ASSERT_TRUE(solid.Solve()) << "load " << loads[i] << " " << History(solid);
+      if (Mpi::Root())
+      {
+         std::cout << "[H6] load " << loads[i] << " " << History(solid) << std::endl;
+      }
+      incns::LinearElasticity::Options lo;
+      lo.order = 3;
+      lo.lambda = kLambda;
+      lo.mu = kMu;
+      lo.rtol = 1e-13;
+      incns::LinearElasticity linear(mesh, lo);
+      linear.AddFixed(4);
+      linear.SetBodyForce(f);
+      ASSERT_TRUE(linear.Solve());
+      const Vector uh = TrueDofs(solid.Displacement());
+      const Vector ul = TrueDofs(linear.Displacement());
+      diff[i] = MaxDiff(uh, ul);
+      if (i == 0) { scale = linear.MaxDisplacement(); }
+   }
+   if (Mpi::Root())
+   {
+      std::cout << "[H6] max |u - u_linear|: " << diff[0] << " " << diff[1]
+                << ", ratio " << diff[0] / diff[1] << ", max |u_linear| " << scale
+                << std::endl;
+   }
+   EXPECT_LT(diff[0], 1e-2 * scale);
+   EXPECT_GT(diff[0] / diff[1], 3.5);
+   EXPECT_LT(diff[0] / diff[1], 4.5);
+}
+

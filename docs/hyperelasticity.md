@@ -15,8 +15,9 @@ a performance step in five rounds (section 4):
 4. 7 blocks per SM;
 5. the exchange overlapped with the interior elements' work.
 
-There is no solver, deck or boundary condition yet: that is milestone 2 (Newton, static,
-Turek-Hron CSM1/CSM2).
+Milestone 2 has begun with the static solver, `Hyperelasticity`: Newton with load
+steps, boundary conditions and loads (sections 1, 2 and 4). Its deck
+(`equation: hyperelasticity`) and Turek-Hron CSM1/CSM2 come next (section 5).
 
 ## 1. What exists
 
@@ -48,6 +49,24 @@ Turek-Hron CSM1/CSM2).
   where the prolongation is the identity (one rank, no hanging nodes). In 3D on a device
   it keeps no E-vectors (the gather and scatter are fused into the kernels), and on a
   conforming space no L-vectors at any rank count (`TrueDofExchange`, section 4).
+- `src/solid/hyperelasticity.{hpp,cpp}`: `Hyperelasticity`, the static solver
+  (milestone 2). Its API is `LinearElasticity`'s static part: `AddFixed`,
+  `AddDisplacement`, `AddTraction` (P N, per reference area) and `SetBodyForce` (per
+  reference volume). The loads are dead loads. `Solve(t)` runs from the current
+  displacement.
+  - Newton on the operator's residual and tangent, `options.load_steps` ramping the loads
+    and the Dirichlet data together from zero. An optional backtracking line search
+    halves the step until the residual norm drops (Armijo, 1e-4).
+  - Each correction is solved by CG, preconditioned by one BoomerAMG V-cycle on the LOR
+    linear elasticity of the reference configuration (the tangent at u = 0), built once
+    (spec D5). It is a copy of `LinearElasticity`'s; sharing it would need that class's
+    bitwise check (spec section 5).
+  - A load step converges when its residual (true dofs, Dirichlet rows out) falls below
+    `max(newton_atol, newton_rtol r_ref)`. Here r_ref is the largest of the step's first
+    residual, its load's norm, and the right-hand side its Dirichlet increment makes
+    (section 4).
+  - Reported: Newton iterations (total and the most in one step), CG iterations, the
+    residual history, strain energy, external work and the largest displacement.
 - `bench/bench_hyperelastic.cpp` reports, per order and storage: the bytes per vector dof,
   the device memory added, and the residual, linearization and tangent times. MFEM's
   linear `ElasticityIntegrator` in partial assembly is the reference.
@@ -82,8 +101,21 @@ spaces at orders 1 to 3:
 
 np 4 on the CPU covers dofs that three or more ranks share.
 
+The static solver (milestone 2):
+
+- **H4:** a homogeneous finite deformation (stretch and shear, det F != 1). The
+  displacement is prescribed on the faces through the origin, and the exact traction
+  P(F) N acts on the others. It is reproduced to 1e-10 in 2D and 3D in at most 8 Newton
+  iterations per load step: the full load at once, and in three load steps with the line
+  search. The residuals fall quadratically, e.g. in 2D 1.3e-2, 3.0e-4, 1.6e-7, 5.4e-14.
+- **H5:** a rigid rotation by 90 and 180 degrees, prescribed on the whole boundary in 8
+  solves. The interior rotates to 1e-10 with |strain energy| < 1e-16, where
+  `LinearElasticity` on the same data stores more than 0.1.
+- **H6:** a 4 x 1 cantilever under its weight at loads 1e-4 and 5e-5. The difference to
+  `LinearElasticity` falls as the load squared (ratio 4.0015).
+
 Passed on the CPU at np 1, 2 and 4 and on H100s at np 1 and 2 at every step; for the
-current code, jobs 49578116 (CPU) and 49576431 (GPU).
+current code, jobs JOB_CPU (CPU) and JOB_GPU (GPU).
 
 ## 3. Memory and speed
 
@@ -232,6 +264,21 @@ tangent, against MFEM's 1846 and 862.
     apply, 90 % and 92 % of one GPU.
   - At np 1 the exchange's gather map is MFEM's own (2 B/dof less).
 
+- **The Dirichlet increment goes through the tangent.** At first, each load step moved
+  the Dirichlet dofs to their new values and left the rest in place. That strained a
+  layer of boundary elements, and Newton started far away: in H4's 2D case the first
+  step raised the residual from 1.4 to 880, and it took 11 iterations. Now a step's first
+  Newton correction carries the increment: it is prescribed on the Dirichlet dofs
+  (`ConstrainedOperator::EliminateRHS`), and the free dofs follow through the tangent,
+  as in deal.II's step-44. H4 then needs 6 iterations from 0.51. The line search skips
+  that first correction, whose residual has new data.
+- **Newton's tolerance has a roundoff floor.** On H6's small cantilever (Q3, 8 x 2
+  elements, loads near 1e-4) the residual stopped at about 3e-11 of the load. Element
+  contributions that are much larger than the load cancel at every node. A slender beam
+  and a finer mesh raise the floor, so the default `newton_rtol` is 1e-8, not the 1e-10
+  the spec's sample deck had. Quadratic convergence leaves little behind it: the
+  displacement error is about the tangent's inverse times the residual.
+
 ## 5. Next
 
 - **More performance.**
@@ -242,5 +289,9 @@ tangent, against MFEM's 1846 and 862.
   - Geometry on the fly: **shelved** (human 2026-10-21). The operator's ~93 B/dof are
     under 5 % of the LOR-AMG's estimated 2-3 kB/dof (elasticity.md section 3), so it
     would save under 2 % of the solver's memory, at a cost in speed.
-- **Milestone 2:** Newton with load steps, the fixed reference LOR-AMG preconditioner, the
-  deck (`equation: hyperelasticity`), CSM1 and CSM2.
+- **Milestone 2, the rest:**
+  - the deck (`equation: hyperelasticity`, `solid.model`, the Newton keys) through
+    `ElasticityCase`, and H8;
+  - the displacement at a point (`DisplacementAt`) for point A;
+  - Turek-Hron CSM1 and CSM2, the beam mesh, and V1 and V2 static. The reference values
+    must be checked against Turek and Hron (2006) before they become thresholds.
