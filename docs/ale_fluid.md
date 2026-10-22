@@ -14,9 +14,8 @@ document of 2026-10-21 (stage numbers below are its stages).
 
 Built so far: the library (stages 0-1, `Case::SetMeshMotion` with IMEX) and
 the deck surface (stage 2, section 3 below: boundary `motion`, checkpoints of
-the node history). Still a full rebuild of the solvers after each move (stage
-3 replaces it with an in-place refresh); earlier mesh solves reused (stage
-4); CPU only so far.
+the node history), the solvers refreshed in place after each move (stage 3,
+section 2), earlier mesh solves reused (stage 4); CPU only so far.
 
 ## 1. Formulation
 
@@ -65,8 +64,9 @@ every RK stage, the riskiest later stage of the scope.
   space and its coefficient) and `MeshConvection` (y = C(w) u).
 - `StokesTimeIntegrator::SetMeshMotion(MeshMotion&, MeshVelocityField&)`,
   before the first step. Each step moves the mesh first
-  (`MoveMesh`: `MeshMotion::Move(t^{n+1})`, w updated, then every solver and
-  the IMEX convection rebuilt on the new geometry), then assembles and solves
+  (`MoveMesh`: `MeshMotion::Move(t^{n+1})`, w updated, then every solver
+  refreshed on the new geometry and the IMEX convection rebuilt), then
+  assembles and solves
   as on a fixed mesh, with `AddMeshConvection` in the right-hand side (the
   trapezoidal starter and `AssembleBdfRhs`).
 - **A failed solve on a moving mesh** (`time.on_solver_failure: cut_step`)
@@ -79,7 +79,30 @@ every RK stage, the riskiest later stage of the scope.
   `MeshMotionModel` drives it (the linear elastic one with stiffening by
   default; the test uses a prescribed displacement field).
 
-- **What survives the rebuild:** the outer solver's initial-guess state
+- **The refresh after a move** (stage 3; deck `mesh_motion.refresh:
+  in_place | rebuild`, default `in_place`; human 2026-10-22: "go to stage
+  3"). `in_place` keeps every solver and calls
+  `StokesSolver::UpdateGeometry(rebuild)`: the operator re-assembles what
+  depends on the geometry (`StokesOperator::UpdateGeometry`: the mass and its
+  diagonal, the divergence, gamma = c h_K with its per-element values, the
+  momentum block at the next `SetMassCoeff`), the Cahouet-Chabard
+  preconditioner its masses and their inverses
+  (`CahouetChabardSchurPC::UpdateGeometry`, `MassInverse::Refresh`), the
+  pressure mean its weights, the guess state its operator images. Re-assembly
+  re-reads MFEM's new geometric factors, so the kernels' cached pointers are
+  valid again. Only the AMG hierarchies (the pressure LOR-AMG and a LOR-AMG
+  velocity block) and the Chebyshev eigenvalue estimates are left an earlier
+  mesh's, rebuilt every `mesh_motion.amg_interval` moves (default 10, by the
+  move count, so a restart keeps the schedule): they only precondition. The
+  velocity PCG's Jacobi or point-block blocks are rebuilt at every move.
+  `rebuild` is the old path, a new solver after every move.
+  Dütsch deck to t = 1 (np 4, 124 steps; outer and inner iterations
+  unchanged): the refresh 1.42 s with `rebuild`, 1.16 s in place with the
+  AMG rebuilt every move, 0.39 / 0.35 / 0.26 s at intervals 5 / 10 / 25; the
+  run 11.2 s against 9.1-9.6 s (-15 to -19 %, run-to-run noise ~0.5 s). With
+  the AMG rebuilt at every move the in-place path equals `rebuild` to 2e-16
+  (test A10). The fixed-mesh path is untouched (no move, no refresh).
+- **What survives a rebuild** (`refresh: rebuild`): the outer solver's initial-guess state
   (the projection's kept solutions, or the extrapolation's previous one) is
   handed from the last step's solver to the new one, its operator images
   recomputed on the moved mesh (`StokesTimeIntegrator::CopyGuessState`).
@@ -115,18 +138,18 @@ every RK stage, the riskiest later stage of the scope.
   `run_case_rejects_volume_change`). Before this check such a deck iterated
   to the solver's cap.
 
-**Why a full rebuild after every move, for now.** MFEM deletes a mesh's cached
+**Why the refresh is needed.** MFEM deletes a mesh's cached
 geometric factors when its nodes change (`NodesUpdated`), and bessemer's own
 divergence (`operators/lean_vector_divergence.cpp`), grad-div
 (`operators/grad_div_integrator.cpp`) and OIFS kernels keep raw pointers to
-them for speed. A solver kept across a move would read freed memory. The
-rebuild costs less than expected once the guess state is carried: 9 % of a
-step on the 2D cylinder deck and 6 % on an 8^3 Q3 box (np 4, profile regions
-`time_integrator::build_solver`), the pressure LOR-AMG setup included. Stage 3
-(the in-place refresh for moving meshes, keeping the cached pointers for
-fixed ones; human 2026-10-21: "we'll want both options") is therefore after
-the validation; to be re-measured at production sizes and on a GPU, where the
-AMG setup's share may differ.
+them for speed. A solver kept across a move without re-assembly would read
+freed memory. Stages 0-2 rebuilt every solver after every move: 9 % of a step
+on the 2D cylinder deck and 6 % on an 8^3 Q3 box (np 4, profile regions
+`time_integrator::build_solver`), the pressure LOR-AMG setup included. The
+in-place refresh above re-assembles instead and keeps the AMG for
+`amg_interval` moves; the fixed-mesh path keeps its cached pointers (human
+2026-10-21: "we'll want both options"). To be re-measured at production sizes
+and on a GPU, where the AMG setup's share may differ.
 
 ## 3. Decks
 
@@ -189,7 +212,8 @@ CPU. Transverse lock-in and Dütsch's velocity profiles are not compared yet.
 | A6 | Taylor-Green on an oscillating mesh, Q3, h = 1/2, 1/4, 1/8: velocity L2 | rates 4.03, 4.32 (theory 4) |
 | A7 | the same at Q5, dt = 0.04, 0.02, 0.01 | rates 2.83, 2.24 (theory 2, BDF2/EXT2) |
 | A8 | a deck whose whole boundary moves rigidly (`motion` on a no_slip group): IMEX chosen, u = w, the nodes translated | to 1e-9 |
-| A9 | a checkpoint mid-march of a deck with a moving wall and an elastically moved interior, restarted | = the uninterrupted run to 1e-13 |
+| A9 | a checkpoint mid-march of a deck with a moving wall and an elastically moved interior, restarted | `rebuild`: = the uninterrupted run to 1e-13; `in_place`: to 1e-10 (the restart's AMG is built on its own mesh) |
+| A10 | the in-place refresh against `rebuild`: AMG every move and every 3 moves; default path, LOR-AMG velocity block, the Schur outer method | to 2e-16 (every move), < 1e-12 otherwise |
 
 A4's stretched case is not exact because the starter's explicit C(w) u^0
 reads u^0 on the moved nodes, off by dt (grad u) w where grad w is not zero; the
@@ -201,9 +225,6 @@ a GPU: `MeshVelocityField::Update` projects on the host once per step.
 
 ## 5. Next
 
-1. In-place refresh after a move (stage 3): the geometric data re-read, the
-   pressure LOR-AMG allowed to go stale for N steps, the velocity PC
-   refreshed; the fixed-mesh path keeps its cached pointers.
-2. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
+1. The the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
    the partitioned coupling with dynamic Aitken and the Robin conditions, to
    all nine Turek-Hron problems.

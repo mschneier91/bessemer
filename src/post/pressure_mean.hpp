@@ -59,6 +59,10 @@ public:
    /// As SubtractMean(p, rules). Collective.
    void Subtract(mfem::ParGridFunction& p) const;
 
+   /// Assemble the functional again at the next use: the mesh's nodes moved
+   /// (a move keeps the space's sequence, which the cache is keyed on).
+   void Invalidate() { fes_ = nullptr; }
+
 private:
    /// The functional and the volume for @p fes (when new or changed).
    void Setup(mfem::ParFiniteElementSpace& fes) const;

@@ -297,6 +297,15 @@ void StokesTimeIntegrator::MoveMesh(double t_new, int order)
                   "incompressible fluid cannot follow it");
    }
    mesh_w_->Update(*motion_, std::min(order, motion_->States() - 1));
+   if (opts_.ale_refresh_in_place)
+   {
+      // The solvers stay, refreshed on the moved mesh with their guess
+      // state (docs/ale_fluid.md, "The refresh after a move").
+      RefreshSolversInPlace(true);
+      if (convection_) { BuildConvection(); }
+      mesh_conv_->SetWind(mesh_w_->Field());
+      return;
+   }
    // The initial-guess state of the solver that made the last step goes to
    // the one this step builds: its solutions are still good guesses, but its
    // operator images are of the old geometry (rebuilt; A x_prev is not kept).
@@ -339,6 +348,12 @@ void StokesTimeIntegrator::RevertMesh()
    if (!motion_ || !mesh_moved_) { return; }
    motion_->Revert();
    mesh_moved_ = false;
+   if (opts_.ale_refresh_in_place)
+   {
+      RefreshSolversInPlace(false);
+      if (convection_) { BuildConvection(); }
+      return;
+   }
    // The solvers of the failed attempt were built on the moved mesh.
    last_solver_ = nullptr;
    trap_.reset();
@@ -347,6 +362,27 @@ void StokesTimeIntegrator::RevertMesh()
    bdf3_.solver.reset();
    bdf3_.c0 = -1.0;
    if (convection_) { BuildConvection(); }
+}
+
+void StokesTimeIntegrator::RefreshSolversInPlace(bool count)
+{
+   INCNS_PROFILE("time_integrator::refresh_solvers");
+   bool rebuild = false;
+   if (count)
+   {
+      MFEM_VERIFY(opts_.ale_rebuild_interval >= 1, "time_integrator: "
+                  "ale_rebuild_interval must be >= 1");
+      // By the move count, so a restart keeps the schedule.
+      rebuild = motion_->MoveCount() % opts_.ale_rebuild_interval == 0;
+   }
+   StokesSolver* done[3] = {nullptr, nullptr, nullptr};
+   int n = 0;
+   for (StokesSolver* s : {trap_.get(), bdf2_.solver.get(), bdf3_.solver.get()})
+   {
+      if (!s || std::find(done, done + n, s) != done + n) { continue; }
+      s->UpdateGeometry(rebuild);
+      done[n++] = s;
+   }
 }
 
 void StokesTimeIntegrator::AddMeshConvection(double t_new, Vector& b, int ext)

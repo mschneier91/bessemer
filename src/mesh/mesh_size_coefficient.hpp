@@ -89,6 +89,10 @@ public:
       }
    }
 
+   /// Recompute the element sizes at the next Eval: the mesh's nodes moved
+   /// (a node move keeps the mesh sequence, which the cache is keyed on).
+   void Invalidate() { sequence_ = -1; }
+
 private:
    mfem::ParMesh& mesh_; ///< Mesh (borrowed).
    double scale_;        ///< Multiplier c_gd.

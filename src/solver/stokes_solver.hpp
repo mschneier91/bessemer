@@ -328,6 +328,25 @@ public:
    bool CanChangeViscosity();
 
    /**
+    * @brief The mesh's nodes moved (the ALE fluid): refresh this solver on the
+    *        current geometry instead of building a new one.
+    *
+    * Re-assembles the blocks in place (StokesOperator::UpdateGeometry), the
+    * momentum block and the velocity preconditioner (the point-block Jacobi
+    * blocks too: their grad-div part depends on the geometry), the Schur
+    * preconditioner's masses, and the output pressure's mean functional.
+    * The pressure L_p LOR-AMG and the Chebyshev eigenvalue estimates are
+    * rebuilt only when @p rebuild; between rebuilds they are those of an
+    * earlier mesh, which costs iterations, not accuracy (they only
+    * precondition). The initial-guess state is kept: its solutions remain
+    * good guesses, its operator images are rebuilt (as after a viscosity
+    * change).
+    * @param rebuild Rebuild the AMG hierarchies and eigenvalue estimates.
+    * @pre No rotation term.
+    */
+   void UpdateGeometry(bool rebuild);
+
+   /**
     * @brief Recompute the rotation term from the lagged velocity's current
     *        values (and the point-block Jacobi skew, if in use); compute the
     *        rotation-number statistics when needed and let the rotational

@@ -578,17 +578,22 @@ TEST(AleFluid, A8_DeckMovesTheMesh)
 
 // A9: a checkpoint of a moving-mesh run carries the node history: the
 // restarted march equals the uninterrupted one (same rank count), with the
-// interior moved by the elastic model.
-TEST(AleFluid, A9_RestartMatchesUninterrupted)
+// interior moved by the elastic model. Bitwise with the solvers rebuilt
+// after every move; with the in-place refresh to the solver tolerance (the
+// restarted solvers' AMG hierarchies are built on the restart's mesh, the
+// uninterrupted run's on an earlier one).
+static void RestartMatchesUninterrupted(const std::string& refresh, double tol)
 {
    const std::string motion =
       "[\"a*sin(2*pi*t)*x*(1-x)*y\", \"b*sin(2*pi*t)*y*(1-y)*x\"]";
-   const std::string dir = "ale_chk_np" + std::to_string(Mpi::WorldSize());
+   const std::string dir = "ale_chk_" + refresh + "_np" +
+                           std::to_string(Mpi::WorldSize());
+   const std::string extra = "mesh_motion:\n  refresh: " + refresh + "\n";
    Vector u_ref, u_restart;
    double t_ref = 0.0;
    {
       const Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion,
-                           0.4));
+                           0.4, extra));
       auto mesh = incns::MakeCaseMesh(p);
       Case flow(*mesh, p);
       flow.Run();
@@ -598,14 +603,15 @@ TEST(AleFluid, A9_RestartMatchesUninterrupted)
    }
    {
       const Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion,
-                           0.4));
+                           0.4, extra));
       auto mesh = incns::MakeCaseMesh(p);
       Case flow(*mesh, p);
       for (int i = 0; i < 4; ++i) { flow.Step(); }
       flow.WriteCheckpoint(dir);
    }
    {
-      Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion, 0.4));
+      Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion, 0.4,
+                     extra));
       p.restart_from = dir;
       auto mesh = incns::MakeCaseMesh(p);
       Case flow(*mesh, p);
@@ -615,8 +621,68 @@ TEST(AleFluid, A9_RestartMatchesUninterrupted)
       u_restart.SetSize(flow.Spaces().Velocity().GetTrueVSize());
       flow.Velocity().GetTrueDofs(u_restart);
    }
-   EXPECT_LT(MaxDiff(u_ref, u_restart), 1e-13 * std::max(1.0, u_ref.Normlinf()));
+   EXPECT_LT(MaxDiff(u_ref, u_restart), tol * std::max(1.0, u_ref.Normlinf()))
+         << refresh;
    EXPECT_GT(u_ref.Normlinf(), 1e-3); // the wall moved the fluid
    MPI_Barrier(MPI_COMM_WORLD);
    if (Mpi::Root()) { std::filesystem::remove_all(dir); }
+}
+
+TEST(AleFluid, A9_RestartMatchesUninterrupted)
+{
+   RestartMatchesUninterrupted("rebuild", 1e-13);
+   RestartMatchesUninterrupted("in_place", 1e-10);
+}
+
+// A10: the in-place refresh after a move (mesh_motion.refresh: in_place,
+// StokesSolver::UpdateGeometry) marches to the answer of building every
+// solver anew (rebuild), to the solver tolerance: with the AMG hierarchies
+// rebuilt at every move and kept for three, on the default solver path, with
+// a LOR-AMG velocity block, and with the Schur (Uzawa) outer method.
+TEST(AleFluid, A10_InPlaceRefreshMatchesRebuild)
+{
+   const std::string motion =
+      "[\"a*sin(2*pi*t)*x*(1-x)*y\", \"b*sin(2*pi*t)*y*(1-y)*x\"]";
+   struct Variant
+   {
+      const char* name;
+      const char* refresh;
+      int interval;
+      bool loramg;
+      bool schur;
+   };
+   const Variant variants[] =
+   {
+      {"rebuild", "rebuild", 1, false, false},
+      {"in_place/1", "in_place", 1, false, false},
+      {"in_place/3", "in_place", 3, false, false},
+      {"rebuild loramg", "rebuild", 1, true, false},
+      {"in_place/3 loramg", "in_place", 3, true, false},
+      {"rebuild schur", "rebuild", 1, false, true},
+      {"in_place/3 schur", "in_place", 3, false, true},
+   };
+   Vector u_ref;
+   for (const Variant& v : variants)
+   {
+      Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion, 0.4,
+                     std::string("mesh_motion:\n  refresh: ") + v.refresh +
+                     "\n  amg_interval: " + std::to_string(v.interval) + "\n"));
+      if (v.loramg) { p.cc.a_pc = incns::APC::LORAMG; }
+      if (v.schur) { p.outer = incns::OuterMethod::Schur; }
+      auto mesh = incns::MakeCaseMesh(p);
+      Case flow(*mesh, p);
+      flow.Run();
+      EXPECT_EQ(flow.Motion().MoveCount(), 8) << v.name;
+      Vector u(flow.Spaces().Velocity().GetTrueVSize());
+      flow.Velocity().GetTrueDofs(u);
+      if (u_ref.Size() == 0)
+      {
+         u_ref = u;
+         EXPECT_GT(u_ref.Normlinf(), 1e-3); // the wall moved the fluid
+         continue;
+      }
+      const double d = MaxDiff(u, u_ref);
+      if (Mpi::Root()) { std::cout << "[ale] " << v.name << ": " << d << std::endl; }
+      EXPECT_LT(d, 1e-9 * u_ref.Normlinf()) << v.name;
+   }
 }

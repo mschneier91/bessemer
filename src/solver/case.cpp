@@ -200,6 +200,9 @@ void Case::BuildIntegrator()
    opts.fuse_grad_div = params_.fuse_grad_div;
    // The raw right-hand side is kept only for the force on the body.
    opts.keep_rhs = params_.forces.enabled;
+   opts.ale_refresh_in_place =
+      params_.mesh_motion.refresh == AleRefresh::InPlace;
+   opts.ale_rebuild_interval = params_.mesh_motion.amg_interval;
    opts.grad_div = params_.GradDivH(); // the part proportional to h_K
    opts.grad_div_scale = GradDivScale::OrderH;
    opts.grad_div_nu = params_.grad_div_nu;
