@@ -150,8 +150,11 @@ subiterations, final residual, the last relaxation factor, the force on the
 interface, the probe's displacement) and a `fsi` section in the summary;
 the reference keys `displacement_x` and `displacement_y` compare the probe's
 displacement. Example: [benchmarks/turek_hron/fsi1.yaml](../benchmarks/turek_hron/fsi1.yaml)
-(results in its README: drag +0.31 %, lift -2.4 %, tip u_y -4.0 % on the coarse
-mesh with the linear solid).
+(results in its README: on the coarse mesh with the linear solid drag +0.30 %,
+lift -0.48 %, tip u_y -0.06 %, u_x +6.5 %, of which +4.9 % is the bending
+shortening a small-strain solid lacks). A steady problem has to be marched well
+past its inflow ramp: FSI1's flag still creeps at t = 5 (u_y 4 % short) and is
+steady from t = 10.
 
 ## 5. Tests (`fsi_test`, fast tier, np 1/2/4)
 

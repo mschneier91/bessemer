@@ -27,10 +27,13 @@ diverges. The flow solver's `rtol` must sit well below `fsi.rtol` (else the resi
 stalls at the solver's noise and IQN-ILS wanders). Tests `fsi_test` F1-F5 and
 `run_case_fsi_flag` (`cases/fsi_flag.yaml`), np 1/2/4, cloud scratch build, CPU; not on
 a GPU. Not yet: Robin conditions and Neumann-Dirichlet (F4), gslib's map, restarts, the
-SVK solid (F1, the maintainer's). FSI1 (`benchmarks/turek_hron/fsi1.yaml`, Q4 on the
-coarse mesh, linear solid, np 4, 30 min): drag +0.31 %, lift -2.4 %, tip u_y -4.0 %, u_x
-+6.6 %, 16.9 subiterations per step (2-7 at the steady state); mesh, linear solid and
-reference-interface traction not separated yet. **Next:** F4 (Robin-Neumann
+SVK solid (F1, the maintainer's). FSI1 (`benchmarks/turek_hron/fsi1.yaml`, Q4, linear solid,
+np 4, to t = 15): coarse mesh (7 min) drag +0.30 %, lift -0.48 %, tip u_y -0.06 %, u_x
++6.5 %; `level: 1` (32 min) +0.11 %, -0.50 %, +0.67 %, +5.3 %; 4.1-4.4 subiterations per
+step. The first version stopped at t = 5, before the flag had settled (u_y -4.0 %, lift
+-2.4 %; human 2026-10-22: "explore the error first"); u_x's error is mostly the linear
+solid's missing bending shortening (+4.9 %); solid mesh and `fsi.rtol` ruled out
+(benchmarks/turek_hron/README.md). **Next:** F4 (Robin-Neumann
 default, Robin-Robin, Neumann-Dirichlet), then FSI2/FSI3.
 
 **ALE stage 3: the solvers refreshed in place after a move (2026-10-22, branch

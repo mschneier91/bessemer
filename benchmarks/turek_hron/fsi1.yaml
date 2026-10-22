@@ -6,8 +6,10 @@
 # so the flag is solved statically in each subiteration. The solid is the
 # linear (small-strain) one; Turek & Hron's is St. Venant-Kirchhoff. The flag
 # bends by 4 % of its thickness, but its tip's small x displacement carries a
-# geometric (shortening) part that a small-strain model does not have.
-# Results: README.md (np 4, 30 min on a 4-core CPU).
+# geometric (shortening) part that a small-strain model does not have (+4.9 %
+# of u_x). The flag settles slowly: at t = 5 u_y is still 4 % short, by t = 10
+# it is steady to 0.05 %, hence t_final 15.
+# Results: README.md (np 4, 7 min on a 4-core CPU).
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/fsi1.yaml
 #   -> fsi1/fsi1_summary.json (reference errors in its "reference" section),
@@ -31,7 +33,7 @@ mesh:
     n_down: 16
 time:
   dt: 0.01
-  t_final: 5
+  t_final: 15
   step_control: fixed
   convection: imex
 boundary_conditions:
@@ -54,7 +56,7 @@ fsi:
   fluid_density: 1000
   acceleration: iqn_ils
   reuse: 2
-  rtol: 1.0e-6
+  rtol: 1.0e-4
 forces:
   enabled: true
   boundaries: [cylinder, flag]
