@@ -564,17 +564,20 @@ Basis<N> MakeBasis(const Array<real_t>& b, const Array<real_t>& g)
    return bs;
 }
 
-// Strides in reals, change 56's LineStrides with D1D = Q1D = N: the x stage's
-// [dz][dy][qx] arrays with an odd dy stride and a dz stride 8 mod 16, the
-// stacks' [qz][qy][qx] planes with a z stride 8 mod 16, so that a half-warp's
-// lanes fall in distinct banks.
+// Strides in reals. The two scratch regions sXB, sXG hold the x stage's
+// [dz][dy][qx] lines and the [z][y][x] planes between the y and z stages, with
+// a z stride of 8 mod 16: a half-warp's two rows of lanes fall in different
+// halves of the 16 8-byte bank slots, as change 56's LineStrides. The stacks
+// are unpadded, N^3 each: a thread touches its own column, and the rows the
+// transposed derivatives read go to lanes in broadcast, conflict-free either
+// way. At N = 7, 9 stacks take 31 KB per block instead of 37 KB padded: 7
+// blocks per SM instead of 6 (18 stacks: 4 instead of 3).
 template <int N>
 struct Strides
 {
-   static constexpr int XQ = (N % 2 == 0) ? N + 1 : N + 2;
-   static constexpr int XZ = ((N * XQ + 7) / 16) * 16 + 8;
-   static constexpr int YZ = ((N * N + 7) / 16) * 16 + 8;
-   static constexpr int XS = N * XZ, YS = N * YZ;
+   static constexpr int ZX = ((N * N + 7) / 16) * 16 + 8; ///< sXB, sXG: z stride.
+   static constexpr int SZ = N * N; ///< The stacks' z stride.
+   static constexpr int XS = N * ZX, YS = N * SZ;
    /// Bytes of shared memory per block with @p stacks stacks.
    static constexpr int Bytes(int stacks)
    {
@@ -637,33 +640,33 @@ __device__ inline void GradLines(const real_t* __restrict__ xc,
          real_t bu = 0.0;
          MFEM_UNROLL(N)
          for (int dx = 0; dx < N; ++dx) { bu += bs.B[qx][dx] * u[dx]; }
-         sXB[ty * L::XZ + tx * L::XQ + qx] = bu;
+         sXB[ty * L::ZX + tx * N + qx] = bu;
       }
    }
    __syncthreads();
-   // y: thread (qx, dz) = (tx, ty): B along y to s0 ([dz][qy][qx]).
+   // y: thread (qx, dz) = (tx, ty): B along y to sXG ([dz][qy][qx]).
    {
       real_t bu[N];
       MFEM_UNROLL(N)
-      for (int dy = 0; dy < N; ++dy) { bu[dy] = sXB[ty * L::XZ + dy * L::XQ + tx]; }
+      for (int dy = 0; dy < N; ++dy) { bu[dy] = sXB[ty * L::ZX + dy * N + tx]; }
       MFEM_UNROLL(N)
       for (int qy = 0; qy < N; ++qy)
       {
          real_t bbu = 0.0;
          MFEM_UNROLL(N)
          for (int dy = 0; dy < N; ++dy) { bbu += bs.B[qy][dy] * bu[dy]; }
-         s0[ty * L::YZ + qy * N + tx] = bbu;
+         sXG[ty * L::ZX + qy * N + tx] = bbu;
       }
    }
    __syncthreads();
-   // z: thread (qx, qy) = (tx, ty), its own column: B along z to U (sXG, its
-   // column also kept for the z derivative).
+   // z: thread (qx, qy) = (tx, ty), its own column, read whole first: B along
+   // z to U, in place in sXG (the column also kept for the z derivative).
    const int col = ty * N + tx;
    real_t uq[N];
    {
       real_t bb[N];
       MFEM_UNROLL(N)
-      for (int dz = 0; dz < N; ++dz) { bb[dz] = s0[dz * L::YZ + col]; }
+      for (int dz = 0; dz < N; ++dz) { bb[dz] = sXG[dz * L::ZX + col]; }
       MFEM_UNROLL(N)
       for (int qz = 0; qz < N; ++qz)
       {
@@ -671,7 +674,7 @@ __device__ inline void GradLines(const real_t* __restrict__ xc,
          MFEM_UNROLL(N)
          for (int dz = 0; dz < N; ++dz) { v += bs.B[qz][dz] * bb[dz]; }
          uq[qz] = v;
-         sXG[qz * L::YZ + col] = v;
+         sXG[qz * L::ZX + col] = v;
       }
    }
    __syncthreads();
@@ -683,13 +686,13 @@ __device__ inline void GradLines(const real_t* __restrict__ xc,
       MFEM_UNROLL(N)
       for (int i = 0; i < N; ++i)
       {
-         gx += bs.D[tx][i] * sXG[qz * L::YZ + ty * N + i];
-         gy += bs.D[ty][i] * sXG[qz * L::YZ + i * N + tx];
+         gx += bs.D[tx][i] * sXG[qz * L::ZX + ty * N + i];
+         gy += bs.D[ty][i] * sXG[qz * L::ZX + i * N + tx];
          gz += bs.D[qz][i] * uq[i];
       }
-      s0[qz * L::YZ + col] = gx;
-      s1[qz * L::YZ + col] = gy;
-      s2[qz * L::YZ + col] = gz;
+      s0[qz * L::SZ + col] = gx;
+      s1[qz * L::SZ + col] = gy;
+      s2[qz * L::SZ + col] = gz;
    }
 }
 
@@ -716,7 +719,7 @@ __device__ inline void GradTransposeLines(const int tx, const int ty,
    {
       real_t a2[N], g[N];
       MFEM_UNROLL(N)
-      for (int qz = 0; qz < N; ++qz) { a2[qz] = f2[qz * L::YZ + col]; }
+      for (int qz = 0; qz < N; ++qz) { a2[qz] = f2[qz * L::SZ + col]; }
       MFEM_UNROLL(N)
       for (int qz = 0; qz < N; ++qz)
       {
@@ -724,8 +727,8 @@ __device__ inline void GradTransposeLines(const int tx, const int ty,
          MFEM_UNROLL(N)
          for (int i = 0; i < N; ++i)
          {
-            v += bs.D[i][tx] * f0[qz * L::YZ + ty * N + i] +
-                 bs.D[i][ty] * f1[qz * L::YZ + i * N + tx] + bs.D[i][qz] * a2[i];
+            v += bs.D[i][tx] * f0[qz * L::SZ + ty * N + i] +
+                 bs.D[i][ty] * f1[qz * L::SZ + i * N + tx] + bs.D[i][qz] * a2[i];
          }
          g[qz] = v;
       }
@@ -735,7 +738,7 @@ __device__ inline void GradTransposeLines(const int tx, const int ty,
          real_t v = 0.0;
          MFEM_UNROLL(N)
          for (int qz = 0; qz < N; ++qz) { v += bs.B[qz][dz] * g[qz]; }
-         sXG[dz * L::YZ + col] = v;
+         sXG[dz * L::ZX + col] = v;
       }
    }
    __syncthreads();
@@ -743,14 +746,14 @@ __device__ inline void GradTransposeLines(const int tx, const int ty,
    {
       real_t z[N];
       MFEM_UNROLL(N)
-      for (int qy = 0; qy < N; ++qy) { z[qy] = sXG[ty * L::YZ + qy * N + tx]; }
+      for (int qy = 0; qy < N; ++qy) { z[qy] = sXG[ty * L::ZX + qy * N + tx]; }
       MFEM_UNROLL(N)
       for (int dy = 0; dy < N; ++dy)
       {
          real_t w = 0.0;
          MFEM_UNROLL(N)
          for (int qy = 0; qy < N; ++qy) { w += bs.B[qy][dy] * z[qy]; }
-         sXB[ty * L::XZ + dy * L::XQ + tx] = w;
+         sXB[ty * L::ZX + dy * N + tx] = w;
       }
    }
    __syncthreads();
@@ -759,7 +762,7 @@ __device__ inline void GradTransposeLines(const int tx, const int ty,
    {
       real_t w[N];
       MFEM_UNROLL(N)
-      for (int qx = 0; qx < N; ++qx) { w[qx] = sXB[ty * L::XZ + tx * L::XQ + qx]; }
+      for (int qx = 0; qx < N; ++qx) { w[qx] = sXB[ty * L::ZX + tx * N + qx]; }
       MFEM_UNROLL(N)
       for (int dx = 0; dx < N; ++dx)
       {
@@ -858,7 +861,7 @@ PointwiseKernel(const __grid_constant__ Args<N> a)
 #pragma unroll 1
    for (int qz = 0; qz < N; ++qz)
    {
-      const int i = qz * L::YZ + col, q = col + N * N * qz;
+      const int i = qz * L::SZ + col, q = col + N * N * qz;
       real_t JI[9], F[9], S[9], P[9];
       LoadJinv<N>(a.jinv, q, e, JI);
       PhysicalGradient<N>(st, i, JI, F);
@@ -936,7 +939,7 @@ TangentKernel(const __grid_constant__ Args<N> a)
 #pragma unroll 1
    for (int qz = 0; qz < N; ++qz)
    {
-      const int i = qz * L::YZ + col, q = col + N * N * qz;
+      const int i = qz * L::SZ + col, q = col + N * N * qz;
       real_t JI[9], F[9], S[9], dF[9], dP[9];
       LoadJinv<N>(a.jinv, q, e, JI);
       PhysicalGradient<N>(st, i, JI, dF);
