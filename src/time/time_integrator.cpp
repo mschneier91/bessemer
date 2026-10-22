@@ -211,6 +211,70 @@ void StokesTimeIntegrator::SetMeshMotion(MeshMotion& motion,
    mesh_conv_ = std::make_unique<MeshConvection>(spaces_, rules_);
 }
 
+void StokesTimeIntegrator::RequireConstantVolume()
+{
+   MFEM_VERIFY(motion_, "time_integrator: RequireConstantVolume() after "
+               "SetMeshMotion()");
+   closed_volume_ = bc_.PressureNullspaceExists() ? MeshVolume() : -1.0;
+}
+
+void StokesTimeIntegrator::CopyGuessState(const SolverGuessState& from,
+      SolverGuessState& to)
+{
+   // Owning copies: the source may alias a solver about to be destroyed.
+   auto copy = [](const Vector & v, Vector & c)
+   {
+      c.Destroy();
+      c.SetSize(v.Size());
+      c = v;
+   };
+   to.projection_x.resize(from.projection_x.size());
+   to.projection_w.resize(from.projection_w.size());
+   for (std::size_t i = 0; i < from.projection_x.size(); ++i)
+   {
+      copy(from.projection_x[i], to.projection_x[i]);
+   }
+   for (std::size_t i = 0; i < from.projection_w.size(); ++i)
+   {
+      copy(from.projection_w[i], to.projection_w[i]);
+   }
+   to.projection_c0 = from.projection_c0;
+   to.projection_stale = from.projection_stale;
+   to.projection_pressure = from.projection_pressure;
+   copy(from.previous_x, to.previous_x);
+   to.has_previous_x = from.has_previous_x;
+   to.previous_c0 = from.previous_c0;
+   copy(from.step_ax, to.step_ax);
+   to.has_step_ax = from.has_step_ax;
+   to.step_c0 = from.step_c0;
+   to.step_nu = from.step_nu;
+}
+
+double StokesTimeIntegrator::MeshVolume() const
+{
+   // det J of a map of order g has degree dim g - 1 per direction: a rule
+   // of that order integrates it exactly (GetElementVolume's rule does not
+   // on curved elements, and a sliding wall would look like a volume change).
+   ParMesh& mesh = *spaces_.Velocity().GetParMesh();
+   const int g = mesh.GetNodes() ? mesh.GetNodes()->FESpace()->GetMaxElementOrder()
+                 : 1;
+   double v = 0.0;
+   for (int e = 0; e < mesh.GetNE(); ++e)
+   {
+      ElementTransformation& T = *mesh.GetElementTransformation(e);
+      const IntegrationRule& ir = IntRules.Get(mesh.GetElementGeometry(e),
+                                  mesh.Dimension() * g);
+      for (int q = 0; q < ir.GetNPoints(); ++q)
+      {
+         const IntegrationPoint& ip = ir.IntPoint(q);
+         T.SetIntPoint(&ip);
+         v += ip.weight * T.Weight();
+      }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &v, 1, MPI_DOUBLE, MPI_SUM, mesh.GetComm());
+   return v;
+}
+
 void StokesTimeIntegrator::MoveMesh(double t_new, int order)
 {
    mesh_moved_ = false;
@@ -220,11 +284,46 @@ void StokesTimeIntegrator::MoveMesh(double t_new, int order)
    MFEM_VERIFY(moved, "time_integrator: the mesh-motion solve to t = " << t_new
                << " did not converge (mesh_motion.rtol, max_iter)");
    mesh_moved_ = true;
+   // A closed domain (no outflow) whose moving walls take u = w holds an
+   // incompressible fluid: a motion that changes its volume has no
+   // solution, and the solver would iterate to its cap instead of saying so.
+   if (closed_volume_ > 0.0)
+   {
+      const double v = MeshVolume();
+      MFEM_VERIFY(std::abs(v - closed_volume_) <= 1e-6 * closed_volume_,
+                  "time_integrator: the boundary motion changes the volume of "
+                  "a closed domain (no outflow) from " << closed_volume_
+                  << " to " << v << " at t = " << t_new << ": an "
+                  "incompressible fluid cannot follow it");
+   }
    mesh_w_->Update(*motion_, std::min(order, motion_->States() - 1));
+   // The initial-guess state of the solver that made the last step goes to
+   // the one this step builds: its solutions are still good guesses, but its
+   // operator images are of the old geometry (rebuilt; A x_prev is not kept).
+   // A restart's state comes from the checkpoint; after a Revert(), the
+   // state carried into the failed attempt is carried again.
+   if (step_count_ > 0)
+   {
+      if (last_solver_)
+      {
+         SolverGuessState s;
+         last_solver_->ExportGuessState(s);
+         CopyGuessState(s, carried_guess_);
+      }
+      else if (!pending_guess_.empty())
+      {
+         CopyGuessState(pending_guess_.begin()->second, carried_guess_);
+      }
+      carried_guess_.projection_stale = true;
+      carried_guess_.has_step_ax = false;
+      carried_guess_.step_ax.Destroy();
+      pending_guess_.clear();
+      CopyGuessState(carried_guess_, pending_guess_[order >= 3 ? "bdf3" :
+                     "bdf2"]);
+   }
    // Everything built on the old geometry goes: the solvers (their operators
    // and preconditioners), the convection. A full rebuild per step, for
-   // now (docs/ale_fluid.md: the in-place refresh is the next stage); a
-   // solver's projection basis does not survive it either.
+   // now (docs/ale_fluid.md: the in-place refresh is the next stage).
    if (last_solver_) { last_solver_ = nullptr; }
    trap_.reset();
    bdf2_.solver.reset();

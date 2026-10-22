@@ -9,6 +9,7 @@
 #include "mfem.hpp"
 
 #include <functional>
+#include <iosfwd>
 #include <memory>
 
 namespace incns
@@ -58,8 +59,29 @@ public:
     */
    virtual bool Solve(double t) = 0;
 
+   /**
+    * @brief Solve() from an initial guess on Space(), to the tolerance a
+    *        zero guess would have had. Collective. A model without an
+    *        iterative solve may ignore the guess (the default).
+    * @param t     Time of the boundary data.
+    * @param guess Initial guess for the displacement, on Space().
+    * @return Whether the solve converged.
+    */
+   virtual bool Solve(double t, const mfem::ParGridFunction& guess)
+   {
+      (void)guess;
+      return Solve(t);
+   }
+
    /// @return The displacement of the last Solve() (zero before the first).
    virtual const mfem::ParGridFunction& Displacement() const = 0;
+
+   /// @brief Write the model's own state (a checkpoint); none by default.
+   /// @param out Binary stream.
+   virtual void SaveState(std::ostream& out) const { (void)out; }
+   /// @brief Read what SaveState() wrote.
+   /// @param in Binary stream.
+   virtual void LoadState(std::istream& in) { (void)in; }
 
    /// @return Linear iterations of the last Solve() (all Newton steps' for a
    ///         nonlinear model).

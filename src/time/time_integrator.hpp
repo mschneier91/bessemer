@@ -294,6 +294,17 @@ public:
     * @param w      The mesh velocity on the velocity space (borrowed).
     */
    void SetMeshMotion(MeshMotion& motion, MeshVelocityField& w);
+   /**
+    * @brief On a closed domain (no outflow), abort at a move that changes the
+    *        mesh's volume by more than 1e-6 relative.
+    *
+    * For moving walls that take u = w: their net flux is then the volume's
+    * rate, and an incompressible fluid has no solution (the outer solver
+    * would iterate to its cap). Not for walls with their own data, which
+    * may move through the fluid. After SetMeshMotion(); a no-op on a domain
+    * with an outflow.
+    */
+   void RequireConstantVolume();
 
    /// @return Whether the mesh moves (SetMeshMotion).
    bool MovingMesh() const { return motion_ != nullptr; }
@@ -636,6 +647,15 @@ private:
     *              step's own order).
     */
    void AddMeshConvection(double t_new, mfem::Vector& b, int ext = 0);
+   /// The volume of the current mesh (collective).
+   double MeshVolume() const;
+   /**
+    * @brief Deep-copy a solver's guess state.
+    * @param from The state (its vectors may alias a solver's).
+    * @param to   Receives owning copies.
+    */
+   static void CopyGuessState(const SolverGuessState& from,
+                              SolverGuessState& to);
 
    /// Apply krylov_memory_cap to @p solver from the free memory now.
    /// Collective (the smallest value over the ranks is used).
@@ -753,6 +773,12 @@ private:
    mfem::Vector ale_ustar_; ///< ALE: the extrapolated velocity u*.
    mfem::Vector ale_y_;     ///< ALE: C(w) u*.
    bool mesh_moved_ = false; ///< ALE: the current attempt moved the mesh.
+   /// ALE on a closed domain (pressure null space) with u = w on the moving
+   /// walls: its volume, which every move must keep; < 0 = no check.
+   double closed_volume_ = -1.0;
+   /// ALE: the guess state carried into the current step's solver (kept for
+   /// a retry after Revert()).
+   SolverGuessState carried_guess_;
 };
 
 } // namespace incns

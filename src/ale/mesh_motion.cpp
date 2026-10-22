@@ -109,7 +109,27 @@ bool MeshMotion::Move(double t)
    bool ok = false;
    {
       INCNS_PROFILE("mesh_motion::model");
-      ok = model_->Solve(t);
+      const int k = std::min(opts_.guess_order + 1, States());
+      if (k >= 2)
+      {
+         // The kept states extrapolated to t: deterministic across a
+         // restart (Save/Load carry them).
+         std::vector<double> times(times_.begin(), times_.begin() + k);
+         const std::vector<double> g = LagrangeWeights(t, times);
+         if (!guess_nodes_)
+         {
+            guess_nodes_ = std::make_unique<ParGridFunction>(disp_->ParFESpace());
+            guess_model_ = std::make_unique<ParGridFunction>(&model_->Space());
+         }
+         guess_nodes_->HostWrite();
+         *guess_nodes_ = 0.0;
+         for (int j = 0; j < k; ++j) { guess_nodes_->Add(g[j], history_[j]); }
+         guess_model_->HostReadWrite();
+         guess_model_->ProjectGridFunction(*guess_nodes_);
+         ok = model_->Solve(t, *guess_model_);
+      }
+      else { ok = model_->Solve(t); }
+      total_iterations_ += model_->Iterations();
    }
    {
       INCNS_PROFILE("mesh_motion::nodes");
@@ -196,6 +216,7 @@ void MeshMotion::Save(const std::string& path) const
       f.write(reinterpret_cast<const char*>(h.HostRead()),
               static_cast<std::streamsize>(size * sizeof(double)));
    }
+   model_->SaveState(f);
    MFEM_VERIFY(f, "mesh_motion: writing " << file << " failed");
 }
 
@@ -221,6 +242,7 @@ void MeshMotion::Load(const std::string& path)
       f.read(reinterpret_cast<char*>(h.HostWrite()),
              static_cast<std::streamsize>(size * sizeof(double)));
    }
+   model_->LoadState(f);
    MFEM_VERIFY(f, "mesh_motion: reading " << file << " failed");
    moves_ = static_cast<int>(moves);
    has_dropped_ = false;

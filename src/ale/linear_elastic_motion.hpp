@@ -44,6 +44,11 @@ public:
       double atol = 0.0;   ///< CG absolute tolerance.
       int max_iter = 2000; ///< CG iteration cap.
       int print_level = -1; ///< MFEM CG print level (-1 silent).
+      /// Solutions kept for reuse (0: none). The displacement is linear in
+      /// the boundary data, so data in the span of earlier data (a rigid or
+      /// modal motion: a few shapes times functions of t) are answered by
+      /// the same combination of the earlier solutions, without a solve.
+      int basis_size = 12;
    };
 
    /**
@@ -76,12 +81,23 @@ public:
    {
       solver_->AddDisplacement(attr, g);
    }
-   bool Solve(double t) override { return solver_->Solve(t); }
+   bool Solve(double t) override { return Solve(t, nullptr); }
+   bool Solve(double t, const mfem::ParGridFunction& guess) override
+   {
+      return Solve(t, &guess);
+   }
    const mfem::ParGridFunction& Displacement() const override
    {
       return static_cast<const LinearElasticity&>(*solver_).Displacement();
    }
    int Iterations() const override { return solver_->Iterations(); }
+   void SaveState(std::ostream& out) const override;
+   void LoadState(std::istream& in) override;
+
+   /// @return Solves answered from the kept solutions (no CG).
+   int ReusedSolves() const { return reused_; }
+   /// @return Solutions kept.
+   int BasisSize() const { return static_cast<int>(basis_x_.size()); }
 
    /// @return The elasticity solver (iterations, energies).
    LinearElasticity& Solver() { return *solver_; }
@@ -89,8 +105,26 @@ public:
    const mfem::Vector& Factors() const { return factors_; }
 
 private:
+   /**
+    * @brief The solve: from the kept solutions when the data lie in their
+    *        span, else CG (from @p guess, or zero) and the solution kept.
+    * @param t     Time of the boundary data.
+    * @param guess Initial guess on Space(), or null.
+    * @return Whether the solve converged.
+    */
+   bool Solve(double t, const mfem::ParGridFunction* guess);
+
+   Options opts_;         ///< Settings.
    mfem::Vector factors_; ///< Per-element stiffening (outlives solver_).
    std::unique_ptr<LinearElasticity> solver_; ///< The pseudo-solid.
+   mfem::Vector guess_; ///< A guess's true dofs (Solve with a guess).
+   /// The kept data, orthonormal (Dirichlet values on the essential true
+   /// dofs), and the solutions they map to (true dofs).
+   std::vector<mfem::Vector> basis_g_;
+   std::vector<mfem::Vector> basis_x_; ///< See basis_g_.
+   mfem::Vector g_;   ///< The current data.
+   mfem::Vector x_;   ///< The combination (true dofs).
+   int reused_ = 0;   ///< See ReusedSolves().
 };
 
 } // namespace incns

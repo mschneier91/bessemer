@@ -102,6 +102,19 @@ public:
    bool Solve(double t);
 
    /**
+    * @brief The static solve of Solve(double), from the initial guess
+    *        @p guess (true dofs; its Dirichlet values are replaced), to the
+    *        tolerance a zero guess would have had: rtol relative to the
+    *        preconditioned norm of the zero guess's residual (one extra
+    *        preconditioner apply). A close guess then saves iterations
+    *        instead of buying digits. Collective.
+    * @param t     Time of the data.
+    * @param guess Initial guess (true dofs).
+    * @return Whether CG reached its tolerance.
+    */
+   bool Solve(double t, const mfem::Vector& guess);
+
+   /**
     * @brief Start a dynamic march: the time, the initial displacement and
     *        velocity (projected; zero when null; the Dirichlet data at @p t0
     *        overrides them on the boundary), the load at @p t0 and, for
@@ -173,6 +186,21 @@ public:
     *         twice the strain energy (to the solver tolerance). Collective.
     */
    double ExternalWork() const;
+
+   /**
+    * @brief The Dirichlet data at time @p t on the essential true dofs, in
+    *        their order (the fixed groups' zeros included).
+    * @param t Time of the data.
+    * @param g Receives the values.
+    */
+   void DirichletValues(double t, mfem::Vector& g);
+
+   /**
+    * @brief Take @p x (true dofs) as the solution, as if a solve had made it
+    *        (no iterations counted).
+    * @param x The displacement's true dofs.
+    */
+   void SetSolution(const mfem::Vector& x);
 
    /// @return max over the nodes of |u_h|. Collective.
    double MaxDisplacement() const;
@@ -289,6 +317,7 @@ private:
    mfem::Vector work_;   ///< Work vector.
    mfem::Vector work2_;  ///< Work vector.
    mfem::Vector work3_;  ///< Work vector.
+   mfem::Vector work4_;  ///< Work vector (Solve with a guess).
    mfem::Vector ess_vals_; ///< Dirichlet values at the essential true dofs.
    mutable mfem::Vector ework_; ///< Work vector of the energies.
    std::unique_ptr<mfem::CGSolver> cg_; ///< The CG of every K + c M solve.

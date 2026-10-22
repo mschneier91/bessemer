@@ -864,7 +864,8 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   membrane, the default scheme's time order, a cantilever's first frequency),
   `mesh_motion_test` (M1 translation exact with stiffening, M2 affine motion
   exact on the curved DFG mesh, M3 the DFG cylinder moved and back, M4 the BDF
-  mesh velocity, M5 a non-elastic model through the factory),
+  mesh velocity, M5 a non-elastic model through the factory, M6 a rigid motion
+  reuses earlier solves),
   `mesh_motion_case_test` (C1 2D rectangle with a ramped parabola, C2 3D cube
   with a bump, C3 a translation; deck defaults), `expression_test` (E1-E4),
   `ale_fluid_test` (the IMEX ALE fluid, docs/ale_fluid.md: A1 zero motion =

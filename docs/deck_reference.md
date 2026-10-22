@@ -84,8 +84,16 @@ Box mesh (quads/hexes) for apps/run_case.
 | `mesh.cylinder_channel.cy` | real | `0.2` | Cylinder centre y. |
 | `mesh.cylinder_channel.n_side` | int | `4` | Cells along each side of the O-grid square. |
 | `mesh.cylinder_channel.n_ring` | int | `3` | Radial cell layers around the cylinder. |
+| `mesh.cylinder_channel.height` | real | `0.41` | Channel height (y). |
+| `mesh.cylinder_channel.radius` | real | `0.05` | Cylinder radius. |
+| `mesh.cylinder_channel.box_half` | real | `0.1` | Half-width of the O-grid's outer square (> radius). |
+| `mesh.cylinder_channel.ring_grading` | real | `1.5` | Radial growth ratio of the ring layers (> 1 clusters at the cylinder). |
 | `mesh.cylinder_channel.n_up` | int | `2` | Cells upstream of the O-grid. |
 | `mesh.cylinder_channel.n_down` | int | `16` | Cells downstream of the O-grid. |
+| `mesh.cylinder_channel.n_below` | int | `2` | Cells below the O-grid. |
+| `mesh.cylinder_channel.n_above` | int | `2` | Cells above the O-grid. |
+| `mesh.cylinder_channel.down_grading` | real | `1.1` | Growth ratio of the downstream cells toward the outflow. |
+| `mesh.cylinder_channel.outer_grading` | real | `1` | Growth ratio of the upstream, lower and upper cells away from the O-grid (1: uniform). |
 | `mesh.cylinder_channel.level` | int | `0` | Nested uniform refinement level (cell counts x 2^level). |
 | `mesh.cylinder_channel.nz` | int | `4` | 3D: element layers in z (x 2^level). |
 | `mesh.cylinder_channel.depth` | real | `0.41` | 3D: extent in z; the z = 0 and z = depth faces join the walls. |
@@ -335,4 +343,5 @@ Equation mesh_motion: the mesh is deformed by the boundary groups of type displa
 | `mesh_motion.rtol` | real | `1e-10` | CG relative tolerance. |
 | `mesh_motion.atol` | real | `0` | CG absolute tolerance. |
 | `mesh_motion.max_iter` | int | `2000` | CG iteration cap. |
+| `mesh_motion.basis_size` | int | `12` | Earlier solutions kept for reuse (0: none). The displacement is linear in the boundary data, so a move whose data lie in the span of earlier data (a rigid or modal motion: a few shapes times functions of t) is the same combination of the earlier solutions, with no solve. |
 | `mesh_motion.preconditioner` | loramg \| jacobi | `loramg` | CG preconditioner: one BoomerAMG V-cycle on the low-order-refined operator, or its diagonal. |

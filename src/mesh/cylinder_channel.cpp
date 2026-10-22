@@ -37,21 +37,26 @@ Mesh MakeCylinderChannelMesh(const CylinderChannelSpec& s)
                s.cy + a < s.height, "cylinder_channel: the O-grid square must "
                "lie strictly inside the channel");
    MFEM_VERIFY(s.n_side >= 1 && s.n_ring >= 1 && s.n_up >= 1 && s.n_down >= 1
-               && s.n_below >= 1 && s.n_above >= 1 && s.order >= 1,
+               && s.n_below >= 1 && s.n_above >= 1 && s.order >= 1 &&
+               s.outer_grading > 0.0 && s.down_grading > 0.0 &&
+               s.ring_grading > 0.0,
                "cylinder_channel: bad resolution");
 
    // Grid lines of the eight Cartesian blocks.
    std::vector<double> X, Y;
    {
-      const auto up = Graded(0.0, s.cx - a, s.n_up, 1.0);
+      // Upstream and below the widths shrink toward the square (ratio 1 /
+      // outer_grading from the far end); above they grow away from it.
+      const double g = s.outer_grading;
+      const auto up = Graded(0.0, s.cx - a, s.n_up, 1.0 / g);
       const auto mid = Graded(s.cx - a, s.cx + a, s.n_side, 1.0);
       const auto down = Graded(s.cx + a, s.length, s.n_down, s.down_grading);
       X = up;
       X.insert(X.end(), mid.begin() + 1, mid.end());
       X.insert(X.end(), down.begin() + 1, down.end());
-      const auto below = Graded(0.0, s.cy - a, s.n_below, 1.0);
+      const auto below = Graded(0.0, s.cy - a, s.n_below, 1.0 / g);
       const auto ymid = Graded(s.cy - a, s.cy + a, s.n_side, 1.0);
-      const auto above = Graded(s.cy + a, s.height, s.n_above, 1.0);
+      const auto above = Graded(s.cy + a, s.height, s.n_above, g);
       Y = below;
       Y.insert(Y.end(), ymid.begin() + 1, ymid.end());
       Y.insert(Y.end(), above.begin() + 1, above.end());

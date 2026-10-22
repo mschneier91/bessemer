@@ -243,14 +243,30 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                                       "geometry cylinder_channel: the DFG channel "
                                       "(default 2.2 x 0.41, cylinder of radius 0.05 "
                                       "at (0.2, 0.2); the DFG 3D benchmarks use "
-                                      "length 2.5, cx 0.5) and its base mesh.");
+                                      "length 2.5, cx 0.5) and its base mesh; "
+                                      "any channel and cylinder size with the "
+                                      "same block layout.");
       r.Read(s, "length", cc.length, "Channel length (x).");
       r.Read(s, "cx", cc.cx, "Cylinder centre x.");
       r.Read(s, "cy", cc.cy, "Cylinder centre y.");
       r.Read(s, "n_side", cc.n_side, "Cells along each side of the O-grid square.");
       r.Read(s, "n_ring", cc.n_ring, "Radial cell layers around the cylinder.");
+      r.Read(s, "height", cc.height, "Channel height (y).");
+      r.Read(s, "radius", cc.radius, "Cylinder radius.");
+      r.Read(s, "box_half", cc.box_half,
+             "Half-width of the O-grid's outer square (> radius).");
+      r.Read(s, "ring_grading", cc.ring_grading,
+             "Radial growth ratio of the ring layers (> 1 clusters at the "
+             "cylinder).");
       r.Read(s, "n_up", cc.n_up, "Cells upstream of the O-grid.");
       r.Read(s, "n_down", cc.n_down, "Cells downstream of the O-grid.");
+      r.Read(s, "n_below", cc.n_below, "Cells below the O-grid.");
+      r.Read(s, "n_above", cc.n_above, "Cells above the O-grid.");
+      r.Read(s, "down_grading", cc.down_grading,
+             "Growth ratio of the downstream cells toward the outflow.");
+      r.Read(s, "outer_grading", cc.outer_grading,
+             "Growth ratio of the upstream, lower and upper cells away from "
+             "the O-grid (1: uniform).");
       r.Read(s, "level", p.cylinder_channel_level,
              "Nested uniform refinement level (cell counts x 2^level).");
       r.Read(s, "nz", p.cylinder_channel_nz,
@@ -1147,6 +1163,12 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(motion, "rtol", mm.rtol, "CG relative tolerance.");
    r.Read(motion, "atol", mm.atol, "CG absolute tolerance.");
    r.Read(motion, "max_iter", mm.max_iter, "CG iteration cap.");
+   r.Read(motion, "basis_size", mm.basis_size,
+          "Earlier solutions kept for reuse (0: none). The displacement is "
+          "linear in the boundary data, so a move whose data lie in the span "
+          "of earlier data (a rigid or modal motion: a few shapes times "
+          "functions of t) is the same combination of the earlier solutions, "
+          "with no solve.");
    r.ReadEnum(motion, "preconditioner", mm.preconditioner,
    {{"loramg", ElasticityPC::LorAmg}, {"jacobi", ElasticityPC::Jacobi}},
    "CG preconditioner: one BoomerAMG V-cycle on the low-order-refined "
@@ -1329,6 +1351,8 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
       MFEM_VERIFY(mm.steps >= 1, "parameters: mesh_motion.steps must be >= 1");
       MFEM_VERIFY(p.t_final > 0.0, "parameters: mesh_motion needs time.t_final "
                   "> 0 (the time of the last move)");
+      MFEM_VERIFY(mm.basis_size >= 0,
+                  "parameters: mesh_motion.basis_size must be >= 0");
       MFEM_VERIFY(mm.rtol > 0.0 && mm.atol >= 0.0 && mm.max_iter >= 1,
                   "parameters: bad mesh_motion.rtol, atol or max_iter");
       MFEM_VERIFY(p.nondim.mode == ScalingMode::Dimensionless,

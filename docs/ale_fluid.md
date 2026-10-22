@@ -15,7 +15,8 @@ document of 2026-10-21 (stage numbers below are its stages).
 Built so far: the library (stages 0-1, `Case::SetMeshMotion` with IMEX) and
 the deck surface (stage 2, section 3 below: boundary `motion`, checkpoints of
 the node history). Still a full rebuild of the solvers after each move (stage
-3 replaces it with an in-place refresh); CPU only so far.
+3 replaces it with an in-place refresh); earlier mesh solves reused (stage
+4); CPU only so far.
 
 ## 1. Formulation
 
@@ -78,14 +79,54 @@ every RK stage, the riskiest later stage of the scope.
   `MeshMotionModel` drives it (the linear elastic one with stiffening by
   default; the test uses a prescribed displacement field).
 
+- **What survives the rebuild:** the outer solver's initial-guess state
+  (the projection's kept solutions, or the extrapolation's previous one) is
+  handed from the last step's solver to the new one, its operator images
+  recomputed on the moved mesh (`StokesTimeIntegrator::CopyGuessState`).
+  Without it every step started cold: on the oscillating-cylinder deck to
+  t = 0.3 (np 4) the outer iterations were 1,336 in 116 steps, 545 with it,
+  and the run 3.3 s against 2.0 s; with zero motion through the same path the
+  run takes 0.82 s, as the fixed mesh does.
+- **The mesh solve starts from the kept node displacements extrapolated to
+  the new time** (quadratic, `MeshMotion::Options::guess_order`), to the
+  tolerance a zero guess would have had (`LinearElasticity::Solve(t, guess)`);
+  deterministic across a restart, since the checkpoint carries those states.
+  3D box, 8^3 Q3, np 4: the mesh solves' time 5.3 s to 3.1 s over 10 steps
+  (about 20 CG iterations per move). The summary's `mesh_motion` section
+  reports the iterations (`solve_iterations`).
+- **Earlier mesh solves are reused** (stage 4, the modal shortcut, without a
+  key of its own): the linear elastic displacement is linear in the boundary
+  data, so `LinearElasticMotion` keeps up to `mesh_motion.basis_size` (12)
+  orthonormalized data vectors and their solutions, and a move whose data lie
+  in their span (to 1e-12 relative) is the same combination of the solutions,
+  with no CG. A rigid or modal motion (a few shapes times functions of t) then
+  costs as many solves as it has shapes: the oscillating-cylinder deck to
+  t = 0.3 makes one solve in 116 moves (24 CG iterations in all), and its
+  mesh motion falls from 1.27 s to 0.07 s; the run takes 1.46 s against 3.26
+  s before stages 2-4's solver work. General motions fall back to CG and keep
+  filling the basis up to its size. Checkpoints carry the basis
+  (`MeshMotionModel::SaveState`); test `mesh_motion_test` M6 (two shapes:
+  two solves, the reuse equal to solving every move to 1e-11, a restart exact).
+- **A closed domain must keep its volume.** With no outflow and moving
+  `no_slip` walls (u = w), a motion that changes the volume leaves the
+  incompressible fluid no solution; the deck path checks the volume after
+  every move and aborts at a change above 1e-6 relative
+  (`StokesTimeIntegrator::RequireConstantVolume`; test
+  `run_case_rejects_volume_change`). Before this check such a deck iterated
+  to the solver's cap.
+
 **Why a full rebuild after every move, for now.** MFEM deletes a mesh's cached
 geometric factors when its nodes change (`NodesUpdated`), and bessemer's own
 divergence (`operators/lean_vector_divergence.cpp`), grad-div
 (`operators/grad_div_integrator.cpp`) and OIFS kernels keep raw pointers to
 them for speed. A solver kept across a move would read freed memory. The
-rebuild is correct and slow (the pressure LOR-AMG setup every step); stage 3
-adds the in-place refresh for moving meshes and keeps the cached pointers for
-fixed ones (human 2026-10-21: "we'll want both options").
+rebuild costs less than expected once the guess state is carried: 9 % of a
+step on the 2D cylinder deck and 6 % on an 8^3 Q3 box (np 4, profile regions
+`time_integrator::build_solver`), the pressure LOR-AMG setup included. Stage 3
+(the in-place refresh for moving meshes, keeping the cached pointers for
+fixed ones; human 2026-10-21: "we'll want both options") is therefore after
+the validation; to be re-measured at production sizes and on a GPU, where the
+AMG setup's share may differ.
 
 ## 3. Decks
 
@@ -154,12 +195,11 @@ a GPU: `MeshVelocityField::Update` projects on the host once per step.
 
 ## 5. Next
 
-1. In-place refresh after a move (stage 3): the geometric data re-read, the
+1. Validation (stage 5): the in-line oscillating cylinder (Dütsch et al. 1998)
+   and transverse lock-in.
+2. In-place refresh after a move (stage 3): the geometric data re-read, the
    pressure LOR-AMG allowed to go stale for N steps, the velocity PC
    refreshed; the fixed-mesh path keeps its cached pointers.
-2. Modal (rigid) motion without a per-step elastic solve (stage 4).
-3. Validation (stage 5): the in-line oscillating cylinder (Dütsch et al. 1998)
-   and transverse lock-in.
-4. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
+3. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
    the partitioned coupling with dynamic Aitken and the Robin conditions, to
    all nine Turek-Hron problems.

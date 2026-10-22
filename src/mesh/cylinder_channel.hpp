@@ -50,6 +50,9 @@ struct CylinderChannelSpec
    double down_grading = 1.1;
    int n_below = 2;      ///< Cells in y below the square.
    int n_above = 2;      ///< Cells in y above the square.
+   /// Growth ratio of the upstream, lower and upper cells away from the
+   /// square (> 1 coarsens toward the inflow and the walls; 1 = uniform).
+   double outer_grading = 1.0;
    int order = 3;        ///< Geometry (curvature) order.
 };
 

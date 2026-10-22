@@ -59,6 +59,12 @@ void Case::BuildDeckMotion()
    for (const BcSpec& s : params_.boundary_conditions)
    {
       moves = moves || !s.motion.empty();
+      // A moving no_slip wall takes u = w; any other moving group has data
+      // of its own that may cross the moving boundary.
+      if (!s.motion.empty() && s.type != BcType::NoSlip)
+      {
+         walls_follow_mesh_ = false;
+      }
    }
    if (!moves) { return; }
    if (mesh_.GetNodes())
@@ -81,6 +87,7 @@ void Case::BuildDeckMotion()
    e.rtol = mm.rtol;
    e.atol = mm.atol;
    e.max_iter = mm.max_iter;
+   e.basis_size = mm.basis_size;
    own_motion_ = std::make_unique<MeshMotion>(mesh_, o,
                  LinearElasticMotion::Factory(e));
    // The moving groups' displacements; every other boundary is held.
@@ -216,7 +223,14 @@ void Case::BuildIntegrator()
    opts.uzawa = params_.uzawa;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
-   if (motion_) { integrator_->SetMeshMotion(*motion_, *mesh_w_); }
+   if (motion_)
+   {
+      integrator_->SetMeshMotion(*motion_, *mesh_w_);
+      if (own_motion_ && walls_follow_mesh_)
+      {
+         integrator_->RequireConstantVolume();
+      }
+   }
    body_force_.reset();
    if (params_.forces.enabled)
    {
@@ -1254,6 +1268,10 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
       a["det_f_min"].Set(jmin);
       a["det_f_max"].Set(jmax);
       a["max_displacement"].Set(dmax);
+      // The model's iterations per move of this process's run (a restart
+      // counts from its own start).
+      a["solve_iterations"].Set(static_cast<long long>
+                                (motion_->TotalIterations()));
    }
 
    Json& d = j["diagnostics"];

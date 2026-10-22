@@ -38,12 +38,21 @@ model (`Case::BuildDeckMotion`); checkpoints carry the node history
 (deck rigid box), A9 (restart = uninterrupted to 1e-13), np 1/2/4. Deck
 `cases/ale_oscillating_cylinder.yaml` (DFG channel, Re 100, cylinder moved across at
 0.2 D: t = 2 in 55 s at np 4, det F in [0.89, 1.11]; not validated). Refused:
-dimensional decks, periodic meshes. **Slow by design for now:** every solver, the
+dimensional decks, periodic meshes. Then: the outer solver's initial-guess state carried
+across the per-step rebuild (outer iterations 1,336 -> 545 on the cylinder deck to
+t = 0.3; zero motion now costs what the fixed mesh does), the mesh solve from the
+extrapolated node history (3D 8^3 Q3: 5.3 -> 3.1 s over 10 moves), and an abort when
+moving walls change a closed domain's volume (it used to iterate to the solver's cap;
+test `run_case_rejects_volume_change`). Stage 4: `LinearElasticMotion` reuses earlier
+solves when the boundary data lie in their span (`mesh_motion.basis_size`, 12; rigid or
+modal motion needs one solve per shape; checkpointed; test `mesh_motion_test` M6): the
+cylinder deck to t = 0.3 makes 1 mesh solve in 116 moves, run 3.26 s -> 1.46 s at np 4
+(the fixed mesh: 0.82 s in 80 steps). **Slow by design for now:** every solver, the
 pressure LOR-AMG included, is rebuilt after each move (bessemer's divergence, grad-div
 and OIFS kernels keep raw pointers to MFEM's geometric factors, which a move frees).
-**Next:** the in-place
-refresh (stage 3), modal motion (4), the oscillating-cylinder validation (5), then
-the FSI stages.
+**Next:** the oscillating-cylinder validation (stage 5); the in-place refresh (stage
+3) after it, since the per-move rebuild is 5-9 % of a step in the 2D and 3D profiles;
+then the FSI stages.
 
 **Hyperelasticity, milestone 1 and a memory step (2026-10-21; human: "start specking on
 adding hyperelasticity and at venant Kirkhoff model", "go with your recommendations,

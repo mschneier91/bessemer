@@ -342,6 +342,9 @@ private:
    /// ALE: build own_motion_ from the deck's moving boundary groups (the
    /// constructor, before anything caches geometry).
    void BuildDeckMotion();
+   /// The deck's moving groups are all no_slip walls (u = w): a closed
+   /// domain must then keep its volume (RequireConstantVolume).
+   bool walls_follow_mesh_ = true;
 
    /// ALE: the mesh displacements of the deck's moving boundary groups
    /// (outlive own_motion_, whose model reads them).

@@ -57,6 +57,10 @@ public:
       /// velocity of BDF order q needs q + 1. At least 2.
       int history = 4;
       double t0 = 0.0; ///< Time of the reference configuration.
+      /// Each solve starts from the kept states extrapolated to the new
+      /// time, at this polynomial order (capped by the states kept; the
+      /// tolerance stays the zero guess's); < 0: from zero.
+      int guess_order = 2;
    };
 
    /**
@@ -150,6 +154,9 @@ public:
    double Time() const { return times_.front(); }
    /// @return Moves since construction.
    int MoveCount() const { return moves_; }
+   /// @return The model's iterations, summed over the moves (reverted ones
+   ///         included; not restored by Load()).
+   long TotalIterations() const { return total_iterations_; }
    /// @return States kept (the reference state counts until it is dropped).
    int States() const { return static_cast<int>(times_.size()); }
 
@@ -169,6 +176,10 @@ private:
    std::vector<int> moving_;                   ///< Displaced attributes.
    bool finalized_ = false;                    ///< Whether the set is fixed.
    int moves_ = 0;                             ///< Moves since construction.
+   long total_iterations_ = 0;                 ///< See TotalIterations().
+   /// The extrapolated guess: on the nodal space and on the model's.
+   std::unique_ptr<mfem::ParGridFunction> guess_nodes_;
+   std::unique_ptr<mfem::ParGridFunction> guess_model_; ///< See guess_nodes_.
    /// Node displacements of the kept states, newest first.
    std::vector<mfem::Vector> history_;
    std::vector<double> times_;                 ///< Their times.

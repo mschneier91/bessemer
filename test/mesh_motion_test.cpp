@@ -14,6 +14,8 @@
 //     motion quadratic in time at BDF2 and cubic at BDF3, on variable steps;
 //  M5 a model that is not elasticity (a test model) plugs in through the
 //     factory, and every boundary nobody named reaches it as fixed.
+//  M6 a rigid motion (two shapes) needs two solves; later moves reuse them
+//     and match a solve at every move; a checkpoint carries them.
 // These pin their own orders and tolerances (unit tests).
 
 #include <gtest/gtest.h>
@@ -25,9 +27,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 using namespace mfem;
@@ -469,4 +474,71 @@ TEST(MeshMotion, M5_AnyModelPlugsIn)
    const double err = NodeError(*mesh, motion.ReferenceNodes(),
    [&field](const Vector & X, Vector & v) { field(X, 0.5, v); });
    EXPECT_LT(err, 1e-14);
+}
+
+TEST(MeshMotion, M6_RigidMotionReusesEarlierSolves)
+{
+   // Two shapes times two functions of t: the cylinder's x and y
+   // translations. Every move after the second lies in the span of the first
+   // two and needs no CG; the nodes are those of a solve at every move, and a
+   // checkpoint carries the kept solutions.
+   auto rigid = [](const Vector&, double t, Vector & d)
+   {
+      d.SetSize(2);
+      d(0) = 0.01 * std::sin(2.0 * M_PI * t);
+      d(1) = 0.02 * (1.0 - std::cos(2.0 * M_PI * t));
+   };
+   const std::string dir = "mesh_motion_m6_np" +
+                           std::to_string(Mpi::WorldSize());
+   auto run = [&](int basis, int moves, bool restart,
+                  bool save) -> std::pair<std::unique_ptr<ParMesh>, int>
+   {
+      auto mesh = CylinderChannel();
+      LinearElasticMotion::Options o = Elastic(1.0);
+      o.basis_size = basis;
+      MeshMotion motion(*mesh, MeshMotion::Options(),
+                        LinearElasticMotion::Factory(o));
+      VectorFunctionCoefficient g(2, rigid);
+      motion.AddDisplacement(incns::kCylinderBody, g);
+      int first = 1;
+      if (restart)
+      {
+         motion.Load(dir);
+         first = motion.MoveCount() + 1;
+      }
+      for (int k = first; k <= moves; ++k)
+      {
+         EXPECT_TRUE(motion.Move(0.1 * k));
+         if (save && k == 3) { motion.Save(dir); }
+      }
+      auto& m = static_cast<LinearElasticMotion&>(motion.Model());
+      return {std::move(mesh), m.ReusedSolves()};
+   };
+   auto [fresh, fresh_reused] = run(0, 6, false, false);
+   auto [reuse, reused] = run(12, 6, false, true);
+   EXPECT_EQ(fresh_reused, 0);
+   EXPECT_EQ(reused, 4); // moves 3 to 6
+   auto [restarted, restart_reused] = run(12, 6, true, false);
+   EXPECT_EQ(restart_reused, 3); // moves 4 to 6, from the loaded basis
+
+   const Vector& x_fresh = *fresh->GetNodes();
+   const Vector& x_reuse = *reuse->GetNodes();
+   const Vector& x_restart = *restarted->GetNodes();
+   double e[2] = {0.0, 0.0};
+   for (int i = 0; i < x_fresh.Size(); ++i)
+   {
+      e[0] = std::max(e[0], std::abs(x_reuse(i) - x_fresh(i)));
+      e[1] = std::max(e[1], std::abs(x_restart(i) - x_reuse(i)));
+   }
+   MPI_Allreduce(MPI_IN_PLACE, e, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   EXPECT_LT(e[0], 1e-11); // displacement ~0.02, CG to 1e-12
+   EXPECT_EQ(e[1], 0.0);   // the restart repeats the arithmetic
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root())
+   {
+      for (int r = 0; r < Mpi::WorldSize(); ++r)
+      {
+         std::remove((dir + ".r" + std::to_string(r)).c_str());
+      }
+   }
 }

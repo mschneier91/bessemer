@@ -284,6 +284,14 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   set_tests_properties(run_case_rejects_missing_bcs_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "declares no boundary_conditions")
+  # A closed domain whose moving walls change its volume must be refused.
+  add_test(NAME run_case_rejects_volume_change_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_CURRENT_SOURCE_DIR}/decks/ale_closed_volume.yaml
+            --summary run_case_volume_np${np}_summary.json)
+  set_tests_properties(run_case_rejects_volume_change_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "changes the volume of a closed domain")
   # A deck that sets a key twice must be refused, not run with the first value.
   add_test(NAME run_case_rejects_duplicate_key_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
