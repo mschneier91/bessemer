@@ -84,6 +84,8 @@ int Np()
 
 double MaxDiff(const Vector& a, const Vector& b)
 {
+   a.HostRead(); // on a device the solver's results are current there only
+   b.HostRead();
    double m = 0.0;
    for (int i = 0; i < a.Size(); ++i) { m = std::max(m, std::abs(a(i) - b(i))); }
    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);

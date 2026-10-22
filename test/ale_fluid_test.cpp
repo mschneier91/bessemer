@@ -23,6 +23,8 @@
 
 #include <gtest/gtest.h>
 
+#include "repro_tolerance.hpp"
+
 #include "ale/mesh_motion.hpp"
 #include "ale/mesh_motion_model.hpp"
 #include "bc/boundary_conditions.hpp"
@@ -639,7 +641,8 @@ static void RestartMatchesUninterrupted(const std::string& refresh, double tol)
 
 TEST(AleFluid, A9_RestartMatchesUninterrupted)
 {
-   RestartMatchesUninterrupted("rebuild", 1e-13);
+   // Bitwise on a host; hypre's GPU AMG is not run-to-run reproducible.
+   RestartMatchesUninterrupted("rebuild", incns_test::ReproTol(1e-13));
    RestartMatchesUninterrupted("in_place", 1e-10);
 }
 
