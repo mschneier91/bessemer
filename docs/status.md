@@ -9,6 +9,21 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Turek-Hron geometry and CFD1-3 (2026-10-22, branch `claude/project-thread-xnsz2c`
+after PR #10 merged; human: "make sure that you keep going").** FSI stage F2 of the
+ALE scope. `mesh.cylinder_channel` takes a flag (`flag_length`, `flag_thickness`,
+`n_flag`, `n_flag_y`): grid lines at the flag's edges and tip, the ring paired by
+angle on its right side so the flag's edges are straight through it, the flag's cells
+left out, boundary `flag`; `part: solid` gives the flag's own mesh with the same nodes
+on the interface (the solid side of FSI). DFG meshes unchanged. Test
+`cylinder_mesh_test` M4. benchmarks/turek_hron: CFD1 (Q4, 314 / 1,256 elements) drag
++0.31 / +0.12 %, lift +0.71 / +0.27 %; CFD2 at the defaults (Q6 OIFS) drag +0.07 %,
+lift +1.46 %; CFD3 at the defaults (Q6 OIFS, 314 elements,
+26 min at np 4) drag 439.52 +- 5.69, lift -11.78 +- 431.7, frequency 4.439 against
+439.45 +- 5.62, -11.89 +- 437.8, 4.396; the flag alone under CSM1's load with the
+linear solid (CSM proper needs the SVK solid). Cloud scratch build, CPU; not run on a
+GPU. **Next:** CFD3 on the refined mesh, then stage 3 or the coupling framework (F3).
+
 **ALE fluid, IMEX, on the CPU (2026-10-21, branch `claude/project-thread-xnsz2c`;
 human: "can you go scope out what needs to be done to implement ALE now?", then
 "Alright can you go get started on this on CPUs").** Stages 0-1 of the scope

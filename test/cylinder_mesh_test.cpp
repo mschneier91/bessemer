@@ -183,3 +183,93 @@ TEST(CylinderMesh, M3_SquareCylinderDomain)
    pm->GeneralRefinement(refs, 1, 1);
    EXPECT_NEAR(Sum(Area(*pm)), W * H - spec.side * spec.side, 1e-9 * W * H);
 }
+
+TEST(CylinderMesh, M4_TurekHronFlag)
+{
+   // The Turek & Hron (2006) geometry: channel 2.5 x 0.41, cylinder of radius
+   // 0.05 at (0.2, 0.2), flag 0.35 x 0.02 from the cylinder to x = 0.6.
+   CylinderChannelSpec s;
+   s.length = 2.5;
+   s.flag_length = 0.35;
+   s.flag_thickness = 0.02;
+   s.n_flag = 6;
+   s.n_flag_y = 2;
+   s.order = 4;
+   const double r = s.radius, b = 0.5 * s.flag_thickness;
+   const double tip = s.cx + r + s.flag_length;
+   const double chord = std::sqrt(r * r - b * b);
+   // The flag: the strip |y - cy| < b between the circle and the tip.
+   const double flag_area = 2 * b * (tip - s.cx) - (b * chord + r * r *
+                            std::asin(b / r));
+   const double clamp = 2 * r * std::asin(b / r);
+
+   Mesh fluid = incns::MakeCylinderChannelMesh(s);
+   s.solid = true;
+   Mesh solid = incns::MakeCylinderChannelMesh(s);
+
+   // The arcs are polynomial interpolants of the circle (order 4).
+   EXPECT_NEAR(Area(fluid), s.height * s.length - M_PI * r * r - flag_area, 1e-9);
+   EXPECT_NEAR(Area(solid), flag_area, 1e-12);
+   EXPECT_NEAR(BoundaryLength(fluid, incns::kCylinderBody), 2 * M_PI * r - clamp,
+               1e-7 * r);
+   EXPECT_NEAR(BoundaryLength(solid, incns::kCylinderBody), clamp, 1e-9 * r);
+   const double surface = 2 * (tip - s.cx - chord) + 2 * b;
+   EXPECT_NEAR(BoundaryLength(fluid, incns::kCylinderFlag), surface, 1e-13);
+   EXPECT_NEAR(BoundaryLength(solid, incns::kCylinderFlag), surface, 1e-13);
+   EXPECT_NEAR(BoundaryLength(fluid, incns::kCylinderInflow), s.height, 1e-13);
+   EXPECT_NEAR(BoundaryLength(fluid, incns::kCylinderWalls), 2 * s.length, 1e-12);
+   EXPECT_EQ(solid.bdr_attributes.Size(), 2);
+   for (Mesh* m : {&fluid, &solid})
+   {
+      for (int e = 0; e < m->GetNE(); ++e)
+      {
+         ElementTransformation& T = *m->GetElementTransformation(e);
+         const IntegrationRule& ir = IntRules.Get(T.GetGeometryType(), 8);
+         for (int q = 0; q < ir.GetNPoints(); ++q)
+         {
+            T.SetIntPoint(&ir.IntPoint(q));
+            ASSERT_GT(T.Weight(), 0.0) << "element " << e;
+         }
+      }
+   }
+
+   // The interface carries the same nodes on both sides: every high-order
+   // node of the solid's flag boundary is a node of the fluid's.
+   auto boundary_nodes = [](Mesh & m)
+   {
+      std::vector<std::pair<double, double>> out;
+      const GridFunction& x = *m.GetNodes();
+      const FiniteElementSpace& f = *x.FESpace();
+      Array<int> vd;
+      for (int be = 0; be < m.GetNBE(); ++be)
+      {
+         if (m.GetBdrAttribute(be) != incns::kCylinderFlag) { continue; }
+         f.GetBdrElementVDofs(be, vd);
+         const int n = vd.Size() / 2;
+         for (int j = 0; j < n; ++j) { out.push_back({x(vd[j]), x(vd[j + n])}); }
+      }
+      return out;
+   };
+   const auto fn = boundary_nodes(fluid), sn = boundary_nodes(solid);
+   EXPECT_EQ(fn.size(), sn.size());
+   for (const auto& p : sn)
+   {
+      double best = 1e300;
+      for (const auto& q : fn)
+      {
+         best = std::min(best, std::hypot(p.first - q.first, p.second - q.second));
+      }
+      ASSERT_LT(best, 1e-14) << "solid node (" << p.first << ", " << p.second
+                             << ") is not on the fluid's interface";
+   }
+
+   // Without a flag the mesh is the one before the flag existed.
+   CylinderChannelSpec d;
+   Mesh plain = incns::MakeCylinderChannelMesh(d);
+   d.flag_thickness = 0.03; // ignored without a length
+   Mesh same = incns::MakeCylinderChannelMesh(d);
+   Vector diff(*plain.GetNodes());
+   diff -= *same.GetNodes();
+   EXPECT_EQ(diff.Normlinf(), 0.0);
+   EXPECT_EQ(plain.GetNE(), 208);
+}

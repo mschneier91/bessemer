@@ -115,7 +115,7 @@ src/
   mesh/        periodic_box (box factory: periodic flags, per-direction stretching),
                case_mesh (THE factory: MakeCaseMesh/PartitionMesh; NC-ready with AMR),
                cylinder_channel (DFG geometry; 3D = Extrude2D, end faces join the
-               walls), square_cylinder (Joly et al. 2012 domain), mesh_file (Gmsh/MFEM
+               walls; optional Turek-Hron flag, fluid or solid part), square_cylinder (Joly et al. 2012 domain), mesh_file (Gmsh/MFEM
                files, Gmsh $PhysicalNames -> boundary names), mesh_size_coefficient
   amr/         amr_parameters, gradient_indicator (nvcc), refinement_marker, mesh_adapter
                (refine/rebalance + exact transfer, RefinementRecord), history_projection,
@@ -172,6 +172,7 @@ benchmarks/    standard benchmarks: decks, reference data (CSV + citation, fetch
                fetch_references.py, git-ignored: not redistributed), plot.py
                --selftest (skipped until fetched) (tgv_re1600, channel, dfg_3d,
                oscillating_cylinder (ALE, Dütsch et al. 1998);
+               turek_hron (CFD1-3, rigid flag);
                sphere_re300 awaits a mesh). Not run yet (2026-10-10).
 cases/         example decks (square_cylinder_re200[_oifs], dfg_2d1, dfg_2d3),
                cavity.yaml (smoke), tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
@@ -852,7 +853,8 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   driver tests,
   `viscous_ratio_test`, `lor_grad_div_test`, `kinetic_head_test`, `cfl_test`,
   `amr_*_test`, `nc_stokes_test`, `body_force_test`, `cylinder_mesh_test` (M3: the
-  square-cylinder domain's area, boundary lengths, grading), `deck_test`,
+  square-cylinder domain's area, boundary lengths, grading; M4: the Turek-Hron flag,
+  fluid and solid parts, areas, lengths, shared interface nodes), `deck_test`,
   `checkpoint_test`, `nondim_test`, `diagnostics_test`, `bc_integration_test`,
   `subgrid_test` (S1 the pointwise LES models and their vanishing cases, S2 the stress
   operator = `ElasticityIntegrator(λ = 0, μ = ν_t)` to 1e-12, S3 dissipation =

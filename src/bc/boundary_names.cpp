@@ -42,6 +42,11 @@ std::vector<std::string> BoundaryNames(const Parameters& p)
       case MeshGeometry::SquareCylinder:
          return {"inflow", "outflow", "sides", "body"};
       case MeshGeometry::CylinderChannel:
+         if (p.cylinder_channel.solid) { return {"cylinder", "flag"}; }
+         if (p.cylinder_channel.flag_length > 0.0)
+         {
+            return {"inflow", "outflow", "walls", "cylinder", "flag"};
+         }
          return {"inflow", "outflow", "walls", "cylinder"};
       case MeshGeometry::File:
       {
@@ -88,6 +93,7 @@ int NamedBoundaryAttribute(const Parameters& p, ParMesh& mesh,
          if (name == "inflow") { return kCylinderInflow; }
          if (name == "outflow") { return kCylinderOutflow; }
          if (name == "walls") { return kCylinderWalls; }
+         if (name == "flag") { return kCylinderFlag; }
          return kCylinderBody; // "cylinder" or "body"
       case MeshGeometry::File:
       {

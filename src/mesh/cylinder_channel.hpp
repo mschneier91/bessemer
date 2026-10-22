@@ -17,7 +17,8 @@ enum CylinderChannelAttribute : int
    kCylinderInflow = 1,  ///< x = 0
    kCylinderOutflow = 2, ///< x = length
    kCylinderWalls = 3,   ///< y = 0 and y = height
-   kCylinderBody = 4     ///< the cylinder surface
+   kCylinderBody = 4,    ///< the cylinder surface (the flag's clamp, solid)
+   kCylinderFlag = 5     ///< the flag's surface (fluid-solid interface)
 };
 
 /**
@@ -30,6 +31,15 @@ enum CylinderChannelAttribute : int
  * ring between the cylinder and the square of half-width a: n_side cells per
  * square side (so 4 n_side around), n_ring cells radially. The other eight
  * blocks are Cartesian and conform to the ring along the square.
+ *
+ * With a flag (flag_length > 0) the grid gets lines at y = cy -+ t/2 (t the
+ * thickness) and x = tip; the square's left and right sides then have
+ * n_side / 2 + n_flag_y + n_side / 2 cells, and on the right side the ring
+ * pairs circle and square points by angle so that the flag's edges are the
+ * straight lines y = cy -+ t/2 through the ring. The flag's cells (in the
+ * ring and in the Cartesian block up to the tip) are left out of the fluid
+ * mesh, which gets boundary kCylinderFlag there; `solid` keeps only them
+ * (boundaries kCylinderFlag, and kCylinderBody on the clamped arc).
  */
 struct CylinderChannelSpec
 {
@@ -54,6 +64,15 @@ struct CylinderChannelSpec
    /// square (> 1 coarsens toward the inflow and the walls; 1 = uniform).
    double outer_grading = 1.0;
    int order = 3;        ///< Geometry (curvature) order.
+   /// Flag (Turek & Hron 2006) behind the cylinder: its length from the
+   /// cylinder's downstream end (cx + radius) to its tip; 0 = no flag.
+   double flag_length = 0.0;
+   double flag_thickness = 0.02; ///< Flag thickness, centred on y = cy.
+   int n_flag = 8;       ///< Cells along the flag downstream of the square.
+   int n_flag_y = 1;     ///< Cells across the flag.
+   /// Build the flag's own (solid) mesh instead of the fluid around it: the
+   /// cells the fluid mesh leaves out, with the same nodes on the interface.
+   bool solid = false;
 };
 
 /**

@@ -1,0 +1,48 @@
+# Turek & Hron (2006) CFD2: the flow around a cylinder with a rigid flag
+# (README.md). Channel 2.5 x 0.41, cylinder of radius 0.05 at (0.2, 0.2),
+# flag 0.35 x 0.02 from the cylinder to x = 0.6; nu = 1e-3, parabolic inflow
+# of mean 1 ramped by (1 - cos(pi t / 2)) / 2 for t < 2. Forces on the
+# cylinder and the flag together: reference_area 0.002 makes the summary's
+# cd / cl (and the forces CSV's Cx / Cy) Turek & Hron's forces at their
+# density 1000.
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/cfd2.yaml
+#   -> cfd2/cfd2_summary.json (reference errors in its "reference" section)
+#
+# Steady (Re 100), marched at the solver defaults (Q6/Q5, OIFS at CFL 2) to
+# t = 20.
+
+equation: navier_stokes
+physics:
+  nu: 1.0e-3
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    flag_length: 0.35
+    flag_thickness: 0.02
+    n_flag: 8
+    n_flag_y: 2
+    n_down: 16
+time:
+  dt: 0.001
+  t_final: 20
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 1.5, height: 0.41,
+     time_profile: ramp, time_scale: 2.0}
+  - {select: [walls, cylinder, flag], type: no_slip}
+  - {select: [outflow], type: outflow}
+forces:
+  enabled: true
+  boundaries: [cylinder, flag]
+  reference_velocity: 1.0
+  reference_area: 0.002
+  interval: 10
+output:
+  path: cfd2
+  name: cfd2
+  progress: 200
+reference:
+  cd: 136.700
+  cl: 10.5343

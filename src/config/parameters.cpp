@@ -207,7 +207,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "Domain: the box above; a square cylinder in a large domain (Joly et al. "
    "2012; 2D; boundaries inflow, outflow, sides, body); the DFG channel with a "
    "cylinder (2D, or extruded in z in 3D; boundaries inflow, outflow, walls, "
-   "cylinder); or a mesh file (mesh.file; boundaries named by the file's Gmsh "
+   "cylinder, and flag with a Turek-Hron flag); or a mesh file (mesh.file; boundaries named by the file's Gmsh "
    "physical groups and mesh.boundary_names).");
    r.Read(mesh, "file", p.mesh_file,
           "geometry file: a Gmsh (.msh, ASCII 2.2 or 4.x) or MFEM (.mesh) file of "
@@ -267,6 +267,23 @@ void FillFromDeck(DeckReader& r, Parameters& p)
       r.Read(s, "outer_grading", cc.outer_grading,
              "Growth ratio of the upstream, lower and upper cells away from "
              "the O-grid (1: uniform).");
+      r.Read(s, "flag_length", cc.flag_length,
+             "Turek-Hron flag behind the cylinder: its length from the "
+             "cylinder's downstream end to its tip (0: no flag; Turek & Hron "
+             "2006: 0.35). Boundary `flag`.");
+      r.Read(s, "flag_thickness", cc.flag_thickness,
+             "Flag thickness, centred on y = cy (Turek & Hron: 0.02).");
+      r.Read(s, "n_flag", cc.n_flag,
+             "Cells along the flag downstream of the O-grid.");
+      r.Read(s, "n_flag_y", cc.n_flag_y, "Cells across the flag.");
+      {
+         bool solid = cc.solid;
+         r.ReadEnum(s, "part", solid, {{"fluid", false}, {"solid", true}},
+         "fluid: the channel around the cylinder (and flag); solid: "
+         "the flag itself (boundaries flag and cylinder, its clamp), "
+         "with the fluid mesh's nodes on the interface.");
+         cc.solid = solid;
+      }
       r.Read(s, "level", p.cylinder_channel_level,
              "Nested uniform refinement level (cell counts x 2^level).");
       r.Read(s, "nz", p.cylinder_channel_nz,
