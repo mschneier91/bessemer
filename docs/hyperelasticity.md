@@ -410,9 +410,20 @@ t >= 5, the frequency from the upward crossings of the mean (job 49596583; u x 1
   - Geometry on the fly: **shelved** (human 2026-10-21). The operator's ~93 B/dof are
     under 5 % of the LOR-AMG's estimated 2-3 kB/dof (elasticity.md section 3), so it
     would save under 2 % of the solver's memory, at a cost in speed.
-- **Milestone 4:** the hyperelastic mesh-motion model and V3 (the DFG cylinder rotated by
-  a large angle). SVK loses strong ellipticity near J = 0.7 under compression (section 4),
-  so the test watches the element Jacobians.
+- **Milestone 4, the hyperelastic mesh motion: parked** (human 2026-10-22: "What is
+  standard in the literature? That's what we should be doing"). An SVK model behind
+  `MeshMotionModel` (kept on a local branch, not on main) did worse than the linear one on
+  the DFG cylinder turned about its centre with the walls held (stiffening chi = 1):
+  min det F 0.76 / 0.37 at 30 / 40 degrees against the linear model's 0.89 / 0.82, and
+  Newton failed from about 45 degrees, where the linear model stays valid to 90 (it
+  inverts at 100). Line search, four load steps per move and 5-degree moves trace the same
+  converged path and fail at the same angle, so it is the material's compression weakness
+  (section 4), not the solver. The literature's standard (Shamanskiy & Simeon, Comput.
+  Mech. 2021, seven techniques on Turek-Hron FSI2): linear elasticity with Jacobian
+  stiffening, what `LinearElasticMotion` is, for moderate motions (it handled 1.6-1.9
+  times FSI2's); biharmonic extension first for large ones; a log-neo-Hookean
+  pseudo-solid for extreme ones (its ln J term keeps elements from inverting). Nobody uses
+  SVK for mesh motion. The Turek-Hron cases need only the linear model.
 - **Later, each needing the human's OK** (spec section 7): neo-Hookean (now motivated by
   that measurement), follower pressure loads for FSI, the refreshed LOR tangent, a mixed
   u-p form, an energy-momentum integrator.
