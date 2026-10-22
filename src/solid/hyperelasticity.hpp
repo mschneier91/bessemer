@@ -113,6 +113,15 @@ public:
    void AddTraction(int attr, mfem::VectorCoefficient& t);
    /// @param f Body force per reference volume (borrowed).
    void SetBodyForce(mfem::VectorCoefficient& f);
+   /**
+    * @brief An elastic support on a boundary: P N = T - k u there, i.e. k (u, v)
+    *        on its faces (per reference area) in the residual and the tangent
+    *        (every scheme, static too), as LinearElasticity::AddSupport: the
+    *        solid's side of a Robin FSI coupling.
+    * @param attr Boundary attribute (also given a traction, or traction-free).
+    * @param k    Stiffness per unit area, > 0; the same on every attribute.
+    */
+   void AddSupport(int attr, double k);
 
    /// @brief Solve() at time 0. Collective. @return Whether Newton converged.
    bool Solve() { return Solve(0.0); }
@@ -159,6 +168,47 @@ public:
    double KineticEnergy() const;
    /// @return Newton iterations of every Solve() and Step() since construction.
    long long TotalNewtonIterations() const { return total_newton_; }
+   /// @return CG iterations of every Solve() and Step() since construction
+   ///         (LinearElasticity's name, for the FSI case).
+   long long TotalIterations() const { return total_linear_; }
+
+   /// The dynamic state: what Step() advances from (true dofs), as
+   /// LinearElasticity::State.
+   struct State
+   {
+      std::vector<mfem::Vector> u_hist; ///< Displacement levels, newest first.
+      std::vector<mfem::Vector> v_hist; ///< Velocity levels, newest first.
+      std::vector<double> t_hist;       ///< Their times.
+      mfem::Vector a_n;  ///< Generalized-alpha acceleration.
+      mfem::Vector f_n;  ///< The load at the current time.
+      mfem::Vector load; ///< The load of the last assembly.
+      double time = 0.0; ///< Time of the current state.
+      int steps = 0;     ///< Steps since Initialize().
+      bool initialized = false; ///< Whether Initialize() ran.
+      mfem::Vector reaction; ///< Reaction() (when tracked).
+   };
+   /// @return A copy of the dynamic state (a trial step's restart point).
+   State ExportState() const;
+   /**
+    * @brief Restore a state from ExportState() (the same solver): the next
+    *        Step() repeats the step from it. The fields follow.
+    * @param s The state.
+    */
+   void ImportState(const State& s);
+
+   /// Keep Reaction() up to date in every solve (one residual more).
+   void TrackReaction();
+   /**
+    * @return The force the Dirichlet boundaries exert on the solid at the
+    *         current state, as moments (true dofs; zero off the essential
+    *         dofs): the residual of the unconstrained equations there,
+    *         without the time scheme's weighting, as LinearElasticity's
+    *         (generalized-alpha's residual is (1 - alpha_f) R^{n+1} + alpha_f
+    *         R^n there, the trapezoidal start's R^0 + R^1; exact for a linear
+    *         internal force, to first order in the step for SVK's). Zero at
+    *         Initialize(). @pre TrackReaction().
+    */
+   const mfem::Vector& Reaction() const { return reaction_; }
 
    /// @return The displacement (after Solve(), Initialize() or Step()).
    mfem::ParGridFunction& Displacement() { return *u_; }
@@ -256,6 +306,14 @@ private:
     * @return ||r|| (global l2).
     */
    double Residual(const mfem::Vector& x, mfem::Vector& r);
+   /**
+    * @brief The reaction after a solve: G(x) of the last Newton() on the
+    *        essential dofs, scaled as (G - gamma R_previous) * scale.
+    * @param x     The solution (true dofs).
+    * @param gamma Weight of the previous reaction in G there.
+    * @param scale The scheme's weight of the new one there (inverted).
+    */
+   void UpdateReaction(const mfem::Vector& x, double gamma, double scale);
    /// Reset the per-solve histories and counters.
    void ResetCounters();
 
@@ -285,7 +343,12 @@ private:
    std::unique_ptr<mfem::HypreParMatrix> lor_matrix_; ///< The LOR operator.
    std::unique_ptr<mfem::Solver> pc_;                 ///< CG preconditioner.
    std::unique_ptr<mfem::CGSolver> cg_;               ///< Tangent solves.
-   std::unique_ptr<ShiftedTangent> jac_;            ///< theta K_T + c M.
+   std::unique_ptr<ShiftedTangent> jac_;  ///< theta (K_T + S) + c M.
+   mfem::Array<int> support_marker_;      ///< AddSupport()'s attributes.
+   mfem::ConstantCoefficient support_k_{0.0}; ///< AddSupport()'s k.
+   std::unique_ptr<mfem::HypreParMatrix> support_; ///< S: k (u, v) on them.
+   bool track_reaction_ = false; ///< See TrackReaction().
+   mfem::Vector reaction_;       ///< See Reaction().
    std::unique_ptr<mfem::ConstrainedOperator> kc_; ///< jac_, constrained.
    const mfem::Operator* k_ = nullptr;             ///< The tangent jac_ wraps.
    double pc_shift_ = 0.0; ///< The mass shift the preconditioner was built for.

@@ -34,10 +34,18 @@
 //     bent to ~20 % of its length, whose tip on the mid-line moves back, where
 //     the linear model's stays (by symmetry); the summary written. Dynamic: a
 //     load applied suddenly at rest, the midpoint rule's energy balance, the
-//     history CSV with the Newton iterations.
+//     history CSV with the Newton iterations;
+//  H10 ExportState / ImportState: a step repeated from an exported state is
+//     the same step (generalized-alpha and BDF2; bitwise on a host);
+//  H11 the reaction (TrackReaction) on the held faces of H4's homogeneous
+//     deformation balances the applied traction;
+//  H12 an elastic support (AddSupport) gives the linear model's support in
+//     the small-load limit: the difference falls as the load squared.
 // Runs on whatever device the test main configures (INCNS_DEVICE=cuda).
 
 #include <gtest/gtest.h>
+
+#include "repro_tolerance.hpp"
 
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
@@ -1151,4 +1159,146 @@ TEST(Hyperelasticity, H8_DynamicDeckThroughElasticityCase)
       EXPECT_EQ(rows, 14); // the initial state and 13 steps
       std::filesystem::remove_all(dir);
    }
+}
+
+// H10
+TEST(Hyperelasticity, H10_ImportStateRepeatsTheStep)
+{
+   for (incns::SolidTimeScheme scheme :
+        {incns::SolidTimeScheme::GeneralizedAlpha, incns::SolidTimeScheme::Bdf})
+   {
+      Mesh serial = Mesh::MakeCartesian2D(8, 2, Element::QUADRILATERAL, true, 4.0,
+                                          1.0);
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      serial.Clear();
+      incns::Hyperelasticity::Options o = SolverOptions(2);
+      o.scheme = scheme;
+      incns::Hyperelasticity solid(mesh, o);
+      solid.AddFixed(4);
+      Vector tv(2);
+      tv(0) = 0.0;
+      tv(1) = -0.05;
+      VectorConstantCoefficient t(tv);
+      solid.AddTraction(2, t);
+      solid.TrackReaction();
+      solid.Initialize(0.0);
+      for (int k = 0; k < 3; ++k) { ASSERT_TRUE(solid.Step(0.1)); }
+      const incns::Hyperelasticity::State st = solid.ExportState();
+      Vector u[2], v[2], r[2];
+      for (int pass = 0; pass < 2; ++pass)
+      {
+         if (pass == 1) { solid.ImportState(st); }
+         EXPECT_NEAR(solid.Time(), 0.3, 1e-14);
+         for (int k = 0; k < 2; ++k) { ASSERT_TRUE(solid.Step(0.1)); }
+         u[pass] = TrueDofs(solid.Displacement());
+         v[pass] = TrueDofs(solid.Velocity());
+         r[pass] = solid.Reaction();
+      }
+      const double scale = std::max(1e-300, std::sqrt(InnerProduct(MPI_COMM_WORLD,
+                                    u[0], u[0])));
+      const double tol = incns_test::ReproTol(0.0);
+      EXPECT_LE(MaxDiff(u[0], u[1]), tol * scale);
+      EXPECT_LE(MaxDiff(v[0], v[1]), tol * scale);
+      EXPECT_LE(MaxDiff(r[0], r[1]), tol * scale);
+      EXPECT_GT(scale, 0.0);
+      EXPECT_EQ(solid.StepCount(), 5);
+   }
+}
+
+// H11
+TEST(Hyperelasticity, H11_ReactionBalancesTheLoad)
+{
+   // H4's 2D case: the faces y = 0 and x = 0 held at the exact displacement,
+   // the exact P N on x = 1 and y = 1. No body force, so the reaction on the
+   // held faces' dofs sums to minus the applied traction's force.
+   auto mesh = UnitBox(2, 3);
+   DenseMatrix F(2);
+   F(0, 0) = 1.2; F(0, 1) = 0.3;
+   F(1, 0) = 0.1; F(1, 1) = 0.9;
+   DenseMatrix E, S, P(2);
+   Strain(F, E);
+   SecondPiola(E, kLambda, kMu, S);
+   Mult(F, S, P);
+   VectorFunctionCoefficient exact(2, [F](const Vector & X, Vector & u)
+   {
+      for (int i = 0; i < 2; i++)
+      {
+         u(i) = -X(i);
+         for (int j = 0; j < 2; j++) { u(i) += F(i, j) * X(j); }
+      }
+   });
+   incns::Hyperelasticity solid(*mesh, SolverOptions(2));
+   solid.AddDisplacement(1, exact);
+   solid.AddDisplacement(4, exact);
+   Vector p0(2), p1(2);
+   P.GetColumn(0, p0); // x = 1: N = e_0
+   P.GetColumn(1, p1); // y = 1: N = e_1
+   VectorConstantCoefficient t0(p0), t1(p1);
+   solid.AddTraction(2, t0);
+   solid.AddTraction(3, t1);
+   solid.TrackReaction();
+   ASSERT_TRUE(solid.Solve()) << History(solid);
+   // By nodes: component c owns the true dofs [c n, (c + 1) n).
+   const Vector& r = solid.Reaction();
+   const int n = r.Size() / 2;
+   const double* rr = r.HostRead();
+   double sum[2] = {0.0, 0.0};
+   for (int c = 0; c < 2; ++c)
+   {
+      for (int i = 0; i < n; ++i) { sum[c] += rr[c * n + i]; }
+   }
+   MPI_Allreduce(MPI_IN_PLACE, sum, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+   for (int c = 0; c < 2; ++c)
+   {
+      // Unit faces: the applied force is P e_0 + P e_1.
+      EXPECT_NEAR(sum[c], -(p0(c) + p1(c)), 1e-10) << "component " << c;
+   }
+   EXPECT_GT(std::abs(sum[0]) + std::abs(sum[1]), 0.1);
+}
+
+// H12
+TEST(Hyperelasticity, H12_SupportGivesTheLinearLimit)
+{
+   // H6's cantilever with an elastic support on its top face (attribute 3).
+   Mesh serial = Mesh::MakeCartesian2D(8, 2, Element::QUADRILATERAL, true, 4.0,
+                                       1.0);
+   ParMesh mesh(MPI_COMM_WORLD, serial);
+   serial.Clear();
+   const double k = 0.3;
+   double diff[2];
+   const double loads[2] = {1e-4, 5e-5};
+   for (int i = 0; i < 2; i++)
+   {
+      Vector fv(2);
+      fv(0) = 0.0;
+      fv(1) = -loads[i];
+      VectorConstantCoefficient f(fv);
+      incns::Hyperelasticity::Options o = SolverOptions(3);
+      o.newton_rtol = incns::Hyperelasticity::Options().newton_rtol;
+      incns::Hyperelasticity solid(mesh, o);
+      solid.AddFixed(4);
+      solid.AddSupport(3, k);
+      solid.SetBodyForce(f);
+      ASSERT_TRUE(solid.Solve()) << History(solid);
+      EXPECT_LE(solid.NewtonIterations(), 5) << History(solid);
+      incns::LinearElasticity::Options lo;
+      lo.order = 3;
+      lo.lambda = kLambda;
+      lo.mu = kMu;
+      lo.rtol = 1e-13;
+      incns::LinearElasticity linear(mesh, lo);
+      linear.AddFixed(4);
+      linear.AddSupport(3, k);
+      linear.SetBodyForce(f);
+      ASSERT_TRUE(linear.Solve());
+      diff[i] = MaxDiff(TrueDofs(solid.Displacement()),
+                        TrueDofs(linear.Displacement()));
+   }
+   if (Mpi::Root())
+   {
+      std::cout << "[H12] max |u - u_linear| with a support: " << diff[0] << " "
+                << diff[1] << ", ratio " << diff[0] / diff[1] << std::endl;
+   }
+   EXPECT_GT(diff[0] / diff[1], 3.5);
+   EXPECT_LT(diff[0] / diff[1], 4.5);
 }

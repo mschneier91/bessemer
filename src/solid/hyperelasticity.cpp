@@ -26,17 +26,22 @@ public:
       w_.UseDevice(true);
    }
 
-   /// @param theta Weight of K. @param c Weight of M. @param M The mass.
-   void Set(double theta, double c, const Operator* M)
+   /**
+    * @param theta Weight of K (and S). @param c Weight of M.
+    * @param M The mass (c != 0). @param S The support, or null.
+    */
+   void Set(double theta, double c, const Operator* M, const HypreParMatrix* S)
    {
       theta_ = theta;
       c_ = c;
       m_ = M;
+      s_ = S;
    }
 
    void Mult(const Vector& x, Vector& y) const override
    {
       k_.Mult(x, y);
+      if (s_) { s_->Mult(1.0, x, 1.0, y); }
       if (theta_ != 1.0) { y *= theta_; }
       if (c_ != 0.0)
       {
@@ -48,6 +53,7 @@ public:
 private:
    const Operator& k_;           ///< The tangent.
    const Operator* m_ = nullptr; ///< The mass (c != 0).
+   const HypreParMatrix* s_ = nullptr; ///< The support (AddSupport).
    double theta_ = 1.0, c_ = 0.0; ///< The weights.
    mutable Vector w_;            ///< M x.
 };
@@ -155,6 +161,24 @@ void Hyperelasticity::AddTraction(int attr, VectorCoefficient& t)
    tractions_.push_back({attr, &t});
 }
 
+void Hyperelasticity::AddSupport(int attr, double k)
+{
+   MFEM_VERIFY(!finalized_, "hyperelasticity: boundary conditions are fixed "
+               "at the first solve");
+   MFEM_VERIFY(k > 0.0, "hyperelasticity: the support stiffness must be "
+               "positive");
+   MFEM_VERIFY(support_k_.constant == 0.0 || support_k_.constant == k,
+               "hyperelasticity: one support stiffness for all attributes");
+   const Array<int> m = Marker(attr);
+   if (support_marker_.Size() == 0)
+   {
+      support_marker_.SetSize(m.Size());
+      support_marker_ = 0;
+   }
+   for (int i = 0; i < m.Size(); ++i) { if (m[i]) { support_marker_[i] = 1; } }
+   support_k_.constant = k;
+}
+
 void Hyperelasticity::SetBodyForce(VectorCoefficient& f)
 {
    MFEM_VERIFY(!finalized_, "hyperelasticity: the load is fixed at the first "
@@ -179,6 +203,16 @@ void Hyperelasticity::Finalize()
       *v = 0.0;
    }
    bc_gf_ = std::make_unique<ParGridFunction>(fes_.get());
+   if (support_marker_.Size() > 0)
+   {
+      // Assembled, as LinearElasticity's: a boundary-sized matrix.
+      ParBilinearForm s(fes_.get());
+      s.AddBoundaryIntegrator(new VectorMassIntegrator(support_k_),
+                              support_marker_);
+      s.Assemble();
+      s.Finalize();
+      support_.reset(s.ParallelAssemble());
+   }
 
    // The load form: dead loads, re-evaluated at every assembly.
    b_ = std::make_unique<ParLinearForm>(fes_.get());
@@ -235,6 +269,11 @@ void Hyperelasticity::SetupPreconditioner(double shift)
    }
    ParBilinearForm lor_form(fes_.get());
    lor_form.AddDomainIntegrator(new ElasticityIntegrator(*lor_lambda_, *lor_mu_));
+   if (support_marker_.Size() > 0)
+   {
+      lor_form.AddBoundaryIntegrator(new VectorMassIntegrator(support_k_),
+                                     support_marker_);
+   }
    if (shift != 0.0)
    {
       lor_mass_.constant = shift * opts_.density;
@@ -306,6 +345,7 @@ double Hyperelasticity::Residual(const Vector& x, Vector& r)
       z = &z_;
    }
    op_->Mult(*z, r);
+   if (support_) { support_->Mult(1.0, *z, 1.0, r); }
    if (g_c_ != 0.0)
    {
       m_->Mult(x, mx_);
@@ -373,7 +413,7 @@ bool Hyperelasticity::Newton(double c, double theta, const Vector* y,
          cg_->SetPreconditioner(*pc_);
       }
       MFEM_VERIFY(&K == k_, "hyperelasticity: the tangent moved");
-      jac_->Set(theta, c, c != 0.0 ? m_.Ptr() : nullptr);
+      jac_->Set(theta, c, c != 0.0 ? m_.Ptr() : nullptr, support_.get());
       rhs_ = r_;
       rhs_.Neg();
       if (lift)
@@ -447,6 +487,7 @@ bool Hyperelasticity::Solve(double t)
       step_rhs_ = load_;
       step_rhs_ *= s;
       converged_ = Newton(0.0, 1.0, nullptr, step_rhs_, ess_step_, x_);
+      UpdateReaction(x_, 0.0, 1.0);
    }
    total_linear_ += linear_iterations_;
    u_->SetFromTrueDofs(x_);
@@ -543,6 +584,7 @@ void Hyperelasticity::Initialize(double t0, VectorCoefficient* u0,
       MFEM_VERIFY(cg.GetConverged(), "hyperelasticity: the initial "
                   "acceleration's mass solve did not converge");
    }
+   if (track_reaction_) { reaction_ = 0.0; } // a dynamic run starts from rest
    time_ = t0;
    steps_ = 0;
    initialized_ = true;
@@ -583,6 +625,7 @@ bool Hyperelasticity::Step(double dt)
       step_rhs_ += mx_;
       x = u; // the initial guess
       ok = Newton(c, 1.0 - af, &u, step_rhs_, ess_full_, x);
+      UpdateReaction(x, af, 1.0 / (1.0 - af));
       // a^{n+1}; v^{n+1} by Newmark.
       z_ = x;
       z_ -= w_;
@@ -616,6 +659,7 @@ bool Hyperelasticity::Step(double dt)
          step_rhs_ -= mx_;
          x = u;
          ok = Newton(c, 1.0, nullptr, step_rhs_, ess_full_, x);
+         UpdateReaction(x, 1.0, 1.0); // R^0 + R^1
          vx = x;
          vx -= u;
          vx *= 2.0 / dt;
@@ -639,6 +683,7 @@ bool Hyperelasticity::Step(double dt)
          step_rhs_ -= mx_;
          x = u;
          ok = Newton(c[0] * c[0], 1.0, nullptr, step_rhs_, ess_full_, x);
+         UpdateReaction(x, 0.0, 1.0);
          vx.Set(c[0], x);
          vx += su;
       }
@@ -741,6 +786,85 @@ bool Hyperelasticity::DisplacementAt(const Vector& x, Vector& u) const
 void Hyperelasticity::SetSolution(const Vector& x)
 {
    u_->SetFromTrueDofs(x);
+}
+
+void Hyperelasticity::UpdateReaction(const Vector& x, double gamma,
+                                     double scale)
+{
+   if (!track_reaction_) { return; }
+   INCNS_PROFILE("hyperelastic::reaction");
+   // G(x) with the essential rows kept: Residual() without its zeroing.
+   const Vector* z = &x;
+   if (g_y_)
+   {
+      add(g_theta_, x, 1.0 - g_theta_, *g_y_, z_);
+      z = &z_;
+   }
+   op_->Mult(*z, r_);
+   if (support_) { support_->Mult(1.0, *z, 1.0, r_); }
+   if (g_c_ != 0.0)
+   {
+      m_->Mult(x, mx_);
+      r_.Add(g_c_, mx_);
+   }
+   r_ -= *g_b_;
+   // On the host, as LinearElasticity's: a boundary-sized loop.
+   const double* rr = r_.HostRead();
+   double* out = reaction_.HostReadWrite();
+   const int* ess = ess_tdofs_.HostRead();
+   std::vector<double> vals(ess_tdofs_.Size());
+   for (int i = 0; i < ess_tdofs_.Size(); ++i)
+   {
+      vals[i] = scale * (rr[ess[i]] - gamma * out[ess[i]]);
+   }
+   reaction_.HostWrite();
+   reaction_ = 0.0;
+   out = reaction_.HostReadWrite();
+   for (int i = 0; i < ess_tdofs_.Size(); ++i) { out[ess[i]] = vals[i]; }
+}
+
+void Hyperelasticity::TrackReaction()
+{
+   track_reaction_ = true;
+   reaction_.SetSize(fes_->GetTrueVSize());
+   reaction_.UseDevice(true);
+   reaction_ = 0.0;
+}
+
+Hyperelasticity::State Hyperelasticity::ExportState() const
+{
+   State s;
+   s.u_hist = u_hist_;
+   s.v_hist = v_hist_;
+   s.t_hist = t_hist_;
+   s.a_n = a_n_;
+   s.f_n = f_n_;
+   s.load = load_;
+   s.time = time_;
+   s.steps = steps_;
+   s.initialized = initialized_;
+   s.reaction = reaction_;
+   return s;
+}
+
+void Hyperelasticity::ImportState(const State& s)
+{
+   MFEM_VERIFY(s.u_hist.size() == u_hist_.size() || !initialized_,
+               "hyperelasticity: the state is not this solver's");
+   u_hist_ = s.u_hist;
+   v_hist_ = s.v_hist;
+   t_hist_ = s.t_hist;
+   a_n_ = s.a_n;
+   f_n_ = s.f_n;
+   load_ = s.load;
+   time_ = s.time;
+   steps_ = s.steps;
+   initialized_ = s.initialized;
+   if (track_reaction_ && s.reaction.Size() == reaction_.Size())
+   {
+      reaction_ = s.reaction;
+   }
+   SyncFields();
 }
 
 } // namespace incns

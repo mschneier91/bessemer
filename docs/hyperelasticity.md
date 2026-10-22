@@ -84,6 +84,16 @@ benchmark's to 0.4-1.7 % at its time step.
       not A-stable, elasticity.md section 1).
     The preconditioner is then the LOR-AMG of K_0 + (c / theta) rho M, rebuilt when dt
     changes. Newton starts from u^n.
+- **For the FSI coupling** (docs/fsi.md), the API `LinearElasticity` gives `FsiCase`, with
+  the same semantics: `AddSupport(attr, k)` (an elastic support, k (u, v) on the faces per
+  reference area, in the residual at the scheme's point, the tangent and the LOR-AMG: the
+  Robin couplings' solid side), `TrackReaction()` / `Reaction()` (the unconstrained
+  residual at the essential dofs, unweighted by the scheme: generalized-alpha's is
+  (1 - alpha_f) R^{n+1} + alpha_f R^n there, the trapezoidal start's R^0 + R^1; exact for
+  a linear internal force, to first order in the step for SVK's), `ExportState()` /
+  `ImportState()` (a subiteration repeats the step) and `TotalIterations()`. The traction
+  of `AddTraction` is per reference area (nominal), the load the solid sees in each
+  subiteration of a partitioned coupling.
 - **The deck**, `equation: hyperelasticity`, static or dynamic (`solid.analysis`, the
   linear deck's time keys). `ElasticityCase` builds either
   solver and applies the deck's boundary groups to it; `run_case` and
@@ -158,6 +168,14 @@ The static solver (milestone 2):
   5e-6 (not to the solver tolerance as in the linear D5: SVK's energy is not quadratic),
   and the history CSV is written.
 - `run_case_csm1` runs `cases/turek_hron_csm1.yaml` through `run_case` (fast tier).
+
+- **H10:** a dynamic cantilever's state exported after three steps; two more steps, then
+  the state imported and the two steps again: the same displacement, velocity and
+  reaction (bitwise on a host), generalized-alpha and BDF2.
+- **H11:** on H4's 2D deformation (displacement on two faces, P N on the others) the
+  reaction on the held faces' dofs sums to minus the applied force, to 1e-10.
+- **H12:** H6's cantilever with an elastic support on its top face: the difference to
+  `LinearElasticity` with the same support falls as the load squared (ratio 3.99998).
 
 `test/verify_hyperelasticity_test.cpp` (verify tier, np 4; settings in
 `test/baselines.yaml`, `verification.hyperelasticity`):
