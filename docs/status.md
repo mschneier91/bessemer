@@ -18,11 +18,13 @@ residual and tangent operators, one fused sum-factorized kernel per apply
 design/hyperelasticity_spec.md). `hyperelasticity_test` checks them against MFEM's
 `HyperelasticNLFIntegrator` (CPU np 1/2/4, H100 np 1/2). The performance step rewrote
 the 3D GPU kernels by lines, after Nsight Compute found their register tensors spilling
-to DRAM (hyperelasticity.md section 4). 3D Q6 on one H100: 104 B per vector dof (the
-default storage, F), residual 14.5 and tangent 14.1 Gdof/s (3.8x the first kernels).
-MFEM's linear elasticity PA cannot launch there and is 11-22x slower at Q3-Q5. No solver
-or deck yet. **Next:** more kernel work (the gather fused, geometry on the fly), then
-milestone 2 (Newton, the deck, Turek-Hron CSM1/CSM2).
+to DRAM, then fused the gather and scatter into them and collocated the derivatives
+(human: "Keep optimizing"; hyperelasticity.md section 4). 3D Q6 on one H100: 91 B per
+vector dof (the default storage, F), residual 20.3 and tangent 16.7 Gdof/s (5.3x and
+4.5x the first kernels). MFEM's linear elasticity PA cannot launch there and is 11-25x
+slower at Q3-Q5. No solver or deck yet. **Next:** more kernel work (geometry on the fly,
+7 blocks per SM, the multi-GPU exchange), then milestone 2 (Newton, the deck, Turek-Hron
+CSM1/CSM2).
 
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...

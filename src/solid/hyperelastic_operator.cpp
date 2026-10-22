@@ -19,6 +19,7 @@
 
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace incns
 {
@@ -507,8 +508,21 @@ void Tangent3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
 // parameters (constant-bank operands); and the reference gradients, then in
 // place the fluxes, are kept in shared memory, 9 stacks of N z-planes (18 when
 // the tangent forms F as well, MODE 2; dynamic shared memory, up to 64 KB per
-// block). The output E-vector is written, not added to. On a device only: the
-// host runs the kernels above, and the CPU build does not change.
+// block). On a device only: the host runs the kernels above, and the CPU
+// build does not change.
+//
+// Round 2 (2026-10-21; human: "Keep optimizing"). The gather and scatter are
+// fused: the kernels read the L-vector through the restriction's gather map
+// and write a dof one element holds straight into the output L-vector, a
+// shared dof's contribution into its slot, which ScatterSlots sums in element
+// order (no E-vectors, no atomics). At Q6 that cut the restriction's 0.47 ms
+// per apply to 0.16 ms, but the index loads cost 12-22 registers and the
+// tangent fell from 6 blocks per SM to 4 (job 49571253). The sum
+// factorization is therefore collocated: B along each direction to the values
+// at the points, then D = G B^-1 there, 6 N^4 multiply-adds per component and
+// pass against 8 N^4. Q6 residual 206 registers -> 128, both kernels back at
+// 6 blocks per SM (job 49572810); a register cap instead gave the same times
+// (job 49573235), so the gain is mostly occupancy.
 // ---------------------------------------------------------------------------
 namespace lines
 {
@@ -516,21 +530,33 @@ namespace lines
 template <int N>
 struct Basis
 {
-   real_t B[N][N], G[N][N]; // B[q][d] = B(q, d), as maps->B
+   real_t B[N][N]; ///< B[q][d] = B(q, d), as maps->B.
+   real_t D[N][N]; ///< D = G B^-1: the derivative at the points from values there.
 };
 
 template <int N>
 Basis<N> MakeBasis(const Array<real_t>& b, const Array<real_t>& g)
 {
-   Basis<N> bs;
    const real_t* hb = b.HostRead();
    const real_t* hg = g.HostRead();
+   DenseMatrix Bm(N), Gm(N), Bi(N), Dm(N);
    for (int q = 0; q < N; ++q)
    {
       for (int d = 0; d < N; ++d)
       {
-         bs.B[q][d] = hb[q + N * d];
-         bs.G[q][d] = hg[q + N * d];
+         Bm(q, d) = hb[q + N * d];
+         Gm(q, d) = hg[q + N * d];
+      }
+   }
+   DenseMatrixInverse(Bm).GetInverseMatrix(Bi); // dofs and points unisolvent
+   Mult(Gm, Bi, Dm);
+   Basis<N> bs;
+   for (int q = 0; q < N; ++q)
+   {
+      for (int r = 0; r < N; ++r)
+      {
+         bs.B[q][r] = Bm(q, r);
+         bs.D[q][r] = Dm(q, r);
       }
    }
    return bs;
@@ -563,91 +589,93 @@ struct Args
    const real_t* wdet = nullptr;   ///< w det J, (N^3, ne)
    const real_t* lambda = nullptr; ///< Per element.
    const real_t* mu = nullptr;     ///< Per element.
-   const real_t* x = nullptr;      ///< E-vector (N^3, 3, ne): u or the direction.
-   const real_t* lin = nullptr;    ///< The tangent's linearization.
-   real_t* y = nullptr;            ///< Output E-vector (written).
+   const real_t* x = nullptr;      ///< L-vector (3 nd): u or the direction.
+   const real_t* lin = nullptr;    ///< The linearization (MODE 2: u's L-vector).
+   real_t* y = nullptr;            ///< Output L-vector: its single-element dofs.
    real_t* fs = nullptr;           ///< Stored F (and S), (N^3, 9 STORE, ne).
    real_t* we = nullptr;           ///< Energy partial sums, (N^2, ne).
+   const int* gmap = nullptr;      ///< E-dof to L-dof (lexicographic, (N^3, ne)).
+   const int* dmap = nullptr;      ///< E-dof to its L-dof or -1 - its slot.
+   real_t* slots = nullptr;        ///< Shared dofs' contributions, (ns, 3).
+   int nd = 0;                     ///< Scalar L-dofs.
+   int ns = 0;                     ///< Slots.
 };
 
 #if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
-/// Component c's reference gradient (its dofs at @p xe, lexicographic) on
-/// the thread's column (qx, qy) = (tx, ty) of the stacks s0, s1, s2 (k = x,
-/// y, z): change 56's GradLines with D1D = Q1D = N. Ends with each thread's
-/// own column written (no sync after the z stage).
+/// Component c's reference gradient on the thread's column (qx, qy) = (tx,
+/// ty) of the stacks s0, s1, s2 (k = x, y, z), its dofs read from the
+/// component's L-vector @p xc at the thread's x line of L-dofs @p gi (the
+/// gather fused). Collocated: B along x, y and z to the values U at the points
+/// (in sXG, as a stack), then D = G B^-1 along each direction there: 6 N^4
+/// multiply-adds per component against change 56's 8 N^4 (B and G in every
+/// stage). Ends with each thread's own column written (no sync after it).
 template <int N>
-__device__ inline void GradLines(const real_t* __restrict__ xe, const int tx,
-                                 const int ty, const Basis<N>& bs, real_t* sXB,
-                                 real_t* sXG, real_t* s0, real_t* s1, real_t* s2)
+__device__ inline void GradLines(const real_t* __restrict__ xc, const int* gi,
+                                 const int tx, const int ty, const Basis<N>& bs,
+                                 real_t* sXB, real_t* sXG, real_t* s0, real_t* s1,
+                                 real_t* s2)
 {
    using L = Strides<N>;
-   // x: thread (dy, dz) = (tx, ty), its line of dofs to N points.
+   // x: thread (dy, dz) = (tx, ty), its line of dofs: B along x to sXB.
    {
       real_t u[N];
       MFEM_UNROLL(N)
-      for (int dx = 0; dx < N; ++dx) { u[dx] = xe[dx + N * (tx + N * ty)]; }
+      for (int dx = 0; dx < N; ++dx) { u[dx] = xc[gi[dx]]; }
       MFEM_UNROLL(N)
       for (int qx = 0; qx < N; ++qx)
       {
-         real_t bu = 0.0, gu = 0.0;
+         real_t bu = 0.0;
          MFEM_UNROLL(N)
-         for (int dx = 0; dx < N; ++dx)
-         {
-            bu += bs.B[qx][dx] * u[dx];
-            gu += bs.G[qx][dx] * u[dx];
-         }
+         for (int dx = 0; dx < N; ++dx) { bu += bs.B[qx][dx] * u[dx]; }
          sXB[ty * L::XZ + tx * L::XQ + qx] = bu;
-         sXG[ty * L::XZ + tx * L::XQ + qx] = gu;
       }
    }
    __syncthreads();
-   // y: thread (qx, dz) = (tx, ty): B B u to s0, G B u to s1, B G u to s2.
+   // y: thread (qx, dz) = (tx, ty): B along y to s0 ([dz][qy][qx]).
    {
-      real_t bu[N], gu[N];
+      real_t bu[N];
       MFEM_UNROLL(N)
-      for (int dy = 0; dy < N; ++dy)
-      {
-         bu[dy] = sXB[ty * L::XZ + dy * L::XQ + tx];
-         gu[dy] = sXG[ty * L::XZ + dy * L::XQ + tx];
-      }
+      for (int dy = 0; dy < N; ++dy) { bu[dy] = sXB[ty * L::XZ + dy * L::XQ + tx]; }
       MFEM_UNROLL(N)
       for (int qy = 0; qy < N; ++qy)
       {
-         real_t bbu = 0.0, gbu = 0.0, bgu = 0.0;
+         real_t bbu = 0.0;
          MFEM_UNROLL(N)
-         for (int dy = 0; dy < N; ++dy)
-         {
-            bbu += bs.B[qy][dy] * bu[dy];
-            gbu += bs.G[qy][dy] * bu[dy];
-            bgu += bs.B[qy][dy] * gu[dy];
-         }
+         for (int dy = 0; dy < N; ++dy) { bbu += bs.B[qy][dy] * bu[dy]; }
          s0[ty * L::YZ + qy * N + tx] = bbu;
-         s1[ty * L::YZ + qy * N + tx] = gbu;
-         s2[ty * L::YZ + qy * N + tx] = bgu;
       }
    }
    __syncthreads();
-   // z: thread (qx, qy) = (tx, ty), its own column, read whole first: x = B
-   // (B G u), y = B (G B u), z = G (B B u).
+   // z: thread (qx, qy) = (tx, ty), its own column: B along z to U (sXG, its
+   // column also kept for the z derivative).
    const int col = ty * N + tx;
-   real_t bbu[N], gbu[N], bgu[N];
-   MFEM_UNROLL(N)
-   for (int dz = 0; dz < N; ++dz)
+   real_t uq[N];
    {
-      bbu[dz] = s0[dz * L::YZ + col];
-      gbu[dz] = s1[dz * L::YZ + col];
-      bgu[dz] = s2[dz * L::YZ + col];
+      real_t bb[N];
+      MFEM_UNROLL(N)
+      for (int dz = 0; dz < N; ++dz) { bb[dz] = s0[dz * L::YZ + col]; }
+      MFEM_UNROLL(N)
+      for (int qz = 0; qz < N; ++qz)
+      {
+         real_t v = 0.0;
+         MFEM_UNROLL(N)
+         for (int dz = 0; dz < N; ++dz) { v += bs.B[qz][dz] * bb[dz]; }
+         uq[qz] = v;
+         sXG[qz * L::YZ + col] = v;
+      }
    }
+   __syncthreads();
+   // The derivatives at the points: x and y from U's rows, z from the column.
    MFEM_UNROLL(N)
    for (int qz = 0; qz < N; ++qz)
    {
       real_t gx = 0.0, gy = 0.0, gz = 0.0;
       MFEM_UNROLL(N)
-      for (int dz = 0; dz < N; ++dz)
+      for (int i = 0; i < N; ++i)
       {
-         gx += bs.B[qz][dz] * bgu[dz];
-         gy += bs.B[qz][dz] * gbu[dz];
-         gz += bs.G[qz][dz] * bbu[dz];
+         gx += bs.D[tx][i] * sXG[qz * L::YZ + ty * N + i];
+         gy += bs.D[ty][i] * sXG[qz * L::YZ + i * N + tx];
+         gz += bs.D[qz][i] * uq[i];
       }
       s0[qz * L::YZ + col] = gx;
       s1[qz * L::YZ + col] = gy;
@@ -656,91 +684,82 @@ __device__ inline void GradLines(const real_t* __restrict__ xe, const int tx,
 }
 
 /// The transposed gradient of one component's flux (stacks f0, f1, f2, k = x,
-/// y, z; overwritten) into its dofs at @p ye (written): change 56's pass 2
-/// tail. Starts on each thread's own column (no sync needed before it).
+/// y, z; each thread's own column written by the point loop) into its dofs,
+/// collocated as GradLines: D^T along each direction at the points, summed,
+/// then B^T along z, y and x. The thread's x line of dofs @p di goes to the
+/// component's L-vector @p yc where a single element holds the dof (di >= 0)
+/// and to its slot in @p sc otherwise (-1 - di; summed by ScatterSlots).
 template <int N>
 __device__ inline void GradTransposeLines(const int tx, const int ty,
       const Basis<N>& bs, real_t* sXB,
-      real_t* sXG, real_t* f0, real_t* f1,
-      real_t* f2, real_t* __restrict__ ye)
+      real_t* sXG, const real_t* f0,
+      const real_t* f1, const real_t* f2,
+      const int* di, real_t* __restrict__ yc,
+      real_t* __restrict__ sc)
 {
    using L = Strides<N>;
-   // z: the thread's own column, read whole first: B for f0 and f1, G for f2.
+   __syncthreads(); // every thread's fluxes (and sXG free)
+   const int col = ty * N + tx;
+   // D^T at the points (x and y from the flux rows, z from the column), then
+   // B^T along z: thread (qx, qy) = (tx, ty), to sXG ([dz][qy][qx]).
    {
-      const int col = ty * N + tx;
-      real_t a0[N], a1[N], a2[N];
+      real_t a2[N], g[N];
+      MFEM_UNROLL(N)
+      for (int qz = 0; qz < N; ++qz) { a2[qz] = f2[qz * L::YZ + col]; }
       MFEM_UNROLL(N)
       for (int qz = 0; qz < N; ++qz)
       {
-         a0[qz] = f0[qz * L::YZ + col];
-         a1[qz] = f1[qz * L::YZ + col];
-         a2[qz] = f2[qz * L::YZ + col];
+         real_t v = 0.0;
+         MFEM_UNROLL(N)
+         for (int i = 0; i < N; ++i)
+         {
+            v += bs.D[i][tx] * f0[qz * L::YZ + ty * N + i] +
+                 bs.D[i][ty] * f1[qz * L::YZ + i * N + tx] + bs.D[i][qz] * a2[i];
+         }
+         g[qz] = v;
       }
       MFEM_UNROLL(N)
       for (int dz = 0; dz < N; ++dz)
       {
-         real_t z0 = 0.0, z1 = 0.0, z2 = 0.0;
+         real_t v = 0.0;
          MFEM_UNROLL(N)
-         for (int qz = 0; qz < N; ++qz)
-         {
-            z0 += bs.B[qz][dz] * a0[qz];
-            z1 += bs.B[qz][dz] * a1[qz];
-            z2 += bs.G[qz][dz] * a2[qz];
-         }
-         f0[dz * L::YZ + col] = z0;
-         f1[dz * L::YZ + col] = z1;
-         f2[dz * L::YZ + col] = z2;
+         for (int qz = 0; qz < N; ++qz) { v += bs.B[qz][dz] * g[qz]; }
+         sXG[dz * L::YZ + col] = v;
       }
    }
    __syncthreads();
-   // y: thread (qx, dz) = (tx, ty): B for f0 (to sXB), G for f1 and B for f2
-   // (to sXG).
+   // y: thread (qx, dz) = (tx, ty): B^T along y to sXB ([dz][dy][qx]).
    {
-      real_t z0[N], z1[N], z2[N];
+      real_t z[N];
       MFEM_UNROLL(N)
-      for (int qy = 0; qy < N; ++qy)
-      {
-         z0[qy] = f0[ty * L::YZ + qy * N + tx];
-         z1[qy] = f1[ty * L::YZ + qy * N + tx];
-         z2[qy] = f2[ty * L::YZ + qy * N + tx];
-      }
+      for (int qy = 0; qy < N; ++qy) { z[qy] = sXG[ty * L::YZ + qy * N + tx]; }
       MFEM_UNROLL(N)
       for (int dy = 0; dy < N; ++dy)
       {
-         real_t w0 = 0.0, w1 = 0.0;
+         real_t w = 0.0;
          MFEM_UNROLL(N)
-         for (int qy = 0; qy < N; ++qy)
-         {
-            w0 += bs.B[qy][dy] * z0[qy];
-            w1 += bs.G[qy][dy] * z1[qy] + bs.B[qy][dy] * z2[qy];
-         }
-         sXB[ty * L::XZ + dy * L::XQ + tx] = w0;
-         sXG[ty * L::XZ + dy * L::XQ + tx] = w1;
+         for (int qy = 0; qy < N; ++qy) { w += bs.B[qy][dy] * z[qy]; }
+         sXB[ty * L::XZ + dy * L::XQ + tx] = w;
       }
    }
    __syncthreads();
-   // x: thread (dy, dz) = (tx, ty): G for sXB, B for sXG.
+   // x: thread (dy, dz) = (tx, ty): B^T along x, to the dofs. The next call's
+   // first sync orders its writes of sXG after these reads of sXB.
    {
-      real_t w0[N], w1[N];
+      real_t w[N];
       MFEM_UNROLL(N)
-      for (int qx = 0; qx < N; ++qx)
-      {
-         w0[qx] = sXB[ty * L::XZ + tx * L::XQ + qx];
-         w1[qx] = sXG[ty * L::XZ + tx * L::XQ + qx];
-      }
+      for (int qx = 0; qx < N; ++qx) { w[qx] = sXB[ty * L::XZ + tx * L::XQ + qx]; }
       MFEM_UNROLL(N)
       for (int dx = 0; dx < N; ++dx)
       {
          real_t v = 0.0;
          MFEM_UNROLL(N)
-         for (int qx = 0; qx < N; ++qx)
-         {
-            v += bs.G[qx][dx] * w0[qx] + bs.B[qx][dx] * w1[qx];
-         }
-         ye[dx + N * (tx + N * ty)] = v;
+         for (int qx = 0; qx < N; ++qx) { v += bs.B[qx][dx] * w[qx]; }
+         const int d = di[dx];
+         if (d >= 0) { yc[d] = v; }
+         else { sc[-1 - d] = v; }
       }
    }
-   __syncthreads(); // sXB, sXG and the stacks reused next
 }
 
 /// J^-1 at point q of element e: JI[k + 3 d].
@@ -809,13 +828,18 @@ PointwiseKernel(const __grid_constant__ Args<N> a)
    real_t* sXG = smem + L::XS;
    real_t* st = smem + 2 * L::XS; // stack 3 c + k at st + (3 c + k) YS
    const int e = blockIdx.x, tx = threadIdx.x, ty = threadIdx.y;
-   const int col = ty * N + tx;
-   MFEM_UNROLL(3)
-   for (int c = 0; c < 3; ++c)
+   const int col = ty * N + tx, line = NQ * e + N * (tx + N * ty);
    {
-      real_t* s = st + 3 * c * L::YS;
-      GradLines<N>(a.x + NQ * (c + 3 * e), tx, ty, a.bs, sXB, sXG, s, s + L::YS,
-                   s + 2 * L::YS);
+      int gi[N]; // the thread's x line of L-dofs
+      MFEM_UNROLL(N)
+      for (int dx = 0; dx < N; ++dx) { gi[dx] = a.gmap[line + dx]; }
+      MFEM_UNROLL(3)
+      for (int c = 0; c < 3; ++c)
+      {
+         real_t* s = st + 3 * c * L::YS;
+         GradLines<N>(a.x + a.nd * c, gi, tx, ty, a.bs, sXB, sXG, s, s + L::YS,
+                      s + 2 * L::YS);
+      }
    }
    const real_t lam = a.lambda[e], mu = a.mu[e];
    [[maybe_unused]] real_t esum = 0.0;
@@ -847,12 +871,15 @@ PointwiseKernel(const __grid_constant__ Args<N> a)
    if constexpr(ENERGY) { a.we[col + N * N * e] = esum; }
    if constexpr(RESIDUAL)
    {
+      int di[N]; // the thread's x line of destinations
+      MFEM_UNROLL(N)
+      for (int dx = 0; dx < N; ++dx) { di[dx] = a.dmap[line + dx]; }
       MFEM_UNROLL(3)
       for (int c = 0; c < 3; ++c)
       {
          real_t* s = st + 3 * c * L::YS;
          GradTransposeLines<N>(tx, ty, a.bs, sXB, sXG, s, s + L::YS, s + 2 * L::YS,
-                               a.y + NQ * (c + 3 * e));
+                               di, a.y + a.nd * c, a.slots + a.ns * c);
       }
    }
 }
@@ -868,23 +895,28 @@ TangentKernel(const __grid_constant__ Args<N> a)
    real_t* sXG = smem + L::XS;
    real_t* st = smem + 2 * L::XS; // dF's stacks 0-8, F's 9-17 (MODE 2)
    const int e = blockIdx.x, tx = threadIdx.x, ty = threadIdx.y;
-   const int col = ty * N + tx;
-   if constexpr(MODE == 2)
+   const int col = ty * N + tx, line = NQ * e + N * (tx + N * ty);
    {
+      int gi[N]; // the thread's x line of L-dofs
+      MFEM_UNROLL(N)
+      for (int dx = 0; dx < N; ++dx) { gi[dx] = a.gmap[line + dx]; }
+      if constexpr(MODE == 2)
+      {
+         MFEM_UNROLL(3)
+         for (int c = 0; c < 3; ++c)
+         {
+            real_t* s = st + (9 + 3 * c) * L::YS;
+            GradLines<N>(a.lin + a.nd * c, gi, tx, ty, a.bs, sXB, sXG, s,
+                         s + L::YS, s + 2 * L::YS);
+         }
+      }
       MFEM_UNROLL(3)
       for (int c = 0; c < 3; ++c)
       {
-         real_t* s = st + (9 + 3 * c) * L::YS;
-         GradLines<N>(a.lin + NQ * (c + 3 * e), tx, ty, a.bs, sXB, sXG, s,
-                      s + L::YS, s + 2 * L::YS);
+         real_t* s = st + 3 * c * L::YS;
+         GradLines<N>(a.x + a.nd * c, gi, tx, ty, a.bs, sXB, sXG, s, s + L::YS,
+                      s + 2 * L::YS);
       }
-   }
-   MFEM_UNROLL(3)
-   for (int c = 0; c < 3; ++c)
-   {
-      real_t* s = st + 3 * c * L::YS;
-      GradLines<N>(a.x + NQ * (c + 3 * e), tx, ty, a.bs, sXB, sXG, s, s + L::YS,
-                   s + 2 * L::YS);
    }
    const real_t lam = a.lambda[e], mu = a.mu[e];
 #pragma unroll 1
@@ -917,12 +949,15 @@ TangentKernel(const __grid_constant__ Args<N> a)
       MAT::template Tangent<3>(F, S, dF, lam, mu, dP);
       WriteFlux<N>(st, i, a.wdet[q + NQ * e], JI, dP);
    }
+   int di[N]; // the thread's x line of destinations
+   MFEM_UNROLL(N)
+   for (int dx = 0; dx < N; ++dx) { di[dx] = a.dmap[line + dx]; }
    MFEM_UNROLL(3)
    for (int c = 0; c < 3; ++c)
    {
       real_t* s = st + 3 * c * L::YS;
       GradTransposeLines<N>(tx, ty, a.bs, sXB, sXG, s, s + L::YS, s + 2 * L::YS,
-                            a.y + NQ * (c + 3 * e));
+                            di, a.y + a.nd * c, a.slots + a.ns * c);
    }
 }
 
@@ -952,12 +987,24 @@ bool Lines3D(int dim)
 #endif
 }
 
-/// Pointwise3D's by-lines counterpart (y written, not added to).
+/// The by-lines kernels' gather and scatter maps
+/// (HyperelasticOperator::SetupLines).
+struct LinesMaps
+{
+   const Array<int>* gmap = nullptr; ///< E-dof to L-dof.
+   const Array<int>* dmap = nullptr; ///< E-dof to L-dof, or -1 - its slot.
+   Vector* slots = nullptr;          ///< (ns, 3).
+   int nd = 0, ns = 0;               ///< Scalar L-dofs, slots.
+};
+
+/// Pointwise3D's by-lines counterpart: x and y are L-vectors; y gets its
+/// single-element dofs and the slots their shared dofs' contributions
+/// (ScatterSlots finishes it).
 template <class MAT, int N, bool RESIDUAL, int STORE, bool ENERGY>
 void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                       const Vector& jinv, const Vector& wdet, const Vector& lam,
                       const Vector& mu, const Vector& x, Vector* y, Vector* fs,
-                      Vector* we)
+                      Vector* we, const LinesMaps& m)
 {
 #if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
    if (NE == 0) { return; }
@@ -968,7 +1015,15 @@ void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    a.lambda = lam.Read();
    a.mu = mu.Read();
    a.x = x.Read();
-   if constexpr(RESIDUAL) { a.y = y->Write(); }
+   a.gmap = m.gmap->Read();
+   a.nd = m.nd;
+   a.ns = m.ns;
+   if constexpr(RESIDUAL)
+   {
+      a.y = y->Write();
+      a.dmap = m.dmap->Read();
+      a.slots = m.slots->Write();
+   }
    if constexpr(STORE > 0) { a.fs = fs->Write(); }
    if constexpr(ENERGY) { a.we = we->Write(); }
    lines::Launch<N>(lines::PointwiseKernel<MAT, N, RESIDUAL, STORE, ENERGY, 1>, a,
@@ -977,17 +1032,18 @@ void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    MFEM_CONTRACT_VAR(NE); MFEM_CONTRACT_VAR(b); MFEM_CONTRACT_VAR(g);
    MFEM_CONTRACT_VAR(jinv); MFEM_CONTRACT_VAR(wdet); MFEM_CONTRACT_VAR(lam);
    MFEM_CONTRACT_VAR(mu); MFEM_CONTRACT_VAR(x); MFEM_CONTRACT_VAR(y);
-   MFEM_CONTRACT_VAR(fs); MFEM_CONTRACT_VAR(we);
+   MFEM_CONTRACT_VAR(fs); MFEM_CONTRACT_VAR(we); MFEM_CONTRACT_VAR(m);
    MFEM_ABORT("HyperelasticOperator: the by-lines kernels need a CUDA build");
 #endif
 }
 
-/// Tangent3D's by-lines counterpart (y written, not added to).
+/// Tangent3D's by-lines counterpart: x, y (and lin for MODE 2) are
+/// L-vectors, as PointwiseLines3D's.
 template <class MAT, int N, int MODE>
 void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                     const Vector& jinv, const Vector& wdet, const Vector& lam,
                     const Vector& mu, const Vector& lin, const Vector& x,
-                    Vector& y)
+                    Vector& y, const LinesMaps& m)
 {
 #if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
    if (NE == 0) { return; }
@@ -1000,15 +1056,43 @@ void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    a.lin = lin.Read();
    a.x = x.Read();
    a.y = y.Write();
+   a.gmap = m.gmap->Read();
+   a.dmap = m.dmap->Read();
+   a.slots = m.slots->Write();
+   a.nd = m.nd;
+   a.ns = m.ns;
    lines::Launch<N>(lines::TangentKernel<MAT, N, MODE, 1>, a, NE,
                     MODE == 2 ? 18 : 9);
 #else
    MFEM_CONTRACT_VAR(NE); MFEM_CONTRACT_VAR(b); MFEM_CONTRACT_VAR(g);
    MFEM_CONTRACT_VAR(jinv); MFEM_CONTRACT_VAR(wdet); MFEM_CONTRACT_VAR(lam);
    MFEM_CONTRACT_VAR(mu); MFEM_CONTRACT_VAR(lin); MFEM_CONTRACT_VAR(x);
-   MFEM_CONTRACT_VAR(y);
+   MFEM_CONTRACT_VAR(y); MFEM_CONTRACT_VAR(m);
    MFEM_ABORT("HyperelasticOperator: the by-lines kernels need a CUDA build");
 #endif
+}
+
+/// y(j, c) = the sum of the shared L-dof j's slots for each component, in
+/// slot (element) order: the by-lines scatter's second half.
+void ScatterSlots(const Array<int>& sdof, const Array<int>& soff,
+                  const Array<int>& sidx, const Vector& slots, const int nd,
+                  const int ns, Vector& y)
+{
+   const int n = sdof.Size();
+   if (n == 0) { return; }
+   const auto J = sdof.Read(), O = soff.Read(), I = sidx.Read();
+   const auto S = slots.Read();
+   auto Y = y.ReadWrite();
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int k)
+   {
+      const int j = J[k], k0 = O[k], k1 = O[k + 1];
+      for (int c = 0; c < 3; ++c)
+      {
+         real_t v = 0.0;
+         for (int i = k0; i < k1; ++i) { v += S[I[i] + ns * c]; }
+         Y[j + nd * c] = v;
+      }
+   });
 }
 
 /// f(std::integral_constant<int, N>) for N = n in 2..8 (compile-time sizes).
@@ -1048,28 +1132,38 @@ public:
 
    void Mult(const Vector& w, Vector& y) const override
    {
-      op_.ToElements(w);
-      const bool lines = Lines3D(op_.dim_); // writes ye_ whole
-      if (!lines) { op_.ye_ = 0.0; }
       const auto& m = *op_.maps_;
       const int mode = 2 - StoreFor(op_.storage_); // 0 F,S; 1 F; 2 displacement
+      const LinesMaps lm{op_.gmap_, &op_.dmap_, &op_.slots_, op_.nd_, op_.nslots_};
+      const Vector* xl = nullptr;
+      Vector* yl = nullptr;
+      if (op_.lines_)
+      {
+         xl = &op_.LocalInput(w);
+         yl = &op_.LocalOutput(y);
+      }
+      else
+      {
+         op_.ToElements(w);
+         op_.ye_ = 0.0;
+      }
       WithPoints(op_.n1d_, [&](auto nc)
       {
          constexpr int N = decltype(nc)::value;
          auto run = [&](auto mc)
          {
             constexpr int MODE = decltype(mc)::value;
-            if (op_.dim_ == 2)
+            if (op_.lines_)
+            {
+               TangentLines3D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
+                     op_.wdet_, op_.lambda_, op_.mu_,
+                     op_.lin_, *xl, *yl, lm);
+            }
+            else if (op_.dim_ == 2)
             {
                Tangent2D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
                                                      op_.wdet_, op_.lambda_, op_.mu_,
                                                      op_.lin_, op_.ue_, op_.ye_);
-            }
-            else if (lines)
-            {
-               TangentLines3D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
-                     op_.wdet_, op_.lambda_, op_.mu_,
-                     op_.lin_, op_.ue_, op_.ye_);
             }
             else
             {
@@ -1082,7 +1176,8 @@ public:
          else if (mode == 1) { run(std::integral_constant<int, 1> {}); }
          else { run(std::integral_constant<int, 2> {}); }
       });
-      op_.FromElements(y);
+      if (op_.lines_) { op_.FinishOutput(*yl, y); }
+      else { op_.FromElements(y); }
    }
 
 private:
@@ -1136,13 +1231,19 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
       if (dim_ == 2) { SetupGeometry<2>(nq, ne_, ir_, geom->J, jinv_, wdet_); }
       else { SetupGeometry<3>(nq, ne_, ir_, geom->J, jinv_, wdet_); }
    }
+   lines_ = Lines3D(dim_);
+   if (lines_) { SetupLines(scratch); }
    const int nstore = StoreFor(storage_);
    lin_.SetSize(nstore > 0 ? nq * nstore * dim_ * dim_ * ne_ :
-                restriction_->Height());
+                (lines_ ? fes.GetVSize() : restriction_->Height()));
    lin_.UseDevice(true);
 
    const int ne_size = restriction_->Height(), nl = fes.GetVSize();
-   if (scratch && scratch->Size() >= ne_size)
+   if (lines_)
+   {
+      own_e_ = false; // no E-vectors
+   }
+   else if (scratch && scratch->Size() >= ne_size)
    {
       scratch->Lend(0, ne_size, ue_);
       scratch->Lend(1, ne_size, ye_);
@@ -1181,7 +1282,94 @@ std::size_t HyperelasticOperator::MemoryBytes() const
                    lambda_.Size() + mu_.Size();
    if (own_e_) { n += ue_.Size() + ye_.Size(); }
    if (own_l_) { n += ul_.Size() + yl_.Size(); }
-   return n * sizeof(real_t);
+   if (own_slots_) { n += slots_.Size(); }
+   const std::size_t ni = dmap_.Size() + sdof_.Size() + soff_.Size() +
+                          sidx_.Size();
+   return n * sizeof(real_t) + ni * sizeof(int);
+}
+
+void HyperelasticOperator::SetupLines(ElementScratch* scratch)
+{
+   const auto* er = dynamic_cast<const ElementRestriction*>(restriction_);
+   if (!er)
+   {
+      lines_ = false;
+      return;
+   }
+   const int nq = n1d_ * n1d_ * n1d_, nd = fes_.GetNDofs();
+   const Array<int>& g = er->GatherMap();
+   MFEM_VERIFY(g.Size() == nq * ne_, "HyperelasticOperator: gather map size");
+   const int* h = g.HostRead();
+   std::vector<int> count(nd, 0);
+   for (int i = 0; i < g.Size(); i++)
+   {
+      MFEM_VERIFY(h[i] >= 0 && h[i] < nd, "HyperelasticOperator: an H1 gather map");
+      count[h[i]]++;
+   }
+   // A dof one element holds is written directly; a shared one gets a slot
+   // per element, in element (E-dof) order.
+   dmap_.SetSize(g.Size());
+   int* dm = dmap_.HostWrite();
+   int ns = 0;
+   for (int i = 0; i < g.Size(); i++) { dm[i] = count[h[i]] == 1 ? h[i] : -1 - ns++; }
+   int nsh = 0;
+   for (int j = 0; j < nd; j++)
+   {
+      MFEM_VERIFY(count[j] > 0, "HyperelasticOperator: a dof in no local element");
+      if (count[j] > 1) { nsh++; }
+   }
+   sdof_.SetSize(nsh);
+   soff_.SetSize(nsh + 1);
+   int* sd = sdof_.HostWrite();
+   int* so = soff_.HostWrite();
+   std::vector<int> next(nd, -1);
+   so[0] = 0;
+   for (int j = 0, k = 0; j < nd; j++)
+   {
+      if (count[j] < 2) { continue; }
+      sd[k] = j;
+      next[j] = so[k];
+      so[k + 1] = so[k] + count[j];
+      k++;
+   }
+   sidx_.SetSize(ns);
+   int* si = sidx_.HostWrite();
+   for (int i = 0; i < g.Size(); i++)
+   {
+      if (dm[i] < 0) { si[next[h[i]]++] = -1 - dm[i]; } // ascending slots
+   }
+   gmap_ = &g;
+   nd_ = nd;
+   nslots_ = ns;
+   if (scratch && scratch->Size() >= 3 * ns)
+   {
+      scratch->Lend(0, 3 * ns, slots_);
+      own_slots_ = false;
+   }
+   else
+   {
+      slots_.SetSize(3 * ns);
+      slots_.UseDevice(true);
+   }
+}
+
+const Vector& HyperelasticOperator::LocalInput(const Vector& u) const
+{
+   if (p_identity_) { return u; }
+   fes_.GetProlongationMatrix()->Mult(u, ul_);
+   return ul_;
+}
+
+Vector& HyperelasticOperator::LocalOutput(Vector& y) const
+{
+   y.SetSize(Height());
+   return p_identity_ ? y : yl_;
+}
+
+void HyperelasticOperator::FinishOutput(Vector& yl, Vector& y) const
+{
+   ScatterSlots(sdof_, soff_, sidx_, slots_, nd_, nslots_, yl);
+   if (!p_identity_) { fes_.GetProlongationMatrix()->MultTranspose(yl_, y); }
 }
 
 void HyperelasticOperator::ToElements(const Vector& u) const
@@ -1209,21 +1397,29 @@ void HyperelasticOperator::FromElements(Vector& y) const
 
 void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
 {
+   if (lines_)
+   {
+      const Vector& xl = LocalInput(u);
+      Vector& yl = LocalOutput(r);
+      const LinesMaps lm{gmap_, &dmap_, &slots_, nd_, nslots_};
+      WithPoints(n1d_, [&](auto nc)
+      {
+         constexpr int N = decltype(nc)::value;
+         PointwiseLines3D<StVenantKirchhoff, N, true, 0, false>(
+            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, xl, &yl, nullptr,
+            nullptr, lm);
+      });
+      FinishOutput(yl, r);
+      return;
+   }
    ToElements(u);
-   const bool lines = Lines3D(dim_); // writes ye_ whole
-   if (!lines) { ye_ = 0.0; }
+   ye_ = 0.0;
    WithPoints(n1d_, [&](auto nc)
    {
       constexpr int N = decltype(nc)::value;
       if (dim_ == 2)
       {
          Pointwise2D<StVenantKirchhoff, N, true, 0, false>(
-            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, &ye_, nullptr,
-            nullptr);
-      }
-      else if (lines)
-      {
-         PointwiseLines3D<StVenantKirchhoff, N, true, 0, false>(
             ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, &ye_, nullptr,
             nullptr);
       }
@@ -1239,28 +1435,33 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
 
 Operator& HyperelasticOperator::GetGradient(const Vector& u) const
 {
-   ToElements(u);
    const int nstore = StoreFor(storage_);
+   const Vector* xl = nullptr;
+   if (lines_) { xl = &LocalInput(u); }
+   else { ToElements(u); }
    if (nstore == 0)
    {
-      lin_ = ue_; // the displacement's E-vector: the tangent recomputes F, S
+      // The displacement (its L-vector or E-vector): the tangent recomputes
+      // F and S.
+      lin_ = lines_ ? *xl : ue_;
       return *tangent_;
    }
+   const LinesMaps lm{gmap_, &dmap_, &slots_, nd_, nslots_};
    WithPoints(n1d_, [&](auto nc)
    {
       constexpr int N = decltype(nc)::value;
       auto run = [&](auto sc)
       {
          constexpr int STORE = decltype(sc)::value;
-         if (dim_ == 2)
-         {
-            Pointwise2D<StVenantKirchhoff, N, false, STORE, false>(
-               ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, &lin_,
-               nullptr);
-         }
-         else if (Lines3D(dim_))
+         if (lines_)
          {
             PointwiseLines3D<StVenantKirchhoff, N, false, STORE, false>(
+               ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, *xl, nullptr, &lin_,
+               nullptr, lm);
+         }
+         else if (dim_ == 2)
+         {
+            Pointwise2D<StVenantKirchhoff, N, false, STORE, false>(
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, &lin_,
                nullptr);
          }
@@ -1286,19 +1487,22 @@ double HyperelasticOperator::Energy(const Vector& u) const
       qe_.SetSize(n1d_ * n1d_ * ne_);
       qe_.UseDevice(true);
    }
-   ToElements(u);
+   const Vector* xl = nullptr;
+   if (lines_) { xl = &LocalInput(u); }
+   else { ToElements(u); }
+   const LinesMaps lm{gmap_, &dmap_, &slots_, nd_, nslots_};
    WithPoints(n1d_, [&](auto nc)
    {
       constexpr int N = decltype(nc)::value;
-      if (dim_ == 2)
-      {
-         Pointwise2D<StVenantKirchhoff, N, false, 0, true>(
-            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
-            &qe_);
-      }
-      else if (Lines3D(dim_))
+      if (lines_)
       {
          PointwiseLines3D<StVenantKirchhoff, N, false, 0, true>(
+            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, *xl, nullptr, nullptr,
+            &qe_, lm);
+      }
+      else if (dim_ == 2)
+      {
+         Pointwise2D<StVenantKirchhoff, N, false, 0, true>(
             ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
             &qe_);
       }
