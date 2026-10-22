@@ -39,7 +39,7 @@ lift +1.46 %; CFD3 at the defaults (Q6 OIFS, 314 elements,
 26 min at np 4) drag 439.52 +- 5.69, lift -11.78 +- 431.7, frequency 4.439 against
 439.45 +- 5.62, -11.89 +- 437.8, 4.396; the flag alone under CSM1's load with the
 linear solid (CSM proper needs the SVK solid). Cloud scratch build, CPU; not run on a
-GPU. **Next:** CFD3 on the refined mesh, then the coupling framework (F3).
+GPU. CFD3 on the refined mesh (`level: 1`, 1,256 elements): lift amplitude -1.4 -> -0.29 %, the rest unchanged (drag +0.03 % / +1.7 %, frequency +1.1 %). **Next:** the coupling framework (F3).
 
 **ALE fluid, IMEX, on the CPU (2026-10-21, branch `claude/project-thread-xnsz2c`;
 human: "can you go scope out what needs to be done to implement ALE now?", then

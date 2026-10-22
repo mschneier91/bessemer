@@ -37,9 +37,15 @@ toolchain), CPU, np 4, 2026-10-22.
 | CFD1 | same, `level: 1` | 1,256 | 13,148 | 40 min | 14.3097 | +0.12 % | 1.12210 | +0.27 % |
 | CFD2 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 20 | 314 | 17,920 | 38 min | 136.791 | +0.07 % | 10.6883 | +1.46 % |
 | CFD3 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 12 | 314 | 20,843 | 26 min | 439.52 ± 5.690 | +0.02 % / +1.3 % | −11.78 ± 431.7 | +1.0 % / −1.4 % |
+| CFD3 | same, `level: 1` | 1,256 | 44,038 | not timed (shared cores, restarted twice) | 439.57 ± 5.713 | +0.03 % / +1.7 % | −12.27 ± 436.5 | −3.2 % / −0.29 % |
 
-CFD3's frequency: 4.439 (+1.0 %). Over the last four periods instead of the last:
-drag 439.58 ± 5.753, lift −11.88 ± 431.9, frequency 4.440.
+CFD3's frequency: 4.439 (+1.0 %); at `level: 1` 4.444 (+1.1 %). Over the last four
+periods instead of the last: drag 439.58 ± 5.753, lift −11.88 ± 431.9, frequency 4.440;
+at `level: 1` drag 439.57 ± 5.728, lift −12.29 ± 436.6. Refinement brings the lift
+amplitude, the quantity that moves most, from −1.4 % to −0.29 %; the drag mean and
+amplitude, the frequency and the lift mean (a small difference of large values, ±3 % of
+it is ±0.4) stay where they were: what is left there is not this mesh family's spatial error
+(time step, or the reference's own error, not separated).
 
 - CFD2 is steady here as in Turek & Hron (the flag holds the wake): over t ≥ 15 the
   drag varies by 6·10⁻³ and the lift by 10⁻⁵. Its lift, a small difference of large
