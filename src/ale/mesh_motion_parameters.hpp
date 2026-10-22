@@ -46,6 +46,9 @@ struct MeshMotionParameters
    double atol = 0.0;     ///< CG absolute tolerance.
    int max_iter = 2000;   ///< CG iteration cap.
    ElasticityPC preconditioner = ElasticityPC::LorAmg; ///< CG preconditioner.
+   /// Earlier solutions kept for reuse (0: none): boundary data in the span
+   /// of earlier data (rigid or modal motion) need no solve.
+   int basis_size = 12;
 
    /// @param order_u The fluid's velocity order. @return The order in effect.
    int Order(int order_u) const { return order > 0 ? order : order_u; }

@@ -8,8 +8,9 @@ different type of solver (hyper elasticity etc) can be used". Since
 2026-10-21 a deck can deform its mesh by prescribed boundary displacements
 (`equation: mesh_motion`, section 3; human: "add the capability to deform a
 given mesh using the structural solver ... specify like a function on the
-boundary"). Nothing in the flow solver moves its mesh yet: that is the ALE
-fluid, the next step.
+boundary"). Since 2026-10-21 a flow case can move its mesh at every step
+with a `MeshMotion` (`Case::SetMeshMotion`, IMEX, no deck keys yet): the ALE
+fluid, [ale_fluid.md](ale_fluid.md).
 
 ## 1. Formulation
 
@@ -245,10 +246,9 @@ runs `cases/mesh_deform_2d.yaml` end to end.
 0. Run the decks and tests on a GPU (human 2026-10-21: "next step is to have
    it tested on GPU"); the expression evaluation and the boundary-error check
    are host loops, at setup and once per move.
-1. The ALE fluid: the convective velocity u - w, the mesh velocity's
-   geometric conservation law with BDF, the flow operators refreshed after
-   each move, the `mesh_motion:` deck section driving a flow case; verified on
-   a moving-domain MMS.
+1. The ALE fluid: started 2026-10-21 (IMEX, library only, a full rebuild
+   after each move; [ale_fluid.md](ale_fluid.md)); next there the deck
+   section, the in-place refresh and the validation.
 2. A hyperelastic mesh-motion model (shares the large-deformation solid of
    the Turek-Hron step).
 3. Sliding boundaries; an incremental (current-configuration) mode if large

@@ -1,9 +1,11 @@
 #include "solver/case.hpp"
 
+#include "ale/linear_elastic_motion.hpp"
 #include "amr/gradient_indicator.hpp"
 #include "amr/history_projection.hpp"
 #include "amr/mesh_adapter.hpp"
 #include "bc/boundary_names.hpp"
+#include "config/expression.hpp"
 #include "operators/kernel_specializations.hpp"
 #include "time/oifs_convection.hpp"
 #include "util/device.hpp"
@@ -48,6 +50,72 @@ Case::Case(ParMesh& mesh, const Parameters& params)
       deck_forcing_ = std::make_unique<VectorConstantCoefficient>(f);
       forcing_ = deck_forcing_.get();
    }
+   BuildDeckMotion();
+}
+
+void Case::BuildDeckMotion()
+{
+   bool moves = false;
+   for (const BcSpec& s : params_.boundary_conditions)
+   {
+      moves = moves || !s.motion.empty();
+      // A moving no_slip wall takes u = w; any other moving group has data
+      // of its own that may cross the moving boundary.
+      if (!s.motion.empty() && s.type != BcType::NoSlip)
+      {
+         walls_follow_mesh_ = false;
+      }
+   }
+   if (!moves) { return; }
+   if (mesh_.GetNodes())
+   {
+      MFEM_VERIFY(dynamic_cast<const H1_FECollection*>(
+                     mesh_.GetNodes()->FESpace()->FEColl()),
+                  "case: a moving mesh needs continuous nodes (a periodic "
+                  "mesh cannot move yet)");
+   }
+   const MeshMotionParameters& mm = params_.mesh_motion;
+   const int dim = mesh_.Dimension();
+   MeshMotion::Options o;
+   o.order = 0; // the nodal order
+   // A mesh without nodes gets them at this order (a curved one keeps its).
+   o.geometry_order = mm.Order(params_.order_u);
+   LinearElasticMotion::Options e;
+   e.poisson_ratio = mm.poisson_ratio;
+   e.stiffening = mm.stiffening;
+   e.preconditioner = mm.preconditioner;
+   e.rtol = mm.rtol;
+   e.atol = mm.atol;
+   e.max_iter = mm.max_iter;
+   e.basis_size = mm.basis_size;
+   own_motion_ = std::make_unique<MeshMotion>(mesh_, o,
+                 LinearElasticMotion::Factory(e));
+   // The moving groups' displacements; every other boundary is held.
+   const std::vector<int> all = AllBoundaryAttributes(params_, mesh_);
+   for (const BcSpec& s : params_.boundary_conditions)
+   {
+      if (s.motion.empty()) { continue; }
+      std::vector<int> attrs = s.select_all ? all : s.attributes;
+      if (!s.select_all)
+      {
+         for (const std::string& name : s.faces)
+         {
+            attrs.push_back(NamedBoundaryAttribute(params_, mesh_, name));
+         }
+      }
+      auto ex = std::make_shared<VectorExpression>(s.motion,
+                s.expression_parameters);
+      deck_motion_coeffs_.push_back(std::make_unique<VectorFunctionCoefficient>(
+                                       dim, [ex](const Vector & X, double t, Vector & d)
+      {
+         ex->Eval(X, t, d);
+      }));
+      for (int a : attrs)
+      {
+         own_motion_->AddDisplacement(a, *deck_motion_coeffs_.back());
+      }
+   }
+   SetMeshMotion(*own_motion_);
 }
 
 Case::~Case()
@@ -155,12 +223,55 @@ void Case::BuildIntegrator()
    opts.uzawa = params_.uzawa;
    integrator_ = std::make_unique<StokesTimeIntegrator>(spaces_, rules_, *bc_,
                  *forcing_, opts);
+   if (motion_)
+   {
+      integrator_->SetMeshMotion(*motion_, *mesh_w_);
+      if (own_motion_ && walls_follow_mesh_)
+      {
+         integrator_->RequireConstantVolume();
+      }
+   }
    body_force_.reset();
    if (params_.forces.enabled)
    {
       body_force_ = std::make_unique<BodyForce>(spaces_.Velocity(),
                     params_.forces.attributes);
    }
+}
+
+void Case::SetMeshMotion(MeshMotion& motion)
+{
+   MFEM_VERIFY(!integrator_, "case: SetMeshMotion() before the first step");
+   MFEM_VERIFY(!motion_, "case: the mesh already moves (the deck's moving "
+               "boundaries, or an earlier SetMeshMotion())");
+   MFEM_VERIFY(!params_.amr.enabled, "case: AMR on a moving mesh is not "
+               "supported");
+   MFEM_VERIFY(params_.Convection() == ConvectionTreatment::Imex ||
+               params_.convection_treatment == ConvectionTreatment::Auto,
+               "case: a moving mesh needs time.convection: imex (or auto)");
+   params_.moving_mesh = true;
+   motion_ = &motion;
+   mesh_w_ = std::make_unique<MeshVelocityField>(spaces_.Velocity());
+   relative_u_ = std::make_unique<ParGridFunction>(&spaces_.Velocity());
+}
+
+MeshMotion& Case::Motion()
+{
+   MFEM_VERIFY(motion_, "case: Motion() needs a moving mesh");
+   return *motion_;
+}
+
+VectorCoefficient& Case::MeshVelocityCoefficient()
+{
+   MFEM_VERIFY(mesh_w_, "case: MeshVelocityCoefficient() needs "
+               "SetMeshMotion()");
+   return mesh_w_->Coefficient();
+}
+
+const ParGridFunction& Case::MeshVelocity() const
+{
+   MFEM_VERIFY(mesh_w_, "case: MeshVelocity() needs SetMeshMotion()");
+   return mesh_w_->Field();
 }
 
 void Case::BuildOutput(bool restart)
@@ -205,7 +316,8 @@ void Case::EnsureSetup()
    if (!bc_explicit_ && !params_.boundary_conditions.empty())
    {
       deck_bc_ = std::make_unique<DeckBoundaryConditions>(params_, mesh_);
-      deck_bc_->Apply(own_bc_, nullptr, /*require_coverage=*/true);
+      deck_bc_->Apply(own_bc_, nullptr, /*require_coverage=*/true,
+                      mesh_w_ ? &mesh_w_->Coefficient() : nullptr);
    }
    // The force body by boundary name.
    for (const std::string& name : params_.forces.boundaries)
@@ -264,6 +376,22 @@ void Case::EnsureSetup()
    {
       Checkpoint::Read(params_.restart_from, *integrator_);
       cycle_ = integrator_->StepCount(); // output/checkpoint cycles continue
+      if (motion_)
+      {
+         // The mesh where the march stopped, with the node history its next
+         // mesh velocity needs.
+         motion_->Load(params_.restart_from + "/mesh_motion");
+         MFEM_VERIFY(std::abs(motion_->Time() - integrator_->Time()) <=
+                     1e-12 * std::max(1.0, std::abs(integrator_->Time())),
+                     "case: the checkpoint's mesh motion is at t = "
+                     << motion_->Time() << ", its flow at t = "
+                     << integrator_->Time());
+         if (motion_->States() > 1)
+         {
+            mesh_w_->Update(*motion_, std::min(params_.BdfOrder(),
+                                               motion_->States() - 1));
+         }
+      }
    }
 
    // Channel statistics: restored with a restart (the averages continue),
@@ -869,6 +997,7 @@ void Case::WriteCheckpoint(const std::string& dir)
 {
    EnsureSetup();
    Checkpoint::Write(dir, *integrator_, params_, &refine_log_);
+   if (motion_) { motion_->Save(dir + "/mesh_motion"); }
    if (channel_stats_)
    {
       // The averaging state travels with the checkpoint (a restart continues
@@ -917,7 +1046,11 @@ void Case::SetupCfl()
       // state carries its dt) the initial dt is capped to the target too.
       integrator_->SetCflRate([this]()
       {
-         return cfl_->Rate(integrator_->Velocity());
+         if (!mesh_w_) { return cfl_->Rate(integrator_->Velocity()); }
+         // ALE: the convective velocity is u - w.
+         *relative_u_ = integrator_->Velocity();
+         *relative_u_ -= mesh_w_->Field();
+         return cfl_->Rate(*relative_u_);
       });
       if (integrator_->StepCount() == 0)
       {
@@ -1120,6 +1253,26 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
    m["pressure_dofs"].Set(static_cast<long long>
                           (spaces_.Pressure().GlobalTrueVSize()));
    m["amr_events"].Set(amr_events_);
+
+   if (motion_)
+   {
+      // The mesh's state: how far it moved and how distorted it is.
+      double jmin = 0.0, jmax = 0.0;
+      motion_->JacobianRange(jmin, jmax);
+      double dmax = motion_->NodeDisplacement().Normlinf();
+      MPI_Allreduce(MPI_IN_PLACE, &dmax, 1, MPI_DOUBLE, MPI_MAX,
+                    mesh_.GetComm());
+      Json& a = j["mesh_motion"];
+      a["moves"].Set(motion_->MoveCount());
+      a["time"].Set(motion_->Time());
+      a["det_f_min"].Set(jmin);
+      a["det_f_max"].Set(jmax);
+      a["max_displacement"].Set(dmax);
+      // The model's iterations per move of this process's run (a restart
+      // counts from its own start).
+      a["solve_iterations"].Set(static_cast<long long>
+                                (motion_->TotalIterations()));
+   }
 
    Json& d = j["diagnostics"];
    d["kinetic_energy"].Set(KineticEnergy());

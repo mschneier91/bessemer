@@ -12,7 +12,7 @@ Every key a YAML deck (`apps/run_case <deck.yaml>`) understands, with its defaul
 | `device` | string | `cpu` | MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins. |
 | `initial_velocity` | string | `zero` | Named initial condition: zero, uniform, channel (see the initial section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, -cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes from Python or C++. |
 | `restart` | string | `""` | Checkpoint directory to restart from (same number of MPI ranks). |
-| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}; a solid (equation linear_elasticity) takes type fixed \| displacement \| traction \| free instead, displacement and traction with value: [x, y(, z)] (a traction is sigma n, force per unit area); a displacement may instead give expression: one string per component in x, y, z, t (+ - * / ^, sin, cos, exp, sqrt, abs, min, max, ..., pi), with optional parameters: {name: value} usable in it. equation mesh_motion takes fixed \| displacement. Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. Every real boundary needs exactly one group when run by run_case. |
+| `boundary_conditions` | list | `[]` | Boundary groups, each {select: [names or attributes], type: no_slip \| outflow \| velocity \| velocity_dirichlet, ...}; a solid (equation linear_elasticity) takes type fixed \| displacement \| traction \| free instead, displacement and traction with value: [x, y(, z)] (a traction is sigma n, force per unit area); a displacement may instead give expression: one string per component in x, y, z, t (+ - * / ^, sin, cos, exp, sqrt, abs, min, max, ..., pi), with optional parameters: {name: value} usable in it. equation mesh_motion takes fixed \| displacement. Names: box faces xmin, xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. type velocity takes value: [u, v] (constant), or profile: parabolic with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D times 4 z (width - z) / width^2, width defaulting to height), optionally time_profile: ramp \| sine with time_scale T (ramp: sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet takes its field from Python or C++ by the group name. A flow boundary may move (the ALE fluid, docs/ale_fluid.md): motion: one string per component, its mesh displacement in the reference x, y, z and t, with parameters as for expression; a moving no_slip wall takes u = w (the mesh velocity), boundaries without motion keep their mesh in place, and the interior follows by the model of section mesh_motion, at every step. Every real boundary needs exactly one group when run by run_case. |
 
 ## `physics`
 
@@ -84,8 +84,16 @@ Box mesh (quads/hexes) for apps/run_case.
 | `mesh.cylinder_channel.cy` | real | `0.2` | Cylinder centre y. |
 | `mesh.cylinder_channel.n_side` | int | `4` | Cells along each side of the O-grid square. |
 | `mesh.cylinder_channel.n_ring` | int | `3` | Radial cell layers around the cylinder. |
+| `mesh.cylinder_channel.height` | real | `0.41` | Channel height (y). |
+| `mesh.cylinder_channel.radius` | real | `0.05` | Cylinder radius. |
+| `mesh.cylinder_channel.box_half` | real | `0.1` | Half-width of the O-grid's outer square (> radius). |
+| `mesh.cylinder_channel.ring_grading` | real | `1.5` | Radial growth ratio of the ring layers (> 1 clusters at the cylinder). |
 | `mesh.cylinder_channel.n_up` | int | `2` | Cells upstream of the O-grid. |
 | `mesh.cylinder_channel.n_down` | int | `16` | Cells downstream of the O-grid. |
+| `mesh.cylinder_channel.n_below` | int | `2` | Cells below the O-grid. |
+| `mesh.cylinder_channel.n_above` | int | `2` | Cells above the O-grid. |
+| `mesh.cylinder_channel.down_grading` | real | `1.1` | Growth ratio of the downstream cells toward the outflow. |
+| `mesh.cylinder_channel.outer_grading` | real | `1` | Growth ratio of the upstream, lower and upper cells away from the O-grid (1: uniform). |
 | `mesh.cylinder_channel.level` | int | `0` | Nested uniform refinement level (cell counts x 2^level). |
 | `mesh.cylinder_channel.nz` | int | `4` | 3D: element layers in z (x 2^level). |
 | `mesh.cylinder_channel.depth` | real | `0.41` | 3D: extent in z; the z = 0 and z = depth faces join the walls. |
@@ -323,7 +331,7 @@ The solid of equation linear_elasticity: small strains, isotropic and homogeneou
 
 ## `mesh_motion`
 
-Equation mesh_motion: the mesh is deformed by the boundary groups of type displacement, every other boundary held (type fixed), the displacement extended into the domain by a pseudo-solid (docs/mesh_motion.md).
+Equation mesh_motion: the mesh is deformed by the boundary groups of type displacement, every other boundary held (type fixed), the displacement extended into the domain by a pseudo-solid (docs/mesh_motion.md). A flow deck whose boundaries have motion uses the same model to move its mesh at every step (docs/ale_fluid.md); steps is then not used.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -335,4 +343,5 @@ Equation mesh_motion: the mesh is deformed by the boundary groups of type displa
 | `mesh_motion.rtol` | real | `1e-10` | CG relative tolerance. |
 | `mesh_motion.atol` | real | `0` | CG absolute tolerance. |
 | `mesh_motion.max_iter` | int | `2000` | CG iteration cap. |
+| `mesh_motion.basis_size` | int | `12` | Earlier solutions kept for reuse (0: none). The displacement is linear in the boundary data, so a move whose data lie in the span of earlier data (a rigid or modal motion: a few shapes times functions of t) is the same combination of the earlier solutions, with no solve. |
 | `mesh_motion.preconditioner` | loramg \| jacobi | `loramg` | CG preconditioner: one BoomerAMG V-cycle on the low-order-refined operator, or its diagonal. |

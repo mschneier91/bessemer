@@ -11,6 +11,7 @@
 #include "mfem.hpp"
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace incns
@@ -56,6 +57,10 @@ public:
       /// velocity of BDF order q needs q + 1. At least 2.
       int history = 4;
       double t0 = 0.0; ///< Time of the reference configuration.
+      /// Each solve starts from the kept states extrapolated to the new
+      /// time, at this polynomial order (capped by the states kept; the
+      /// tolerance stays the zero guess's); < 0: from zero.
+      int guess_order = 2;
    };
 
    /**
@@ -88,6 +93,31 @@ public:
     * @return Whether the model's solve converged (the nodes move anyway).
     */
    bool Move(double t);
+
+   /**
+    * @brief Undo the last Move(): drop the newest state and put the nodes
+    *        back at the previous one (a fluid step that is retried with a
+    *        smaller step, or a coupling subiteration that moves again).
+    *        Collective.
+    * @pre MoveCount() > 0 and more than one state kept.
+    */
+   void Revert();
+
+   /**
+    * @brief Write the state (the kept node displacements, their times, the
+    *        move count) to @p path, one file per rank (`<path>.r<rank>`), for
+    *        a restart at the same rank count. Collective only in that every
+    *        rank writes its own file.
+    * @param path File prefix.
+    */
+   void Save(const std::string& path) const;
+
+   /**
+    * @brief Restore a state Save() wrote and put the nodes there. The
+    *        boundary set must be the same as when it was saved. Collective.
+    * @param path File prefix.
+    */
+   void Load(const std::string& path);
 
    /**
     * @brief The BDF derivative of the node positions at the newest state,
@@ -124,6 +154,9 @@ public:
    double Time() const { return times_.front(); }
    /// @return Moves since construction.
    int MoveCount() const { return moves_; }
+   /// @return The model's iterations, summed over the moves (reverted ones
+   ///         included; not restored by Load()).
+   long TotalIterations() const { return total_iterations_; }
    /// @return States kept (the reference state counts until it is dropped).
    int States() const { return static_cast<int>(times_.size()); }
 
@@ -143,9 +176,17 @@ private:
    std::vector<int> moving_;                   ///< Displaced attributes.
    bool finalized_ = false;                    ///< Whether the set is fixed.
    int moves_ = 0;                             ///< Moves since construction.
+   long total_iterations_ = 0;                 ///< See TotalIterations().
+   /// The extrapolated guess: on the nodal space and on the model's.
+   std::unique_ptr<mfem::ParGridFunction> guess_nodes_;
+   std::unique_ptr<mfem::ParGridFunction> guess_model_; ///< See guess_nodes_.
    /// Node displacements of the kept states, newest first.
    std::vector<mfem::Vector> history_;
    std::vector<double> times_;                 ///< Their times.
+   /// The state the last Move() dropped from a full history (Revert()).
+   mfem::Vector dropped_;
+   double dropped_time_ = 0.0; ///< Its time.
+   bool has_dropped_ = false;  ///< Whether dropped_ holds one.
    /// Gauss-Lobatto rules of JacobianRange().
    mutable mfem::IntegrationRules gll_rules_;
 };

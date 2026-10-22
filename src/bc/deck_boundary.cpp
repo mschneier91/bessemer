@@ -116,7 +116,8 @@ std::vector<std::string> DeckBoundaryConditions::CoverageProblems() const
 
 void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
                                    const FieldLookup& field,
-                                   bool require_coverage)
+                                   bool require_coverage,
+                                   VectorCoefficient* mesh_velocity)
 {
    if (require_coverage)
    {
@@ -139,6 +140,15 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
             for (int a : attrs_[g]) { bc.AddOutflow(a); }
             break;
          case BcType::NoSlip:
+            if (!s.motion.empty())
+            {
+               // A moving wall: u = w (the fluid sticks to the moving mesh).
+               MFEM_VERIFY(mesh_velocity, "boundary_conditions: the no_slip "
+                           "group " << g << " moves, but no mesh velocity is "
+                           "given (the case's mesh does not move?)");
+               for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *mesh_velocity); }
+               break;
+            }
             for (int a : attrs_[g]) { bc.AddNoSlip(a); }
             break;
          case BcType::VelocityDirichlet:

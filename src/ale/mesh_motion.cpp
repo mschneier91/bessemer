@@ -4,6 +4,8 @@
 #include "util/profiler.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <fstream>
 #include <limits>
 
 namespace incns
@@ -107,7 +109,27 @@ bool MeshMotion::Move(double t)
    bool ok = false;
    {
       INCNS_PROFILE("mesh_motion::model");
-      ok = model_->Solve(t);
+      const int k = std::min(opts_.guess_order + 1, States());
+      if (k >= 2)
+      {
+         // The kept states extrapolated to t: deterministic across a
+         // restart (Save/Load carry them).
+         std::vector<double> times(times_.begin(), times_.begin() + k);
+         const std::vector<double> g = LagrangeWeights(t, times);
+         if (!guess_nodes_)
+         {
+            guess_nodes_ = std::make_unique<ParGridFunction>(disp_->ParFESpace());
+            guess_model_ = std::make_unique<ParGridFunction>(&model_->Space());
+         }
+         guess_nodes_->HostWrite();
+         *guess_nodes_ = 0.0;
+         for (int j = 0; j < k; ++j) { guess_nodes_->Add(g[j], history_[j]); }
+         guess_model_->HostReadWrite();
+         guess_model_->ProjectGridFunction(*guess_nodes_);
+         ok = model_->Solve(t, *guess_model_);
+      }
+      else { ok = model_->Solve(t); }
+      total_iterations_ += model_->Iterations();
    }
    {
       INCNS_PROFILE("mesh_motion::nodes");
@@ -128,11 +150,19 @@ bool MeshMotion::Move(double t)
       mesh_.NodesUpdated();
       if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
    }
-   // The new state at the front; the oldest dropped beyond the history.
+   // The new state at the front; the oldest dropped beyond the history (and
+   // kept aside, so that Revert() restores every level).
    if (static_cast<int>(history_.size()) < opts_.history)
    {
       history_.emplace_back(disp_->Size());
       times_.push_back(0.0);
+      has_dropped_ = false;
+   }
+   else
+   {
+      dropped_ = history_.back();
+      dropped_time_ = times_.back();
+      has_dropped_ = true;
    }
    std::rotate(history_.rbegin(), history_.rbegin() + 1, history_.rend());
    std::rotate(times_.rbegin(), times_.rbegin() + 1, times_.rend());
@@ -140,6 +170,91 @@ bool MeshMotion::Move(double t)
    times_[0] = t;
    ++moves_;
    return ok;
+}
+
+void MeshMotion::Revert()
+{
+   INCNS_PROFILE("mesh_motion::revert");
+   MFEM_VERIFY(moves_ > 0 && history_.size() > 1, "mesh_motion: Revert() "
+               "needs a move to undo");
+   history_.erase(history_.begin());
+   times_.erase(times_.begin());
+   // The state the move dropped comes back (one level only: a second
+   // Revert() in a row loses it).
+   if (has_dropped_)
+   {
+      history_.push_back(dropped_);
+      times_.push_back(dropped_time_);
+      has_dropped_ = false;
+   }
+   --moves_;
+   disp_->HostReadWrite();
+   static_cast<Vector&>(*disp_) = history_[0];
+   GridFunction& nodes = *mesh_.GetNodes();
+   nodes = x0_;
+   nodes += *disp_;
+   nodes.HostRead();
+   mesh_.NodesUpdated();
+   if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
+}
+
+void MeshMotion::Save(const std::string& path) const
+{
+   const std::string file = path + ".r" + std::to_string(mesh_.GetMyRank());
+   std::ofstream f(file, std::ios::binary);
+   MFEM_VERIFY(f, "mesh_motion: cannot write " << file);
+   const std::int64_t n = static_cast<std::int64_t>(history_.size());
+   const std::int64_t size = disp_->Size();
+   const std::int64_t moves = moves_;
+   f.write(reinterpret_cast<const char*>(&n), sizeof(n));
+   f.write(reinterpret_cast<const char*>(&size), sizeof(size));
+   f.write(reinterpret_cast<const char*>(&moves), sizeof(moves));
+   f.write(reinterpret_cast<const char*>(times_.data()),
+           static_cast<std::streamsize>(n * sizeof(double)));
+   for (const Vector& h : history_)
+   {
+      f.write(reinterpret_cast<const char*>(h.HostRead()),
+              static_cast<std::streamsize>(size * sizeof(double)));
+   }
+   model_->SaveState(f);
+   MFEM_VERIFY(f, "mesh_motion: writing " << file << " failed");
+}
+
+void MeshMotion::Load(const std::string& path)
+{
+   const std::string file = path + ".r" + std::to_string(mesh_.GetMyRank());
+   std::ifstream f(file, std::ios::binary);
+   MFEM_VERIFY(f, "mesh_motion: cannot read " << file
+               << " (missing checkpoint or wrong rank count?)");
+   std::int64_t n = 0, size = 0, moves = 0;
+   f.read(reinterpret_cast<char*>(&n), sizeof(n));
+   f.read(reinterpret_cast<char*>(&size), sizeof(size));
+   f.read(reinterpret_cast<char*>(&moves), sizeof(moves));
+   MFEM_VERIFY(f && n >= 1 && n <= opts_.history && size == disp_->Size(),
+               "mesh_motion: " << file << " does not match this mesh (rank "
+               "count, order or history length)");
+   times_.resize(n);
+   f.read(reinterpret_cast<char*>(times_.data()),
+          static_cast<std::streamsize>(n * sizeof(double)));
+   history_.assign(n, Vector(disp_->Size()));
+   for (Vector& h : history_)
+   {
+      f.read(reinterpret_cast<char*>(h.HostWrite()),
+             static_cast<std::streamsize>(size * sizeof(double)));
+   }
+   model_->LoadState(f);
+   MFEM_VERIFY(f, "mesh_motion: reading " << file << " failed");
+   moves_ = static_cast<int>(moves);
+   has_dropped_ = false;
+   Finalize();
+   disp_->HostWrite();
+   static_cast<Vector&>(*disp_) = history_.front();
+   GridFunction& nodes = *mesh_.GetNodes();
+   nodes = x0_;
+   nodes += *disp_;
+   nodes.HostRead();
+   mesh_.NodesUpdated();
+   if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
 }
 
 void MeshMotion::MeshVelocity(int order, Vector& w) const

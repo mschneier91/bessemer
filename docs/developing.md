@@ -158,7 +158,9 @@ src/
                (LinearElasticity with Jacobian stiffening), mesh_motion (moves the
                nodes to X + d from a reference copy; BDF mesh velocity;
                docs/mesh_motion.md), mesh_motion_case (equation: mesh_motion decks:
-               prescribed boundary displacements, det F and quality, ParaView)
+               prescribed boundary displacements, det F and quality, ParaView),
+               mesh_convection (the ALE fluid's mesh velocity on the velocity space
+               and its explicit convection C(w)u; docs/ale_fluid.md)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),
@@ -168,7 +170,8 @@ bench/         bench_graddiv, bench_rotation_pc, bench_velocity_pc (manual, not 
                dfg3/ (DFG 2D-3 scheme-comparison harness + raw results)
 benchmarks/    standard benchmarks: decks, reference data (CSV + citation, fetched by
                fetch_references.py, git-ignored: not redistributed), plot.py
-               --selftest (skipped until fetched) (tgv_re1600, channel, dfg_3d;
+               --selftest (skipped until fetched) (tgv_re1600, channel, dfg_3d,
+               oscillating_cylinder (ALE, Dütsch et al. 1998);
                sphere_re300 awaits a mesh). Not run yet (2026-10-10).
 cases/         example decks (square_cylinder_re200[_oifs], dfg_2d1, dfg_2d3),
                cavity.yaml (smoke), tgv2d_stokes.yaml, stokes_mms.yaml, channel_noslip.yaml
@@ -862,9 +865,17 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   membrane, the default scheme's time order, a cantilever's first frequency),
   `mesh_motion_test` (M1 translation exact with stiffening, M2 affine motion
   exact on the curved DFG mesh, M3 the DFG cylinder moved and back, M4 the BDF
-  mesh velocity, M5 a non-elastic model through the factory),
+  mesh velocity, M5 a non-elastic model through the factory, M6 a rigid motion
+  reuses earlier solves),
   `mesh_motion_case_test` (C1 2D rectangle with a ramped parabola, C2 3D cube
-  with a bump, C3 a translation; deck defaults), `expression_test` (E1-E4).
+  with a bump, C3 a translation; deck defaults), `expression_test` (E1-E4),
+  `ale_fluid_test` (the IMEX ALE fluid, docs/ale_fluid.md: A1 zero motion =
+  fixed mesh, A2 free stream on an oscillating mesh (the GCL) 2D/3D, A3 a
+  rigidly moved box carries the fluid, A4 a linear flow on a mesh moved at
+  constant rates, A5 a cut step moves the mesh back, A6/A7 Taylor-Green
+  spatial order 4 at Q3 and temporal order 2 on a moving mesh, A8 a deck's
+  `motion` group moves the mesh, A9 a moving-mesh restart = the uninterrupted
+  run).
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need

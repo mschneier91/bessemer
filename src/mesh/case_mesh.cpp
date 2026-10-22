@@ -57,6 +57,7 @@ std::unique_ptr<ParMesh> MakeCaseMesh(const Parameters& params, MPI_Comm comm)
          spec.n_above *= m;
          spec.ring_grading = std::pow(spec.ring_grading, root);
          spec.down_grading = std::pow(spec.down_grading, root);
+         spec.outer_grading = std::pow(spec.outer_grading, root);
          spec.order = std::max(params.order_u, 2);
          Mesh serial = MakeCylinderChannelMesh(spec);
          if (params.mesh.dim == 2)

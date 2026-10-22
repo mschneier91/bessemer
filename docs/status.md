@@ -9,6 +9,53 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**ALE fluid, IMEX, on the CPU (2026-10-21, branch `claude/project-thread-xnsz2c`;
+human: "can you go scope out what needs to be done to implement ALE now?", then
+"Alright can you go get started on this on CPUs").** Stages 0-1 of the scope
+(decisions: IMEX first; mesh moved every step by pseudo-elasticity with stiffening;
+cached geometry kept for fixed meshes plus a refresh path for moving ones; then the
+partitioned FSI to all nine Turek-Hron problems). Landed ([ale_fluid.md](ale_fluid.md)):
+`Case::SetMeshMotion(MeshMotion&)` and `StokesTimeIntegrator::SetMeshMotion`, the
+non-conservative ALE form on the current mesh: each step moves the mesh, takes w as
+the BDF derivative of the nodes (`MeshVelocityField`), rebuilds every solver and the
+convection on the moved mesh, and adds the explicit, extrapolated mesh convection
+C(w) u* (`src/ale/mesh_convection`); u = w on moving walls
+(`Case::MeshVelocityCoefficient`); a cut step moves the mesh back
+(`MeshMotion::Revert`, new); the CFL uses u - w; `time.convection: auto` picks IMEX
+on a moving mesh; OIFS, the rotational form, error control and AMR are refused.
+Test `ale_fluid_test` A1-A7 (fast): the free stream stays uniform (GCL) in 2D and 3D,
+a rigid box carries the fluid, Taylor-Green on an oscillating mesh converges at
+order 4.3 in h (Q3) and 2.2 in dt. Run in the cloud on a scratch build (MFEM v4.10
+from GitHub, apt hypre and Open MPI, not the Spack toolchain) at np 1/2/4; its fast
+tier fails 10 tests that fail the same way on main there (the unpatched MFEM 4.10
+AnisotropicConflict segfault, apt hypre's "Error during solve"); CI is the gate.
+Never run on a GPU. **Stage 2, the deck surface (2026-10-22; human: "Rather than
+merge keep going"):** a boundary group's `motion` (expressions in the reference
+x, y, z, t with `parameters`) moves the mesh; groups without it stay fixed; a moving
+`no_slip` group takes u = w; the interior follows section `mesh_motion`'s elastic
+model (`Case::BuildDeckMotion`); checkpoints carry the node history
+(`MeshMotion::Save/Load`, per rank), the summary a `mesh_motion` section. Tests A8
+(deck rigid box), A9 (restart = uninterrupted to 1e-13), np 1/2/4. Deck
+`cases/ale_oscillating_cylinder.yaml` (DFG channel, Re 100, cylinder moved across at
+0.2 D: t = 2 in 55 s at np 4, det F in [0.89, 1.11]; not validated). Refused:
+dimensional decks, periodic meshes. Then: the outer solver's initial-guess state carried
+across the per-step rebuild (outer iterations 1,336 -> 545 on the cylinder deck to
+t = 0.3; zero motion now costs what the fixed mesh does), the mesh solve from the
+extrapolated node history (3D 8^3 Q3: 5.3 -> 3.1 s over 10 moves), and an abort when
+moving walls change a closed domain's volume (it used to iterate to the solver's cap;
+test `run_case_rejects_volume_change`). Stage 4: `LinearElasticMotion` reuses earlier
+solves when the boundary data lie in their span (`mesh_motion.basis_size`, 12; rigid or
+modal motion needs one solve per shape; checkpointed; test `mesh_motion_test` M6): the
+cylinder deck to t = 0.3 makes 1 mesh solve in 116 moves, run 3.26 s -> 1.46 s at np 4
+(the fixed mesh: 0.82 s in 80 steps). **Slow by design for now:** every solver, the
+pressure LOR-AMG included, is rebuilt after each move (bessemer's divergence, grad-div
+and OIFS kernels keep raw pointers to MFEM's geometric factors, which a move frees).
+Stage 5, validation: the in-line oscillating cylinder of Dütsch et al. (1998), Re 100,
+KC 5 (benchmarks/oscillating_cylinder/; new `mesh.cylinder_channel` keys for any channel
+and cylinder size): c_d 2.091, c_i 1.460 against 2.09 / 1.45, converged to ~0.1 % in mesh,
+dt and domain; 8 min at np 4 on the CPU. **Next:** the in-place refresh (stage 3; the
+per-move rebuild is 5-9 % of a step in the 2D and 3D profiles), then the FSI stages.
+
 **Hyperelasticity, milestone 1 and a memory step (2026-10-21; human: "start specking on
 adding hyperelasticity and at venant Kirkhoff model", "go with your recommendations,
 commit the spec and start M1", "after this is a good time to also start optimizing memory

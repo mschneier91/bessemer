@@ -398,6 +398,66 @@ bool LinearElasticity::Solve(double t)
    return ok;
 }
 
+void LinearElasticity::DirichletValues(double t, Vector& g)
+{
+   Finalize();
+   Vector& x = work4_;
+   x.SetSize(fes_->GetTrueVSize());
+   x = 0.0;
+   ApplyDirichlet(t, x);
+   x.GetSubVector(ess_tdofs_, g);
+}
+
+void LinearElasticity::SetSolution(const Vector& x)
+{
+   iterations_ = 0;
+   converged_ = true;
+   u_->SetFromTrueDofs(x);
+}
+
+bool LinearElasticity::Solve(double t, const Vector& guess)
+{
+   INCNS_PROFILE("solid::solve");
+   Finalize();
+   if (!pc_ready_ || pc_shift_ != 0.0) { SetupPreconditioner(0.0); }
+   op_->SetWeights(1.0, 0.0);
+   AssembleLoad(t, load_);
+   // The zero guess's residual, in CG's (preconditioned) norm: the
+   // reference of the tolerance.
+   Vector& x = work2_;
+   Vector& z = work4_;
+   x.SetSize(guess.Size());
+   x = 0.0;
+   ApplyDirichlet(t, x);
+   rhs_ = load_;
+   constrained_->EliminateRHS(x, rhs_);
+   z.SetSize(rhs_.Size());
+   pc_->Mult(rhs_, z);
+   const double nom0 = InnerProduct(mesh_.GetComm(), z, rhs_);
+   if (nom0 <= opts_.atol * opts_.atol)
+   {
+      // The zero guess already meets the tolerance (zero data, for one):
+      // its answer is the Dirichlet values alone, as CG would leave it.
+      iterations_ = 0;
+      converged_ = true;
+      final_norm_ = std::sqrt(std::max(nom0, 0.0));
+      u_->SetFromTrueDofs(x);
+      return true;
+   }
+   // The solve from the guess.
+   x = guess;
+   ApplyDirichlet(t, x);
+   rhs_ = load_;
+   cg_->SetRelTol(0.0);
+   cg_->SetAbsTol(std::max(opts_.atol, opts_.rtol * std::sqrt(std::max(nom0,
+                           0.0))));
+   const bool ok = SolveShifted(0.0, rhs_, x);
+   cg_->SetRelTol(opts_.rtol);
+   cg_->SetAbsTol(opts_.atol);
+   u_->SetFromTrueDofs(x);
+   return ok;
+}
+
 void LinearElasticity::Initialize(double t0, VectorCoefficient* u0,
                                   VectorCoefficient* v0)
 {

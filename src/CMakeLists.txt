@@ -74,6 +74,7 @@ add_library(incns STATIC
   solid/elasticity_case.cpp
   ale/linear_elastic_motion.cpp
   ale/mesh_motion.cpp
+  ale/mesh_convection.cpp
   ale/mesh_motion_case.cpp
   solver/case.cpp)
 

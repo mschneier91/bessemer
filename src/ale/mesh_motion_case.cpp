@@ -110,6 +110,7 @@ MeshMotionCase::MeshMotionCase(ParMesh& mesh, const Parameters& params)
    e.rtol = mm.rtol;
    e.atol = mm.atol;
    e.max_iter = mm.max_iter;
+   e.basis_size = mm.basis_size;
    motion_ = std::make_unique<MeshMotion>(mesh_, o,
                                           LinearElasticMotion::Factory(e));
 

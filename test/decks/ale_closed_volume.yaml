@@ -1,0 +1,26 @@
+# A closed box (no outflow) whose x = 1 wall moves outward and takes u = w:
+# the volume grows, which an incompressible fluid cannot follow. run_case
+# must refuse it at the first move, not iterate to the solver's cap.
+equation: navier_stokes
+physics:
+  nu: 0.1
+discretization:
+  order_u: 3
+  order_p: 2
+mesh:
+  dim: 2
+  elements: [4, 4]
+  lengths: [1, 1]
+  periodic: [false, false]
+time:
+  dt: 0.05
+  t_final: 0.1
+  step_control: fixed
+boundary_conditions:
+  - select: all
+    type: no_slip
+    motion: ["a * sin(2 * pi * t) * x * y * (1 - y)", "0"]
+    parameters: {a: 0.3}
+output:
+  path: ale_closed_volume
+  name: ale_closed_volume

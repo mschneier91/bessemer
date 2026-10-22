@@ -243,14 +243,30 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                                       "geometry cylinder_channel: the DFG channel "
                                       "(default 2.2 x 0.41, cylinder of radius 0.05 "
                                       "at (0.2, 0.2); the DFG 3D benchmarks use "
-                                      "length 2.5, cx 0.5) and its base mesh.");
+                                      "length 2.5, cx 0.5) and its base mesh; "
+                                      "any channel and cylinder size with the "
+                                      "same block layout.");
       r.Read(s, "length", cc.length, "Channel length (x).");
       r.Read(s, "cx", cc.cx, "Cylinder centre x.");
       r.Read(s, "cy", cc.cy, "Cylinder centre y.");
       r.Read(s, "n_side", cc.n_side, "Cells along each side of the O-grid square.");
       r.Read(s, "n_ring", cc.n_ring, "Radial cell layers around the cylinder.");
+      r.Read(s, "height", cc.height, "Channel height (y).");
+      r.Read(s, "radius", cc.radius, "Cylinder radius.");
+      r.Read(s, "box_half", cc.box_half,
+             "Half-width of the O-grid's outer square (> radius).");
+      r.Read(s, "ring_grading", cc.ring_grading,
+             "Radial growth ratio of the ring layers (> 1 clusters at the "
+             "cylinder).");
       r.Read(s, "n_up", cc.n_up, "Cells upstream of the O-grid.");
       r.Read(s, "n_down", cc.n_down, "Cells downstream of the O-grid.");
+      r.Read(s, "n_below", cc.n_below, "Cells below the O-grid.");
+      r.Read(s, "n_above", cc.n_above, "Cells above the O-grid.");
+      r.Read(s, "down_grading", cc.down_grading,
+             "Growth ratio of the downstream cells toward the outflow.");
+      r.Read(s, "outer_grading", cc.outer_grading,
+             "Growth ratio of the upstream, lower and upper cells away from "
+             "the O-grid (1: uniform).");
       r.Read(s, "level", p.cylinder_channel_level,
              "Nested uniform refinement level (cell counts x 2^level).");
       r.Read(s, "nz", p.cylinder_channel_nz,
@@ -687,7 +703,13 @@ void FillFromDeck(DeckReader& r, Parameters& p)
              "times 4 z (width - z) / width^2, width defaulting to height), "
              "optionally time_profile: ramp | sine with time_scale T (ramp: "
              "sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet "
-             "takes its field from Python or C++ by the group name. Every real "
+             "takes its field from Python or C++ by the group name. A flow "
+             "boundary may move (the ALE fluid, docs/ale_fluid.md): motion: "
+             "one string per component, its mesh displacement in the "
+             "reference x, y, z and t, with parameters as for expression; a "
+             "moving no_slip wall takes u = w (the mesh velocity), boundaries "
+             "without motion keep their mesh in place, and the interior follows "
+             "by the model of section mesh_motion, at every step. Every real "
              "boundary needs exactly one group when run by run_case.");
    if (root.Has("boundary_conditions"))
    {
@@ -711,7 +733,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          static const std::set<std::string> entry_keys =
          {
             "group", "type", "select", "value", "profile", "u_max", "height",
-            "width", "time_profile", "time_scale", "expression", "parameters"
+            "width", "time_profile", "time_scale", "expression", "parameters",
+            "motion"
          };
          for (const auto& kv : e)
          {
@@ -719,7 +742,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
             MFEM_VERIFY(entry_keys.count(k), "parameters: unknown "
                         "boundary_conditions key '" << k << "' (group, type, "
                         "select, value, profile, u_max, height, width, "
-                        "time_profile, time_scale, expression, parameters)");
+                        "time_profile, time_scale, expression, parameters, motion)");
          }
          BcSpec s;
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
@@ -742,19 +765,36 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          }
          const bool by_expression = s.type == BcType::Displacement &&
                                     e["expression"];
-         MFEM_VERIFY(by_expression || (!e["expression"] && !e["parameters"]),
-                     "parameters: boundary keys 'expression' and 'parameters' "
-                     "need type displacement (and parameters needs expression)");
-         if (by_expression)
+         const bool flow_type = s.type == BcType::Outflow ||
+                                s.type == BcType::NoSlip ||
+                                s.type == BcType::Velocity ||
+                                s.type == BcType::VelocityDirichlet;
+         MFEM_VERIFY(!e["motion"] || flow_type, "parameters: boundary key "
+                     "'motion' is for a flow boundary (no_slip, outflow, "
+                     "velocity, velocity_dirichlet); a mesh_motion deck moves "
+                     "a boundary with type displacement");
+         const bool moves = flow_type && e["motion"];
+         MFEM_VERIFY(by_expression || !e["expression"],
+                     "parameters: boundary key 'expression' needs type "
+                     "displacement (a moving flow boundary takes 'motion')");
+         MFEM_VERIFY(by_expression || moves || !e["parameters"],
+                     "parameters: boundary key 'parameters' needs "
+                     "'expression' or 'motion'");
+         if (by_expression || moves)
          {
-            const YAML::Node ex = e["expression"];
-            MFEM_VERIFY(!e["value"], "parameters: a displacement boundary "
-                        "takes value or expression, not both");
+            const YAML::Node ex = by_expression ? e["expression"] : e["motion"];
+            const char* what = by_expression ? "displacement expression" :
+                               "boundary motion";
+            MFEM_VERIFY(!by_expression || !e["value"], "parameters: a "
+                        "displacement boundary takes value or expression, not "
+                        "both");
             MFEM_VERIFY(ex.IsSequence() &&
                         static_cast<int>(ex.size()) == p.mesh.dim,
-                        "parameters: a displacement expression needs one "
-                        "string per component (" << p.mesh.dim << ")");
-            for (const auto& c : ex) { s.expression.push_back(c.as<std::string>()); }
+                        "parameters: a " << what << " needs one string per "
+                        "component (" << p.mesh.dim << ")");
+            std::vector<std::string>& dst = by_expression ? s.expression :
+                                            s.motion;
+            for (const auto& c : ex) { dst.push_back(c.as<std::string>()); }
             if (e["parameters"])
             {
                MFEM_VERIFY(e["parameters"].IsMap(), "parameters: a boundary's "
@@ -767,7 +807,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
             }
             try
             {
-               VectorExpression check(s.expression, s.expression_parameters);
+               VectorExpression check(by_expression ? s.expression : s.motion,
+                                      s.expression_parameters);
             }
             catch (const std::invalid_argument& err)
             {
@@ -871,6 +912,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          else { add_token(sel.as<std::string>(), s); }
          p.boundary_conditions.push_back(std::move(s));
       }
+   }
+   for (const BcSpec& s : p.boundary_conditions)
+   {
+      p.moving_mesh = p.moving_mesh || !s.motion.empty();
    }
 
    const DeckSection output = r.Section(root, "output",
@@ -1092,7 +1137,12 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                                         "type displacement, every other "
                                         "boundary held (type fixed), the "
                                         "displacement extended into the domain "
-                                        "by a pseudo-solid (docs/mesh_motion.md).");
+                                        "by a pseudo-solid (docs/mesh_motion.md). "
+                                        "A flow deck whose boundaries have "
+                                        "motion uses the same model to move "
+                                        "its mesh at every step "
+                                        "(docs/ale_fluid.md); steps is then "
+                                        "not used.");
    r.ReadEnum(motion, "model", mm.model,
    {{"linear_elastic", MeshMotionModelType::LinearElastic}},
    "The extension model: small-strain linear elasticity on the reference "
@@ -1113,6 +1163,12 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(motion, "rtol", mm.rtol, "CG relative tolerance.");
    r.Read(motion, "atol", mm.atol, "CG absolute tolerance.");
    r.Read(motion, "max_iter", mm.max_iter, "CG iteration cap.");
+   r.Read(motion, "basis_size", mm.basis_size,
+          "Earlier solutions kept for reuse (0: none). The displacement is "
+          "linear in the boundary data, so a move whose data lie in the span "
+          "of earlier data (a rigid or modal motion: a few shapes times "
+          "functions of t) is the same combination of the earlier solutions, "
+          "with no solve.");
    r.ReadEnum(motion, "preconditioner", mm.preconditioner,
    {{"loramg", ElasticityPC::LorAmg}, {"jacobi", ElasticityPC::Jacobi}},
    "CG preconditioner: one BoomerAMG V-cycle on the low-order-refined "
@@ -1265,7 +1321,27 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                   "(a mesh boundary is held or moved)");
       held = held || s.type == BcType::Fixed || s.type == BcType::Displacement;
    }
-   if (motion)
+   if (p.moving_mesh)
+   {
+      MFEM_VERIFY(p.equation == Equation::Stokes ||
+                  p.equation == Equation::NavierStokes,
+                  "parameters: a boundary motion moves a flow's mesh");
+      MFEM_VERIFY(p.nondim.mode == ScalingMode::Dimensionless,
+                  "parameters: a moving mesh uses the deck's own units "
+                  "(nondimensionalization.mode dimensionless)");
+      MFEM_VERIFY(!p.amr.enabled, "parameters: AMR on a moving mesh is not "
+                  "available");
+      MFEM_VERIFY(p.convection_treatment != ConvectionTreatment::Oifs,
+                  "parameters: OIFS on a moving mesh is not available "
+                  "(time.convection: imex, or auto)");
+      MFEM_VERIFY(p.step_control != StepControl::Error,
+                  "parameters: error-controlled steps on a moving mesh are "
+                  "not available (time.step_control: cfl or fixed)");
+      MFEM_VERIFY(p.convective_form == ConvectiveForm::Convective,
+                  "parameters: the rotational form on a moving mesh is not "
+                  "available");
+   }
+   if (motion || p.moving_mesh)
    {
       const MeshMotionParameters& mm = p.mesh_motion;
       MFEM_VERIFY(mm.poisson_ratio > -1.0 && mm.poisson_ratio < 0.5,
@@ -1275,6 +1351,8 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
       MFEM_VERIFY(mm.steps >= 1, "parameters: mesh_motion.steps must be >= 1");
       MFEM_VERIFY(p.t_final > 0.0, "parameters: mesh_motion needs time.t_final "
                   "> 0 (the time of the last move)");
+      MFEM_VERIFY(mm.basis_size >= 0,
+                  "parameters: mesh_motion.basis_size must be >= 0");
       MFEM_VERIFY(mm.rtol > 0.0 && mm.atol >= 0.0 && mm.max_iter >= 1,
                   "parameters: bad mesh_motion.rtol, atol or max_iter");
       MFEM_VERIFY(p.nondim.mode == ScalingMode::Dimensionless,
