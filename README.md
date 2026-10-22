@@ -72,7 +72,9 @@ and per-step history.
 
 **Solids** (`equation: linear_elasticity`): small-strain linear elasticity, static or
 dynamic (generalized-alpha or BDF), plane strain or plane stress
-([docs/elasticity.md](docs/elasticity.md)).
+([docs/elasticity.md](docs/elasticity.md)). `equation: hyperelasticity`: large
+deformation (St. Venant-Kirchhoff), static, Newton with load steps; Turek-Hron CSM1/CSM2
+decks ([docs/hyperelasticity.md](docs/hyperelasticity.md)).
 
 **Moving meshes and fluid-structure interaction:** a pseudo-solid mesh deformation with
 Jacobian stiffening (`equation: mesh_motion`, [docs/mesh_motion.md](docs/mesh_motion.md)),

@@ -15,8 +15,12 @@ a performance step in five rounds (section 4):
 4. 7 blocks per SM;
 5. the exchange overlapped with the interior elements' work.
 
-There is no solver, deck or boundary condition yet: that is milestone 2 (Newton, static,
-Turek-Hron CSM1/CSM2).
+Milestone 2 (static): the solver `Hyperelasticity` (Newton with load steps, boundary
+conditions and dead loads), its deck `equation: hyperelasticity` through `ElasticityCase`,
+and the Turek-Hron CSM1 and CSM2 decks, which reproduce the benchmark's point-A
+displacements to 1-2e-4 (sections 1-4). Milestone 3 (dynamics): generalized-alpha and
+BDF2 on the nonlinear system, the dynamic deck, and CSM3, whose oscillation matches the
+benchmark's to 0.4-1.7 % at its time step.
 
 ## 1. What exists
 
@@ -48,6 +52,53 @@ Turek-Hron CSM1/CSM2).
   where the prolongation is the identity (one rank, no hanging nodes). In 3D on a device
   it keeps no E-vectors (the gather and scatter are fused into the kernels), and on a
   conforming space no L-vectors at any rank count (`TrueDofExchange`, section 4).
+- `src/solid/hyperelasticity.{hpp,cpp}`: `Hyperelasticity`, the static solver
+  (milestone 2). Its API is `LinearElasticity`'s static part: `AddFixed`,
+  `AddDisplacement`, `AddTraction` (P N, per reference area) and `SetBodyForce` (per
+  reference volume). The loads are dead loads. `Solve(t)` runs from the current
+  displacement.
+  - Newton on the operator's residual and tangent, `options.load_steps` ramping the loads
+    and the Dirichlet data together from zero. An optional backtracking line search
+    halves the step until the residual norm drops (Armijo, 1e-4).
+  - Each correction is solved by CG, preconditioned by one BoomerAMG V-cycle on the LOR
+    linear elasticity of the reference configuration (the tangent at u = 0), built once
+    (spec D5). It is a copy of `LinearElasticity`'s; sharing it would need that class's
+    bitwise check (spec section 5).
+  - A load step converges when its residual (true dofs, Dirichlet rows out) falls below
+    `max(newton_atol, newton_rtol r_ref)`, or when a Newton correction falls below
+    `newton_dx_rtol` (default 1e-10) times the displacement. Here r_ref is the largest of
+    the step's first residual, its load's norm, and the right-hand side its Dirichlet
+    increment makes. On fine meshes the correction test decides, because the residual
+    has a roundoff floor (section 4).
+  - Reported: Newton iterations (total and the most in one step), CG iterations, the
+    residual and correction histories, strain energy, external work, the largest
+    displacement, and the displacement at a point (`DisplacementAt`).
+  - Dynamics (milestone 3): rho u_tt + R(u) = f(t) with the consistent mass at rho,
+    `Initialize(t0, u0, v0)` and `Step(dt)` as `LinearElasticity`'s. Every scheme is one
+    Newton solve per step of c M u^{n+1} + R(theta u^{n+1} + (1 - theta) u^n) = b, the
+    static solve's loop with c = 0, theta = 1:
+    - generalized-alpha (Chung-Hulbert, `rho_inf`), the internal force and the load at
+      t_{n+1-alpha_f} (theta = 1 - alpha_f), the initial acceleration from M a0 = f -
+      R(u0);
+    - BDF2 on (u, v) after one trapezoidal step (theta = 1); BDF3 is not offered (it is
+      not A-stable, elasticity.md section 1).
+    The preconditioner is then the LOR-AMG of K_0 + (c / theta) rho M, rebuilt when dt
+    changes. Newton starts from u^n.
+- **The deck**, `equation: hyperelasticity`, static or dynamic (`solid.analysis`, the
+  linear deck's time keys). `ElasticityCase` builds either
+  solver and applies the deck's boundary groups to it; `run_case` and
+  `incns.run_deck` dispatch both equations. The `solid` section takes the linear keys
+  (material, order, body force, CG, probe) and, for this equation, `model:
+  st_venant_kirchhoff`, `newton_rtol`, `newton_atol`, `newton_dx_rtol`,
+  `newton_max_iter`, `load_steps` and `line_search` (docs/deck_reference.md). Plane
+  stress, BDF3 and the Jacobi preconditioner are rejected. The summary gains a `newton`
+  block; a dynamic run's history CSV a `newton_iterations` column. The linear decks'
+  results, the dynamic one's history included, are bitwise unchanged (np 1, 2 and 4).
+  - `cases/turek_hron_csm1.yaml`, `cases/turek_hron_csm2.yaml`: the flag of the
+    `cylinder_channel` geometry (its solid part) clamped to the cylinder under gravity,
+    Q4 on 16 x 2 elements, point A as the probe (section 3).
+  - `cases/turek_hron_csm3.yaml`: the same flag released from rest, dt 0.005 to t = 10,
+    generalized-alpha at rho_inf 1, the history of point A.
 - `bench/bench_hyperelastic.cpp` reports, per order and storage: the bytes per vector dof,
   the device memory added, and the residual, linearization and tangent times. MFEM's
   linear `ElasticityIntegrator` in partial assembly is the reference.
@@ -82,8 +133,47 @@ spaces at orders 1 to 3:
 
 np 4 on the CPU covers dofs that three or more ranks share.
 
+The static solver (milestone 2):
+
+- **H4:** a homogeneous finite deformation (stretch and shear, det F != 1). The
+  displacement is prescribed on the faces through the origin, and the exact traction
+  P(F) N acts on the others. It is reproduced to 1e-10 in 2D and 3D in at most 8 Newton
+  iterations per load step: the full load at once, and in three load steps with the line
+  search. The residuals fall quadratically, e.g. in 2D 1.3e-2, 3.0e-4, 1.6e-7, 5.4e-14.
+- **H5:** a rigid rotation by 90 and 180 degrees, prescribed on the whole boundary in 8
+  solves. The interior rotates to 1e-10 with |strain energy| < 1e-16, where
+  `LinearElasticity` on the same data stores more than 0.1.
+- **H6:** a 4 x 1 cantilever under its weight at loads 1e-4 and 5e-5. The difference to
+  `LinearElasticity` falls as the load squared (ratio 4.0015).
+
+- **H7:** generalized-alpha (rho_inf 0.8) and BDF2 are second order in time on a
+  separable finite motion, u = 0.1 s(X) (cos 4t + sin 3t / 2) with s quadratic (gradient
+  up to 0.14), in 2D and 3D at Q2, whose space holds it exactly. The body force and the
+  traction P N are exact, so every error is the integrator's. Halving dt divides the
+  errors by 3.99-4.05; at most 3 Newton iterations per step.
+- **H8:** a deck through `ElasticityCase`: a 4 x 1 cantilever bent by about 20 % of its
+  length. Its tip on the mid-line moves back along the beam, where the linear model's
+  stays by symmetry. The summary is written with its `newton` block. Dynamic: a load
+  applied suddenly at rest, at rho_inf 1 (the midpoint rule); E(t) = f . u(t) holds to
+  5e-6 (not to the solver tolerance as in the linear D5: SVK's energy is not quadratic),
+  and the history CSV is written.
+- `run_case_csm1` runs `cases/turek_hron_csm1.yaml` through `run_case` (fast tier).
+
+`test/verify_hyperelasticity_test.cpp` (verify tier, np 4; settings in
+`test/baselines.yaml`, `verification.hyperelasticity`):
+
+- **V1:** a manufactured finite deformation, u_i = 0.05 prod_d sin(pi x_d) (gradient up
+  to 0.16, J >= 0.84), held on the whole boundary, under the body force -Div P. The test
+  evaluates P on the host, apart from the kernels. Rates k + 1 (L2) and k (H1) at Q2-Q4
+  in 2D and Q2-Q3 in 3D, and at the default order. At amplitude 0.1 SVK loses strong
+  ellipticity (section 4).
+- **V2:** CSM1 and CSM2 through a deck at Q6 on 16 x 2 and 32 x 4 flag meshes: point A
+  within 5e-4 (relative, each component) of the benchmark's values and converging.
+  CSM3 at Q4 on 16 x 2, dt 0.005, to t = 10: point A's mean and amplitude within 2.5 %
+  and its frequency within 1 % of the benchmark's at the same dt (section 3).
+
 Passed on the CPU at np 1, 2 and 4 and on H100s at np 1 and 2 at every step; for the
-current code, jobs 49578116 (CPU) and 49576431 (GPU).
+current code, jobs 49597065 (CPU) and 49592163 (GPU).
 
 ## 3. Memory and speed
 
@@ -139,6 +229,59 @@ tangent, against MFEM's 1846 and 862.
     syncs around them, less what the overlap hides.
 - One CPU core (RM, np 1, ~3e5 dofs): the Q6 tangent 11 Mdof/s against MFEM's linear PA
   at 0.7.
+
+### Turek-Hron CSM1 and CSM2
+
+The flag (0.35 x 0.02) is clamped to the cylinder and carries gravity, rho_s g = 2000 per
+reference volume, with nu_s = 0.4 in plane strain. CSM1 has mu_s = 0.5e6 (E = 1.4e6), and
+CSM2 has mu_s = 2.0e6 (E = 5.6e6). The reference values come from the benchmark's own
+table (FeatFlow, "CSM tests", level 4+2, 164092 Q2 dofs), read on 2026-10-22. They match
+the values the spec quoted. Displacement of point A (0.6, 0.2), x 1e-3, np 4 (jobs
+49586969, 49587586):
+
+| Mesh, order | dofs | CSM1 u_x | CSM1 u_y | CSM2 u_x | CSM2 u_y |
+|---|---|---|---|---|---|
+| 16 x 2, Q2 | 390 | -7.14143 | -65.8629 | -0.465907 | -16.9105 |
+| 16 x 2, Q4 (the decks) | 1386 | -7.18279 | -66.0767 | -0.468671 | -16.9670 |
+| 16 x 2, Q6 | 2990 | -7.18607 | -66.0939 | -0.468892 | -16.9716 |
+| 32 x 4, Q6 | 10550 | -7.18631 | -66.0952 | -0.468908 | -16.9720 |
+| 64 x 8, Q6 | 39494 | -7.18634 | -66.0953 | -0.468910 | -16.9720 |
+| FeatFlow 4+2 | 164092 | -7.18766 | -66.1023 | -0.468999 | -16.9739 |
+
+- The values converge to within 1.8e-4 (u_x) and 1.1e-4 (u_y) of the reference. That is
+  about the spread of the benchmark's own finest levels (CSM1 u_y: -66.0965 at 4+0,
+  -66.1029 at 4+3, -66.1009 at 5+0).
+- Newton takes 6 iterations (CSM1) and 5 (CSM2) from rest in one load step. The first
+  correction, the linear solution, raises CSM1's residual about 10^4-fold; the iterations
+  then converge quadratically without a line search.
+
+### Turek-Hron CSM3
+
+CSM1's flag is released from rest under gravity (rho_s = 1000) and oscillates. The
+benchmark reports point A as mean +- amplitude [frequency in Hz] at three time steps;
+its values move with dt by up to 2.4 % (u_x mean -14.384, -14.645, -14.305 e-3 at dt
+0.02, 0.01, 0.005). Ours at np 4, to t = 10, mean and amplitude from the extremes over
+t >= 5, the frequency from the upward crossings of the mean (job 49596583; u x 1e-3):
+
+| Run | u_x | u_y | Frequency (u_x, u_y) | Wall |
+|---|---|---|---|---|
+| Q4 16 x 2, dt 0.005, rho_inf 1 (the deck) | -14.548 +- 14.548 | -63.942 +- 65.500 | 1.0954, 1.0942 | 54 s |
+| the same, rho_inf 0.8 | -14.543 +- 14.544 | -63.923 +- 65.499 | 1.0954, 1.0941 | 56 s |
+| Q6 16 x 2, dt 0.005 | -14.553 +- 14.554 | -63.957 +- 65.511 | 1.0953, 1.0940 | 99 s |
+| Q4 32 x 4, dt 0.005 | -14.548 +- 14.549 | -63.944 +- 65.502 | 1.0954, 1.0941 | 136 s |
+| Q4 16 x 2, dt 0.0025 | -14.612 +- 14.613 | -64.440 +- 65.113 | 1.0948, 1.0945 | 74 s |
+| Q4 16 x 2, dt 0.005, BDF2 | -14.440 +- 14.439 | -63.817 +- 65.354 | 1.0934, 1.0948 | 66 s |
+| FeatFlow 4+0, dt 0.005 | -14.305 +- 14.305 | -63.607 +- 65.160 | 1.0995 | |
+
+- Space is converged to 2e-4 (Q6, or the 32 x 4 mesh, against the deck).
+- The time step moves u_y's mean by 0.8 % from dt 0.005 to 0.0025: the extremes of a
+  signal that carries the higher bending modes, whose phases dt shifts, not the
+  fundamental's second-order error (omega dt = 0.035). The benchmark's values move the
+  same way, so the comparison is at its dt.
+- At dt 0.005 the deck is within 0.53 % (u_y mean and amplitude), 1.7 % (u_x) and
+  0.4-0.5 % (frequency) of the benchmark. Numerical damping hardly matters for this mode (rho_inf
+  0.8 vs 1: 0.03 %); BDF2 damps the higher modes and lands 0.2 % away.
+- At most 3 Newton iterations per step, about 140 CG iterations per step.
 
 ## 4. Notes for developers
 
@@ -232,6 +375,31 @@ tangent, against MFEM's 1846 and 862.
     apply, 90 % and 92 % of one GPU.
   - At np 1 the exchange's gather map is MFEM's own (2 B/dof less).
 
+- **The Dirichlet increment goes through the tangent.** At first, each load step moved
+  the Dirichlet dofs to their new values and left the rest in place. That strained a
+  layer of boundary elements, and Newton started far away: in H4's 2D case the first
+  step raised the residual from 1.4 to 880, and it took 11 iterations. Now a step's first
+  Newton correction carries the increment: it is prescribed on the Dirichlet dofs
+  (`ConstrainedOperator::EliminateRHS`), and the free dofs follow through the tangent,
+  as in deal.II's step-44. H4 then needs 6 iterations from 0.51. The line search skips
+  that first correction, whose residual has new data.
+- **Newton's residual has a roundoff floor; its corrections do not.** Element
+  contributions much larger than the load cancel at every node. The floor was 3e-11 of
+  the load on H6's small cantilever. On the CSM1 flag (job 49587586) it grew from
+  2.5e-9 (16 x 2, Q4) to 1.2e-7 (64 x 8, Q6, 4e4 dofs). With the residual test alone
+  (`newton_rtol` 1e-8), the 32 x 4 Q5 and Q6 flags ran into the 25-iteration cap with
+  u(A) converged. The relative correction ||dx|| / ||u|| kept falling quadratically to
+  about 1e-15 on every mesh (CSM1: 2.1e-5, 1.1e-8, 1e-15). So a step also converges at
+  `newton_dx_rtol` = 1e-10 (on by default), five orders above where the corrections
+  stop. `newton_rtol` stays at 1e-8, not the 1e-10 of the spec's sample deck.
+- **SVK loses strong ellipticity in moderate compression.** V1 first used amplitude 0.1:
+  J down to 0.69 in 2D (E = 1, nu = 0.3). There the acoustic tensor's least eigenvalue
+  is -0.025 (+0.18 at amplitude 0.05), so the continuous problem is ill-posed. Newton
+  converged quadratically on 4 x 4 meshes and diverged on finer ones, which resolve the
+  unstable short waves (job 49589795; np 1 and np 4 identical). This is the weakness the
+  spec names (section 1) and the reason for neo-Hookean next. Mesh motion with SVK should
+  watch the element Jacobians.
+
 ## 5. Next
 
 - **More performance.**
@@ -242,5 +410,12 @@ tangent, against MFEM's 1846 and 862.
   - Geometry on the fly: **shelved** (human 2026-10-21). The operator's ~93 B/dof are
     under 5 % of the LOR-AMG's estimated 2-3 kB/dof (elasticity.md section 3), so it
     would save under 2 % of the solver's memory, at a cost in speed.
-- **Milestone 2:** Newton with load steps, the fixed reference LOR-AMG preconditioner, the
-  deck (`equation: hyperelasticity`), CSM1 and CSM2.
+- **Milestone 4:** the hyperelastic mesh-motion model and V3 (the DFG cylinder rotated by
+  a large angle). SVK loses strong ellipticity near J = 0.7 under compression (section 4),
+  so the test watches the element Jacobians.
+- **Later, each needing the human's OK** (spec section 7): neo-Hookean (now motivated by
+  that measurement), follower pressure loads for FSI, the refreshed LOR tangent, a mixed
+  u-p form, an energy-momentum integrator.
+- The fixed reference LOR-AMG took 50-80 CG iterations per Newton correction on the CSM
+  decks (CG rtol 1e-10). Large rotations in mesh motion may need the refreshed LOR
+  tangent (spec D5).

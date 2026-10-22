@@ -42,8 +42,16 @@ enum class Equation
    NavierStokes,    ///< Incompressible Navier-Stokes (Sprint 2.2; IMEX BDF/AB).
    LinearElasticity, ///< Small-strain linear elasticity (ElasticityCase).
    /// Deform the mesh by prescribed boundary displacements (MeshMotionCase).
-   MeshMotion
+   MeshMotion,
+   /// Large-deformation elasticity, St. Venant-Kirchhoff (ElasticityCase).
+   Hyperelasticity
 };
+
+/// @return Whether @p e is a solid's (ElasticityCase).
+inline bool IsSolid(Equation e)
+{
+   return e == Equation::LinearElasticity || e == Equation::Hyperelasticity;
+}
 
 /// How the time step is chosen (deck `time.step_control`).
 /// What a time step does when its implicit solve does not converge.

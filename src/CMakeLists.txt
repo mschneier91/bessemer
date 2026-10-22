@@ -72,6 +72,7 @@ add_library(incns STATIC
   precond/viscous_ratio.cpp
   solid/linear_elasticity.cpp
   solid/hyperelastic_operator.cpp
+  solid/hyperelasticity.cpp
   solid/elasticity_case.cpp
   ale/linear_elastic_motion.cpp
   ale/mesh_motion.cpp

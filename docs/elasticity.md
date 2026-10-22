@@ -184,7 +184,8 @@ Verify tier (`verify_elasticity_test`, np 4; settings in `baselines.yaml`
   inertia correction predicts -0.15 %; the test allows 0.5 %.
 
 The Turek-Hron CSM1-3 structural benchmarks use a St. Venant-Kirchhoff
-material: they belong to the large-deformation step, not to this linear model.
+material: they belong to the large-deformation solver (`equation: hyperelasticity`,
+[hyperelasticity.md](hyperelasticity.md)), not to this linear model.
 
 ## 5. Next
 

@@ -8,7 +8,7 @@ Every key a YAML deck (`apps/run_case <deck.yaml>`) understands, with its defaul
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `equation` | stokes \| navier_stokes \| linear_elasticity \| mesh_motion | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, a small-strain linear elastic solid, static or dynamic (section solid), or mesh_motion: deform the mesh by prescribed boundary displacements (section mesh_motion). |
+| `equation` | stokes \| navier_stokes \| linear_elasticity \| mesh_motion \| hyperelasticity | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, a small-strain linear elastic solid, static or dynamic (section solid), mesh_motion: deform the mesh by prescribed boundary displacements (section mesh_motion), or hyperelasticity: a large-deformation solid, static or dynamic (section solid; docs/hyperelasticity.md). |
 | `device` | string | `cpu` | MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins. |
 | `initial_velocity` | string | `zero` | Named initial condition: zero, uniform, channel (see the initial section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, -cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes from Python or C++. |
 | `restart` | string | `""` | Checkpoint directory to restart from (same number of MPI ranks). |
@@ -316,7 +316,7 @@ Benchmark values the run summary compares against (relative errors; absolute for
 
 ## `solid`
 
-The solid of equation linear_elasticity: small strains, isotropic and homogeneous, displacement-only on the reference configuration (docs/elasticity.md). Units are the deck's own, consistent ones.
+The solid of equations linear_elasticity (small strains) and hyperelasticity (large deformation, dead loads): isotropic and homogeneous, displacement-only on the reference configuration (docs/elasticity.md, docs/hyperelasticity.md). Units are the deck's own, consistent ones.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -325,7 +325,7 @@ The solid of equation linear_elasticity: small strains, isotropic and homogeneou
 | `solid.plane` | strain \| stress | `strain` | 2D model: plane strain, or plane stress (lambda* = 2 lambda mu / (lambda + 2 mu)). Ignored in 3D. |
 | `solid.order` | int | `0` | Displacement polynomial order; <= 0: discretization.order_u, so the solid matches the fluid's velocity at a future interface. |
 | `solid.body_force` | real[dim] | `[0, 0]` | A constant body force per unit volume. |
-| `solid.rtol` | real | `1e-10` | CG relative tolerance. |
+| `solid.rtol` | real | `1e-10` | CG relative tolerance (hyperelasticity: of each Newton correction). |
 | `solid.atol` | real | `0` | CG absolute tolerance. |
 | `solid.max_iter` | int | `2000` | CG iteration cap. |
 | `solid.preconditioner` | loramg \| jacobi | `loramg` | CG preconditioner: one BoomerAMG V-cycle (systems mode) on the low-order-refined operator, or the operator's diagonal (no setup, iterations grow with the resolution). |
@@ -335,6 +335,13 @@ The solid of equation linear_elasticity: small strains, isotropic and homogeneou
 | `solid.time_scheme` | generalized_alpha \| bdf | `generalized_alpha` | Dynamic time integrator: Chung-Hulbert generalized-alpha (second order, high-frequency damping set by rho_inf), or the fluid's variable-step BDF (order bdf_order) on the first-order system (u, v), started by one trapezoidal step. |
 | `solid.bdf_order` | int | `2` | BDF order, 2 or 3. BDF3 is not A-stable: an undamped mode with omega dt between about 0.5 and 2 grows (4 % per step at omega dt = 1), so it suits short or damped runs only; BDF2 and generalized-alpha are unconditionally stable. |
 | `solid.rho_inf` | real | `0.8` | Generalized-alpha spectral radius at infinite frequency, in [0, 1]: 1 is the trapezoidal rule (energy-conserving, no damping), smaller values damp the unresolved high frequencies more. |
+| `solid.model` | st_venant_kirchhoff | `st_venant_kirchhoff` | Equation hyperelasticity: the material. St. Venant-Kirchhoff, W = lambda/2 (tr E)^2 + mu E : E with E the Green-Lagrange strain (plane strain in 2D). |
+| `solid.newton_rtol` | real | `1e-08` | Equation hyperelasticity: a load step converges when its residual falls below newton_rtol times the largest of its first residual, its load and its Dirichlet increment's pull. The residual has a roundoff floor that grows with slenderness and refinement (1e-7 of the load on CSM1's flag at 4e4 dofs); newton_dx_rtol then decides. |
+| `solid.newton_atol` | real | `0` | Equation hyperelasticity: Newton's absolute residual tolerance. |
+| `solid.newton_dx_rtol` | real | `1e-10` | Equation hyperelasticity: a load step also converges when a Newton correction's norm falls below newton_dx_rtol times the displacement's (0: off). Unlike the residual, the correction keeps falling below the residual's roundoff floor. |
+| `solid.newton_max_iter` | int | `25` | Equation hyperelasticity: Newton iterations per load step. |
+| `solid.load_steps` | int | `1` | Equation hyperelasticity: the static solve ramps the body force, tractions and prescribed displacements from zero in this many equal steps. |
+| `solid.line_search` | bool | `false` | Equation hyperelasticity: halve a Newton step until the residual norm drops (large loads). |
 
 ## `fsi`
 

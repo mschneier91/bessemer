@@ -483,7 +483,7 @@ std::pair<std::string, bool> RunDeck(Parameters params, std::string summary)
       }
    }
    py::gil_scoped_release rel;
-   if (params.equation == Equation::LinearElasticity)
+   if (IsSolid(params.equation))
    {
       ElasticityCase solid(*pmesh, params);
       solid.WriteSummary(summary, "running");
@@ -568,7 +568,8 @@ PYBIND11_MODULE(_core, m)
    .value("Stokes", Equation::Stokes)
    .value("NavierStokes", Equation::NavierStokes)
    .value("LinearElasticity", Equation::LinearElasticity)
-   .value("MeshMotion", Equation::MeshMotion);
+   .value("MeshMotion", Equation::MeshMotion)
+   .value("Hyperelasticity", Equation::Hyperelasticity);
 
    py::enum_<StepControl>(m, "StepControl")
    .value("Fixed", StepControl::Fixed)

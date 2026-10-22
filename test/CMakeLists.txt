@@ -194,6 +194,7 @@ incns_add_verify_test(verify_spatial_test verify_spatial_test.cpp)
 incns_add_verify_test(verify_kovasznay_test verify_kovasznay_test.cpp)
 incns_add_verify_test(verify_temporal_test verify_temporal_test.cpp)
 incns_add_verify_test(verify_elasticity_test verify_elasticity_test.cpp)
+incns_add_verify_test(verify_hyperelasticity_test verify_hyperelasticity_test.cpp)
 incns_add_mpi_test(nondim_test nondim_test.cpp)
 incns_add_mpi_test(linear_elasticity_test linear_elasticity_test.cpp)
 incns_add_mpi_test(elastodynamics_test elastodynamics_test.cpp)
@@ -257,6 +258,14 @@ foreach(np IN LISTS INCNS_TEST_NPS)
             ${CMAKE_SOURCE_DIR}/cases/cantilever_2d.yaml
             --summary run_case_cantilever_np${np}_summary.json)
   set_tests_properties(run_case_cantilever_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # A hyperelastic deck end to end: Turek-Hron CSM1 (equation hyperelasticity).
+  add_test(NAME run_case_csm1_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/turek_hron_csm1.yaml
+            --summary run_case_csm1_np${np}_summary.json)
+  set_tests_properties(run_case_csm1_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "status=ok")
   # A mesh deformation deck end to end (equation mesh_motion). It writes

@@ -131,9 +131,27 @@ SM, then overlapped the exchange with the interior elements. 3D Q6 on one H100: 
 vector dof (the default storage, F), residual 20.2 and tangent 17.2 Gdof/s (5.3x and
 4.7x the first kernels). On two H100s it reaches 89-93 % of one (it was 76-79 %). MFEM's
 linear elasticity PA cannot launch there and is 11-25x slower at Q3-Q5. Geometry on the
-fly is shelved (human 2026-10-21: under 2 % of the solver's memory). No solver or deck
-yet. **Next:** a 4-8 GPU scaling measurement, then milestone 2 (Newton, the deck,
-Turek-Hron CSM1/CSM2).
+fly is shelved (human 2026-10-21: under 2 % of the solver's memory). Milestone 2 began
+on 2026-10-22 with the static solver, `Hyperelasticity` (Newton, load steps, line search,
+the reference LOR-AMG; tests H4-H6: an exact homogeneous finite deformation, a strain-free
+180-degree rotation, and the linear limit at O(load^2)). Its deck,
+`equation: hyperelasticity` through `ElasticityCase` (linear decks bitwise unchanged), runs
+`cases/turek_hron_csm{1,2}.yaml`. Point A converges to within 1-2e-4 of the benchmark's
+values (FeatFlow table, checked 2026-10-22), about the spread of the benchmark's own
+levels. Verify tier: `verify_hyperelasticity_test` (a finite manufactured deformation's
+rates, CSM1/CSM2). Newton also stops on a small correction, since the residual's roundoff
+floor reached 1e-7 of the load on fine flag meshes. Milestone 3 (dynamics, the same
+day): generalized-alpha and BDF2 on the nonlinear system as one Newton solve per step,
+second order in time on a finite separable motion (H7), the dynamic deck, and
+`cases/turek_hron_csm3.yaml`. CSM3 is within 0.5 % (u_y, frequency) and 1.7 % (u_x mean)
+of the benchmark at its dt 0.005, about as close as the benchmark's own dt dependence
+(2.4 %) allows. **Next:** the hyperelastic mesh motion (milestone 4).
+The landing's GPU suite (job 49592163, np 1 and 2, H100s) passed everything here but
+found three failures in the FSI F3 and ALE stage 3 code merged the same day, which had
+not run on a GPU: `fsi_test` F2 compares a device result read on the host (2e-319, the
+pattern of the earlier `ale_fluid_test` fix); `fsi_test` and `run_case_fsi_flag`
+diverge (`IsFinite(nom)` fails); `ale_fluid_test` A9's restart differs by 1.3e-12
+against its 1e-13 tolerance. The CPU suite passes them at np 1, 2 and 4.
 
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...

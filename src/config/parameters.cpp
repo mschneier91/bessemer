@@ -29,12 +29,14 @@ void FillFromDeck(DeckReader& r, Parameters& p)
       {"stokes", Equation::Stokes}, {"navier_stokes", Equation::NavierStokes},
       {"linear_elasticity", Equation::LinearElasticity},
       {"mesh_motion", Equation::MeshMotion},
+      {"hyperelasticity", Equation::Hyperelasticity},
       {"nse", Equation::NavierStokes}
    },
    "Equation set: unsteady Stokes, incompressible Navier-Stokes, a "
-   "small-strain linear elastic solid, static or dynamic (section solid), or "
+   "small-strain linear elastic solid, static or dynamic (section solid), "
    "mesh_motion: deform the mesh by prescribed boundary displacements "
-   "(section mesh_motion).");
+   "(section mesh_motion), or hyperelasticity: a large-deformation solid, "
+   "static or dynamic (section solid; docs/hyperelasticity.md).");
    r.Read(root, "device", p.device,
           "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
    r.Read(root, "initial_velocity", p.initial_velocity,
@@ -1092,11 +1094,14 @@ void FillFromDeck(DeckReader& r, Parameters& p)
 
    ElasticityParameters& sp = p.solid;
    const DeckSection solid = r.Section(root, "solid",
-                                       "The solid of equation linear_elasticity: "
-                                       "small strains, isotropic and homogeneous, "
+                                       "The solid of equations linear_elasticity "
+                                       "(small strains) and hyperelasticity "
+                                       "(large deformation, dead loads): "
+                                       "isotropic and homogeneous, "
                                        "displacement-only on the reference "
-                                       "configuration (docs/elasticity.md). Units "
-                                       "are the deck's own, consistent ones.");
+                                       "configuration (docs/elasticity.md, "
+                                       "docs/hyperelasticity.md). Units are the "
+                                       "deck's own, consistent ones.");
    r.Read(solid, "youngs_modulus", sp.youngs_modulus, "Young's modulus E.");
    r.Read(solid, "poisson_ratio", sp.poisson_ratio,
           "Poisson's ratio (-1 < nu < 1/2). A displacement-only discretization "
@@ -1110,7 +1115,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "solid matches the fluid's velocity at a future interface.");
    r.ReadArray(solid, "body_force", sp.body_force, p.mesh.dim,
                "A constant body force per unit volume.");
-   r.Read(solid, "rtol", sp.rtol, "CG relative tolerance.");
+   r.Read(solid, "rtol", sp.rtol,
+          "CG relative tolerance (hyperelasticity: of each Newton correction).");
    r.Read(solid, "atol", sp.atol, "CG absolute tolerance.");
    r.Read(solid, "max_iter", sp.max_iter, "CG iteration cap.");
    r.ReadEnum(solid, "preconditioner", sp.preconditioner,
@@ -1153,6 +1159,32 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Generalized-alpha spectral radius at infinite frequency, in [0, 1]: "
           "1 is the trapezoidal rule (energy-conserving, no damping), smaller "
           "values damp the unresolved high frequencies more.");
+   r.ReadEnum(solid, "model", sp.model,
+   {{"st_venant_kirchhoff", SolidModel::StVenantKirchhoff}},
+   "Equation hyperelasticity: the material. St. Venant-Kirchhoff, W = lambda/2 "
+   "(tr E)^2 + mu E : E with E the Green-Lagrange strain (plane strain in 2D).");
+   r.Read(solid, "newton_rtol", sp.newton_rtol,
+          "Equation hyperelasticity: a load step converges when its residual "
+          "falls below newton_rtol times the largest of its first residual, its "
+          "load and its Dirichlet increment's pull. The residual has a roundoff "
+          "floor that grows with slenderness and refinement (1e-7 of the load "
+          "on CSM1's flag at 4e4 dofs); newton_dx_rtol then decides.");
+   r.Read(solid, "newton_atol", sp.newton_atol,
+          "Equation hyperelasticity: Newton's absolute residual tolerance.");
+   r.Read(solid, "newton_dx_rtol", sp.newton_dx_rtol,
+          "Equation hyperelasticity: a load step also converges when a Newton "
+          "correction's norm falls below newton_dx_rtol times the "
+          "displacement's (0: off). Unlike the residual, the correction keeps "
+          "falling below the residual's roundoff floor.");
+   r.Read(solid, "newton_max_iter", sp.newton_max_iter,
+          "Equation hyperelasticity: Newton iterations per load step.");
+   r.Read(solid, "load_steps", sp.load_steps,
+          "Equation hyperelasticity: the static solve ramps the body force, "
+          "tractions and prescribed displacements from zero in this many "
+          "equal steps.");
+   r.Read(solid, "line_search", sp.line_search,
+          "Equation hyperelasticity: halve a Newton step until the residual "
+          "norm drops (large loads).");
 
    FsiParameters& fp = p.fsi;
    const DeckSection fsi = r.Section(root, "fsi", "Fluid-structure "
@@ -1416,7 +1448,7 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                "every node height must span the whole x-z plane");
    // A solid takes the solid boundary types, a flow the flow ones, a mesh
    // motion fixed and displacement.
-   const bool solid = (p.equation == Equation::LinearElasticity);
+   const bool solid = IsSolid(p.equation);
    const bool motion = (p.equation == Equation::MeshMotion);
    bool held = false;
    for (const BcSpec& s : p.boundary_conditions)
@@ -1428,9 +1460,9 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                               s.type == BcType::Traction ||
                               s.type == BcType::Free;
       MFEM_VERIFY(solid_type == (solid || motion), "parameters: boundary types "
-                  "fixed, displacement, traction and free are for equation "
-                  "linear_elasticity (and fixed, displacement for "
-                  "mesh_motion), and only they are");
+                  "fixed, displacement, traction and free are for equations "
+                  "linear_elasticity and hyperelasticity (and fixed, "
+                  "displacement for mesh_motion), and only they are");
       MFEM_VERIFY(!motion || s.type == BcType::Fixed ||
                   s.type == BcType::Displacement, "parameters: equation "
                   "mesh_motion takes boundary types fixed and displacement only "
@@ -1534,6 +1566,27 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
       MFEM_VERIFY(p.boundary_conditions.empty() || held,
                   "parameters: a solid needs a fixed or displacement boundary "
                   "(otherwise its rigid motions are free)");
+   }
+   if (p.equation == Equation::Hyperelasticity)
+   {
+      const ElasticityParameters& sp = p.solid;
+      MFEM_VERIFY(sp.analysis == SolidAnalysis::Static ||
+                  sp.time_scheme == SolidTimeScheme::GeneralizedAlpha ||
+                  sp.bdf_order == 2, "parameters: equation hyperelasticity "
+                  "takes BDF2 only (solid.bdf_order: 2; BDF3 is not A-stable)");
+      MFEM_VERIFY(p.mesh.dim == 3 || sp.plane == PlaneModel::Strain,
+                  "parameters: equation hyperelasticity is plane strain in 2D "
+                  "(plane stress needs a pointwise solve for the out-of-plane "
+                  "stretch)");
+      MFEM_VERIFY(sp.preconditioner == ElasticityPC::LorAmg,
+                  "parameters: equation hyperelasticity preconditions with "
+                  "the LOR-AMG only (solid.preconditioner: loramg)");
+      MFEM_VERIFY(sp.newton_rtol >= 0.0 && sp.newton_atol >= 0.0 &&
+                  sp.newton_dx_rtol >= 0.0 &&
+                  (sp.newton_rtol > 0.0 || sp.newton_atol > 0.0) &&
+                  sp.newton_max_iter >= 1 && sp.load_steps >= 1,
+                  "parameters: bad solid.newton_rtol, newton_atol, "
+                  "newton_max_iter or load_steps");
    }
    p.Normalize();
    return p;

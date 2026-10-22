@@ -1,8 +1,8 @@
 // Generic YAML-driven driver: `run_case <deck.yaml>` -- no recompilation per
 // case. The deck supplies parameters, mesh, initial condition (by name), and
 // output settings; the case goes through the same Case surface as any
-// in-code driver, equation: linear_elasticity runs a solid instead
-// (ElasticityCase), and equation: mesh_motion deforms the mesh
+// in-code driver, equation: linear_elasticity or hyperelasticity runs a solid
+// instead (ElasticityCase), and equation: mesh_motion deforms the mesh
 // (MeshMotionCase). `run_case --deck-reference` prints every deck key with its
 // default (docs/deck_reference.md is that output). Every run writes a
 // machine-readable summary (<output.path>/<output.name>_summary.json, or
@@ -82,7 +82,7 @@ int main(int argc, char* argv[])
    }
 
    // A solid: a static solve or a dynamic march (solid/elasticity_case).
-   if (params.equation == incns::Equation::LinearElasticity)
+   if (incns::IsSolid(params.equation))
    {
       incns::ElasticityCase solid(mesh, params);
       solid.WriteSummary(summary, "running");
@@ -90,7 +90,9 @@ int main(int argc, char* argv[])
       solid.WriteSummary(summary, ok ? "ok" : "diverged");
       if (Mpi::Root())
       {
-         std::cout << "run_case: linear_elasticity  status="
+         std::cout << "run_case: "
+                   << (params.equation == incns::Equation::Hyperelasticity ?
+                       "hyperelasticity" : "linear_elasticity") << "  status="
                    << (ok ? "ok" : "diverged") << "  summary: " << summary
                    << std::endl;
       }
