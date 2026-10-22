@@ -27,8 +27,9 @@ enum class TangentStorage
    /// data of StressAndDeformation and, on an H100 at Q6, 5 % faster (less to
    /// read); as fast on the CPU (docs/hyperelasticity.md section 3).
    Deformation,
-   /// The displacement's element vector; F and S recomputed in every apply
-   /// (one more gradient pass).
+   /// The displacement's element vector (its L-vector where the gather is
+   /// fused, 3D on a device); F and S recomputed in every apply (one more
+   /// gradient pass).
    Displacement
 };
 
@@ -41,7 +42,9 @@ enum class TangentStorage
  * components by sum factorization, the material law at every point, the
  * transposed gradient back to the dofs (MFEM's kernels::internal helpers, as
  * GradDivIntegrator's apply; in 3D on a device by lines, the gradients kept in
- * shared memory, as the momentum apply of change 56). Tensor-product elements (quads, hexes) with as
+ * shared memory, as the momentum apply of change 56, and the kernels read the
+ * L-vector through the restriction's gather map and write it back themselves,
+ * with no E-vectors). Tensor-product elements (quads, hexes) with as
  * many points per direction as dofs (the Gauss rule of order 2k + 1, the
  * linear solver's), k from 1 to 7. Lambda and mu are per element (the mesh
  * motion's stiffening).
@@ -106,6 +109,16 @@ private:
    /// The E-vector ye_ added into y (true dofs; y is overwritten).
    void FromElements(mfem::Vector& y) const;
 
+   /// The by-lines path's maps from the restriction's gather map (lines_
+   /// false where the restriction is not an ElementRestriction).
+   void SetupLines(ElementScratch* scratch);
+   /// u (true dofs) as an L-vector: u itself or P u in ul_.
+   const mfem::Vector& LocalInput(const mfem::Vector& u) const;
+   /// The L-vector the by-lines kernels write for y (true dofs): y or yl_.
+   mfem::Vector& LocalOutput(mfem::Vector& y) const;
+   /// The shared dofs' slots summed into @p yl, then y = P^T yl if needed.
+   void FinishOutput(mfem::Vector& yl, mfem::Vector& y) const;
+
    mfem::ParFiniteElementSpace& fes_;
    const mfem::IntegrationRule& ir_;
    HyperelasticMaterial material_;
@@ -123,6 +136,19 @@ private:
    mutable mfem::Vector ul_, ue_, ye_, yl_; ///< Work (borrowed or own).
    bool own_e_ = true, own_l_ = true; ///< Whether ue_/ye_ and ul_/yl_ are own.
    bool p_identity_ = false; ///< Whether the prolongation is the identity.
+
+   /// 3D on a device: the by-lines kernels read the L-vector through the
+   /// gather map and write it back themselves (no E-vectors): a dof one
+   /// element holds directly, a shared dof through its slots, summed in
+   /// element order (deterministic, no atomics).
+   bool lines_ = false;
+   const mfem::Array<int>* gmap_ =
+      nullptr; ///< E-dof to L-dof (the restriction's).
+   mfem::Array<int> dmap_; ///< Per E-dof: its L-dof, or -1 - its slot if shared.
+   mfem::Array<int> sdof_, soff_, sidx_; ///< Shared L-dofs and their slots (CSR).
+   mutable mfem::Vector slots_; ///< (slots, 3): the shared dofs' contributions.
+   int nd_ = 0, nslots_ = 0; ///< Scalar L-dofs, slots.
+   bool own_slots_ = true;
    std::unique_ptr<Tangent> tangent_;
 };
 
