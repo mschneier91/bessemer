@@ -55,6 +55,8 @@ std::unique_ptr<ParMesh> MakeCaseMesh(const Parameters& params, MPI_Comm comm)
          spec.n_up *= m;
          spec.n_below *= m;
          spec.n_above *= m;
+         spec.n_flag *= m;
+         spec.n_flag_y *= m;
          spec.ring_grading = std::pow(spec.ring_grading, root);
          spec.down_grading = std::pow(spec.down_grading, root);
          spec.outer_grading = std::pow(spec.outer_grading, root);

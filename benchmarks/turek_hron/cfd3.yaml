@@ -1,0 +1,45 @@
+# Turek & Hron (2006) CFD3: the flow around a cylinder with a rigid flag
+# (README.md). Channel 2.5 x 0.41, cylinder of radius 0.05 at (0.2, 0.2),
+# flag 0.35 x 0.02 from the cylinder to x = 0.6; nu = 1e-3, parabolic inflow
+# of mean 2 ramped by (1 - cos(pi t / 2)) / 2 for t < 2. Forces on the
+# cylinder and the flag together: reference_area 0.002 makes the summary's
+# cd / cl (and the forces CSV's Cx / Cy) Turek & Hron's forces at their
+# density 1000.
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/cfd3.yaml
+#   python3 benchmarks/turek_hron/forces.py cfd3/cfd3_forces.csv
+#
+# Periodic (Re 200). The solver defaults (Q6/Q5, OIFS at CFL 2); 26 min at np 4 on
+# a 4-core cloud VM.
+
+equation: navier_stokes
+physics:
+  nu: 1.0e-3
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    flag_length: 0.35
+    flag_thickness: 0.02
+    n_flag: 8
+    n_flag_y: 2
+    n_down: 16
+time:
+  dt: 0.001
+  t_final: 12
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 3.0, height: 0.41,
+     time_profile: ramp, time_scale: 2.0}
+  - {select: [walls, cylinder, flag], type: no_slip}
+  - {select: [outflow], type: outflow}
+forces:
+  enabled: true
+  boundaries: [cylinder, flag]
+  reference_velocity: 1.0
+  reference_area: 0.002
+  interval: 1
+output:
+  path: cfd3
+  name: cfd3
+  progress: 200

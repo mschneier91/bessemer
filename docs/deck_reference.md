@@ -66,7 +66,7 @@ Box mesh (quads/hexes) for apps/run_case.
 | `mesh.periodic` | bool[dim] | `[true, true]` | Periodic directions; non-periodic faces need boundary_conditions. |
 | `mesh.stretch` | none \| tanh | `[none, none]` | Per-direction node clustering: uniform, or two-sided tanh toward both ends. |
 | `mesh.stretch_beta` | real[dim] | `[2, 2]` | tanh clustering strength per direction. |
-| `mesh.geometry` | box \| square_cylinder \| cylinder_channel \| file | `box` | Domain: the box above; a square cylinder in a large domain (Joly et al. 2012; 2D; boundaries inflow, outflow, sides, body); the DFG channel with a cylinder (2D, or extruded in z in 3D; boundaries inflow, outflow, walls, cylinder); or a mesh file (mesh.file; boundaries named by the file's Gmsh physical groups and mesh.boundary_names). |
+| `mesh.geometry` | box \| square_cylinder \| cylinder_channel \| file | `box` | Domain: the box above; a square cylinder in a large domain (Joly et al. 2012; 2D; boundaries inflow, outflow, sides, body); the DFG channel with a cylinder (2D, or extruded in z in 3D; boundaries inflow, outflow, walls, cylinder, and flag with a Turek-Hron flag); or a mesh file (mesh.file; boundaries named by the file's Gmsh physical groups and mesh.boundary_names). |
 | `mesh.file` | string | `""` | geometry file: a Gmsh (.msh, ASCII 2.2 or 4.x) or MFEM (.mesh) file of quadrilaterals (2D) or hexahedra (3D); relative paths are relative to the working directory. |
 | `mesh.boundary_names` | name: attribute | `{}` | geometry file: boundary names for attribute numbers, added to (and overriding) the Gmsh file's named physical groups, e.g. {inlet: 1, walls: 3}. |
 | `mesh.square_cylinder.side` | real | `1` | Square side D. |
@@ -94,6 +94,11 @@ Box mesh (quads/hexes) for apps/run_case.
 | `mesh.cylinder_channel.n_above` | int | `2` | Cells above the O-grid. |
 | `mesh.cylinder_channel.down_grading` | real | `1.1` | Growth ratio of the downstream cells toward the outflow. |
 | `mesh.cylinder_channel.outer_grading` | real | `1` | Growth ratio of the upstream, lower and upper cells away from the O-grid (1: uniform). |
+| `mesh.cylinder_channel.flag_length` | real | `0` | Turek-Hron flag behind the cylinder: its length from the cylinder's downstream end to its tip (0: no flag; Turek & Hron 2006: 0.35). Boundary `flag`. |
+| `mesh.cylinder_channel.flag_thickness` | real | `0.02` | Flag thickness, centred on y = cy (Turek & Hron: 0.02). |
+| `mesh.cylinder_channel.n_flag` | int | `8` | Cells along the flag downstream of the O-grid. |
+| `mesh.cylinder_channel.n_flag_y` | int | `1` | Cells across the flag. |
+| `mesh.cylinder_channel.part` | fluid \| solid | `fluid` | fluid: the channel around the cylinder (and flag); solid: the flag itself (boundaries flag and cylinder, its clamp), with the fluid mesh's nodes on the interface. |
 | `mesh.cylinder_channel.level` | int | `0` | Nested uniform refinement level (cell counts x 2^level). |
 | `mesh.cylinder_channel.nz` | int | `4` | 3D: element layers in z (x 2^level). |
 | `mesh.cylinder_channel.depth` | real | `0.41` | 3D: extent in z; the z = 0 and z = depth faces join the walls. |

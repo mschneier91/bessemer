@@ -11,6 +11,7 @@ decks.
 | [channel/](channel/) | wall-bounded turbulence: U⁺(y⁺), Reynolds stresses, Re_τ | Moser, Kim & Mansour 1999, Re_τ 178 and 392 | Re_τ 180, 395 (and 550), Q6/Q5 | GPU; 180 fits the desktop limits (slow) |
 | [dfg_3d/](dfg_3d/) | laminar 3D flow past a cylinder: drag, lift | FeatFlow (Bayraktar, Mierka & Turek 2012) | 3D-1Z (steady, Re 20), 3D-3Z (unsteady); Q6/Q5 with AMR | desktop or GPU |
 | [oscillating_cylinder/](oscillating_cylinder/) | a moving body (ALE): in-line force of a cylinder oscillating in fluid at rest | Dütsch et al. 1998, Re 100, KC 5: c_d 2.09, c_i 1.45 | one 2D deck, Q4/Q3 | CPU, 8 min at np 4 |
+| [turek_hron/](turek_hron/) | flow around a cylinder with a rigid flag (the FSI benchmark's fluid tests): drag, lift, frequency | Turek & Hron 2006, CFD1–3 | CFD1, CFD2 (steady), CFD3 (periodic); the flag's solid mesh | CPU, 5–40 min at np 4 |
 | [sphere_re300/](sphere_re300/) | 3D wake and forces with AMR | Johnson & Patel 1999 | needs a hex mesh file first | — |
 
 **Status (2026-10-17):** tgv_re1600, channel (Re_τ 180) and dfg_3d have been run on

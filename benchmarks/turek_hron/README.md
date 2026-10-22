@@ -1,0 +1,54 @@
+# Turek & Hron: cylinder with a flag (CFD1–3)
+
+The fluid tests of the Turek & Hron (2006) FSI benchmark, with the flag rigid:
+the first step toward FSI1–3 (docs/ale_fluid.md, "Next"). A channel 2.5 × 0.41,
+a cylinder of radius 0.05 at (0.2, 0.2) and a flag 0.35 × 0.02 attached behind it,
+its right bottom corner at (0.6, 0.19). ν = 10⁻³, parabolic inflow of mean Ū,
+1.5 Ū at its peak, ramped by (1 − cos(πt/2))/2 for t < 2; no-slip walls, cylinder
+and flag; do-nothing outflow.
+
+| Test | Ū | Re | Reference (Turek & Hron, finest level) |
+|---|---|---|---|
+| CFD1 | 0.2 | 20 | steady: drag 14.2929, lift 1.11905 |
+| CFD2 | 1 | 100 | steady: drag 136.700, lift 10.5343 |
+| CFD3 | 2 | 200 | periodic: drag 439.45 ± 5.6183, lift −11.893 ± 437.81, frequency 4.3956 (Δt 0.005) |
+
+Forces are on the cylinder and the flag together, F = ∫ σ n, at density 1000 (the
+decks' `reference_area: 0.002` turns the summary's cd and cl into these forces).
+For CFD3, mean = (max + min)/2 and amplitude = (max − min)/2 over the last period:
+`python3 forces.py cfd3/cfd3_forces.csv`. Source: the FeatFlow benchmark pages
+(wwwold.mathematik.tu-dortmund.de/~featflow, "FSI benchmark", CFD tests);
+S. Turek and J. Hron, in *Fluid-Structure Interaction*, LNCSE 53, Springer 2006.
+
+**Mesh:** `mesh.geometry: cylinder_channel` with `flag_length: 0.35` (new): the DFG
+O-grid with lines at y = 0.19, 0.21 and x = 0.6, the flag's cells left out and
+boundary `flag` on its surface; 314 elements, the cylinder and the flag's ends
+curved exactly. `part: solid` gives the flag's own mesh with the same nodes on the
+interface (`cases/turek_hron_flag_linear.yaml`; the solid for FSI). `level: 1` doubles every count.
+
+## Results
+
+Cloud scratch build (MFEM v4.10 from GitHub, apt hypre and Open MPI, not the Spack
+toolchain), CPU, np 4, 2026-10-22.
+
+| Test | Discretization | Elements | Steps | Wall | Drag | Error | Lift | Error |
+|---|---|---|---|---|---|---|---|---|
+| CFD1 | Q4/Q3, IMEX, error control | 314 | 6,783 | 5.3 min | 14.3373 | +0.31 % | 1.12702 | +0.71 % |
+| CFD1 | same, `level: 1` | 1,256 | 13,148 | 40 min | 14.3097 | +0.12 % | 1.12210 | +0.27 % |
+| CFD2 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 20 | 314 | 17,920 | 38 min | 136.791 | +0.07 % | 10.6883 | +1.46 % |
+| CFD3 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 12 | 314 | 20,843 | 26 min | 439.52 ± 5.690 | +0.02 % / +1.3 % | −11.78 ± 431.7 | +1.0 % / −1.4 % |
+
+CFD3's frequency: 4.439 (+1.0 %). Over the last four periods instead of the last:
+drag 439.58 ± 5.753, lift −11.88 ± 431.9, frequency 4.440.
+
+- CFD2 is steady here as in Turek & Hron (the flag holds the wake): over t ≥ 15 the
+  drag varies by 6·10⁻³ and the lift by 10⁻⁵. Its lift, a small difference of large
+  pressure forces, carries the larger error.
+- CFD1 converges by a factor of ~2.6 per level, below the order's rate: the flag's
+  corners (the re-entrant ones where it meets the cylinder, and its tip) are
+  singular and the mesh is not graded toward them.
+- `cases/turek_hron_flag_linear.yaml`: the flag alone under CSM1's load with the *linear* solid: tip
+  u_y = −0.0680 against the large-deformation reference −0.0661, and u_x = 0 where
+  the reference has −7.2·10⁻³ (the geometric effect a small-strain model has not).
+  CSM1–3 proper need the St. Venant-Kirchhoff solid.
+- Not run on a GPU.

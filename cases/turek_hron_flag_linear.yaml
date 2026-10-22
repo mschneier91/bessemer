@@ -1,0 +1,33 @@
+# The Turek & Hron (2006) flag on its own, clamped to the cylinder, under
+# CSM1's load (gravity 2 on density 1000, E = 1.4e6, nu = 0.4, plane strain),
+# with the LINEAR elastic solid: not the benchmark itself, which is large
+# deformation (St. Venant-Kirchhoff, reference u(A) = (-7.187e-3, -6.610e-2)).
+# The mesh is the cylinder_channel flag's solid part, whose interface nodes are
+# the fluid mesh's.
+#
+#   mpirun -np 1 build/cpu/apps/run_case cases/turek_hron_flag_linear.yaml
+
+equation: linear_elasticity
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    flag_length: 0.35
+    flag_thickness: 0.02
+    n_flag: 16
+    n_flag_y: 2
+    part: solid
+solid:
+  youngs_modulus: 1.4e6
+  poisson_ratio: 0.4
+  plane: strain
+  order: 4
+  body_force: [0.0, -2000.0]
+  probe: [0.6, 0.2]
+boundary_conditions:
+  - {select: [cylinder], type: fixed}
+  - {select: [flag], type: free}
+output:
+  path: turek_hron_flag_linear
+  name: turek_hron_flag_linear
