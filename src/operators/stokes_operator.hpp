@@ -246,6 +246,22 @@ public:
     */
    void SetViscosity(double nu);
 
+   /**
+    * @brief The mesh's nodes moved (the ALE fluid): re-assemble every block on
+    *        the current geometry, in place.
+    *
+    * The mass (its diagonal and reciprocal, or its form and W det J), the
+    * divergence and gamma = c h_K are re-assembled into the objects that
+    * exist, so operators and preconditioners that borrow them stay valid;
+    * the momentum block is rebuilt by the next SetMassCoeff() (its pointer
+    * changes, as at a viscosity change), and the unconstrained viscous
+    * operator is released. Bessemer's own kernels fetch the mesh's
+    * geometric factors at assembly, which this repeats: after a move the
+    * pointers they kept are freed (MFEM's NodesUpdated).
+    * @pre No rotation term (the moving mesh needs the convective form).
+    */
+   void UpdateGeometry();
+
    /// @return Whether the velocity LOR source is frozen at its reference
    ///         mass factor and viscosity.
    bool LorFrozen() const { return opts_.lor_momentum && opts_.lor_frozen; }

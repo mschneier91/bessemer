@@ -1190,6 +1190,19 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    {{"loramg", ElasticityPC::LorAmg}, {"jacobi", ElasticityPC::Jacobi}},
    "CG preconditioner: one BoomerAMG V-cycle on the low-order-refined "
    "operator, or its diagonal.");
+   r.ReadEnum(motion, "refresh", mm.refresh,
+   {{"in_place", AleRefresh::InPlace}, {"rebuild", AleRefresh::Rebuild}},
+   "A moving-mesh flow: after each move, re-assemble the flow solvers' "
+   "operators on the moved mesh and keep the rest (in_place), or build "
+   "every solver anew (rebuild). Both give the same answer to the solver "
+   "tolerance (docs/ale_fluid.md).");
+   r.Read(motion, "amg_interval", mm.amg_interval,
+          "A moving-mesh flow with refresh in_place: rebuild the AMG "
+          "hierarchies and the Chebyshev eigenvalue estimates of the flow "
+          "solvers every this many moves (>= 1); in between they are an "
+          "earlier mesh's, which only preconditions.");
+   MFEM_VERIFY(mm.amg_interval >= 1,
+               "deck: mesh_motion.amg_interval must be >= 1");
 }
 
 // Abort with every unknown key a deck sets, each with its closest valid key.

@@ -473,6 +473,66 @@ void StokesOperator::SetViscosity(double nu)
    momentum_stale_ = true;        // and the momentum form's viscous data
 }
 
+void StokesOperator::UpdateGeometry()
+{
+   INCNS_PROFILE("stokes_operator::update_geometry");
+   MFEM_VERIFY(!rot_form_, "stokes_operator: UpdateGeometry() with a rotation "
+               "term is not supported (a moving mesh needs the convective "
+               "form)");
+   // gamma = c h_K: the element sizes changed with the nodes.
+   if (auto* h = dynamic_cast<MeshSizeCoefficient*>(gamma_.get()))
+   {
+      h->Invalidate();
+      if (gamma_elem_.Size() > 0) { h->ElementValues(gamma_elem_); }
+   }
+   if (auto* h = dynamic_cast<MeshSizeCoefficient*>(gamma_lor_.get()))
+   {
+      h->Invalidate();
+   }
+   {
+      INCNS_PROFILE("mass");
+      if (DiagonalMass())
+      {
+         // Into the same vectors: M_, the Schur PC's mass inverse and the
+         // momentum shift hold references to them.
+         AssembleCollocatedMassDiagonal(spaces_.Velocity(), *mass_rule_,
+                                        mass_diag_);
+         if (!spaces_.Velocity().Conforming())
+         {
+            const double ratio =
+               LumpedMassRatio(spaces_.Velocity(), *mass_rule_, mass_diag_);
+            MFEM_VERIFY(ratio >= kMinLumpedMassRatio, "stokes_operator: the "
+                        "collocated mass lumped at hanging nodes is too small "
+                        "or negative somewhere after a mesh move (min b / ref "
+                        "= " << ratio << ")");
+         }
+         mass_diag_inv_ = 1.0;
+         mass_diag_inv_ /= mass_diag_;
+      }
+      else
+      {
+         MassWeightDet(spaces_.Velocity(), *mass_rule_, mass_wdet_);
+         {
+            ParBilinearForm diag_form(&spaces_.Velocity());
+            auto* mi = new LeanVectorMassIntegrator(mass_wdet_);
+            mi->SetIntRule(mass_rule_);
+            diag_form.AddDomainIntegrator(mi);
+            diag_form.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+            diag_form.Assemble();
+            diag_form.AssembleDiagonal(mass_diag_);
+         }
+         mass_form_->Assemble();
+      }
+   }
+   {
+      INCNS_PROFILE("divergence");
+      div_form_->Assemble();
+   }
+   ReleaseViscousUnconstrained();
+   rest_diag_valid_ = false;
+   momentum_stale_ = true;
+}
+
 void StokesOperator::BuildMomentum()
 {
    INCNS_PROFILE("stokes_operator::momentum");

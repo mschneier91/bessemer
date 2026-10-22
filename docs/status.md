@@ -9,6 +9,23 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**ALE stage 3: the solvers refreshed in place after a move (2026-10-22, branch
+`claude/project-thread-xnsz2c` after PR #11 merged; human: "Ok merge please and go to
+stage 3").** `mesh_motion.refresh: in_place | rebuild` (case default in_place; the
+low-level `TimeIntegratorOptions::ale_refresh_in_place` is off) and
+`mesh_motion.amg_interval` (10). In place, `StokesSolver::UpdateGeometry` re-assembles
+what depends on the geometry (masses and their inverses, divergence, gamma, the momentum
+block, the pressure mean, the guess state's images; `StokesOperator::UpdateGeometry`,
+`CahouetChabardSchurPC::UpdateGeometry`, `MassInverse::Refresh`) and keeps the AMG
+hierarchies and Chebyshev estimates for `amg_interval` moves, by the move count. Not with
+the rotational form (refused already on moving meshes). Dütsch deck to t = 1, np 4: the
+per-move refresh 1.42 -> 0.35 s, the run 11.2 -> 9.6 s, iterations unchanged. Tests
+`ale_fluid_test` A10 (in place = rebuild to 2e-16 with the AMG rebuilt every move,
+< 1e-12 kept for 3 moves, also with a LOR-AMG velocity block and the Schur method), A9 for
+both paths (a restart in place matches to 1e-10, not bitwise: its AMG is built on the
+restart's mesh). Cloud scratch build, CPU, np 1/2/4; not on a GPU. **Next:** the
+coupling framework (F3).
+
 **Turek-Hron geometry and CFD1-3 (2026-10-22, branch `claude/project-thread-xnsz2c`
 after PR #10 merged; human: "make sure that you keep going").** FSI stage F2 of the
 ALE scope. `mesh.cylinder_channel` takes a flag (`flag_length`, `flag_thickness`,
@@ -22,7 +39,7 @@ lift +1.46 %; CFD3 at the defaults (Q6 OIFS, 314 elements,
 26 min at np 4) drag 439.52 +- 5.69, lift -11.78 +- 431.7, frequency 4.439 against
 439.45 +- 5.62, -11.89 +- 437.8, 4.396; the flag alone under CSM1's load with the
 linear solid (CSM proper needs the SVK solid). Cloud scratch build, CPU; not run on a
-GPU. **Next:** CFD3 on the refined mesh, then stage 3 or the coupling framework (F3).
+GPU. **Next:** CFD3 on the refined mesh, then the coupling framework (F3).
 
 **ALE fluid, IMEX, on the CPU (2026-10-21, branch `claude/project-thread-xnsz2c`;
 human: "can you go scope out what needs to be done to implement ALE now?", then
@@ -62,7 +79,7 @@ test `run_case_rejects_volume_change`). Stage 4: `LinearElasticMotion` reuses ea
 solves when the boundary data lie in their span (`mesh_motion.basis_size`, 12; rigid or
 modal motion needs one solve per shape; checkpointed; test `mesh_motion_test` M6): the
 cylinder deck to t = 0.3 makes 1 mesh solve in 116 moves, run 3.26 s -> 1.46 s at np 4
-(the fixed mesh: 0.82 s in 80 steps). **Slow by design for now:** every solver, the
+(the fixed mesh: 0.82 s in 80 steps). **Slow by design for now (stage 3 above replaced it):** every solver, the
 pressure LOR-AMG included, is rebuilt after each move (bessemer's divergence, grad-div
 and OIFS kernels keep raw pointers to MFEM's geometric factors, which a move frees).
 Stage 5, validation: the in-line oscillating cylinder of Dütsch et al. (1998), Re 100,

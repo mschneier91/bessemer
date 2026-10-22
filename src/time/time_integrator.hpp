@@ -85,6 +85,15 @@ struct TimeIntegratorOptions
    /// on Dirichlet boundaries): one true-dof velocity vector. Case turns it
    /// off when forces are not computed.
    bool keep_rhs = true;
+   /// ALE (SetMeshMotion): after each move, refresh the solvers on the moved
+   /// mesh in place (StokesSolver::UpdateGeometry) instead of building new
+   /// ones. Off by default here (the integrator tests pin what they test);
+   /// the case-level default is on (deck mesh_motion.refresh).
+   bool ale_refresh_in_place = false;
+   /// ALE, in place: rebuild the AMG hierarchies and the Chebyshev
+   /// eigenvalue estimates at every this many moves (>= 1; 1 = every move);
+   /// in between they are an earlier mesh's.
+   int ale_rebuild_interval = 10;
    /// Compact vector-diffusion storage (StokesOperatorOptions).
    bool compact_diffusion = true;
    /// Grad-div with the viscous term in one kernel (StokesOperatorOptions).
@@ -779,6 +788,10 @@ private:
    /// ALE: the guess state carried into the current step's solver (kept for
    /// a retry after Revert()).
    SolverGuessState carried_guess_;
+   /// ALE, in place: refresh every solver that exists on the moved mesh.
+   /// @param count The move counts toward ale_rebuild_interval (a Revert
+   ///        does not).
+   void RefreshSolversInPlace(bool count);
 };
 
 } // namespace incns

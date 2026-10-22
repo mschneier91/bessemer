@@ -208,6 +208,7 @@ CahouetChabardSchurPC::CahouetChabardSchurPC(
    {
       bmb_proj_ = std::make_unique<ProjectedOperator>(*bmb_, *proj_);
    }
+   outflow_attrs_ = outflow_attrs;
    {
       INCNS_PROFILE("cc::setup_lor_amg");
       lp_ = std::make_unique<LpSurrogate>(pfes, outflow_attrs, singular_,
@@ -279,6 +280,40 @@ public:
 };
 
 } // namespace
+
+void CahouetChabardSchurPC::UpdateGeometry(bool rebuild)
+{
+   INCNS_PROFILE("cc::update_geometry");
+   if (mp_form_)
+   {
+      mp_form_->Assemble();
+      mp_form_->AssembleDiagonal(mp_diag_);
+      mp_inv_->Refresh(rebuild);
+   }
+   if (mv_form_pc_)
+   {
+      mv_form_pc_->Assemble();
+      mv_form_pc_->AssembleDiagonal(mv_diag_pc_);
+   }
+   mv_inv_->Refresh(rebuild);
+   if (mpw_form_)
+   {
+      // 1 / (nu_pc + gamma): gamma = c h_K is evaluated on the moved mesh.
+      mpw_form_->Assemble();
+      mpw_form_->AssembleDiagonal(mpw_diag_);
+      mpw_inv_->Refresh(rebuild);
+   }
+   if (rebuild)
+   {
+      INCNS_PROFILE("cc::setup_lor_amg");
+      lp_ = std::make_unique<LpSurrogate>(*pfes_, outflow_attrs_, singular_,
+                                          cfg_.lp_bc, cfg_.lp_dirichlet_attrs,
+                                          cfg_.lp_vcycles, cfg_.lp_strong_threshold,
+                                          cfg_.lp_agg_levels, cfg_.lp_print_level);
+      lp_prof_ = std::make_unique<ProfiledOperator>(*lp_, "cc::lor_amg");
+      inner_cg_->SetPreconditioner(*lp_prof_);
+   }
+}
 
 void CahouetChabardSchurPC::ReleasePlainMass()
 {

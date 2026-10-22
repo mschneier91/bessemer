@@ -256,6 +256,22 @@ public:
    }
 
    /**
+    * @brief The mesh's nodes moved: re-assemble the pressure masses (plain
+    *        and weighted) and the PC's own velocity mass in place, re-read
+    *        the system's velocity mass diagonal (its operator and diagonal,
+    *        borrowed, were updated in place by StokesOperator::UpdateGeometry),
+    *        and rebuild the L_p LOR-AMG only when asked.
+    *
+    * A stale L_p hierarchy (the LOR operator of an earlier mesh) only
+    * preconditions the inner CG on B M_v^-1 B^T, which is always the current
+    * one; Chebyshev mass inverses keep their eigenvalue estimate unless
+    * @p rebuild (MassInverse::Refresh).
+    * @param rebuild Rebuild the L_p hierarchy and re-estimate the Chebyshev
+    *        eigenvalues.
+    */
+   void UpdateGeometry(bool rebuild);
+
+   /**
     * @brief Free the plain pressure mass and its inverse: after SetGradDiv
     *        the mass term uses the weighted one, and only the rotation-aware
     *        Schur PC (PressureMassInverse) reads the plain one.
@@ -311,6 +327,7 @@ private:
    std::unique_ptr<ConstantPressureProjector> proj_; ///< l2 projector.
    std::unique_ptr<ProjectedOperator> bmb_proj_; ///< P.S (singular CG operator).
    std::unique_ptr<LpSurrogate> lp_;    ///< Inner Poisson PC (LOR-AMG).
+   mfem::Array<int> outflow_attrs_;     ///< For an L_p rebuild (a copy).
    /// Named regions for the profile (no numerics): B and B^T, M_v^-1, the
    /// inner CG's operator and its preconditioner.
    std::unique_ptr<ProfiledOperator> b_prof_;

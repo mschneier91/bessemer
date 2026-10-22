@@ -68,7 +68,8 @@ public:
    MassInverse(const mfem::Operator& mass, const mfem::Vector& diag,
                MPI_Comm comm, MassInvType type = MassInvType::Auto,
                int cheb_order = 4, const mfem::Vector* d_inv = nullptr)
-      : mfem::Solver(diag.Size())
+      : mfem::Solver(diag.Size()), mass_(&mass), diag_(&diag), comm_(comm),
+        cheb_order_(cheb_order)
    {
       iterative_mode = false;
 
@@ -163,6 +164,37 @@ public:
    /// Required by mfem::Solver; the strategy is fixed at construction.
    void SetOperator(const mfem::Operator&) override {}
 
+   /**
+    * @brief The mass operator and its diagonal (the objects given at
+    *        construction, updated in place) changed: a mesh move.
+    *
+    * DiagDirect: its own reciprocal recomputed (a borrowed one is the
+    * caller's). Chebyshev: the Jacobi diagonal re-read; the largest
+    * eigenvalue of D^-1 M is estimated again by power iteration only when
+    * @p reestimate, otherwise the old estimate is kept (its polynomial
+    * already covers 1.2 times it, and D^-1 M's spectrum moves with the
+    * elements' shape, not their size).
+    * @param reestimate Run the power iteration again.
+    */
+   void Refresh(bool reestimate)
+   {
+      if (resolved_ == MassInvType::DiagDirect)
+      {
+         if (dinv_ == &d_inv_)
+         {
+            d_inv_ = 1.0;
+            d_inv_ /= *diag_;
+         }
+         return;
+      }
+      if (reestimate)
+      {
+         cheb_ = std::make_unique<mfem::OperatorChebyshevSmoother>(
+                    *mass_, *diag_, empty_ess_, cheb_order_, comm_);
+      }
+      else { cheb_->Setup(); }
+   }
+
    /// @return The strategy actually in use (after Auto resolution).
    MassInvType Resolved() const { return resolved_; }
 
@@ -195,6 +227,10 @@ private:
       return err2 <= 1e-24 * ref2; // relative ~1e-12: exact-diagonal or not
    }
 
+   const mfem::Operator* mass_;    ///< The mass operator (borrowed).
+   const mfem::Vector* diag_;      ///< Its diagonal (borrowed).
+   MPI_Comm comm_;                 ///< Communicator of the power iteration.
+   int cheb_order_;                ///< Chebyshev order.
    MassInvType resolved_ = MassInvType::Auto; ///< Post-Auto strategy.
    mfem::Vector d_inv_;            ///< Reciprocal diagonal (DiagDirect only).
    /// The reciprocal applied: d_inv_, or the caller's (DiagDirect only).

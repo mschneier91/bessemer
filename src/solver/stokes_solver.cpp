@@ -840,6 +840,58 @@ void StokesSolver::Refresh(double c0, double nu)
    Refresh(c0);
 }
 
+void StokesSolver::UpdateGeometry(bool rebuild)
+{
+   INCNS_PROFILE("stokes_solver::update_geometry");
+   MFEM_VERIFY(!op_.Rotation(), "stokes_solver: UpdateGeometry() with a "
+               "rotation term is not supported (a moving mesh needs the "
+               "convective form)");
+   // The blocks on the moved mesh, the momentum block rebuilt at this mass
+   // factor (its pointer moved: re-pointed below).
+   op_.UpdateGeometry();
+   op_.SetMassCoeff(opts_.mass_coeff);
+   block_op_.SetBlock(0, 0, &op_.FullMomentum());
+   pressure_mean_.Invalidate();
+   dirichlet_cached_ = false;
+   // The guesses stay; the operator images go (as at a viscosity change),
+   // and A x_prev was the old operator's.
+   projection_stale_ = true;
+   step_ax_valid_ = false;
+   if (schur_solver_) { schur_solver_->ResetGuess(); }
+   if (schur_)
+   {
+      // The mass-path Schur block: small, rebuilt (it is not the default).
+      schur_ = std::make_unique<PressureMassSchur>(spaces_.Pressure(), rules_,
+               opts_.nu);
+      pressure_block_ = schur_.get();
+      if (nullspace_)
+      {
+         ortho_schur_.SetSolver(*schur_);
+         pressure_block_ = &ortho_schur_;
+      }
+   }
+   if (cc_pc_)
+   {
+      cc_pc_->UpdateGeometry(rebuild);
+      cc_pc_->Reset(opts_.mass_coeff, opts_.nu);
+   }
+   // On the CC path a LOR-AMG velocity PC is kept between rebuilds like the
+   // pressure one; every other velocity PC is diagonal-based and rebuilt
+   // from the new diagonal -- point-block Jacobi in full, its grad-div blocks
+   // being of the old geometry (BuildVelocityPreconditioner would keep them).
+   const bool lor_vel =
+      cc_mode_ ? (opts_.cc.a_pc == APC::LORAMG)
+      : (opts_.velocity_prec == VelocityPreconditioner::LORAMG);
+   if (cc_mode_ && lor_vel && !rebuild && vel_prec_)
+   {
+      if (schur_solver_) { WireSchurSolver(); } // the momentum block moved
+      return;
+   }
+   vel_prec_.reset(); // it may borrow vel_inner_pc_
+   vel_inner_pc_.reset();
+   BuildVelocityPreconditioner();
+}
+
 void StokesSolver::UpdateRotation()
 {
    if (!op_.Rotation()) { return; }

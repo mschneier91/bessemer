@@ -18,6 +18,17 @@ enum class MeshMotionModelType
    LinearElastic
 };
 
+/// How a moving-mesh flow refreshes its solvers after each move (deck
+/// `mesh_motion.refresh`).
+enum class AleRefresh
+{
+   /// Keep the solvers and re-assemble their operators on the moved mesh;
+   /// the AMG hierarchies are rebuilt every `amg_interval` moves.
+   InPlace,
+   /// Build every solver anew after each move.
+   Rebuild
+};
+
 /**
  * @brief How a deck deforms its mesh: the boundary displacements are the
  *        `displacement` groups of boundary_conditions, every other boundary is
@@ -49,6 +60,11 @@ struct MeshMotionParameters
    /// Earlier solutions kept for reuse (0: none): boundary data in the span
    /// of earlier data (rigid or modal motion) need no solve.
    int basis_size = 12;
+   /// A moving-mesh flow: how the solvers follow a move.
+   AleRefresh refresh = AleRefresh::InPlace;
+   /// A moving-mesh flow, refresh in place: the AMG hierarchies and the
+   /// Chebyshev eigenvalue estimates are rebuilt every this many moves.
+   int amg_interval = 10;
 
    /// @param order_u The fluid's velocity order. @return The order in effect.
    int Order(int order_u) const { return order > 0 ? order : order_u; }
