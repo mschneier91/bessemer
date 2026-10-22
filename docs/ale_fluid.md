@@ -171,6 +171,12 @@ IMEX, CFL control; 2,099 steps to t = 2 in 55 s at np 4 on the cloud scratch
 build; det F stays in [0.89, 1.11]). An example of the keys, not a validated
 benchmark.
 
+**Validated:** the in-line oscillating cylinder of Dütsch et al. (1998), Re 100,
+KC 5, in [benchmarks/oscillating_cylinder/](../benchmarks/oscillating_cylinder/):
+c_d 2.091 and c_i 1.460 against 2.09 and 1.45 (other computations 1.45-1.48),
+converged to about 0.1 % in mesh, time step and domain size; 8 min at np 4 on the
+CPU. Transverse lock-in and Dütsch's velocity profiles are not compared yet.
+
 ## 4. Verification (`test/ale_fluid_test.cpp`, fast tier, np 1/2/4)
 
 | Test | What it pins | Result |
@@ -195,11 +201,9 @@ a GPU: `MeshVelocityField::Update` projects on the host once per step.
 
 ## 5. Next
 
-1. Validation (stage 5): the in-line oscillating cylinder (Dütsch et al. 1998)
-   and transverse lock-in.
-2. In-place refresh after a move (stage 3): the geometric data re-read, the
+1. In-place refresh after a move (stage 3): the geometric data re-read, the
    pressure LOR-AMG allowed to go stale for N steps, the velocity PC
    refreshed; the fixed-mesh path keeps its cached pointers.
-3. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
+2. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
    the partitioned coupling with dynamic Aitken and the Robin conditions, to
    all nine Turek-Hron problems.

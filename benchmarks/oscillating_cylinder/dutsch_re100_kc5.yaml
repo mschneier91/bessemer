@@ -1,0 +1,59 @@
+# Dutsch et al. (1998): a circular cylinder oscillating in line in fluid at
+# rest, x(t) = -A sin(2 pi f t), Re = U_max D / nu = 100, KC = U_max / (f D) = 5
+# (D = 1, U_max = 1: nu = 0.01, f = 0.2, A = 5 / (2 pi)). The cylinder sits in
+# a closed 40 D x 30 D box with no-slip walls; the mesh follows by
+# pseudo-elasticity (section mesh_motion; the motion is rigid, so after the
+# first move every mesh solve is reused). IMEX at the IMEX CFL target.
+# Reference (Dutsch et al. 1998): c_d 2.09, c_i 1.45 (README.md).
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/oscillating_cylinder/dutsch_re100_kc5.yaml
+#   python3 benchmarks/oscillating_cylinder/morison.py \
+#       dutsch_re100_kc5/dutsch_re100_kc5_forces.csv
+equation: navier_stokes
+physics:
+  nu: 0.01
+discretization:
+  order_u: 4
+  order_p: 3
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 40.0
+    height: 30.0
+    cx: 20.0
+    cy: 15.0
+    radius: 0.5
+    box_half: 2.0
+    n_side: 6
+    n_ring: 6
+    ring_grading: 1.3
+    n_up: 8
+    n_down: 8
+    n_below: 7
+    n_above: 7
+    outer_grading: 1.35
+    down_grading: 1.35
+mesh_motion:
+  poisson_ratio: 0.3
+  stiffening: 1.0
+time:
+  convection: imex
+  dt: 0.002
+  t_final: 50.0
+boundary_conditions:
+  - {select: [inflow, outflow, walls], type: no_slip}
+  - select: [cylinder]
+    type: no_slip
+    motion: ["-A * sin(2 * pi * f * t)", "0"]
+    parameters: {A: 0.7957747154594767, f: 0.2}
+forces:
+  enabled: true
+  boundaries: [cylinder]
+  reference_velocity: 1.0
+  reference_area: 1.0
+  interval: 1
+output:
+  path: dutsch_re100_kc5
+  name: dutsch_re100_kc5
+  progress: 500

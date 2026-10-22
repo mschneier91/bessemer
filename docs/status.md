@@ -50,9 +50,11 @@ cylinder deck to t = 0.3 makes 1 mesh solve in 116 moves, run 3.26 s -> 1.46 s a
 (the fixed mesh: 0.82 s in 80 steps). **Slow by design for now:** every solver, the
 pressure LOR-AMG included, is rebuilt after each move (bessemer's divergence, grad-div
 and OIFS kernels keep raw pointers to MFEM's geometric factors, which a move frees).
-**Next:** the oscillating-cylinder validation (stage 5); the in-place refresh (stage
-3) after it, since the per-move rebuild is 5-9 % of a step in the 2D and 3D profiles;
-then the FSI stages.
+Stage 5, validation: the in-line oscillating cylinder of Dütsch et al. (1998), Re 100,
+KC 5 (benchmarks/oscillating_cylinder/; new `mesh.cylinder_channel` keys for any channel
+and cylinder size): c_d 2.091, c_i 1.460 against 2.09 / 1.45, converged to ~0.1 % in mesh,
+dt and domain; 8 min at np 4 on the CPU. **Next:** the in-place refresh (stage 3; the
+per-move rebuild is 5-9 % of a step in the 2D and 3D profiles), then the FSI stages.
 
 **Hyperelasticity, milestone 1 and a memory step (2026-10-21; human: "start specking on
 adding hyperelasticity and at venant Kirkhoff model", "go with your recommendations,
