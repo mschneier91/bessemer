@@ -7,12 +7,13 @@ model", then "go with your recommendations, commit the spec and start M1", then 
 this is a good time to also start optimizing memory and then do performance engineering".
 
 **State (2026-10-22):** milestone 1 (the material and its operators), a memory step, and
-a performance step in four rounds (section 4):
+a performance step in five rounds (section 4):
 
 1. the 3D kernels on a device by lines;
 2. the gather and scatter fused and the derivatives collocated;
 3. the shared dofs exchanged directly instead of through MFEM's prolongation;
-4. 7 blocks per SM.
+4. 7 blocks per SM;
+5. the exchange overlapped with the interior elements' work.
 
 There is no solver, deck or boundary condition yet: that is milestone 2 (Newton, static,
 Turek-Hron CSM1/CSM2).
@@ -82,24 +83,24 @@ spaces at orders 1 to 3:
 np 4 on the CPU covers dofs that three or more ranks share.
 
 Passed on the CPU at np 1, 2 and 4 and on H100s at np 1 and 2 at every step; for the
-current code, jobs 49575822 and 49575047 (CPU) and 49575048 (GPU).
+current code, jobs 49578116 (CPU) and 49576431 (GPU).
 
 ## 3. Memory and speed
 
 The benchmark used a 3D unit cube of hexes at about 2e7 vector dofs per H100, with the
-kernels of round 4 (job 49575048, np 1; round 2: job 49572810; round 1: job 49569573; the
-first kernels: job 49563894). It reports bytes per vector dof that the operator owns, and
+kernels of round 5 (job 49576431, np 1; round 4: job 49575048; round 2: job 49572810;
+round 1: job 49569573; the first kernels: job 49563894). It reports bytes per vector dof that the operator owns, and
 the same with work vectors borrowed from an `ElementScratch`. Rates are million vector
 dofs per second.
 
 | p | storage | B/dof | B/dof borrowed | residual Mdof/s | tangent Mdof/s | MFEM linear PA Mdof/s |
 |---|---------|------:|------:|------:|------:|------:|
-| 4 | F (default) | 119 | 107 | 18247 | 14669 | 1085 |
-| 5 | F (default) | 104 | 95 | 16124 | 13926 | 557 |
-| 6 | F,S | 132 | 125 | 20694 | 15677 | cannot launch |
-| 6 | F (default) | 95 | 87 | 20722 | 17354 | cannot launch |
-| 6 | u | 65 | 58 | 20733 | 12064 | cannot launch |
-| 7 | F (default) | 88 | 82 | 21596 | 18952 | cannot launch |
+| 4 | F (default) | 117 | 105 | 18308 | 14751 | 1078 |
+| 5 | F (default) | 102 | 93 | 16197 | 13891 | 553 |
+| 6 | F,S | 130 | 123 | 20212 | 15552 | cannot launch |
+| 6 | F (default) | 93 | 85 | 20202 | 17194 | cannot launch |
+| 6 | u | 63 | 56 | 20234 | 12007 | cannot launch |
+| 7 | F (default) | 86 | 80 | 21478 | 18834 | cannot launch |
 
 Q2 and Q3 were last measured in round 2 (job 49572810): 4500 and 9586 Mdof/s in the
 tangent, against MFEM's 1846 and 862.
@@ -109,32 +110,33 @@ tangent, against MFEM's 1846 and 862.
   - F: 38 B/dof (F,S: 76; u, its L-vector: 8);
   - the slots of the dofs elements share: 8 B/dof (borrowed: 0);
   - the fused scatter's maps (each E-dof's destination, the shared dofs' lists): 3 B/dof;
-  - the exchange's maps (the gather map to true dofs and ghosts, the local dofs' sources):
-    3.4 B/dof.
+  - the exchange's local-dof sources: 1.4 B/dof (at np > 1 also its gather map to true
+    dofs and ghosts, 2 B/dof; at np 1 that map is MFEM's).
 
   Before round 2 the operator's E-vectors took 25 B/dof instead of the slots and maps, so
-  it owns 10 B/dof less. With borrowed buffers it holds 8 B/dof more, because the maps
+  it owns 11 B/dof less. With borrowed buffers it holds 6 B/dof more, because the maps
   cannot be borrowed.
 
-  At np 2 it owns 95 B/dof too (job 49575048): no L-vectors since round 3 (before: 16
-  B/dof more). The first construction also computes the mesh's geometric factors at the
+  At np 2 it owns 94 B/dof (job 49576431): no L-vectors since round 3 (before: 16 B/dof
+  more). The first construction also computes the mesh's geometric factors at the
   rule (about 38 B/dof at Q6). The mesh keeps them until the rule's owner clears them.
 - The default `Deformation` has half the stored data of `StressAndDeformation` and its
-  tangent is 10 % faster on the H100 (1.13 against 1.25 ms at Q6): there is less to read,
+  tangent is 10 % faster on the H100 (1.14 against 1.26 ms at Q6): there is less to read,
   and recomputing S is cheap. On the CPU the two are equally fast. `Displacement` saves
-  another 30 B/dof but costs 44 % in the tangent at Q6 and 98 % at Q7, where its 18
-  stacks of shared memory leave 2 blocks per SM.
+  another 30 B/dof but costs 43 % in the tangent at Q6 and 2x at Q7, where its 18 stacks
+  of shared memory leave 2 blocks per SM.
 - MFEM's linear elasticity PA does strictly less work (no material law) and is 2.4x
   slower at Q2 and 11x to 25x slower at Q3-Q5. In 3D at Q6 it cannot launch: it asks for
   dim (p + 1)^dim threads per block ([status.md](status.md)). These kernels use
   (p + 1)^2.
 - Throughput rises with the order: an element is a block of (k + 1)^2 threads, so Q2 (9
-  threads) uses the GPU least, 4.5 Gdof/s (round 2) against 17.4 at Q6.
-- Two H100s (np 2, ~4e7 dofs, job 49575048): at Q6, 15.0 Gdof/s per GPU in the tangent
-  and 17.5 in the residual: 87 % and 84 % of one GPU (Q4-Q7: 84-87 %). Round 2 reached
-  79 % and 76 %, through MFEM's prolongation; for comparison, MFEM's P u and P^T y alone
-  still take 0.165 ms each at Q6 there. What is left is about 0.19 ms per apply: the
-  exchange's messages (~1.4 MB each way) and its syncs.
+  threads) uses the GPU least, 4.5 Gdof/s (round 2) against 17.2 at Q6.
+- Two H100s (np 2, ~4e7 dofs, job 49576431): at Q6, 15.8 Gdof/s per GPU in the tangent
+  and 18.2 in the residual, 92 % and 90 % of one GPU (Q4-Q7: 89-93 %).
+  - Earlier rounds reached 87 % and 84 % (round 4) and 79 % and 76 % (round 2, through
+    MFEM's prolongation). MFEM's P u and P^T y alone take 0.165 ms each at Q6 there.
+  - About 0.1 ms per apply is left: the exchange's messages (~1.4 MB each way) and the
+    syncs around them, less what the overlap hides.
 - One CPU core (RM, np 1, ~3e5 dofs): the Q6 tangent 11 Mdof/s against MFEM's linear PA
   at 0.7.
 
@@ -218,15 +220,26 @@ tangent, against MFEM's 1846 and 862.
   - Q4 gained 6-7 %, and Q5 and Q7 are unchanged. `Displacement` is 8 % slower at Q7
     (not investigated).
 
+- **Round 5: the exchange overlapped.**
+  - On a rank with ghosts, the elements that read none run while the gather's messages
+    travel, and the others after.
+  - On the way back, the ghosts' slots are summed first and sent, and the other slots are
+    summed while those sums travel.
+  - The slotted dofs are ordered ghosts first. Every sum keeps its order, so results do
+    not change. A rank without ghosts runs one launch as before; at np 2 that is rank 0,
+    which owns the interface.
+  - At np 2, Q6 (job 49576431): residual 1.20 -> 1.15 ms and tangent 1.40 -> 1.33 ms per
+    apply, 90 % and 92 % of one GPU.
+  - At np 1 the exchange's gather map is MFEM's own (2 B/dof less).
+
 ## 5. Next
 
-- **More performance.** At np 2, Q6, a tangent apply is 1.04 ms of kernel and 0.18 ms of
-  `ScatterSlots` (nsys, job 49575048). Open:
-  - overlap the exchange with the interior elements' work. At np 2 the exchange still
-    takes about 0.19 ms per Q6 apply, 13-16 % of one GPU's apply. Intra-node GPU MPI goes
-    over InfiniBand (rc_mlx5) by design, not CUDA IPC (change 42).
-  - at np 1 the exchange's gather map equals MFEM's and could be shared (2 B/dof).
-  - geometry on the fly: **shelved** (human 2026-10-21). The operator's 95 B/dof are
+- **More performance.**
+  - Measure the scaling beyond two GPUs, at np 4 and 8 on one node. Tests stay at np 1
+    and 2 on GPUs, but benchmarks at 4-8 H100s are allowed.
+  - What is left at np 2 is about 0.1 ms per Q6 apply. Intra-node GPU MPI goes over
+    InfiniBand (rc_mlx5) by design, not CUDA IPC (change 42).
+  - Geometry on the fly: **shelved** (human 2026-10-21). The operator's ~93 B/dof are
     under 5 % of the LOR-AMG's estimated 2-3 kB/dof (elasticity.md section 3), so it
     would save under 2 % of the solver's memory, at a cost in speed.
 - **Milestone 2:** Newton with load steps, the fixed reference LOR-AMG preconditioner, the

@@ -19,6 +19,7 @@
 #include "mfem/fem/kernels.hpp"
 #include "mfem/general/forall.hpp"
 
+#include <algorithm>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -606,6 +607,8 @@ struct Args
    const int* dmap = nullptr;      ///< E-dof to its output index or -1 - slot.
    real_t* slots = nullptr;        ///< Shared dofs' contributions, (ns, 3).
    int stride = 0;                 ///< The component stride of x, lin and y.
+   const int* elems =
+      nullptr;     ///< The blocks' elements (null: block = element).
    int ns = 0;                     ///< Slots.
 };
 
@@ -841,7 +844,8 @@ PointwiseKernel(const __grid_constant__ Args<N> a)
    real_t* sXB = smem;
    real_t* sXG = smem + L::XS;
    real_t* st = smem + 2 * L::XS; // stack 3 c + k at st + (3 c + k) YS
-   const int e = blockIdx.x, tx = threadIdx.x, ty = threadIdx.y;
+   const int e = a.elems ? a.elems[blockIdx.x] : blockIdx.x;
+   const int tx = threadIdx.x, ty = threadIdx.y;
    const int col = ty * N + tx, line = NQ * e + N * (tx + N * ty);
    {
       int gi[N]; // the thread's x line of L-dofs
@@ -909,7 +913,8 @@ TangentKernel(const __grid_constant__ Args<N> a)
    real_t* sXB = smem;
    real_t* sXG = smem + L::XS;
    real_t* st = smem + 2 * L::XS; // dF's stacks 0-8, F's 9-17 (MODE 2)
-   const int e = blockIdx.x, tx = threadIdx.x, ty = threadIdx.y;
+   const int e = a.elems ? a.elems[blockIdx.x] : blockIdx.x;
+   const int tx = threadIdx.x, ty = threadIdx.y;
    const int col = ty * N + tx, line = NQ * e + N * (tx + N * ty);
    {
       int gi[N]; // the thread's x line of L-dofs
@@ -1014,9 +1019,11 @@ struct LinesMaps
    int stride = 0, ns = 0;           ///< Component stride, slots.
    const Vector* ghosts = nullptr;   ///< The input's ghosts (the exchange's).
    int linghosts = -1; ///< MODE 2: where lin's ghosts start (-1: none).
+   const Array<int>* elems = nullptr; ///< The elements to run (null: all).
 };
 
-/// Pointwise3D's by-lines counterpart: x and y are true-dof vectors (a
+/// Pointwise3D's by-lines counterpart over NE elements (m.elems, or all): x and
+/// y are true-dof vectors (a
 /// conforming space; x's ghosts in m.ghosts) or L-vectors; y gets its
 /// single-element dofs, the slots their shared dofs' contributions
 /// (ScatterSlots finishes it).
@@ -1039,6 +1046,7 @@ void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    a.gmap = m.gmap->Read();
    a.stride = m.stride;
    a.ns = m.ns;
+   a.elems = m.elems ? m.elems->Read() : nullptr;
    if constexpr(RESIDUAL)
    {
       a.y = y->Write();
@@ -1084,6 +1092,7 @@ void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    a.slots = m.slots->Write();
    a.stride = m.stride;
    a.ns = m.ns;
+   a.elems = m.elems ? m.elems->Read() : nullptr;
    lines::Launch<N>(lines::TangentKernel<MAT, N, MODE, 1>, a, NE,
                     MODE == 2 ? 18 : 9);
 #else
@@ -1095,27 +1104,27 @@ void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
 #endif
 }
 
-/// Each slotted dof's slots summed per component, in slot (element) order:
-/// the by-lines scatter's second half. Destination sdof[k] >= 0: y's entry
+/// Slotted dofs k0 to k1: each one's slots summed per component, in slot
+/// (element) order: the by-lines scatter's second half. Destination sdof[k] >= 0: y's entry
 /// (component stride @p stride); < 0: ghost -1 - sdof[k] of @p g, (3, ghosts),
 /// the exchange's sums for the owners.
 void ScatterSlots(const Array<int>& sdof, const Array<int>& soff,
                   const Array<int>& sidx, const Vector& slots, const int stride,
-                  const int ns, Vector& y, Vector* g)
+                  const int ns, Vector& y, Vector* g, const int k0, const int k1)
 {
-   const int n = sdof.Size();
-   if (n == 0) { return; }
+   const int n = k1 - k0;
+   if (n <= 0) { return; }
    const auto J = sdof.Read(), O = soff.Read(), I = sidx.Read();
    const auto S = slots.Read();
    auto Y = y.ReadWrite();
    real_t* G = (g && g->Size() > 0) ? g->Write() : Y; // Y: never written then
-   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int k)
+   mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int r)
    {
-      const int j = J[k], k0 = O[k], k1 = O[k + 1];
+      const int k = k0 + r, j = J[k], i0 = O[k], i1 = O[k + 1];
       for (int c = 0; c < 3; ++c)
       {
          real_t v = 0.0;
-         for (int i = k0; i < k1; ++i) { v += S[I[i] + ns * c]; }
+         for (int i = i0; i < i1; ++i) { v += S[I[i] + ns * c]; }
          if (j >= 0) { Y[j + stride * c] = v; }
          else { G[3 * (-1 - j) + c] = v; }
       }
@@ -1151,6 +1160,24 @@ int StoreFor(TangentStorage s)
 
 } // namespace
 
+template <class F>
+void HyperelasticOperator::ForLines(const Vector& u, F&& launch) const
+{
+   LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_,
+                ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
+   if (ex_ && outer_.Size() > 0)
+   {
+      ex_->GatherBegin(u);
+      lm.elems = &inner_;
+      launch(u, lm, inner_.Size()); // while the ghosts travel
+      ex_->GatherEnd();
+      lm.elems = &outer_;
+      launch(u, lm, outer_.Size());
+      return;
+   }
+   launch(LocalInput(u), lm, ne_);
+}
+
 class HyperelasticOperator::Tangent : public Operator
 {
 public:
@@ -1161,33 +1188,40 @@ public:
    {
       const auto& m = *op_.maps_;
       const int mode = 2 - StoreFor(op_.storage_); // 0 F,S; 1 F; 2 displacement
-      const LinesMaps lm{op_.gmap_, &op_.dmap_, &op_.slots_, op_.stride_, op_.nslots_,
-                         op_.ex_ ? &op_.ex_->Ghosts() : nullptr, op_.lin_ghosts_};
-      const Vector* xl = nullptr;
-      Vector* yl = nullptr;
+      auto modes = [&](auto&& run)
+      {
+         if (mode == 0) { run(std::integral_constant<int, 0> {}); }
+         else if (mode == 1) { run(std::integral_constant<int, 1> {}); }
+         else { run(std::integral_constant<int, 2> {}); }
+      };
       if (op_.lines_)
       {
-         xl = &op_.LocalInput(w);
-         yl = &op_.LocalOutput(y);
+         Vector& yl = op_.LocalOutput(y);
+         op_.ForLines(w, [&](const Vector & x, const LinesMaps & lm, int n)
+         {
+            WithPoints(op_.n1d_, [&](auto nc)
+            {
+               constexpr int N = decltype(nc)::value;
+               modes([&](auto mc)
+               {
+                  constexpr int MODE = decltype(mc)::value;
+                  TangentLines3D<StVenantKirchhoff, N, MODE>(n, m.B, m.G, op_.jinv_,
+                        op_.wdet_, op_.lambda_, op_.mu_, op_.lin_, x, yl, lm);
+               });
+            });
+         });
+         op_.FinishOutput(yl, y);
+         return;
       }
-      else
-      {
-         op_.ToElements(w);
-         op_.ye_ = 0.0;
-      }
+      op_.ToElements(w);
+      op_.ye_ = 0.0;
       WithPoints(op_.n1d_, [&](auto nc)
       {
          constexpr int N = decltype(nc)::value;
-         auto run = [&](auto mc)
+         modes([&](auto mc)
          {
             constexpr int MODE = decltype(mc)::value;
-            if (op_.lines_)
-            {
-               TangentLines3D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
-                     op_.wdet_, op_.lambda_, op_.mu_,
-                     op_.lin_, *xl, *yl, lm);
-            }
-            else if (op_.dim_ == 2)
+            if (op_.dim_ == 2)
             {
                Tangent2D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
                                                      op_.wdet_, op_.lambda_, op_.mu_,
@@ -1199,13 +1233,9 @@ public:
                                                      op_.wdet_, op_.lambda_, op_.mu_,
                                                      op_.lin_, op_.ue_, op_.ye_);
             }
-         };
-         if (mode == 0) { run(std::integral_constant<int, 0> {}); }
-         else if (mode == 1) { run(std::integral_constant<int, 1> {}); }
-         else { run(std::integral_constant<int, 2> {}); }
+         });
       });
-      if (op_.lines_) { op_.FinishOutput(*yl, y); }
-      else { op_.FromElements(y); }
+      op_.FromElements(y);
    }
 
 private:
@@ -1316,7 +1346,7 @@ std::size_t HyperelasticOperator::MemoryBytes() const
    if (own_l_) { n += ul_.Size() + yl_.Size(); }
    if (own_slots_) { n += slots_.Size(); }
    const std::size_t ni = dmap_.Size() + sdof_.Size() + soff_.Size() +
-                          sidx_.Size() + gsrc_.Size();
+                          sidx_.Size() + gsrc_.Size() + inner_.Size() + outer_.Size();
    return n * sizeof(real_t) + ni * sizeof(int) +
           (ex_ ? ex_->MemoryBytes() : 0);
 }
@@ -1362,6 +1392,13 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
       int* gs = gsrc_.HostWrite();
       for (int i = 0; i < g.Size(); i++) { gs[i] = io[h[i]]; }
       gmap_ = &gsrc_;
+      if (std::equal(gs, gs + g.Size(), h))
+      {
+         // One rank: the true dofs are the local dofs, and the map is the
+         // restriction's (not kept twice: 2 B/dof at Q6).
+         gsrc_.DeleteAll();
+         gmap_ = &g;
+      }
    }
    else
    {
@@ -1382,19 +1419,26 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
       MFEM_VERIFY(count[j] > 0, "HyperelasticOperator: a dof in no local element");
       if (!direct(j)) { nsh++; }
    }
+   // The slotted dofs: the ghosts first (their sums go to the owners before
+   // the others are summed), then the rest.
    sdof_.SetSize(nsh);
    soff_.SetSize(nsh + 1);
    int* sd = sdof_.HostWrite();
    int* so = soff_.HostWrite();
    std::vector<int> next(nd, -1);
    so[0] = 0;
-   for (int j = 0, k = 0; j < nd; j++)
+   int k = 0;
+   for (int pass = 0; pass < 2; pass++)
    {
-      if (direct(j)) { continue; }
-      sd[k] = io[j]; // the destination: an output index, or -1 - ghost
-      next[j] = so[k];
-      so[k + 1] = so[k] + count[j];
-      k++;
+      for (int j = 0; j < nd; j++)
+      {
+         if (direct(j) || (io[j] < 0) != (pass == 0)) { continue; }
+         sd[k] = io[j]; // the destination: an output index, or -1 - ghost
+         next[j] = so[k];
+         so[k + 1] = so[k] + count[j];
+         k++;
+      }
+      if (pass == 0) { nghost_ = k; }
    }
    sidx_.SetSize(ns);
    int* si = sidx_.HostWrite();
@@ -1403,6 +1447,23 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
       if (dm[i] < 0) { si[next[h[i]]++] = -1 - dm[i]; } // ascending slots
    }
    nslots_ = ns;
+   // With ghosts: the elements that read none run while the gather's messages
+   // travel (inner_), the others after (outer_).
+   if (ex_ && ex_->NumGhosts() > 0)
+   {
+      std::vector<int> in, out;
+      const int* gs = gsrc_.HostRead();
+      for (int e = 0; e < ne_; e++)
+      {
+         bool ghost = false;
+         for (int i = 0; i < nq && !ghost; i++) { ghost = gs[e * nq + i] < 0; }
+         (ghost ? out : in).push_back(e);
+      }
+      inner_.SetSize(static_cast<int>(in.size()));
+      outer_.SetSize(static_cast<int>(out.size()));
+      std::copy(in.begin(), in.end(), inner_.HostWrite());
+      std::copy(out.begin(), out.end(), outer_.HostWrite());
+   }
    if (scratch && scratch->Size() >= 3 * ns)
    {
       scratch->Lend(0, 3 * ns, slots_);
@@ -1436,15 +1497,19 @@ Vector& HyperelasticOperator::LocalOutput(Vector& y) const
 
 void HyperelasticOperator::FinishOutput(Vector& yl, Vector& y) const
 {
+   const int n = sdof_.Size();
    if (ex_)
    {
-      ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, y,
-                   &ex_->GhostSums());
+      // The ghosts' sums first and on their way to the owners; the rest while
+      // they travel (ReduceEnd's sums run after it, in stream order).
+      Vector* g = &ex_->GhostSums();
+      ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, y, g, 0, nghost_);
       ex_->ReduceBegin();
+      ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, y, g, nghost_, n);
       ex_->ReduceEnd(y);
       return;
    }
-   ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, yl, nullptr);
+   ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, yl, nullptr, 0, n);
    if (!p_identity_) { fes_.GetProlongationMatrix()->MultTranspose(yl_, y); }
 }
 
@@ -1475,15 +1540,16 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
 {
    if (lines_)
    {
-      const Vector& xl = LocalInput(u);
       Vector& yl = LocalOutput(r);
-      const LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_, ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
-      WithPoints(n1d_, [&](auto nc)
+      ForLines(u, [&](const Vector & x, const LinesMaps & lm, int n)
       {
-         constexpr int N = decltype(nc)::value;
-         PointwiseLines3D<StVenantKirchhoff, N, true, 0, false>(
-            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, xl, &yl, nullptr,
-            nullptr, lm);
+         WithPoints(n1d_, [&](auto nc)
+         {
+            constexpr int N = decltype(nc)::value;
+            PointwiseLines3D<StVenantKirchhoff, N, true, 0, false>(
+               n, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, x, &yl, nullptr,
+               nullptr, lm);
+         });
       });
       FinishOutput(yl, r);
       return;
@@ -1512,13 +1578,11 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
 Operator& HyperelasticOperator::GetGradient(const Vector& u) const
 {
    const int nstore = StoreFor(storage_);
-   const Vector* xl = nullptr;
-   if (lines_) { xl = &LocalInput(u); }
-   else { ToElements(u); }
-   if (nstore == 0)
+   if (lines_ && nstore == 0)
    {
-      // The displacement (true dofs and ghosts, the L-vector or the E-vector):
-      // the tangent recomputes F and S.
+      // The displacement (true dofs and ghosts, or the L-vector): the tangent
+      // recomputes F and S.
+      const Vector& xl = LocalInput(u);
       if (ex_)
       {
          // Copied into lin_ itself: written through sub-vector aliases on a
@@ -1535,23 +1599,45 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
             mfem::forall(ng, [ = ] MFEM_HOST_DEVICE(int i) { L[n + i] = G[i]; });
          }
       }
-      else { lin_ = lines_ ? *xl : ue_; }
+      else { lin_ = xl; }
       return *tangent_;
    }
-   const LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_, ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
+   auto stores = [&](auto&& run)
+   {
+      if (nstore == 1) { run(std::integral_constant<int, 1> {}); }
+      else { run(std::integral_constant<int, 2> {}); }
+   };
+   if (lines_)
+   {
+      ForLines(u, [&](const Vector & x, const LinesMaps & lm, int n)
+      {
+         WithPoints(n1d_, [&](auto nc)
+         {
+            constexpr int N = decltype(nc)::value;
+            stores([&](auto sc)
+            {
+               constexpr int STORE = decltype(sc)::value;
+               PointwiseLines3D<StVenantKirchhoff, N, false, STORE, false>(
+                  n, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, x, nullptr, &lin_,
+                  nullptr, lm);
+            });
+         });
+      });
+      return *tangent_;
+   }
+   ToElements(u);
+   if (nstore == 0)
+   {
+      lin_ = ue_; // the displacement's E-vector: the tangent recomputes F, S
+      return *tangent_;
+   }
    WithPoints(n1d_, [&](auto nc)
    {
       constexpr int N = decltype(nc)::value;
-      auto run = [&](auto sc)
+      stores([&](auto sc)
       {
          constexpr int STORE = decltype(sc)::value;
-         if (lines_)
-         {
-            PointwiseLines3D<StVenantKirchhoff, N, false, STORE, false>(
-               ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, *xl, nullptr, &lin_,
-               nullptr, lm);
-         }
-         else if (dim_ == 2)
+         if (dim_ == 2)
          {
             Pointwise2D<StVenantKirchhoff, N, false, STORE, false>(
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, &lin_,
@@ -1563,9 +1649,7 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, &lin_,
                nullptr);
          }
-      };
-      if (nstore == 1) { run(std::integral_constant<int, 1> {}); }
-      else { run(std::integral_constant<int, 2> {}); }
+      });
    });
    return *tangent_;
 }
@@ -1579,32 +1663,39 @@ double HyperelasticOperator::Energy(const Vector& u) const
       qe_.SetSize(n1d_ * n1d_ * ne_);
       qe_.UseDevice(true);
    }
-   const Vector* xl = nullptr;
-   if (lines_) { xl = &LocalInput(u); }
-   else { ToElements(u); }
-   const LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_, ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
-   WithPoints(n1d_, [&](auto nc)
+   if (lines_)
    {
-      constexpr int N = decltype(nc)::value;
-      if (lines_)
+      ForLines(u, [&](const Vector & x, const LinesMaps & lm, int n)
       {
-         PointwiseLines3D<StVenantKirchhoff, N, false, 0, true>(
-            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, *xl, nullptr, nullptr,
-            &qe_, lm);
-      }
-      else if (dim_ == 2)
+         WithPoints(n1d_, [&](auto nc)
+         {
+            constexpr int N = decltype(nc)::value;
+            PointwiseLines3D<StVenantKirchhoff, N, false, 0, true>(
+               n, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, x, nullptr, nullptr,
+               &qe_, lm);
+         });
+      });
+   }
+   else
+   {
+      ToElements(u);
+      WithPoints(n1d_, [&](auto nc)
       {
-         Pointwise2D<StVenantKirchhoff, N, false, 0, true>(
-            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
-            &qe_);
-      }
-      else
-      {
-         Pointwise3D<StVenantKirchhoff, N, false, 0, true>(
-            ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
-            &qe_);
-      }
-   });
+         constexpr int N = decltype(nc)::value;
+         if (dim_ == 2)
+         {
+            Pointwise2D<StVenantKirchhoff, N, false, 0, true>(
+               ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
+               &qe_);
+         }
+         else
+         {
+            Pointwise3D<StVenantKirchhoff, N, false, 0, true>(
+               ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
+               &qe_);
+         }
+      });
+   }
    // Summed on the host in a fixed order: deterministic.
    const real_t* q = qe_.HostRead();
    double local = 0.0;

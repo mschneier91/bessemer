@@ -83,12 +83,13 @@ the 3D GPU kernels by lines, after Nsight Compute found their register tensors s
 to DRAM, then fused the gather and scatter into them and collocated the derivatives
 (human: "Keep optimizing"; hyperelasticity.md section 4). It then exchanged the shared dofs
 directly instead of through MFEM's prolongation (`TrueDofExchange`) and fit 7 blocks per
-SM. 3D Q6 on one H100: 95 B per vector dof (the default storage, F), residual 20.7 and
-tangent 17.4 Gdof/s (5.4x and 4.7x the first kernels). On two H100s it reaches 84-87 %
-of one (it was 76-79 %). MFEM's linear elasticity PA cannot launch there and is 11-25x
-slower at Q3-Q5. Geometry on the fly is shelved (human 2026-10-21: under 2 % of the
-solver's memory). No solver or deck yet. **Next:** the exchange overlapped with the
-interior elements, then milestone 2 (Newton, the deck, Turek-Hron CSM1/CSM2).
+SM, then overlapped the exchange with the interior elements. 3D Q6 on one H100: 93 B per
+vector dof (the default storage, F), residual 20.2 and tangent 17.2 Gdof/s (5.3x and
+4.7x the first kernels). On two H100s it reaches 89-93 % of one (it was 76-79 %). MFEM's
+linear elasticity PA cannot launch there and is 11-25x slower at Q3-Q5. Geometry on the
+fly is shelved (human 2026-10-21: under 2 % of the solver's memory). No solver or deck
+yet. **Next:** a 4-8 GPU scaling measurement, then milestone 2 (Newton, the deck,
+Turek-Hron CSM1/CSM2).
 
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...

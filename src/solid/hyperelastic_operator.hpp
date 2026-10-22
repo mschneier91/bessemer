@@ -123,6 +123,11 @@ private:
    /// The slots summed into @p yl (and the ghosts' sums), then the exchange's
    /// reduce into y, or y = P^T yl.
    void FinishOutput(mfem::Vector& yl, mfem::Vector& y) const;
+   /// Runs launch(x, maps, count) for the by-lines kernels, x what they read for
+   /// u. With ghosts, the elements that read none run while the gather's
+   /// messages travel, the others after.
+   template <class F>
+   void ForLines(const mfem::Vector& u, F&& launch) const;
 
    mfem::ParFiniteElementSpace& fes_;
    const mfem::IntegrationRule& ir_;
@@ -159,6 +164,9 @@ private:
    int stride_ = 0, nslots_ =
                     0; ///< The component stride of input and output, slots.
    int lin_ghosts_ = -1; ///< With ex_: where lin_'s ghosts start (Displacement).
+   mfem::Array<int> inner_,
+        outer_; ///< With ghosts: elements reading none, the others.
+   int nghost_ = 0; ///< The slotted dofs that are ghosts (sdof_'s first).
    bool own_slots_ = true;
    std::unique_ptr<Tangent> tangent_;
 };
