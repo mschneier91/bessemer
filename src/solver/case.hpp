@@ -99,17 +99,27 @@ public:
     *        is not built); OIFS, the rotational form, error control and AMR
     *        are refused. A moving wall's no-slip condition is u = w: give its
     *        attribute MeshVelocityCoefficient() as Dirichlet data.
+    *        A deck whose boundary groups have `motion` builds its own
+    *        (the linear elastic model of section mesh_motion) in the
+    *        constructor; this is for a driver's own motion and model.
     * @param motion The motion of this case's mesh (borrowed; built on it
     *        before this case caches any geometry, at the case's start time).
     */
    void SetMeshMotion(MeshMotion& motion);
 
+   /// @return Whether the mesh moves (a deck's moving boundaries, or
+   ///         SetMeshMotion()).
+   bool MovingMesh() const { return motion_ != nullptr; }
+
+   /// @return The mesh motion. @pre MovingMesh().
+   MeshMotion& Motion();
+
    /// @return The mesh velocity w as a coefficient (u = w on a moving
-   ///         wall). @pre SetMeshMotion().
+   ///         wall). @pre MovingMesh().
    mfem::VectorCoefficient& MeshVelocityCoefficient();
 
    /// @return The mesh velocity w on the velocity space (zero before the
-   ///         first step). @pre SetMeshMotion().
+   ///         first step). @pre MovingMesh().
    const mfem::ParGridFunction& MeshVelocity() const;
 
    /**
@@ -329,7 +339,18 @@ private:
    mfem::VectorCoefficient* initial_;  ///< Initial velocity (null = zero).
 
    std::unique_ptr<StokesTimeIntegrator> integrator_; ///< Built lazily.
-   /// ALE: the mesh motion (borrowed; null: fixed mesh).
+   /// ALE: build own_motion_ from the deck's moving boundary groups (the
+   /// constructor, before anything caches geometry).
+   void BuildDeckMotion();
+
+   /// ALE: the mesh displacements of the deck's moving boundary groups
+   /// (outlive own_motion_, whose model reads them).
+   std::vector<std::unique_ptr<mfem::VectorFunctionCoefficient>>
+   deck_motion_coeffs_;
+   /// ALE: the mesh motion a deck's moving boundaries build (null: none, or
+   /// a driver's own through SetMeshMotion).
+   std::unique_ptr<MeshMotion> own_motion_;
+   /// ALE: the mesh motion (own_motion_ or a driver's; null: fixed mesh).
    MeshMotion* motion_ = nullptr;
    /// ALE: the mesh velocity on the velocity space.
    std::unique_ptr<MeshVelocityField> mesh_w_;

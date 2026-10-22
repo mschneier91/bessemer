@@ -1,0 +1,57 @@
+# A cylinder oscillating across the DFG channel (docs/ale_fluid.md): the DFG
+# 2D-3 geometry (channel 2.2 x 0.41, cylinder of diameter 0.1 at (0.2, 0.2)),
+# parabolic inflow with peak 1.5 (mean 1, Re = 100), and the cylinder moved
+# transversely by y = A sin(2 pi f t), A = 0.2 D, f = 3 (near the natural
+# shedding frequency, St ~ 0.3). The mesh follows by pseudo-elasticity with
+# Jacobian stiffening (section mesh_motion); the cylinder wall takes the mesh
+# velocity (a moving no_slip group), the channel walls stay fixed. IMEX, CFL
+# control at the IMEX target.
+#
+# An example of the deck surface, not a validated benchmark. Every solver is
+# rebuilt after each move for now, so a step costs several fixed-mesh steps.
+#
+#   mpirun -np 4 build/cpu/apps/run_case cases/ale_oscillating_cylinder.yaml
+#   -> ale_oscillating_cylinder/ale_oscillating_cylinder_summary.json
+
+equation: navier_stokes
+
+physics:
+  nu: 1.0e-3
+
+discretization:
+  order_u: 3
+  order_p: 2
+
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+
+mesh_motion:
+  poisson_ratio: 0.3
+  stiffening: 1.0
+
+time:
+  dt: 0.001
+  t_final: 2.0
+
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 1.5, height: 0.41,
+     time_profile: ramp, time_scale: 0.5}
+  - {select: [walls], type: no_slip}
+  - select: [cylinder]
+    type: no_slip
+    motion: ["0", "A * sin(2 * pi * f * t)"]
+    parameters: {A: 0.02, f: 3.0}
+  - {select: [outflow], type: outflow}
+
+forces:
+  enabled: true
+  boundaries: [cylinder]
+  reference_velocity: 1.0
+  reference_area: 0.1
+  interval: 1
+
+output:
+  path: ale_oscillating_cylinder
+  name: ale_oscillating_cylinder
+  progress: 20

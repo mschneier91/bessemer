@@ -32,6 +32,7 @@
 #include "mfem.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <iostream>
@@ -519,4 +520,103 @@ TEST(AleFluid, A7_TemporalOrderOnAMovingMesh)
                 << Rate(e[1], e[2], 2) << std::endl;
    }
    EXPECT_GT(Rate(e[1], e[2], 2.0), 1.7);
+}
+
+namespace
+{
+
+/// A deck whose whole boundary moves by @p motion (two expressions in the
+/// reference x, y and t), a no-slip wall there (u = w): Navier-Stokes on a
+/// 4 x 4 unit box, Q3, fixed steps.
+std::string MovingWallDeck(const std::string& motion, double t_final,
+                           const std::string& extra = "")
+{
+   return Deck("navier_stokes", 2, 4,
+               "physics:\n  nu: 0.1\n"
+               "time:\n  dt: 0.05\n  t_final: " + std::to_string(t_final) +
+               "\n  step_control: fixed\n"
+               "boundary_conditions:\n"
+               "  - {select: all, type: no_slip, motion: " + motion +
+               ", parameters: {a: 0.3, b: 0.2}}\n" + extra);
+}
+
+} // namespace
+
+// A8: the deck surface. A boundary group with `motion` moves the mesh (the
+// case builds the linear elastic model of section mesh_motion), a moving
+// no_slip wall takes u = w, and convection auto is IMEX. A rigid translation
+// of the whole box carries the fluid exactly, as A3 does by hand.
+TEST(AleFluid, A8_DeckMovesTheMesh)
+{
+   const Parameters p = Parameters::LoadYAMLString(
+                           MovingWallDeck("[\"a*t\", \"-b*t\"]", 0.3));
+   EXPECT_TRUE(p.moving_mesh);
+   EXPECT_EQ(p.Convection(), incns::ConvectionTreatment::Imex);
+   auto mesh = incns::MakeCaseMesh(p);
+   Case flow(*mesh, p);
+   ASSERT_TRUE(flow.MovingMesh());
+   flow.Run();
+   EXPECT_EQ(flow.Motion().MoveCount(), 6);
+   Vector V(2);
+   V(0) = 0.3;
+   V(1) = -0.2;
+   EXPECT_LT(MaxDeviation(flow.MeshVelocity(), V), 1e-9);
+   EXPECT_LT(MaxDeviation(flow.Velocity(), V), 1e-9);
+   // The nodes are the reference ones translated by V t.
+   const GridFunction& x = *mesh->GetNodes();
+   const Vector& X = flow.Motion().ReferenceNodes();
+   const int nn = x.Size() / 2;
+   double err = 0.0;
+   for (int i = 0; i < nn; ++i)
+   {
+      err = std::max(err, std::abs(x(i) - X(i) - 0.3 * flow.Time()));
+      err = std::max(err, std::abs(x(nn + i) - X(nn + i) + 0.2 * flow.Time()));
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   EXPECT_LT(err, 1e-9);
+}
+
+// A9: a checkpoint of a moving-mesh run carries the node history: the
+// restarted march equals the uninterrupted one (same rank count), with the
+// interior moved by the elastic model.
+TEST(AleFluid, A9_RestartMatchesUninterrupted)
+{
+   const std::string motion =
+      "[\"a*sin(2*pi*t)*x*(1-x)*y\", \"b*sin(2*pi*t)*y*(1-y)*x\"]";
+   const std::string dir = "ale_chk_np" + std::to_string(Mpi::WorldSize());
+   Vector u_ref, u_restart;
+   double t_ref = 0.0;
+   {
+      const Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion,
+                           0.4));
+      auto mesh = incns::MakeCaseMesh(p);
+      Case flow(*mesh, p);
+      flow.Run();
+      u_ref.SetSize(flow.Spaces().Velocity().GetTrueVSize());
+      flow.Velocity().GetTrueDofs(u_ref);
+      t_ref = flow.Time();
+   }
+   {
+      const Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion,
+                           0.4));
+      auto mesh = incns::MakeCaseMesh(p);
+      Case flow(*mesh, p);
+      for (int i = 0; i < 4; ++i) { flow.Step(); }
+      flow.WriteCheckpoint(dir);
+   }
+   {
+      Parameters p = Parameters::LoadYAMLString(MovingWallDeck(motion, 0.4));
+      p.restart_from = dir;
+      auto mesh = incns::MakeCaseMesh(p);
+      Case flow(*mesh, p);
+      flow.Run();
+      EXPECT_NEAR(flow.Time(), t_ref, 1e-12);
+      EXPECT_EQ(flow.Motion().MoveCount(), 8);
+      u_restart.SetSize(flow.Spaces().Velocity().GetTrueVSize());
+      flow.Velocity().GetTrueDofs(u_restart);
+   }
+   EXPECT_LT(MaxDiff(u_ref, u_restart), 1e-13 * std::max(1.0, u_ref.Normlinf()));
+   EXPECT_GT(u_ref.Normlinf(), 1e-3); // the wall moved the fluid
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root()) { std::filesystem::remove_all(dir); }
 }

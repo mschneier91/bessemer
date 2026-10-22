@@ -871,7 +871,9 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   fixed mesh, A2 free stream on an oscillating mesh (the GCL) 2D/3D, A3 a
   rigidly moved box carries the fluid, A4 a linear flow on a mesh moved at
   constant rates, A5 a cut step moves the mesh back, A6/A7 Taylor-Green
-  spatial order 4 at Q3 and temporal order 2 on a moving mesh).
+  spatial order 4 at Q3 and temporal order 2 on a moving mesh, A8 a deck's
+  `motion` group moves the mesh, A9 a moving-mesh restart = the uninterrupted
+  run).
 
 ### 7.4 GPU parity
 CPU/GPU parity runs only where a CUDA build and GPUs exist (≥ 1 GPU per rank); GPU runs need

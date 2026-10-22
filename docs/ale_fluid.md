@@ -12,9 +12,10 @@ geometry kept for fixed meshes, with a refresh path for moving ones; the
 partitioned FSI coupling to the Turek-Hron problems) are in the scoping
 document of 2026-10-21 (stage numbers below are its stages).
 
-This first piece (stages 0-1) is the library: `Case::SetMeshMotion` with
-IMEX. No deck keys yet (stage 2), a full rebuild of the solvers after each move
-(stage 3 replaces it with an in-place refresh), CPU only so far.
+Built so far: the library (stages 0-1, `Case::SetMeshMotion` with IMEX) and
+the deck surface (stage 2, section 3 below: boundary `motion`, checkpoints of
+the node history). Still a full rebuild of the solvers after each move (stage
+3 replaces it with an in-place refresh); CPU only so far.
 
 ## 1. Formulation
 
@@ -70,7 +71,8 @@ every RK stage, the riskiest later stage of the scope.
 - **A failed solve on a moving mesh** (`time.on_solver_failure: cut_step`)
   moves the mesh back first (`MeshMotion::Revert`, which also restores a
   history level the move had dropped), then retries at the cut step.
-- `Case::SetMeshMotion(MeshMotion&)` before the first step; `MeshVelocity()`,
+- `Case::SetMeshMotion(MeshMotion&)` before the first step (a deck's `motion`
+  groups build their own, `Case::BuildDeckMotion`); `MeshVelocity()`,
   `MeshVelocityCoefficient()`. The `MeshMotion` is the caller's (built on the
   case's mesh before the `Case`, as in `test/ale_fluid_test.cpp`); any
   `MeshMotionModel` drives it (the linear elastic one with stiffening by
@@ -85,7 +87,50 @@ rebuild is correct and slow (the pressure LOR-AMG setup every step); stage 3
 adds the in-place refresh for moving meshes and keeps the cached pointers for
 fixed ones (human 2026-10-21: "we'll want both options").
 
-## 3. Verification (`test/ale_fluid_test.cpp`, fast tier, np 1/2/4)
+## 3. Decks
+
+A flow deck (`equation: navier_stokes` or `stokes`) moves its mesh when a
+boundary group carries `motion`: the displacement of that group's nodes from
+their reference positions, one expression per component in the reference
+x, y, z and t, with named `parameters` (the expression syntax of
+docs/mesh_motion.md section 3):
+
+```yaml
+boundary_conditions:
+  - {select: [walls], type: no_slip}            # fixed
+  - select: [cylinder]
+    type: no_slip                               # u = w on the moving wall
+    motion: ["0", "A * sin(2 * pi * f * t)"]
+    parameters: {A: 0.02, f: 3.0}
+  - {select: [inflow], type: velocity, ...}     # fixed
+  - {select: [outflow], type: outflow}          # fixed
+```
+
+- **Every group without `motion` is held fixed**, whatever its flow type; no
+  sliding boundaries yet.
+- **A moving `no_slip` group takes the mesh velocity** (u = w_h); a moving
+  `velocity` group keeps its own data.
+- **The interior** follows the linear elastic model with Jacobian stiffening,
+  set by section `mesh_motion` (`poisson_ratio`, `stiffening`, `order`, the CG
+  settings; its `steps` is not used: the mesh moves at every time step). The
+  node order is the mesh's (the velocity order on the built-in geometries).
+- **Refused:** dimensional decks (`nondim: dimensional`), AMR, `time.convection:
+  oifs`, `step_control: error`, the rotational form, periodic meshes. Setup
+  aborts with the reason.
+- **Checkpoints** carry the node history (`<checkpoint>/mesh_motion.r<rank>`:
+  the move count, the last BDF levels of the node displacements and their
+  times), so a restart at the same rank count continues the march exactly
+  (test A9).
+- **Summary:** a `mesh_motion` section (moves, the det F range over the mesh,
+  the largest node displacement).
+
+Example: `cases/ale_oscillating_cylinder.yaml`, the DFG 2D-3 channel at Re 100
+with the cylinder moved across it at 0.2 D near the shedding frequency (Q3,
+IMEX, CFL control; 2,099 steps to t = 2 in 55 s at np 4 on the cloud scratch
+build; det F stays in [0.89, 1.11]). An example of the keys, not a validated
+benchmark.
+
+## 4. Verification (`test/ale_fluid_test.cpp`, fast tier, np 1/2/4)
 
 | Test | What it pins | Result |
 |---|---|---|
@@ -96,6 +141,8 @@ fixed ones (human 2026-10-21: "we'll want both options").
 | A5 | a vetoed solve on a moving mesh: the mesh goes back, the step is cut and retried, the nodes end where the motion says | to 1e-12 |
 | A6 | Taylor-Green on an oscillating mesh, Q3, h = 1/2, 1/4, 1/8: velocity L2 | rates 4.03, 4.32 (theory 4) |
 | A7 | the same at Q5, dt = 0.04, 0.02, 0.01 | rates 2.83, 2.24 (theory 2, BDF2/EXT2) |
+| A8 | a deck whose whole boundary moves rigidly (`motion` on a no_slip group): IMEX chosen, u = w, the nodes translated | to 1e-9 |
+| A9 | a checkpoint mid-march of a deck with a moving wall and an elastically moved interior, restarted | = the uninterrupted run to 1e-13 |
 
 A4's stretched case is not exact because the starter's explicit C(w) u^0
 reads u^0 on the moved nodes, off by dt (grad u) w where grad w is not zero; the
@@ -105,17 +152,14 @@ Run in the cloud session on a scratch build (MFEM v4.10 from GitHub, apt hypre
 and Open MPI, not the Spack toolchain); CI is the reference build. Never run on
 a GPU: `MeshVelocityField::Update` projects on the host once per step.
 
-## 4. Next
+## 5. Next
 
-1. Deck surface (stage 2): a `mesh_motion:` section in flow decks with
-   per-group boundary motion, nondimensionalization, the node history in
-   checkpoints.
-2. In-place refresh after a move (stage 3): the geometric data re-read, the
+1. In-place refresh after a move (stage 3): the geometric data re-read, the
    pressure LOR-AMG allowed to go stale for N steps, the velocity PC
    refreshed; the fixed-mesh path keeps its cached pointers.
-3. Modal (rigid) motion without a per-step elastic solve (stage 4).
-4. Validation (stage 5): the in-line oscillating cylinder (Dütsch et al. 1998)
+2. Modal (rigid) motion without a per-step elastic solve (stage 4).
+3. Validation (stage 5): the in-line oscillating cylinder (Dütsch et al. 1998)
    and transverse lock-in.
-5. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
+4. Then the FSI stages: St. Venant-Kirchhoff solid, the Turek-Hron geometry,
    the partitioned coupling with dynamic Aitken and the Robin conditions, to
    all nine Turek-Hron problems.

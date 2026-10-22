@@ -11,6 +11,7 @@
 #include "mfem.hpp"
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace incns
@@ -97,6 +98,22 @@ public:
     * @pre MoveCount() > 0 and more than one state kept.
     */
    void Revert();
+
+   /**
+    * @brief Write the state (the kept node displacements, their times, the
+    *        move count) to @p path, one file per rank (`<path>.r<rank>`), for
+    *        a restart at the same rank count. Collective only in that every
+    *        rank writes its own file.
+    * @param path File prefix.
+    */
+   void Save(const std::string& path) const;
+
+   /**
+    * @brief Restore a state Save() wrote and put the nodes there. The
+    *        boundary set must be the same as when it was saved. Collective.
+    * @param path File prefix.
+    */
+   void Load(const std::string& path);
 
    /**
     * @brief The BDF derivative of the node positions at the newest state,

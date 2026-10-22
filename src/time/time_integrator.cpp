@@ -216,7 +216,9 @@ void StokesTimeIntegrator::MoveMesh(double t_new, int order)
    mesh_moved_ = false;
    if (!motion_) { return; }
    INCNS_PROFILE("time_integrator::move_mesh");
-   motion_->Move(t_new);
+   const bool moved = motion_->Move(t_new);
+   MFEM_VERIFY(moved, "time_integrator: the mesh-motion solve to t = " << t_new
+               << " did not converge (mesh_motion.rtol, max_iter)");
    mesh_moved_ = true;
    mesh_w_->Update(*motion_, std::min(order, motion_->States() - 1));
    // Everything built on the old geometry goes: the solvers (their operators

@@ -29,10 +29,19 @@ order 4.3 in h (Q3) and 2.2 in dt. Run in the cloud on a scratch build (MFEM v4.
 from GitHub, apt hypre and Open MPI, not the Spack toolchain) at np 1/2/4; its fast
 tier fails 10 tests that fail the same way on main there (the unpatched MFEM 4.10
 AnisotropicConflict segfault, apt hypre's "Error during solve"); CI is the gate.
-Never run on a GPU. No deck keys. **Slow by design for now:** every solver, the
+Never run on a GPU. **Stage 2, the deck surface (2026-10-22; human: "Rather than
+merge keep going"):** a boundary group's `motion` (expressions in the reference
+x, y, z, t with `parameters`) moves the mesh; groups without it stay fixed; a moving
+`no_slip` group takes u = w; the interior follows section `mesh_motion`'s elastic
+model (`Case::BuildDeckMotion`); checkpoints carry the node history
+(`MeshMotion::Save/Load`, per rank), the summary a `mesh_motion` section. Tests A8
+(deck rigid box), A9 (restart = uninterrupted to 1e-13), np 1/2/4. Deck
+`cases/ale_oscillating_cylinder.yaml` (DFG channel, Re 100, cylinder moved across at
+0.2 D: t = 2 in 55 s at np 4, det F in [0.89, 1.11]; not validated). Refused:
+dimensional decks, periodic meshes. **Slow by design for now:** every solver, the
 pressure LOR-AMG included, is rebuilt after each move (bessemer's divergence, grad-div
 and OIFS kernels keep raw pointers to MFEM's geometric factors, which a move frees).
-**Next:** the deck section and checkpointed node history (stage 2), the in-place
+**Next:** the in-place
 refresh (stage 3), modal motion (4), the oscillating-cylinder validation (5), then
 the FSI stages.
 

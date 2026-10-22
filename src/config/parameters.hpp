@@ -120,6 +120,12 @@ struct BcSpec
    std::vector<std::string> expression;
    /// Named constants the expressions may use (deck `parameters`).
    std::map<std::string, double> expression_parameters;
+   /// A flow boundary that moves (the ALE fluid, docs/ale_fluid.md): its
+   /// mesh displacement d(X, t), one expression of the reference coordinates
+   /// (x, y, z) and t per component, with `parameters` as for `expression`;
+   /// empty: the boundary's mesh is held. A no_slip group that moves takes
+   /// u = w, the mesh velocity.
+   std::vector<std::string> motion;
    BcProfile profile = BcProfile::Constant;           ///< BcType::Velocity shape.
    double u_max = 1.0;   ///< Parabolic: peak velocity.
    double height = 1.0;  ///< Parabolic: channel height (y from 0 to height).
@@ -417,9 +423,9 @@ struct Parameters
    /// Convection(). OIFS: fixed or CFL step control, BDF3 by default
    /// (time_order).
    ConvectionTreatment convection_treatment = ConvectionTreatment::Auto;
-   /// The mesh moves (ALE; Case::SetMeshMotion sets it): Auto convection is
-   /// then IMEX, since OIFS on a moving mesh is not built
-   /// (docs/ale_fluid.md).
+   /// The mesh moves (ALE: a boundary group with `motion`, set by the deck
+   /// loader, or Case::SetMeshMotion): Auto convection is then IMEX, since
+   /// OIFS on a moving mesh is not built (docs/ale_fluid.md).
    bool moving_mesh = false;
    /// OIFS: CFL number of each RK4 substep (deck `time.oifs_cfl`; 1.5, the
    /// polynomial-order study's and the channel decks' setting).

@@ -55,9 +55,13 @@ public:
     * @param field            Fields of velocity_dirichlet groups (may be empty:
     *                         such a group is then an error).
     * @param require_coverage Abort with CoverageProblems() unless empty.
+    * @param mesh_velocity    The mesh velocity w (ALE): a no_slip group with
+    *                         `motion` takes u = w from it (needed when one
+    *                         has; borrowed).
     */
    void Apply(BoundaryConditions& bc, const FieldLookup& field,
-              bool require_coverage);
+              bool require_coverage,
+              mfem::VectorCoefficient* mesh_velocity = nullptr);
 
 private:
    const Parameters& params_;              ///< The deck's parameters.

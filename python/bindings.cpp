@@ -368,7 +368,8 @@ private:
       {
          const auto it = dirichlet_fields_.find(g);
          return it == dirichlet_fields_.end() ? nullptr : it->second;
-      }, /*require_coverage=*/false);
+      }, /*require_coverage=*/false,
+      case_->MovingMesh() ? &case_->MeshVelocityCoefficient() : nullptr);
    }
 
    std::vector<int> AsAttrs(const py::object& a)
