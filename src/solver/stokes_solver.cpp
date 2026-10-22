@@ -26,9 +26,16 @@ bool HasBlockLayout(const BlockVector& x, const Array<int>& offsets)
 // Map the solver options to the operator's assembly options. A LOR source is
 // built when the velocity block PC is (LOR-)AMG on either Schur path;
 // amg_reuse freezes it so its hierarchy survives Delta-t.
-static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o)
+static StokesOperatorOptions MakeOpOptions(const StokesSolverOptions& o,
+      const BoundaryConditions& bc)
 {
    StokesOperatorOptions so;
+   if (bc.HasRobin())
+   {
+      so.robin_marker = &bc.RobinMarker();
+      so.robin_alpha = bc.RobinAlpha();
+      so.robin_alpha_max = bc.RobinAlphaMax();
+   }
    so.nu = o.nu;
    so.collocated_mass = o.collocated_mass;
    so.lumped_hanging_mass = o.lumped_hanging_mass;
@@ -87,7 +94,7 @@ StokesSolver::StokesSolver(MixedSpaces& spaces, const RuleBook& rules,
    : spaces_(spaces), rules_(rules), bc_(bc), opts_(opts),
      nullspace_(bc.PressureNullspaceExists()), pressure_mean_(rules),
      cc_mode_(opts.schur == SchurBlockType::CahouetChabard),
-     op_(spaces, rules, MakeOpOptions(opts), &bc.EssentialTrueDofs()),
+     op_(spaces, rules, MakeOpOptions(opts, bc), &bc.EssentialTrueDofs()),
      block_op_(const_cast<Array<int>&>(spaces.BlockTrueOffsets())),
      ortho_schur_(spaces.Velocity().GetComm()),
      fgmres_(spaces.Velocity().GetComm())

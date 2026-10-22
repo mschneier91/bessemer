@@ -15,6 +15,13 @@ namespace incns
 /// The interface conditions of the partitioned coupling (`fsi.coupling`).
 enum class FsiCoupling
 {
+   /// Robin on the fluid (sigma_f n + alpha_f u = the last subiteration's
+   /// traction + alpha_f w, the mesh following the solid's interface),
+   /// Neumann on the solid (the fluid's traction), iterated on the traction.
+   /// alpha_f ~ rho_s H / dt takes the solid's inertia into the fluid's
+   /// solve (Badia, Nobile and Vergara 2008); on a wall wetted on both
+   /// sides its through-thickness squeeze mode converges slowly (docs/fsi.md).
+   RobinNeumann,
    /// Dirichlet on the fluid (the mesh and u = w follow the solid's
    /// interface displacement), Neumann on the solid (the fluid's traction).
    DirichletNeumann
@@ -47,7 +54,16 @@ struct FsiParameters
    double fluid_density = 1.0; ///< rho_f: the fluid's traction is rho_f times
    ///< the kinematic one.
    FsiCoupling coupling = FsiCoupling::DirichletNeumann; ///< Conditions.
-   FsiAcceleration acceleration = FsiAcceleration::Aitken; ///< Relaxation.
+   /// The fluid's Robin coefficient alpha_f (a density times a velocity);
+   /// <= 0: Badia, Nobile and Vergara's rho_s H / dt (Parameters::
+   /// FsiFluidRobin()).
+   double alpha_fluid = 0.0;
+   /// The structure's thickness H in the default alpha_f; <= 0: the
+   /// geometry's flag thickness.
+   double structure_thickness = 0.0;
+   /// Relaxation: IQN-ILS by default (Aitken fails FSI1's first step under
+   /// either condition; docs/fsi.md).
+   FsiAcceleration acceleration = FsiAcceleration::IqnIls;
    /// The first subiteration's relaxation factor (Aitken) or every one's
    /// (constant), in (0, 1].
    double relaxation = 0.5;

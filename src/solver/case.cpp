@@ -338,7 +338,8 @@ void Case::EnsureSetup()
    {
       deck_bc_ = std::make_unique<DeckBoundaryConditions>(params_, mesh_);
       deck_bc_->Apply(own_bc_, nullptr, /*require_coverage=*/true,
-                      mesh_w_ ? &mesh_w_->Coefficient() : nullptr);
+                      mesh_w_ ? &mesh_w_->Coefficient() : nullptr,
+                      robin_alpha_, robin_alpha_max_);
    }
    // The force body by boundary name.
    for (const std::string& name : params_.forces.boundaries)

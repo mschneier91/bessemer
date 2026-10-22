@@ -132,6 +132,14 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // divergence trial columns; empty when no Dirichlet BCs are given. Stored as
    // a member: the constrained operators MakeRef this list.
    if (ess_tdofs) { ess_tdofs_ = *ess_tdofs; }
+   if (opts_.robin_marker)
+   {
+      MFEM_VERIFY(opts_.robin_alpha && opts_.robin_alpha_max > 0.0,
+                  "stokes_operator: the Robin coefficient must be positive");
+      robin_marker_ = *opts_.robin_marker;
+      robin_lor_alpha_.constant = opts_.robin_alpha_max;
+      AssembleRobin();
+   }
 
    // --- velocity mass: GL 2k default, or the collocated GLL (diagonal) rule --
    if (opts_.collocated_mass)
@@ -312,6 +320,7 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
       AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
                              /*include_grad_div=*/true, gamma_lor_.get());
+      AddRobinIntegrator(*lor_form_);
    }
 
    // --- rotation in the LOR source: an LOR discretization owned HERE, so the
@@ -528,6 +537,13 @@ void StokesOperator::UpdateGeometry()
       INCNS_PROFILE("divergence");
       div_form_->Assemble();
    }
+   if (robin_)
+   {
+      // The faces moved. The momentum block's sum pointed at the matrix
+      // this frees: the block must be rebuilt by SetMassCoeff before any
+      // apply (StokesSolver::UpdateGeometry does it at once).
+      AssembleRobin();
+   }
    ReleaseViscousUnconstrained();
    rest_diag_valid_ = false;
    momentum_stale_ = true;
@@ -568,19 +584,27 @@ void StokesOperator::BuildMomentum()
       // the one the solver applies: one RAP and its work vectors, not two.
       // The old K_ wraps the old Aunc_: release it first.
       K_.Clear();
+      Aunc_.Clear();
+      mfem::OperatorPtr& base = robin_ ? Abase_ : Aunc_;
       if (DiagonalMass())
       {
          // c0 M is c0 times the mass diagonal, added at every apply with c0
          // read then: a new mass factor re-assembles nothing.
          TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
                          momentum_form_->GetProlongation(), Arest_);
-         Aunc_.Reset(new DiagonalShiftOperator(*Arest_.Ptr(), mass_diag_,
-                                               opts_.mass_coeff), true);
+         base.Reset(new DiagonalShiftOperator(*Arest_.Ptr(), mass_diag_,
+                                              opts_.mass_coeff), true);
       }
       else
       {
          TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
-                         momentum_form_->GetProlongation(), Aunc_);
+                         momentum_form_->GetProlongation(), base);
+      }
+      if (robin_)
+      {
+         // alpha (u, v) on the Robin faces, an assembled boundary matrix.
+         Aunc_.Reset(new SumOperator(Abase_.Ptr(), 1.0, robin_.get(), 1.0,
+                                     false, false), true);
       }
       K_.Reset(new ConstrainedOperator(Aunc_.Ptr(), ess_tdofs_, false), true);
    }
@@ -609,6 +633,31 @@ void StokesOperator::UpdateMomentumDiagonal()
    momentum_diag_.UseDevice(true);
    const double c0 = (opts_.mass_coeff > 0.0) ? opts_.mass_coeff : 0.0;
    add(rest_diag_, c0, mass_diag_, momentum_diag_);
+   if (robin_) { momentum_diag_ += robin_diag_; }
+}
+
+void StokesOperator::AssembleRobin()
+{
+   INCNS_PROFILE("stokes_operator::robin");
+   ParBilinearForm r(&spaces_.Velocity());
+   r.AddBoundaryIntegrator(new VectorMassIntegrator(*opts_.robin_alpha),
+                           robin_marker_);
+   r.Assemble();
+   r.Finalize();
+   robin_.reset(r.ParallelAssemble());
+   robin_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
+   robin_diag_.UseDevice(true);
+   robin_->GetDiag(robin_diag_);
+}
+
+void StokesOperator::AddRobinIntegrator(ParBilinearForm& form)
+{
+   if (!robin_) { return; }
+   // MFEM's LOR assembly copies boundary integrators with their markers;
+   // the coefficient's bound stands in for it there (a coefficient of the
+   // high-order mesh's fields cannot be evaluated on the LOR mesh).
+   form.AddBoundaryIntegrator(new VectorMassIntegrator(robin_lor_alpha_),
+                              robin_marker_);
 }
 
 void StokesOperator::BuildLorSource()
@@ -622,6 +671,7 @@ void StokesOperator::BuildLorSource()
       lor_form_ = std::make_unique<ParBilinearForm>(&spaces_.Velocity());
       AddMomentumIntegrators(*lor_form_, /*include_mass=*/true,
                              /*include_grad_div=*/true, gamma_lor_.get());
+      AddRobinIntegrator(*lor_form_);
       if (w_lor_)
       {
          // Legacy element matrices on the LOR elements, reading the LOR-space

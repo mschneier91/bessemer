@@ -84,9 +84,11 @@ BoundaryConditions::BoundaryConditions(ParFiniteElementSpace& vfes)
 
    dirichlet_marker_.SetSize(max_attr_);
    outflow_marker_.SetSize(max_attr_);
+   robin_marker_.SetSize(max_attr_);
    real_bdr_marker_.SetSize(max_attr_);
    dirichlet_marker_ = 0;
    outflow_marker_ = 0;
+   robin_marker_ = 0;
    real_bdr_marker_ = 0;
    ess_tdofs_.SetSize(0);
 
@@ -121,7 +123,9 @@ void BoundaryConditions::AddVelocityDirichlet(int attr,
                "BoundaryConditions: attribute has no real boundary faces "
                "(periodic pseudo-boundary?) -- eliminating its dofs would "
                "corrupt the periodic coupling");
-   MFEM_VERIFY(dirichlet_marker_[attr - 1] == 0 && outflow_marker_[attr - 1] == 0,
+   MFEM_VERIFY(dirichlet_marker_[attr - 1] == 0 && outflow_marker_[attr - 1] == 0
+               &&
+               robin_marker_[attr - 1] == 0,
                "BoundaryConditions: attribute already has a condition");
    MFEM_VERIFY(coeff.GetVDim() == vfes_.GetVDim(),
                "BoundaryConditions: coefficient vdim does not match velocity");
@@ -149,12 +153,56 @@ void BoundaryConditions::AddOutflow(int attr)
    MFEM_VERIFY(real_bdr_marker_[attr - 1] == 1,
                "BoundaryConditions: attribute has no real boundary faces "
                "(periodic pseudo-boundary?)");
-   MFEM_VERIFY(dirichlet_marker_[attr - 1] == 0 && outflow_marker_[attr - 1] == 0,
+   MFEM_VERIFY(dirichlet_marker_[attr - 1] == 0 && outflow_marker_[attr - 1] == 0
+               &&
+               robin_marker_[attr - 1] == 0,
                "BoundaryConditions: attribute already has a condition");
 
    outflow_marker_[attr - 1] = 1;
    has_outflow_ = true;
    // Outflow is natural: nothing to assemble, nothing to eliminate.
+}
+
+void BoundaryConditions::AddRobin(int attr, double alpha,
+                                  mfem::VectorCoefficient& w)
+{
+   MFEM_VERIFY(alpha > 0.0, "BoundaryConditions: the Robin coefficient must be "
+               "positive");
+   if (!robin_constant_)
+   {
+      robin_constant_ = std::make_unique<ConstantCoefficient>(alpha);
+   }
+   MFEM_VERIFY(robin_constant_->constant == alpha,
+               "BoundaryConditions: one Robin coefficient for all attributes");
+   AddRobin(attr, *robin_constant_, alpha, w);
+}
+
+void BoundaryConditions::AddRobin(int attr, mfem::Coefficient& alpha,
+                                  double alpha_max,
+                                  mfem::VectorCoefficient& w)
+{
+   MFEM_VERIFY(attr >= 1 && attr <= max_attr_,
+               "BoundaryConditions: boundary attribute out of range");
+   MFEM_VERIFY(real_bdr_marker_[attr - 1] == 1,
+               "BoundaryConditions: attribute has no real boundary faces "
+               "(periodic pseudo-boundary?)");
+   MFEM_VERIFY(dirichlet_marker_[attr - 1] == 0 && outflow_marker_[attr - 1] == 0
+               &&
+               robin_marker_[attr - 1] == 0,
+               "BoundaryConditions: attribute already has a condition");
+   MFEM_VERIFY(alpha_max > 0.0, "BoundaryConditions: the Robin coefficient "
+               "must be positive");
+   MFEM_VERIFY(!robin_alpha_ || robin_alpha_ == &alpha,
+               "BoundaryConditions: one Robin coefficient for all attributes");
+   MFEM_VERIFY(!robin_w_ || robin_w_ == &w,
+               "BoundaryConditions: one Robin velocity for all attributes");
+   MFEM_VERIFY(w.GetVDim() == vfes_.GetVDim(),
+               "BoundaryConditions: coefficient vdim does not match velocity");
+   robin_marker_[attr - 1] = 1;
+   robin_alpha_ = &alpha;
+   robin_alpha_max_ = alpha_max;
+   robin_w_ = &w;
+   // Natural as well: the operator and the right-hand side carry it.
 }
 
 bool BoundaryConditions::DirichletIsConstant() const

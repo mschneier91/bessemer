@@ -9,12 +9,11 @@ You also should use atkin acceleration and be iterating back and forth like
 is common in the literature", and the target, all nine Turek-Hron problems,
 fully coupled and iterated; 2026-10-22, "then do the coupling".
 
-Built so far (CPU only): Dirichlet-Neumann subiterations with constant,
-dynamic Aitken or IQN-ILS updates of the interface displacement, the linear
-(small-strain) solid, static or dynamic, matching or non-matching interfaces
-by point search. Not yet: the Robin conditions (F4; Robin-Neumann is to be the
-default), Neumann-Dirichlet, the St. Venant-Kirchhoff solid (F1, the
-maintainer's), restarts, a GPU run.
+Built so far (CPU only): Dirichlet-Neumann (the default) and Robin-Neumann
+subiterations (section 2) with constant, dynamic Aitken or IQN-ILS updates,
+the linear (small-strain) solid, static or dynamic, matching or non-matching
+interfaces by point search. Not yet: Neumann-Dirichlet and Robin-Robin (F4),
+the St. Venant-Kirchhoff solid (F1, the maintainer's), restarts, a GPU run.
 
 ## 1. The coupling
 
@@ -64,15 +63,74 @@ it over the undeformed one. The two differ at the order of the strain, the
 small-strain model's own error. The St. Venant-Kirchhoff solid will take the
 nominal traction.
 
-## 2. The accelerators (`fsi.acceleration`)
+## 2. Robin-Neumann (`fsi.coupling: robin_neumann`)
 
-- **`aitken`** (default; human 2026-10-21): dynamic Aitken relaxation
+The fluid's interface takes a Robin condition instead of u = w (Badia, Nobile
+and Vergara 2008): sigma_f n + alpha_f u = tau + alpha_f w, tau the fluid's
+traction of the previous subiteration and w the mesh velocity of the solid's
+interface; the solid takes the fluid's traction as before. At the fixed point
+tau is the fluid's own traction, so u = w and the coupled solution is
+Dirichlet-Neumann's, whatever alpha_f (test F6: the two agree to 1e-7 over two
+impulsive steps). The fluid's side: `BoundaryConditions::AddRobin` (a
+boundary mass alpha (u, v) in the momentum block, `StokesOperator::Robin`;
+the load alpha (w, v) + (tau, v) assembled on the current mesh every step,
+`StokesTimeIntegrator::SetBoundaryTraction`); the momentum residual leaves
+the Robin terms out, so forces and the solid's load stay the physical ones
+(`robin_test` R1-R3: an exact Robin channel flow, the residual identity, the
+no-slip limit as alpha grows).
+
+**The iterate is the traction, not the displacement.** A step: the solid
+under -rho_f tau, the mesh to its interface, the fluid with Robin data tau,
+its traction tau~; residual tau~ - tau, relative to |tau~|, and the
+accelerator updates tau. Iterating on d instead leaves tau as hidden state,
+and IQN-ILS, which models d~(d), stalled (|r|/|d~| ~ 0.5 for 60
+subiterations). tau is a field on the interface, not the residual's moments:
+the moments of one traction change as the interface moves, and reading them
+on the mesh of the start of the step moved the converged flag by 3 % on an
+impulsive start.
+
+**alpha_f.** Badia, Nobile and Vergara's rho_s H / dt for a thin wall
+(`fsi.alpha_fluid`, or `fsi.structure_thickness` H > 0); by default face by
+face, rho_s h / dt with h the solid's thickness behind the face (a ray cast
+through the solid's boundary along the face normal), capped at c_P dt, the
+P-wave's reach in a step (`FsiCase::BuildRobinCoefficient`): on the
+Turek-Hron flag 4,000 on its sides and 54,800 on its tip at dt 0.005.
+
+**On the flag it is slower than Dirichlet-Neumann** (human 2026-10-22: the
+default is Dirichlet-Neumann with IQN-ILS):
+
+| | DN, Aitken | DN, IQN-ILS | RN, Aitken | RN, IQN-ILS |
+|---|---|---|---|---|
+| `cases/fsi_flag.yaml`, 10 steps | 201 | 103 | fails | 171 |
+| FSI1 (coarse, t = 15), per step | fails at step 1 | 4.4 | fails at step 1 | 6.6 |
+
+Both reach the same FSI1 answer (drag +0.30 % against the reference in
+both, lift -0.48 % and -0.35 %, tip u_y -0.06 %, u_x +6.5 %).
+
+The flag is a wall wetted on both sides. Its bending modes want alpha_f near
+their impedance (larger diverges), its through-thickness squeeze mode is
+some fifty times stiffer and converges at about 1 - alpha_f / Z_squeeze per
+subiteration (0.97 measured): no single alpha_f serves both. solids4foam
+reports the same on Turek-Hron (FSI3: 151 subiterations per step for
+Robin-Neumann against 9 for Dirichlet-Neumann with IQN-ILS; FSI1 17.6
+against 5.9; their issues #493 and #529), with separate coefficients for the
+two faces' symmetric and antisymmetric motion as the open remedy. The
+parameter formulas in the literature are derived for thin walls wetted on
+one side (arteries). A Robin-Neumann subiteration also costs about three
+times a Dirichlet-Neumann one on FSI1: the flow's solve is harder with the
+Robin term in it (the pressure preconditioner does not see it).
+
+## 3. The accelerators (`fsi.acceleration`)
+
+- **`iqn_ils`** is the default (human 2026-10-22); Aitken fails FSI1's first
+  step under both conditions.
+- **`aitken`**: dynamic Aitken relaxation
   (Kuttler and Wall 2008), d_{k+1} = d_k + omega_k r_k, omega_0 =
   `fsi.relaxation` at the first subiteration of every step, then omega_k =
   -omega_{k-1} r_{k-1}.(r_k - r_{k-1}) / |r_k - r_{k-1}|^2 within
   [-omega_max, omega_max].
 - **`constant`**: omega = `fsi.relaxation` throughout.
-- **`iqn_ils`**: the interface quasi-Newton method with a least-squares
+- **IQN-ILS**: the interface quasi-Newton method with a least-squares
   inverse Jacobian (Degroote, Bathe and Vierendeels 2009): with V the
   differences of the residuals and W those of the outputs d~, d_{k+1} = d~_k
   + W c, c the least-squares solution of V c = -r_k (modified Gram-Schmidt
@@ -88,9 +146,10 @@ subiterations in two steps, IQN-ILS reusing two steps 25, Aitken 54-62
 (rank-dependent), the constant relaxation at 0.1 4.7 times Aitken's over four
 steps, at 0.5 divergent. A density ratio of one is the hard case of
 Dirichlet-Neumann coupling (the added-mass effect; Causin, Gerbeau and Nobile
-2005): the Robin conditions of stage F4 are the remedy, and FSI3 the test.
+2005); on this flag IQN-ILS handles it better than the Robin condition does
+(section 2), and FSI3 is the test still ahead.
 
-## 3. The interface maps (`fsi/interface_transfer`)
+## 4. The interface maps (`fsi/interface_transfer`)
 
 Both directions interpolate a field at the destination's interface nodes:
 the solid's displacement to the nodes of the motion space on the fluid's
@@ -110,7 +169,7 @@ MFEM's `FindPointsGSLIB` is the planned alternative for large or 3D
 interfaces (the human's gslib decision; MFEM is built with gslib in every
 real environment, not in the cloud scratch build these were developed on).
 
-## 4. The deck
+## 5. The deck
 
 The flow deck as usual, with the wetted boundary as a group of type
 `interface`, the solid in section `solid` (its material, `analysis`, time
@@ -124,7 +183,10 @@ fsi:
   solid_fixed: [cylinder]   # the solid mesh's clamp
   solid_interface: []       # empty: the fluid's interface names
   fluid_density: 1000       # the solid's load is rho_f times the kinematic one
-  acceleration: aitken      # aitken | constant | iqn_ils
+  coupling: dirichlet_neumann  # dirichlet_neumann | robin_neumann
+  alpha_fluid: 0            # robin_neumann: <= 0 face by face (section 2)
+  structure_thickness: 0    # robin_neumann: > 0 one alpha = rho_s H / dt
+  acceleration: iqn_ils     # iqn_ils | aitken | constant
   relaxation: 0.5           # omega_0 (aitken), omega (constant), first step (iqn_ils)
   omega_max: 1
   reuse: 0                  # iqn_ils: earlier steps kept
@@ -142,7 +204,11 @@ tolerance well below `fsi.rtol`** (`solver.rtol` 1e-9 against 1e-6 in
 [cases/fsi_flag.yaml](../cases/fsi_flag.yaml)): the subiterations cannot
 converge below the flow solve's own error, and IQN-ILS fed with that noise
 wanders off (at the default `solver.rtol` the smoke deck's residual stalled
-near 1e-5 and the step failed). Time steps are fixed
+near 1e-5 and the step failed). A static solid (`solid.analysis: static`)
+needs a far larger gap: with no inertia to set against the fluid's added
+mass, the subiteration map amplifies the flow solve's error about 1e5 times
+(`fsi_test` F5: `solver.rtol` 1e-10 left the residual wandering at 1e-5
+against `fsi.rtol` 1e-8; 1e-12 converges in 14-18 subiterations). Time steps are fixed
 (`time.step_control: fixed`); a failed fluid solve inside the coupling stops
 the run instead of cutting the step. Restarts are refused (the solid's state
 is not checkpointed yet). The run writes `<name>_fsi.csv` (per step: time,
@@ -156,7 +222,7 @@ shortening a small-strain solid lacks). A steady problem has to be marched well
 past its inflow ramp: FSI1's flag still creeps at t = 5 (u_y 4 % short) and is
 steady from t = 10.
 
-## 5. Tests (`fsi_test`, fast tier, np 1/2/4)
+## 6. Tests (`fsi_test`, fast tier, np 1/2/4)
 
 F1 the maps are exact on a linear field both ways; F2 a fluid trial step
 undone and taken again reproduces itself, and a committed one equals a
@@ -164,6 +230,8 @@ plain step; F3 the traction integrates to rho_f times the force on the flag
 (the residual's sum, and through the map on the solid's interface); F4
 coupled steps converge with IQN-ILS (with and without reuse) and Aitken, the
 fluid's interface sits at the solid's, IQN-ILS needs fewer subiterations than
-Aitken; F5 a static solid on a ramped start. The deck end to end:
+Aitken; F5 a static solid on a ramped start; F6 Robin-Neumann converges to
+Dirichlet-Neumann's steps, with u = w on the interface. `robin_test` R1-R3
+covers the fluid's Robin condition alone. The deck end to end:
 `run_case_fsi_flag` ([cases/fsi_flag.yaml](../cases/fsi_flag.yaml), ten
 dynamic steps, 9-12 subiterations each with IQN-ILS, 5 s at np 2).

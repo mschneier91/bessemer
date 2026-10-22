@@ -338,7 +338,7 @@ The solid of equation linear_elasticity: small strains, isotropic and homogeneou
 
 ## `fsi`
 
-Fluid-structure interaction (docs/fsi.md): the flow of this deck, whose boundary groups of type interface are the wetted surface, coupled with the solid of section solid on its own mesh, iterated in every time step (partitioned, Dirichlet-Neumann).
+Fluid-structure interaction (docs/fsi.md): the flow of this deck, whose boundary groups of type interface are the wetted surface, coupled with the solid of section solid on its own mesh, iterated in every time step (partitioned: fsi.coupling).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -346,8 +346,10 @@ Fluid-structure interaction (docs/fsi.md): the flow of this deck, whose boundary
 | `fsi.solid_fixed` | string list | `[]` | Boundary names of the solid mesh held fixed (the clamp). |
 | `fsi.solid_interface` | string list | `[]` | Boundary names of the solid mesh on the interface; empty: the names of the fluid's interface groups. |
 | `fsi.fluid_density` | real | `1` | rho_f: the traction on the solid is rho_f times the flow's kinematic traction (the flow's pressure is p / rho_f). |
-| `fsi.coupling` | dirichlet_neumann | `dirichlet_neumann` | Interface conditions: dirichlet_neumann moves the fluid's interface with the solid (u = w there) and loads the solid with the fluid's traction. |
-| `fsi.acceleration` | aitken \| constant \| iqn_ils | `aitken` | The update of the interface displacement between subiterations: dynamic Aitken relaxation (Kuttler and Wall 2008), the constant factor relaxation, or the interface quasi-Newton method IQN-ILS (Degroote et al. 2009). |
+| `fsi.coupling` | robin_neumann \| dirichlet_neumann | `dirichlet_neumann` | Interface conditions. Both move the fluid's mesh with the solid's interface and load the solid with the fluid's traction. dirichlet_neumann imposes u = w on the fluid's interface; robin_neumann imposes sigma_f n + alpha_f u = the last subiteration's traction + alpha_f w and iterates on the traction (Badia, Nobile and Vergara 2008); it converges to the same solution, but slowly on a wall wetted on both sides (its squeeze mode; docs/fsi.md). |
+| `fsi.alpha_fluid` | real | `0` | robin_neumann: the fluid's Robin coefficient (a density times a velocity, as rho_s H / dt); <= 0: rho_s h / dt face by face, h the solid's thickness behind the face (capped at the P-wave speed times dt), or structure_thickness when that is > 0. |
+| `fsi.structure_thickness` | real | `0` | > 0: one alpha_fluid = rho_s H / dt with this H on the whole interface instead of the face-by-face thickness. |
+| `fsi.acceleration` | aitken \| constant \| iqn_ils | `iqn_ils` | The update of the interface displacement between subiterations: dynamic Aitken relaxation (Kuttler and Wall 2008), the constant factor relaxation, or the interface quasi-Newton method IQN-ILS (Degroote et al. 2009; the default: Aitken fails Turek-Hron FSI1's first step). robin_neumann relaxes the interface traction instead. |
 | `fsi.print_level` | int | `0` | 1: print every subiteration's residual and relaxation factor on rank 0; 0: nothing. |
 | `fsi.reuse` | int | `0` | IQN-ILS: earlier steps whose least-squares columns are kept. |
 | `fsi.relaxation` | real | `0.5` | The relaxation factor of the first subiteration (aitken) or of every one (constant), in (0, 1]. |

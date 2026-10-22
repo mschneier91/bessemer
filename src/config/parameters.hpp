@@ -637,6 +637,25 @@ struct Parameters
       return grad_div_h >= 0.0 ? grad_div_h : 6.0 / order_u;
    }
 
+   /// @return The fluid's constant Robin coefficient of the FSI coupling
+   ///         divided by rho_f (the flow's equations are kinematic):
+   ///         fsi.alpha_fluid, or rho_s H / dt (Badia, Nobile and Vergara
+   ///         2008, the structure's inertia) when it is <= 0, H
+   ///         fsi.structure_thickness or the flag's thickness. FsiCase uses
+   ///         a face-by-face coefficient instead when neither key is set.
+   double FsiFluidRobin() const
+   {
+      double a = fsi.alpha_fluid;
+      if (a <= 0.0)
+      {
+         const double h = fsi.structure_thickness > 0.0 ?
+                          fsi.structure_thickness :
+                          cylinder_channel.flag_thickness;
+         a = solid.density * h / dt;
+      }
+      return a / fsi.fluid_density;
+   }
+
    /// @return True when the step is CFL-controlled: StepControl::Cfl on a
    ///         Navier-Stokes case (Stokes steps at time.dt under Cfl).
    bool CflSteps() const

@@ -58,10 +58,16 @@ public:
     * @param mesh_velocity    The mesh velocity w (ALE): a no_slip group with
     *                         `motion` takes u = w from it (needed when one
     *                         has; borrowed).
+    * @param robin_alpha      The Robin coefficient of the interface groups
+    *                         under fsi.coupling robin_neumann (borrowed);
+    *                         null: the constant Parameters::FsiFluidRobin().
+    * @param robin_alpha_max  An upper bound of robin_alpha.
     */
    void Apply(BoundaryConditions& bc, const FieldLookup& field,
               bool require_coverage,
-              mfem::VectorCoefficient* mesh_velocity = nullptr);
+              mfem::VectorCoefficient* mesh_velocity = nullptr,
+              mfem::Coefficient* robin_alpha = nullptr,
+              double robin_alpha_max = 0.0);
 
 private:
    const Parameters& params_;              ///< The deck's parameters.

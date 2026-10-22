@@ -205,6 +205,19 @@ public:
       return interface_disp_.get();
    }
 
+   /**
+    * @brief The Robin coefficient of the deck's interface groups under
+    *        fsi.coupling robin_neumann, in place of the constant
+    *        Parameters::FsiFluidRobin(). Before the first step.
+    * @param alpha     The coefficient, kinematic (borrowed).
+    * @param alpha_max An upper bound (the LOR preconditioner's constant).
+    */
+   void SetRobinCoefficient(mfem::Coefficient& alpha, double alpha_max)
+   {
+      robin_alpha_ = &alpha;
+      robin_alpha_max_ = alpha_max;
+   }
+
    /// @return Current time (nondimensional, t*).
    double Time() const;
 
@@ -420,6 +433,8 @@ private:
    void AfterStep(double t_prev, double step_wall);
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
    SummaryHook summary_hook_; ///< See SetSummaryHook().
+   mfem::Coefficient* robin_alpha_ = nullptr; ///< See SetRobinCoefficient().
+   double robin_alpha_max_ = 0.0; ///< See SetRobinCoefficient().
    bool memory_hint_done_ = false; ///< memory.max_dofs considered (once).
    std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.
    /// Convective CFL estimator on the current mesh (time.cfl_max, NSE only).

@@ -12,11 +12,14 @@
 //     fluid's interface displacement is the solid's at the interface's
 //     nodes, and IQN-ILS needs fewer subiterations than Aitken;
 //  F5 a static solid couples too (on a ramped start: under the impulsive
-//     start's pressure pulse a static flag swings far out).
+//     start's pressure pulse a static flag swings far out);
+//  F6 Robin-Neumann and Dirichlet-Neumann converge to the same coupled
+//     steps, the Robin one with u = w on the interface at convergence.
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
 
+#include "bc/boundary_names.hpp"
 #include "config/parameters.hpp"
 #include "fsi/fsi_case.hpp"
 #include "fsi/interface_transfer.hpp"
@@ -304,12 +307,79 @@ TEST(Fsi, F4_CoupledStepsConverge)
 // F5: a static solid (quasi-static coupling) converges too.
 TEST(Fsi, F5_StaticSolid)
 {
-   const Parameters p = Parameters::LoadYAMLString(
-                           Deck("  acceleration: iqn_ils\n",
-                                "  analysis: static\n", Np(), true));
+   // A static solid has no inertia to damp the fluid's added mass: the
+   // subiteration map amplifies the flow solve's error some 1e5 times
+   // (solver rtol 1e-10 left |r| / |d~| wandering at 1e-5), so the flow
+   // solves to 1e-12 here.
+   std::string deck = Deck("  acceleration: iqn_ils\n",
+                           "  analysis: static\n", Np(), true);
+   deck.replace(deck.find("rtol: 1.0e-10"), 13, "rtol: 1.0e-12");
+   const Parameters p = Parameters::LoadYAMLString(deck);
    auto mesh = incns::MakeCaseMesh(p);
    FsiCase fsi(*mesh, p);
    for (int s = 0; s < 2; ++s) { ASSERT_TRUE(fsi.Step()) << s; }
    EXPECT_EQ(static_cast<int>(fsi.History().size()), 2);
    EXPECT_GT(fsi.Solid().MaxDisplacement(), 0.0);
 }
+
+// F6: Robin-Neumann reaches Dirichlet-Neumann's coupled solution.
+TEST(Fsi, F6_RobinNeumannMatchesDirichletNeumann)
+{
+   const char* couplings[] = {"dirichlet_neumann", "robin_neumann"};
+   std::vector<Vector> u(2);
+   std::vector<long long> its;
+   for (int v = 0; v < 2; ++v)
+   {
+      const Parameters p = Parameters::LoadYAMLString(
+                              Deck(std::string("  coupling: ") + couplings[v] +
+                                   "\n  max_iterations: 300\n",
+                                   "  analysis: dynamic\n", Np()));
+      auto mesh = incns::MakeCaseMesh(p);
+      FsiCase fsi(*mesh, p);
+      for (int s = 0; s < 2; ++s) { ASSERT_TRUE(fsi.Step()) << couplings[v] << s; }
+      long long n = 0;
+      for (const FsiCase::StepRecord& r : fsi.History()) { n += r.iterations; }
+      its.push_back(n);
+      Case& f = fsi.Fluid();
+      u[v].SetSize(f.Spaces().Velocity().GetTrueVSize());
+      f.Velocity().GetTrueDofs(u[v]);
+      if (v == 1)
+      {
+         // u = w on the interface: the Robin condition holds it weakly only
+         // at the coupled fixed point (to the quadrature of its two terms).
+         ParFiniteElementSpace& vfes = f.Spaces().Velocity();
+         const ParGridFunction& w = f.MeshVelocity();
+         w.HostRead();
+         const double* uh = f.Velocity().HostRead();
+         Array<int> marker(mesh->bdr_attributes.Max()), iface;
+         marker = 0;
+         marker[incns::NamedBoundaryAttribute(p, *mesh, "flag") - 1] = 1;
+         vfes.GetEssentialVDofs(marker, iface);
+         double err = 0.0, wmax = 0.0;
+         for (int i = 0; i < iface.Size(); ++i)
+         {
+            if (!iface[i]) { continue; }
+            wmax = std::max(wmax, std::abs(w(i)));
+            err = std::max(err, std::abs(w(i) - uh[i]));
+         }
+         MPI_Allreduce(MPI_IN_PLACE, &wmax, 1, MPI_DOUBLE, MPI_MAX,
+                       MPI_COMM_WORLD);
+         MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX,
+                       MPI_COMM_WORLD);
+         EXPECT_GT(wmax, 0.0);
+         EXPECT_LT(err, 1e-5 * wmax);
+      }
+      if (Mpi::Root())
+      {
+         std::cout << "[fsi] " << couplings[v] << ": subiterations " << n
+                   << " in 2 steps" << std::endl;
+      }
+   }
+   double scale = u[0].Normlinf();
+   MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   EXPECT_LT(MaxDiff(u[0], u[1]), 1e-6 * scale);
+   // Both converge; on this flag (a wall wetted on both sides, rho_s =
+   // rho_f) Robin-Neumann needs more subiterations, not fewer (docs/fsi.md).
+   EXPECT_GT(its[1], 0);
+}
+

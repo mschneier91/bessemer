@@ -2,8 +2,8 @@
  * @file fsi_case.hpp
  * @brief A deck-driven fluid-structure interaction run (section `fsi`): the
  *        ALE flow and the linear solid, coupled by partitioned
- *        Dirichlet-Neumann subiterations with dynamic Aitken relaxation in
- *        every time step (docs/fsi.md).
+ *        subiterations (Robin-Neumann or Dirichlet-Neumann) with dynamic
+ *        Aitken relaxation in every time step (docs/fsi.md).
  */
 #pragma once
 
@@ -25,7 +25,12 @@ namespace incns
  *        the deck's geometry (`mesh.cylinder_channel.part: solid`),
  *        coupled in every time step.
  *
- * A step: predict the interface displacement d from the committed steps
+ * Dirichlet-Neumann iterates on the interface displacement d, Robin-Neumann
+ * on the fluid's interface traction tau (StepRobinNeumann(): solid under
+ * -rho_f tau, mesh to its interface, fluid with Robin data tau and the
+ * solid's velocity, tau~ its traction; the residual tau~ - tau).
+ *
+ * A Dirichlet-Neumann step: predict the interface displacement d from the committed steps
  * (fsi.predictor), then iterate: the fluid takes a trial step with its
  * interface at d (u = w there); the fluid's traction (the momentum residual
  * at the interface dofs, recovered as a traction field by the interface's
@@ -94,6 +99,11 @@ public:
    /// Recompute SolidTraction() from the fluid's last step. Collective.
    void UpdateTraction();
 
+   /// @return The fluid's residual at the interface's velocity true dofs
+   ///         (zero elsewhere) of its last step: the moments of its
+   ///         kinematic traction, the Robin-Neumann iterate (UpdateLoad()).
+   const mfem::Vector& InterfaceLoad() const { return last_load_; }
+
    /// @return The total force of SolidTraction() over the fluid's moved
    ///         interface (rho_f times the fluid's force on the interface).
    mfem::Vector InterfaceForce() const { return interface_force_; }
@@ -110,6 +120,39 @@ private:
    /// @param d The predicted interface displacement (true dofs of the
    ///          motion space).
    void Predict(mfem::Vector& d) const;
+
+   /// @param load The predicted interface traction (Robin-Neumann; velocity
+   ///             true dofs), extrapolated as Predict().
+   void PredictLoad(mfem::Vector& load) const;
+
+   /// last_load_ from the fluid's last step. Collective.
+   void UpdateLoad();
+
+   /// @param load Interface moments of the fluid's kinematic traction
+   ///             (velocity true dofs): SolidTraction() and InterfaceForce()
+   ///             from them, on the current mesh. Collective.
+   void LoadSolid(const mfem::Vector& load);
+
+   /**
+    * @brief The traction field whose moments on the current mesh's
+    *        interface are @p load; sets InterfaceForce(). Collective.
+    * @param load Moments (velocity true dofs; interface entries read).
+    * @param t    The fluid's kinematic traction (velocity true dofs; zero off
+    *             the interface).
+    */
+   void TractionFromLoad(const mfem::Vector& load, mfem::Vector& t);
+
+   /// @param t The fluid's kinematic traction (velocity true dofs): the
+   ///          solid's load SolidTraction() = -rho_f t. Collective.
+   void LoadSolidTraction(const mfem::Vector& t);
+
+   /// Step() under Robin-Neumann: subiterations on the interface traction.
+   /// @return Whether they converged (else failure_ says why).
+   bool StepRobinNeumann();
+
+   /// The default Robin coefficient, face by face from the solid's
+   /// thickness behind each interface face; handed to the flow.
+   void BuildRobinCoefficient();
 
    mfem::ParMesh& fluid_mesh_; ///< The fluid mesh (borrowed).
    Parameters params_;         ///< Parameters (copied).
@@ -133,6 +176,22 @@ private:
    std::unique_ptr<InterfaceTransfer> to_fluid_; ///< Solid -> fluid map.
    mfem::Array<int> fluid_marker_; ///< Interface marker of the fluid mesh.
    mfem::Vector interface_force_;  ///< See InterfaceForce().
+   /// The fluid's residual (its kinematic traction's moments) at the
+   /// interface's velocity true dofs, zero elsewhere, of the last step
+   /// (UpdateTraction()).
+   mfem::Vector last_load_;
+   /// Robin-Neumann: committed interface tractions, newest first.
+   std::vector<mfem::Vector> committed_load_;
+   /// Robin-Neumann: the current subiteration's traction field (the fluid's
+   /// Robin data).
+   std::unique_ptr<mfem::ParGridFunction> robin_tau_;
+   /// Its coefficient (the time integrator reads it).
+   std::unique_ptr<mfem::VectorGridFunctionCoefficient> robin_tau_coeff_;
+   /// The face-by-face Robin coefficient (kinematic), or null (the constant
+   /// Parameters::FsiFluidRobin()).
+   std::unique_ptr<mfem::Coefficient> robin_alpha_;
+   double robin_alpha_min_ = 0.0; ///< Its smallest value on the interface.
+   double robin_alpha_max_ = 0.0; ///< Its largest.
 
    std::unique_ptr<InterfaceAccelerator> accel_; ///< The relaxation.
    /// Committed interface displacements (motion true dofs), newest first.
