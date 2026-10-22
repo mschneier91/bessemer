@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <type_traits>
 
 namespace incns
 {
@@ -58,6 +59,9 @@ Hyperelasticity::Options HyperelasticOptions(const Parameters& p)
    o.rtol = s.rtol;
    o.atol = s.atol;
    o.max_iter = s.max_iter;
+   o.density = s.density;
+   o.scheme = s.time_scheme;
+   o.rho_inf = s.rho_inf;
    return o;
 }
 
@@ -224,7 +228,14 @@ Vector ElasticityCase::ProbeDisplacement()
 bool ElasticityCase::Run()
 {
    if (params_.solid.analysis == SolidAnalysis::Static) { return Solve(); }
-   MFEM_VERIFY(solver_, "elasticity_case: hyperelasticity is static only");
+   return hyper_ ? March(*hyper_) : March(*solver_);
+}
+
+template <class SolidSolver>
+bool ElasticityCase::March(SolidSolver& solver)
+{
+   // Hyperelasticity logs its Newton iterations too.
+   constexpr bool hyper = std::is_same<SolidSolver, Hyperelasticity>::value;
    INCNS_PROFILE("solid::march");
    const int dim = mesh_.Dimension();
    const double wall0 = MPI_Wtime();
@@ -234,20 +245,24 @@ bool ElasticityCase::Run()
    {
       std::filesystem::create_directories(out.path);
    }
-   solver_->Initialize(0.0);
+   solver.Initialize(0.0);
 
    std::ofstream history;
    const char* names[3] = {"x", "y", "z"};
    auto log = [&](double dt)
    {
       // Collective quantities on every rank, the row on rank 0.
-      const double ke = solver_->KineticEnergy();
-      const double se = solver_->StrainEnergy();
+      const double ke = solver.KineticEnergy();
+      const double se = solver.StrainEnergy();
       const Vector u = ProbeDisplacement();
       if (!root || !history.is_open()) { return; }
-      history << solver_->StepCount() << "," << solver_->Time() << "," << dt
-              << "," << solver_->Iterations() << "," << ke << "," << se << ","
-              << ke + se;
+      history << solver.StepCount() << "," << solver.Time() << "," << dt << ",";
+      if constexpr(hyper)
+      {
+         history << solver.LinearIterations() << "," << solver.NewtonIterations();
+      }
+      else { history << solver.Iterations(); }
+      history << "," << ke << "," << se << "," << ke + se;
       if (params_.solid.has_probe)
       {
          for (int d = 0; d < dim; ++d) { history << "," << u(d); }
@@ -259,8 +274,10 @@ bool ElasticityCase::Run()
       history.open(out.path + "/" + out.name + "_history.csv");
       MFEM_VERIFY(history.good(), "elasticity_case: cannot write the history");
       history.precision(12);
-      history << "step,t,dt,cg_iterations,kinetic_energy,strain_energy,"
-              "total_energy";
+      history << (hyper ? "step,t,dt,cg_iterations,newton_iterations,"
+                  "kinetic_energy,strain_energy,total_energy" :
+                  "step,t,dt,cg_iterations,kinetic_energy,strain_energy,"
+                  "total_energy");
       if (params_.solid.has_probe)
       {
          for (int d = 0; d < dim; ++d) { history << ",u_" << names[d]; }
@@ -276,10 +293,10 @@ bool ElasticityCase::Run()
       pv->SetPrefixPath(out.path);
       // High-order output, LOD >= k, or Q_k fields render as mush.
       pv->SetHighOrderOutput(true);
-      pv->SetLevelsOfDetail(std::max(solver_->GetOptions().order, 1));
+      pv->SetLevelsOfDetail(std::max(solver.GetOptions().order, 1));
       pv->SetDataFormat(VTKFormat::BINARY);
-      pv->RegisterField("displacement", &solver_->Displacement());
-      pv->RegisterField("velocity", &solver_->Velocity());
+      pv->RegisterField("displacement", &solver.Displacement());
+      pv->RegisterField("velocity", &solver.Velocity());
       pv->SetCycle(0);
       pv->SetTime(0.0);
       pv->Save();
@@ -295,7 +312,11 @@ bool ElasticityCase::Run()
    for (long long k = 1; k <= n && ok; ++k)
    {
       const double t = std::min(static_cast<double>(k) * dt, tf);
-      ok = solver_->Step(t - t_prev);
+      ok = solver.Step(t - t_prev);
+      if constexpr(hyper)
+      {
+         max_newton_step_ = std::max(max_newton_step_, solver.NewtonIterations());
+      }
       if (out.history) { log(t - t_prev); }
       if (pv && (k % std::max(out.interval, 1) == 0 || k == n || !ok))
       {
@@ -310,12 +331,25 @@ bool ElasticityCase::Run()
    converged_ = ok;
    if (root)
    {
-      std::cout << "elasticity: " << solver_->GlobalTrueDofs() << " dofs, "
-                << solver_->StepCount() << " steps to t = " << solver_->Time()
-                << ", CG " << solver_->TotalIterations() << " iterations (max "
-                << solver_->MaxIterations() << " per step)"
-                << (ok ? "" : ", a step did NOT converge") << ", "
-                << solve_seconds_ << " s" << std::endl;
+      if constexpr(hyper)
+      {
+         std::cout << "hyperelasticity: " << solver.GlobalTrueDofs() << " dofs, "
+                   << solver.StepCount() << " steps to t = " << solver.Time()
+                   << ", Newton " << solver.TotalNewtonIterations()
+                   << " iterations (max " << max_newton_step_ << " per step), CG "
+                   << solver.TotalLinearIterations() << " iterations"
+                   << (ok ? "" : ", a step did NOT converge") << ", "
+                   << solve_seconds_ << " s" << std::endl;
+      }
+      else
+      {
+         std::cout << "elasticity: " << solver.GlobalTrueDofs() << " dofs, "
+                   << solver.StepCount() << " steps to t = " << solver.Time()
+                   << ", CG " << solver.TotalIterations() << " iterations (max "
+                   << solver.MaxIterations() << " per step)"
+                   << (ok ? "" : ", a step did NOT converge") << ", "
+                   << solve_seconds_ << " s" << std::endl;
+      }
    }
    return ok;
 }
@@ -334,6 +368,7 @@ void ElasticityCase::WriteSummary(const std::string& path,
    if (solved_ && hyper_)
    {
       energy = hyper_->StrainEnergy();
+      if (dynamic) { kinetic = hyper_->KineticEnergy(); }
       work = hyper_->ExternalWork();
       umax = hyper_->MaxDisplacement();
       if (s.has_probe)
@@ -426,10 +461,21 @@ void ElasticityCase::WriteSummary(const std::string& path,
       dy["density"].Set(s.density);
       dy["dt"].Set(params_.dt);
       dy["t_final"].Set(params_.t_final);
-      dy["time"].Set(solver_->Time());
-      dy["steps"].Set(solver_->StepCount());
-      dy["cg_iterations_total"].Set(solver_->TotalIterations());
-      dy["cg_iterations_max"].Set(solver_->MaxIterations());
+      if (hyper_)
+      {
+         dy["time"].Set(hyper_->Time());
+         dy["steps"].Set(hyper_->StepCount());
+         dy["cg_iterations_total"].Set(hyper_->TotalLinearIterations());
+         dy["newton_iterations_total"].Set(hyper_->TotalNewtonIterations());
+         dy["newton_iterations_max"].Set(max_newton_step_);
+      }
+      else
+      {
+         dy["time"].Set(solver_->Time());
+         dy["steps"].Set(solver_->StepCount());
+         dy["cg_iterations_total"].Set(solver_->TotalIterations());
+         dy["cg_iterations_max"].Set(solver_->MaxIterations());
+      }
    }
 
    if (solved_)

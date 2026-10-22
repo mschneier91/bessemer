@@ -8,7 +8,7 @@ Every key a YAML deck (`apps/run_case <deck.yaml>`) understands, with its defaul
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `equation` | stokes \| navier_stokes \| linear_elasticity \| mesh_motion \| hyperelasticity | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, a small-strain linear elastic solid, static or dynamic (section solid), mesh_motion: deform the mesh by prescribed boundary displacements (section mesh_motion), or hyperelasticity: a large-deformation solid, static (section solid; docs/hyperelasticity.md). |
+| `equation` | stokes \| navier_stokes \| linear_elasticity \| mesh_motion \| hyperelasticity | `stokes` | Equation set: unsteady Stokes, incompressible Navier-Stokes, a small-strain linear elastic solid, static or dynamic (section solid), mesh_motion: deform the mesh by prescribed boundary displacements (section mesh_motion), or hyperelasticity: a large-deformation solid, static or dynamic (section solid; docs/hyperelasticity.md). |
 | `device` | string | `cpu` | MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins. |
 | `initial_velocity` | string | `zero` | Named initial condition: zero, uniform, channel (see the initial section), taylor_green_2d or taylor_green_3d (u = (sin x cos y cos z, -cos x sin y cos z, 0) on a 2 pi periodic box); anything else comes from Python or C++. |
 | `restart` | string | `""` | Checkpoint directory to restart from (same number of MPI ranks). |

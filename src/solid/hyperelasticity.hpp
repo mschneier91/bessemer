@@ -1,9 +1,10 @@
 /**
  * @file hyperelasticity.hpp
  * @brief Large-deformation elasticity (St. Venant-Kirchhoff), total
- *        Lagrangian, static: Newton with load steps on HyperelasticOperator,
- *        CG with the reference configuration's LOR-AMG
- *        (docs/design/hyperelasticity_spec.md sections 1 and 4, milestone 2).
+ *        Lagrangian, static or dynamic: Newton with load steps on
+ *        HyperelasticOperator, generalized-alpha or BDF2 in time, CG with the
+ *        reference configuration's LOR-AMG (docs/design/hyperelasticity_spec.md
+ *        sections 1 and 4, milestones 2 and 3).
  */
 #pragma once
 
@@ -33,9 +34,16 @@ namespace incns
  * out) falls below max(newton_atol, newton_rtol r_ref), r_ref the largest of its
  * first residual, its load's norm and its increment's right-hand side (the
  * tangent applied to it, free rows), or when a correction falls below
- * newton_dx_rtol times the displacement. The API mirrors
- * LinearElasticity's (static part). Every quadrature rule is owned here, so the
- * solver must not outlive its mesh.
+ * newton_dx_rtol times the displacement.
+ *
+ * Dynamics: rho u_tt + R(u) = f(t), the consistent mass at rho. Each step is
+ * one Newton solve of c M u^{n+1} + R(theta u^{n+1} + (1 - theta) u^n) = b:
+ * generalized-alpha (Chung-Hulbert, the internal force and the load at
+ * t_{n+1-alpha_f}: theta = 1 - alpha_f), or BDF2 on (u, v) after one
+ * trapezoidal step (theta = 1), from u^n. The preconditioner is then the
+ * LOR-AMG of K_0 + (c / theta) rho M, rebuilt when dt changes. The API mirrors
+ * LinearElasticity's. Every quadrature rule is owned here, so the solver must
+ * not outlive its mesh.
  */
 class Hyperelasticity
 {
@@ -70,6 +78,11 @@ public:
       /// outlive the solver), multiplying lambda and mu (the mesh motion's
       /// Jacobian stiffening); null: none.
       const mfem::Vector* element_stiffness = nullptr;
+      double density = 1.0; ///< Mass density per reference volume (dynamics).
+      /// Time integrator (dynamics): generalized-alpha, or BDF2 (Bdf; BDF3 is
+      /// not offered: it is not A-stable, docs/elasticity.md section 1).
+      SolidTimeScheme scheme = SolidTimeScheme::GeneralizedAlpha;
+      double rho_inf = 0.8; ///< Generalized-alpha high-frequency radius, [0, 1].
    };
 
    /**
@@ -113,9 +126,43 @@ public:
     */
    bool Solve(double t);
 
-   /// @return The displacement (after Solve()).
+   /**
+    * @brief Start a dynamic march: the time, the initial displacement and
+    *        velocity (projected; zero when null; the Dirichlet data at @p t0
+    *        overrides them on the boundary), the load at @p t0 and, for
+    *        generalized-alpha, the initial acceleration from M a0 = f(t0) -
+    *        R(u0) (zero on the Dirichlet boundary). Collective. Step() calls
+    *        it with t0 = 0 and a zero state if it was not called.
+    * @param t0 Initial time.
+    * @param u0 Initial displacement, or null.
+    * @param v0 Initial velocity, or null.
+    */
+   void Initialize(double t0, mfem::VectorCoefficient* u0 = nullptr,
+                   mfem::VectorCoefficient* v0 = nullptr);
+
+   /**
+    * @brief Advance by @p dt: one Newton solve. Collective. The first BDF step
+    *        is a trapezoidal step; the BDF2 weights come from the actual step
+    *        sizes.
+    * @param dt Step size (> 0).
+    * @return Whether Newton converged.
+    */
+   bool Step(double dt);
+
+   /// @return The time of the current dynamic state.
+   double Time() const { return time_; }
+   /// @return Steps taken since Initialize().
+   int StepCount() const { return steps_; }
+   /// @return The velocity (valid after Initialize()).
+   mfem::ParGridFunction& Velocity() { return *v_gf_; }
+   /// @return 1/2 v.M v of the current state. Collective.
+   double KineticEnergy() const;
+   /// @return Newton iterations of every Solve() and Step() since construction.
+   long long TotalNewtonIterations() const { return total_newton_; }
+
+   /// @return The displacement (after Solve(), Initialize() or Step()).
    mfem::ParGridFunction& Displacement() { return *u_; }
-   /// @return The displacement (after Solve()).
+   /// @return The displacement (after Solve(), Initialize() or Step()).
    const mfem::ParGridFunction& Displacement() const { return *u_; }
    /// @return The displacement space (vector H1, ordered by nodes).
    mfem::ParFiniteElementSpace& Space() { return *fes_; }
@@ -124,21 +171,23 @@ public:
    /// @return The quadrature rule of the operator and the load.
    const mfem::IntegrationRule& DomainRule() const;
 
-   /// @return Newton iterations of the last Solve(), summed over its load steps.
+   /// @return Newton iterations of the last Solve() (summed over its load
+   ///         steps) or Step().
    int NewtonIterations() const { return newton_iterations_; }
-   /// @return The most Newton iterations of one load step in the last Solve().
+   /// @return The most Newton iterations of one load step in the last Solve()
+   ///         (of the last Step()).
    int MaxNewtonIterations() const { return max_newton_; }
-   /// @return CG iterations of the last Solve().
+   /// @return CG iterations of the last Solve() or Step().
    int LinearIterations() const { return linear_iterations_; }
-   /// @return CG iterations of every Solve() since construction.
+   /// @return CG iterations of every Solve() and Step() since construction.
    long long TotalLinearIterations() const { return total_linear_; }
-   /// @return The last Solve()'s residual norms, every Newton iterate of every
-   ///         load step in order.
+   /// @return The last Solve()'s (Step()'s) residual norms, every Newton
+   ///         iterate of every load step in order.
    const std::vector<double>& ResidualHistory() const { return history_; }
-   /// @return The last Solve()'s Newton corrections, each ||dx|| / ||u|| after
-   ///         it, every load step in order.
+   /// @return The last Solve()'s (Step()'s) Newton corrections, each ||dx|| /
+   ///         ||u|| after it, every load step in order.
    const std::vector<double>& CorrectionHistory() const { return corrections_; }
-   /// @return Whether the last Solve() converged.
+   /// @return Whether the last Solve() or Step() converged.
    bool Converged() const { return converged_; }
    /// @return Global number of true displacement dofs.
    HYPRE_BigInt GlobalTrueDofs() const { return fes_->GlobalTrueVSize(); }
@@ -147,7 +196,8 @@ public:
 
    /// @return The strain energy int W(F(u_h)) dX. Collective.
    double StrainEnergy() const;
-   /// @return The work of the last Solve()'s full load on u_h. Collective.
+   /// @return The work of the last full load (Solve()) or the current one
+   ///         (dynamics) on u_h. Collective.
    double ExternalWork() const;
    /// @return max over the nodes of |u_h|. Collective.
    double MaxDisplacement() const;
@@ -170,21 +220,44 @@ public:
    void SetSolution(const mfem::Vector& x);
 
 private:
+   class ShiftedTangent; // theta K_T + c M, the Newton operator (the .cpp)
+
    /// @param attr Boundary attribute. @return A marker selecting only it.
    mfem::Array<int> Marker(int attr) const;
    /// Fix the Dirichlet set, the load form, the preconditioner, the CG.
    void Finalize();
-   /// The LOR-AMG of the reference linear elasticity, once.
-   void SetupPreconditioner();
+   /// The LOR-AMG of the reference linear elasticity plus @p shift rho M.
+   void SetupPreconditioner(double shift);
+   /// The consistent mass at rho (partial assembly, true dofs), once.
+   void BuildMass();
+   /// The displacement and velocity fields from the newest state.
+   void SyncFields();
    /// The full load at time @p t into load_ (true dofs).
    void AssembleLoad(double t);
    /// The full Dirichlet data at time @p t into ess_full_.
    void DirichletValues(double t);
    /**
-    * @brief r = R(x) - s load_, its Dirichlet entries zeroed.
+    * @brief Newton on G(x) = c M x + R(theta x + (1 - theta) y) - b, the
+    *        Dirichlet dofs of x moved to @p g by the first correction (the
+    *        free dofs following through the tangent). Appends to the
+    *        histories and counters. Collective.
+    * @param c     Mass weight (0: static).
+    * @param theta Weight of x in the internal force's argument.
+    * @param y     The argument's other part (u^n), or null when theta is 1.
+    * @param b     Right-hand side (true dofs; Dirichlet entries ignored).
+    * @param g     Dirichlet values at the essential dofs.
+    * @param x     Initial guess in, the solution out.
+    * @return Whether it converged.
+    */
+   bool Newton(double c, double theta, const mfem::Vector* y,
+               const mfem::Vector& b, const mfem::Vector& g, mfem::Vector& x);
+   /**
+    * @brief r = G(x) of the running Newton(), its Dirichlet entries zeroed.
     * @return ||r|| (global l2).
     */
-   double Residual(const mfem::Vector& x, double s, mfem::Vector& r);
+   double Residual(const mfem::Vector& x, mfem::Vector& r);
+   /// Reset the per-solve histories and counters.
+   void ResetCounters();
 
    mfem::ParMesh& mesh_; ///< The mesh (borrowed).
    Options opts_;        ///< Settings.
@@ -212,10 +285,34 @@ private:
    std::unique_ptr<mfem::HypreParMatrix> lor_matrix_; ///< The LOR operator.
    std::unique_ptr<mfem::Solver> pc_;                 ///< CG preconditioner.
    std::unique_ptr<mfem::CGSolver> cg_;               ///< Tangent solves.
-   std::unique_ptr<mfem::ConstrainedOperator> kc_; ///< The tangent, constrained.
-   const mfem::Operator* k_ = nullptr;             ///< The tangent kc_ wraps.
+   std::unique_ptr<ShiftedTangent> jac_;            ///< theta K_T + c M.
+   std::unique_ptr<mfem::ConstrainedOperator> kc_; ///< jac_, constrained.
+   const mfem::Operator* k_ = nullptr;             ///< The tangent jac_ wraps.
+   double pc_shift_ = 0.0; ///< The mass shift the preconditioner was built for.
+   mfem::ConstantCoefficient lor_mass_; ///< shift rho, on the LOR mesh.
 
-   mfem::Vector load_;     ///< Full load of the last Solve() (true dofs).
+   mfem::ConstantCoefficient rho_;          ///< Density.
+   std::unique_ptr<mfem::ParBilinearForm> m_form_; ///< The mass (PA).
+   mfem::OperatorHandle m_;                 ///< The mass on true dofs.
+   mfem::Vector m_diag_;                    ///< Its diagonal (true dofs).
+   /// The running Newton()'s G: mass weight, theta, u^n and right-hand side.
+   double g_c_ = 0.0, g_theta_ = 1.0;
+   const mfem::Vector* g_y_ = nullptr;
+   const mfem::Vector* g_b_ = nullptr;
+
+   std::vector<mfem::Vector> u_hist_; ///< u^n, u^{n-1}, ...; then a spare level.
+   std::vector<mfem::Vector> v_hist_; ///< The velocities alike.
+   std::vector<double> t_hist_;       ///< Their times.
+   mfem::Vector a_n_;  ///< Generalized-alpha acceleration a^n.
+   mfem::Vector f_n_;  ///< Load at t_n.
+   mfem::Vector step_rhs_; ///< A step's or load step's right-hand side.
+   mfem::Vector w_, z_, mx_; ///< Work vectors (predictor, argument, mass apply).
+   std::unique_ptr<mfem::ParGridFunction> v_gf_; ///< Velocity.
+   double time_ = 0.0;        ///< Time of the dynamic state.
+   int steps_ = 0;            ///< Steps since Initialize().
+   bool initialized_ = false; ///< Whether Initialize() ran.
+
+   mfem::Vector load_;     ///< Full load of the last Solve() or Step().
    mfem::Vector ess_full_; ///< Full Dirichlet data at the essential dofs.
    mfem::Vector ess_step_; ///< A load step's Dirichlet data.
    mfem::Vector ess_jump_; ///< Its increment over the current displacement.
@@ -230,7 +327,7 @@ private:
    std::vector<double> history_; ///< Residual norms of the last Solve().
    std::vector<double> corrections_; ///< Its relative correction norms.
    int newton_iterations_ = 0, max_newton_ = 0, linear_iterations_ = 0;
-   long long total_linear_ = 0;
+   long long total_linear_ = 0, total_newton_ = 0;
    bool converged_ = false;
 };
 

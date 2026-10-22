@@ -300,3 +300,26 @@ verification:
       csm2:
         youngs_modulus: 5.6e6  # mu_s = 2.0e6
         reference_u_a: [-0.468999e-3, -16.9739e-3]
+      # CSM3: CSM1's flag released from rest, rho_s = 1000, to t = 10. The
+      # benchmark's u(A) as mean +- amplitude [frequency] at its dt 0.005
+      # (level 4+0): its values move with dt by up to 2.4 % (u_x mean
+      # -14.384, -14.645, -14.305 e-3 at dt 0.02, 0.01, 0.005), as ours do
+      # (u_y mean 0.8 % from dt 0.005 to 0.0025: the extremes of a signal
+      # with the higher bending modes in it). Ours at Q4 16 x 2 (space
+      # converged to 2e-4): u_x -14.548 +- 14.548, u_y -63.942 +- 65.500,
+      # 1.0942-1.0954 (job 49596583). Mean and amplitude from the extremes
+      # over t >= window_start; the frequency from the upward crossings.
+      csm3:
+        youngs_modulus: 1.4e6
+        density: 1000.0
+        rho_inf: 1.0
+        order: 4
+        level: [16, 2]
+        dt: 0.005
+        t_final: 10.0
+        window_start: 5.0
+        reference_u_x: [-14.305e-3, 14.305e-3]
+        reference_u_y: [-63.607e-3, 65.160e-3]
+        reference_frequency: 1.0995
+        tolerance: 0.025
+        tolerance_frequency: 0.01

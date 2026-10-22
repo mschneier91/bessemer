@@ -92,6 +92,10 @@ private:
    /// to @p solver (LinearElasticity or Hyperelasticity).
    template <class SolidSolver>
    void ApplyDeck(SolidSolver& solver);
+   /// Run()'s dynamic march with @p solver (LinearElasticity or
+   /// Hyperelasticity).
+   template <class SolidSolver>
+   bool March(SolidSolver& solver);
    /// @return The probe's displacement (zero if absent). Collective.
    mfem::Vector ProbeDisplacement();
    /// @return The displacement order in effect.
@@ -108,6 +112,7 @@ private:
    double solve_seconds_ = 0.0; ///< Wall time of Solve() or the march.
    bool solved_ = false;        ///< Whether Solve() or a march ran.
    bool converged_ = true;      ///< Whether every solve converged.
+   int max_newton_step_ = 0;    ///< Hyperelastic march: most Newton its per step.
 };
 
 } // namespace incns

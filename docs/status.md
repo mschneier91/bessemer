@@ -140,8 +140,18 @@ the reference LOR-AMG; tests H4-H6: an exact homogeneous finite deformation, a s
 values (FeatFlow table, checked 2026-10-22), about the spread of the benchmark's own
 levels. Verify tier: `verify_hyperelasticity_test` (a finite manufactured deformation's
 rates, CSM1/CSM2). Newton also stops on a small correction, since the residual's roundoff
-floor reached 1e-7 of the load on fine flag meshes. **Next:** dynamics (milestone 3,
-CSM3).
+floor reached 1e-7 of the load on fine flag meshes. Milestone 3 (dynamics, the same
+day): generalized-alpha and BDF2 on the nonlinear system as one Newton solve per step,
+second order in time on a finite separable motion (H7), the dynamic deck, and
+`cases/turek_hron_csm3.yaml`. CSM3 is within 0.5 % (u_y, frequency) and 1.7 % (u_x mean)
+of the benchmark at its dt 0.005, about as close as the benchmark's own dt dependence
+(2.4 %) allows. **Next:** the hyperelastic mesh motion (milestone 4).
+The landing's GPU suite (job 49592163, np 1 and 2, H100s) passed everything here but
+found three failures in the FSI F3 and ALE stage 3 code merged the same day, which had
+not run on a GPU: `fsi_test` F2 compares a device result read on the host (2e-319, the
+pattern of the earlier `ale_fluid_test` fix); `fsi_test` and `run_case_fsi_flag`
+diverge (`IsFinite(nom)` fails); `ale_fluid_test` A9's restart differs by 1.3e-12
+against its 1e-13 tolerance. The CPU suite passes them at np 1, 2 and 4.
 
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...

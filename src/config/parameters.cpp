@@ -36,7 +36,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "small-strain linear elastic solid, static or dynamic (section solid), "
    "mesh_motion: deform the mesh by prescribed boundary displacements "
    "(section mesh_motion), or hyperelasticity: a large-deformation solid, "
-   "static (section solid; docs/hyperelasticity.md).");
+   "static or dynamic (section solid; docs/hyperelasticity.md).");
    r.Read(root, "device", p.device,
           "MFEM device backend (cpu, cuda, debug); the env var INCNS_DEVICE wins.");
    r.Read(root, "initial_velocity", p.initial_velocity,
@@ -1553,9 +1553,10 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    if (p.equation == Equation::Hyperelasticity)
    {
       const ElasticityParameters& sp = p.solid;
-      MFEM_VERIFY(sp.analysis == SolidAnalysis::Static,
-                  "parameters: equation hyperelasticity is static for now "
-                  "(solid.analysis: static)");
+      MFEM_VERIFY(sp.analysis == SolidAnalysis::Static ||
+                  sp.time_scheme == SolidTimeScheme::GeneralizedAlpha ||
+                  sp.bdf_order == 2, "parameters: equation hyperelasticity "
+                  "takes BDF2 only (solid.bdf_order: 2; BDF3 is not A-stable)");
       MFEM_VERIFY(p.mesh.dim == 3 || sp.plane == PlaneModel::Strain,
                   "parameters: equation hyperelasticity is plane strain in 2D "
                   "(plane stress needs a pointwise solve for the out-of-plane "

@@ -11,7 +11,9 @@
 //  V2 Turek & Hron's CSM1 and CSM2 (2006): the flag clamped to the cylinder
 //     under gravity, through a deck and ElasticityCase; the displacement of
 //     point A against the benchmark's reference values (FeatFlow), converging
-//     as the flag mesh is refined.
+//     as the flag mesh is refined. CSM3: the flag released from rest, dynamic;
+//     the mean, amplitude and frequency of point A's oscillation against the
+//     benchmark's at its time step.
 // Settings and thresholds: baselines.yaml `verification.hyperelasticity`.
 // Theory (V1): ||u - u_h||_L2 at k + 1, |u - u_h|_H1 at k. Pass: the rate
 // fitted over all levels >= theory - rate_margin.
@@ -28,6 +30,7 @@
 #include "solid/hyperelasticity.hpp"
 #include "mfem.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <memory>
@@ -218,9 +221,15 @@ void TrigStudy(int dim)
    Study(rec, dim, 0, Ints(s["default_levels"]));
 }
 
-/// The Turek-Hron flag deck of CSM test @p name on an n_flag x n_flag_y mesh.
+/**
+ * The Turek-Hron flag deck of a CSM test on an n_flag x n_flag_y mesh at
+ * @p order; @p solid_extra is appended to the solid section, @p tail to the
+ * deck.
+ */
 incns::Parameters CsmDeck(const YAML::Node& csm, const YAML::Node& test,
-                          int n_flag, int n_flag_y)
+                          int n_flag, int n_flag_y, int order,
+                          const std::string& solid_extra = "",
+                          const std::string& tail = "")
 {
    const std::vector<double> g = csm["body_force"].as<std::vector<double>>();
    std::ostringstream d;
@@ -233,13 +242,13 @@ incns::Parameters CsmDeck(const YAML::Node& csm, const YAML::Node& test,
      << "solid:\n  model: st_venant_kirchhoff\n"
      << "  youngs_modulus: " << test["youngs_modulus"].as<double>() << "\n"
      << "  poisson_ratio: " << csm["poisson_ratio"].as<double>() << "\n"
-     << "  plane: strain\n  order: " << csm["order"].as<int>() << "\n"
+     << "  plane: strain\n  order: " << order << "\n"
      << "  body_force: [" << g[0] << ", " << g[1] << "]\n"
      << "  rtol: " << Settings()["rtol"].as<double>() << "\n"
-     << "  probe: [0.6, 0.2]\n"
+     << "  probe: [0.6, 0.2]\n" << solid_extra
      << "boundary_conditions:\n"
      << "  - {select: [cylinder], type: fixed}\n"
-     << "  - {select: [flag], type: free}\n";
+     << "  - {select: [flag], type: free}\n" << tail;
    return incns::Parameters::LoadYAMLString(d.str());
 }
 
@@ -256,7 +265,8 @@ void CsmStudy(const std::string& name)
    std::vector<double> ux, uy;
    for (std::size_t i = 0; i < levels.size(); ++i)
    {
-      const incns::Parameters p = CsmDeck(csm, test, levels[i][0], levels[i][1]);
+      const incns::Parameters p = CsmDeck(csm, test, levels[i][0], levels[i][1],
+                                          csm["order"].as<int>());
       auto mesh = incns::MakeCaseMesh(p);
       incns::ElasticityCase c(*mesh, p);
       ASSERT_TRUE(c.Solve()) << name << " level " << i;
@@ -287,6 +297,34 @@ void CsmStudy(const std::string& name)
    }
 }
 
+/// An oscillation's mean and amplitude (from its extremes) and frequency (the
+/// mean period between upward crossings of the mean, interpolated).
+struct Oscillation
+{
+   double mean = 0.0, amplitude = 0.0, frequency = 0.0;
+};
+
+Oscillation Analyze(const std::vector<double>& t, const std::vector<double>& u)
+{
+   const auto lohi = std::minmax_element(u.begin(), u.end());
+   Oscillation o;
+   o.mean = 0.5 * (*lohi.second + *lohi.first);
+   o.amplitude = 0.5 * (*lohi.second - *lohi.first);
+   std::vector<double> ups;
+   for (std::size_t i = 0; i + 1 < u.size(); ++i)
+   {
+      if (u[i] < o.mean && u[i + 1] >= o.mean)
+      {
+         ups.push_back(t[i] + (o.mean - u[i]) * (t[i + 1] - t[i]) / (u[i + 1] - u[i]));
+      }
+   }
+   if (ups.size() > 1)
+   {
+      o.frequency = static_cast<double>(ups.size() - 1) / (ups.back() - ups.front());
+   }
+   return o;
+}
+
 } // namespace
 
 TEST(VerifyHyperelasticity, V1_FiniteManufacturedDeformation2D) { TrigStudy(2); }
@@ -296,3 +334,71 @@ TEST(VerifyHyperelasticity, V1_FiniteManufacturedDeformation3D) { TrigStudy(3); 
 TEST(VerifyHyperelasticity, V2_TurekHronCSM1) { CsmStudy("csm1"); }
 
 TEST(VerifyHyperelasticity, V2_TurekHronCSM2) { CsmStudy("csm2"); }
+
+TEST(VerifyHyperelasticity, V2_TurekHronCSM3)
+{
+   const YAML::Node csm = Settings()["turek_hron_csm"];
+   const YAML::Node c3 = csm["csm3"];
+   const double dt = c3["dt"].as<double>();
+   const double tf = c3["t_final"].as<double>();
+   const double t0 = c3["window_start"].as<double>();
+   const double tol = c3["tolerance"].as<double>();
+   const double tol_f = c3["tolerance_frequency"].as<double>();
+   const std::vector<int> level = c3["level"].as<std::vector<int>>();
+   const int order = c3["order"].as<int>();
+   std::ostringstream extra, tail;
+   extra << std::setprecision(17) << "  analysis: dynamic\n  density: "
+         << c3["density"].as<double>() << "\n  rho_inf: "
+         << c3["rho_inf"].as<double>() << "\n";
+   tail << std::setprecision(17) << "time:\n  dt: " << dt << "\n  t_final: " << tf
+        << "\n";
+   const incns::Parameters p = CsmDeck(csm, c3, level[0], level[1], order,
+                                       extra.str(), tail.str());
+   auto mesh = incns::MakeCaseMesh(p);
+   incns::ElasticityCase c(*mesh, p);
+   incns::Hyperelasticity& s = c.HyperelasticSolver();
+   s.Initialize(0.0);
+   Vector x(2), u;
+   x(0) = 0.6;
+   x(1) = 0.2;
+   std::vector<double> t, ux, uy;
+   int most = 0;
+   const long n = std::lround(tf / dt);
+   for (long k = 1; k <= n; ++k)
+   {
+      ASSERT_TRUE(s.Step(dt)) << "step " << k;
+      most = std::max(most, s.NewtonIterations());
+      ASSERT_TRUE(s.DisplacementAt(x, u));
+      if (s.Time() >= t0 - 1e-12)
+      {
+         t.push_back(s.Time());
+         ux.push_back(u(0));
+         uy.push_back(u(1));
+      }
+   }
+   const Oscillation ox = Analyze(t, ux), oy = Analyze(t, uy);
+   const std::vector<double> rx = c3["reference_u_x"].as<std::vector<double>>();
+   const std::vector<double> ry = c3["reference_u_y"].as<std::vector<double>>();
+   const double rf = c3["reference_frequency"].as<double>();
+   verify::Record rec("hyperelasticity_csm3");
+   std::ostringstream st;
+   st << std::setprecision(6) << "Q" << order << " flag " << level[0] << " x "
+      << level[1] << " dt " << dt << " u_x " << 1e3 * ox.mean << " +- " << 1e3 *
+      ox.amplitude << " [" << ox.frequency << "] u_y " << 1e3 * oy.mean << " +- "
+      << 1e3 * oy.amplitude << " [" << oy.frequency << "] Newton max " << most;
+   const std::string variant = "Q" + std::to_string(order);
+   rec.Error(variant, 0, dt, "ux_mean_error", std::abs(ox.mean - rx[0]), st.str());
+   rec.Error(variant, 0, dt, "ux_amplitude_error", std::abs(ox.amplitude - rx[1]),
+             st.str());
+   rec.Error(variant, 0, dt, "uy_mean_error", std::abs(oy.mean - ry[0]), st.str());
+   rec.Error(variant, 0, dt, "uy_amplitude_error", std::abs(oy.amplitude - ry[1]),
+             st.str());
+   rec.Error(variant, 0, dt, "frequency_error", std::abs(oy.frequency - rf),
+             st.str());
+   EXPECT_NEAR(ox.mean, rx[0], tol * std::abs(rx[0])) << st.str();
+   EXPECT_NEAR(ox.amplitude, rx[1], tol * rx[1]) << st.str();
+   EXPECT_NEAR(oy.mean, ry[0], tol * std::abs(ry[0])) << st.str();
+   EXPECT_NEAR(oy.amplitude, ry[1], tol * ry[1]) << st.str();
+   EXPECT_NEAR(ox.frequency, rf, tol_f * rf) << st.str();
+   EXPECT_NEAR(oy.frequency, rf, tol_f * rf) << st.str();
+}
