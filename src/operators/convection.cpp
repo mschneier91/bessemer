@@ -93,6 +93,9 @@ void Convection::EnableDirectionalDoNothing(const Array<int>& outflow_attrs)
       ddn_marker_[a - 1] = 1;
    }
    ddn_u_ = std::make_unique<ParGridFunction>(&spaces_.Velocity());
+   // A device vector, so SetFromTrueDofs (a plain copy where the prolongation
+   // is the identity) and the gather in MultDirectionalDoNothing stay there.
+   ddn_u_->UseDevice(true);
    *ddn_u_ = 0.0;
    ddn_form_ = std::make_unique<ParLinearForm>(&spaces_.Velocity());
    ddn_form_->UseDevice(true);
@@ -181,12 +184,11 @@ void Convection::MultDirectionalDoNothing(const Vector& u, Vector& y) const
    // vanish on the face: the same term to roundoff.
    CacheDirectionalDoNothingDofs();
    ddn_u_->SetFromTrueDofs(u);
-   {
-      Vector lu;
-      lu.MakeRef(*ddn_u_, 0, ddn_u_->Size());
-      lu.UseDevice(true);
-      lu.GetSubVector(ddn_dofs_, ddn_vals_);
-   }
+   // The gather straight from ddn_u_. Through a whole-vector alias of it
+   // (MakeRef), the next call's copy into ddn_u_ faulted on MFEM's debug device
+   // (fsi_test F2 and the moving-mesh decks, where Convection is rebuilt after
+   // every move and so is called twice per instance at BDF2).
+   ddn_u_->GetSubVector(ddn_dofs_, ddn_vals_);
    const int nd = ddn_dofs_.Size();
    const int dim = spaces_.Dim();
    MFEM_ASSERT(dim <= 3, "convection: 2D or 3D");
