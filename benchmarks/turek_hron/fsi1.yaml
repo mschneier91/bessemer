@@ -1,0 +1,72 @@
+# Turek & Hron (2006) FSI1: the elastic flag behind the cylinder, steady at
+# Re 20 (README.md). The CFD1 flow (mean inflow 0.2, nu = 1e-3, fluid
+# density 1000) and the flag of FSI1 (density 1000, Poisson's ratio 0.4,
+# shear modulus 0.5e6: E = 1.4e6) clamped to the cylinder, coupled in every
+# step by Dirichlet-Neumann subiterations (docs/fsi.md). The flow is steady,
+# so the flag is solved statically in each subiteration. The solid is the
+# linear (small-strain) one; Turek & Hron's is St. Venant-Kirchhoff. The flag
+# bends by 4 % of its thickness, but its tip's small x displacement carries a
+# geometric (shortening) part that a small-strain model does not have.
+# Results: README.md (np 4, 30 min on a 4-core CPU).
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/fsi1.yaml
+#   -> fsi1/fsi1_summary.json (reference errors in its "reference" section),
+#      fsi1/fsi1_fsi.csv (subiterations, interface force, tip displacement)
+
+equation: navier_stokes
+physics:
+  nu: 1.0e-3
+discretization:
+  order_u: 4
+  order_p: 3
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    flag_length: 0.35
+    flag_thickness: 0.02
+    n_flag: 8
+    n_flag_y: 2
+    n_down: 16
+time:
+  dt: 0.01
+  t_final: 5
+  step_control: fixed
+  convection: imex
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 0.3, height: 0.41,
+     time_profile: ramp, time_scale: 2.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [flag], type: interface}
+  - {select: [outflow], type: outflow}
+mesh_motion:
+  stiffening: 1
+solid:
+  analysis: static
+  youngs_modulus: 1.4e6
+  poisson_ratio: 0.4
+  density: 1000
+  probe: [0.6, 0.2]
+fsi:
+  enabled: true
+  solid_fixed: [cylinder]
+  fluid_density: 1000
+  acceleration: iqn_ils
+  reuse: 2
+  rtol: 1.0e-6
+forces:
+  enabled: true
+  boundaries: [cylinder, flag]
+  reference_velocity: 1.0
+  reference_area: 0.002
+  interval: 10
+output:
+  path: fsi1
+  name: fsi1
+  progress: 100
+reference:
+  cd: 14.295
+  cl: 0.7638
+  displacement_x: 2.27e-5
+  displacement_y: 8.209e-4

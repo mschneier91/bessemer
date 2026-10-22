@@ -137,6 +137,30 @@ public:
     */
    bool Step(double dt);
 
+   /// The dynamic state: what Step() advances from (true dofs).
+   struct State
+   {
+      std::vector<mfem::Vector> u_hist; ///< Displacement levels, newest first.
+      std::vector<mfem::Vector> v_hist; ///< Velocity levels, newest first.
+      std::vector<double> t_hist;       ///< Their times.
+      mfem::Vector a_n;  ///< Generalized-alpha acceleration.
+      mfem::Vector f_n;  ///< The load at the current time.
+      mfem::Vector load; ///< The load of the last assembly.
+      double time = 0.0; ///< Time of the current state.
+      int steps = 0;     ///< Steps since Initialize().
+      bool initialized = false; ///< Whether Initialize() ran.
+   };
+
+   /// @return A copy of the dynamic state (a trial step's restart point).
+   State ExportState() const;
+
+   /**
+    * @brief Restore a state from ExportState() (the same solver): the next
+    *        Step() repeats the step from it. The fields follow.
+    * @param s The state.
+    */
+   void ImportState(const State& s);
+
    /// @return The time of the current state.
    double Time() const { return time_; }
    /// @return Steps taken since Initialize().

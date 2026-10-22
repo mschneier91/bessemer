@@ -1,4 +1,4 @@
-# Turek & Hron: cylinder with a flag (CFD1–3)
+# Turek & Hron: cylinder with a flag (CFD1–3, FSI1)
 
 The fluid tests of the Turek & Hron (2006) FSI benchmark, with the flag rigid:
 the first step toward FSI1–3 (docs/ale_fluid.md, "Next"). A channel 2.5 × 0.41,
@@ -58,3 +58,24 @@ it is ±0.4) stay where they were: what is left there is not this mesh family's 
   the reference has −7.2·10⁻³ (the geometric effect a small-strain model has not).
   CSM1–3 proper need the St. Venant-Kirchhoff solid.
 - Not run on a GPU.
+
+## FSI1
+
+The flag elastic (`fsi1.yaml`, [docs/fsi.md](../../docs/fsi.md)): the CFD1 flow
+coupled with the flag of FSI1 (ρ_s = ρ_f = 1000, ν_s = 0.4, μ_s = 0.5·10⁶), steady;
+Dirichlet-Neumann subiterations with IQN-ILS (two steps reused) to 10⁻⁶ at every
+step, the flag solved statically, the **linear** solid (Turek & Hron's is St.
+Venant-Kirchhoff). Reference: drag 14.295, lift 0.7638, tip (point A) displacement
+u_x 2.270·10⁻⁵, u_y 8.209·10⁻⁴.
+
+| Discretization | Elements (fluid / solid) | Steps | Subiterations | Wall | Drag | Lift | u_x(A) | u_y(A) |
+|---|---|---|---|---|---|---|---|---|
+| Q4/Q3 and Q4, IMEX, Δt 0.01 to t = 5 | 314 / 22 | 500 | 16.9 per step (≤ 49; 2–7 at the steady state) | 30 min | 14.340 (+0.31 %) | 0.7452 (−2.4 %) | 2.419·10⁻⁵ (+6.6 %) | 7.881·10⁻⁴ (−4.0 %) |
+
+Cloud scratch build, CPU, np 4, 2026-10-22. Over t ∈ [4.5, 5] u_y varies by 0.3 %
+(the subiterations' tolerance), so the march is steady. The drag error is CFD1's on
+the same mesh (+0.31 %); the lift error moved from +0.71 % (rigid) to −2.4 %, and u_y
+follows the lift. Not separated yet: the mesh (CFD1's lift halves its error per level),
+the linear solid (it lacks the tip's geometric shortening, a part of u_x of the size of
+the u_x error: (u_y)²/L ≈ 2·10⁻⁶), the traction applied on the undeformed interface.
+The refined mesh (`level: 1`) and the SVK solid are next.

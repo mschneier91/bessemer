@@ -202,6 +202,7 @@ incns_add_mpi_test(true_dof_exchange_test true_dof_exchange_test.cpp)
 incns_add_mpi_test(mesh_motion_test mesh_motion_test.cpp)
 incns_add_mpi_test(ale_fluid_test ale_fluid_test.cpp)
 incns_add_mpi_test(mesh_motion_case_test mesh_motion_case_test.cpp)
+incns_add_mpi_test(fsi_test fsi_test.cpp)
 incns_add_mpi_test(expression_test expression_test.cpp)
 incns_add_mpi_test(checkpoint_test checkpoint_test.cpp)
 incns_add_mpi_test(bc_integration_test bc_integration_test.cpp)
@@ -266,6 +267,17 @@ foreach(np IN LISTS INCNS_TEST_NPS)
             --summary run_case_mesh_deform_np${np}_summary.json
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mesh_deform_np${np})
   set_tests_properties(run_case_mesh_deform_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "status=ok")
+  # A fluid-structure interaction deck end to end (section fsi). It writes
+  # its coupling log, so each rank count runs in its own directory.
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fsi_flag_np${np})
+  add_test(NAME run_case_fsi_flag_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_SOURCE_DIR}/cases/fsi_flag.yaml
+            --summary run_case_fsi_flag_np${np}_summary.json
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fsi_flag_np${np})
+  set_tests_properties(run_case_fsi_flag_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "status=ok")
   # The same cantilever with its load applied suddenly: a dynamic march.

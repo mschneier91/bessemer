@@ -311,6 +311,8 @@ Benchmark values the run summary compares against (relative errors; absolute for
 | `reference.t_cl_max` | real | `unset` | Time of the maximum lift. |
 | `reference.pressure_difference` | real | `unset` | The pressure-difference probe's value. |
 | `reference.re_tau` | real | `unset` | Channel: Re_tau from the time-averaged wall shear stress. |
+| `reference.displacement_x` | real | `unset` | FSI: the x displacement of the solid's probe (solid.probe) at the end of the run. |
+| `reference.displacement_y` | real | `unset` | FSI: its y displacement. |
 
 ## `solid`
 
@@ -333,6 +335,27 @@ The solid of equation linear_elasticity: small strains, isotropic and homogeneou
 | `solid.time_scheme` | generalized_alpha \| bdf | `generalized_alpha` | Dynamic time integrator: Chung-Hulbert generalized-alpha (second order, high-frequency damping set by rho_inf), or the fluid's variable-step BDF (order bdf_order) on the first-order system (u, v), started by one trapezoidal step. |
 | `solid.bdf_order` | int | `2` | BDF order, 2 or 3. BDF3 is not A-stable: an undamped mode with omega dt between about 0.5 and 2 grows (4 % per step at omega dt = 1), so it suits short or damped runs only; BDF2 and generalized-alpha are unconditionally stable. |
 | `solid.rho_inf` | real | `0.8` | Generalized-alpha spectral radius at infinite frequency, in [0, 1]: 1 is the trapezoidal rule (energy-conserving, no damping), smaller values damp the unresolved high frequencies more. |
+
+## `fsi`
+
+Fluid-structure interaction (docs/fsi.md): the flow of this deck, whose boundary groups of type interface are the wetted surface, coupled with the solid of section solid on its own mesh, iterated in every time step (partitioned, Dirichlet-Neumann).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `fsi.enabled` | bool | `false` | Run the coupled problem. |
+| `fsi.solid_fixed` | string list | `[]` | Boundary names of the solid mesh held fixed (the clamp). |
+| `fsi.solid_interface` | string list | `[]` | Boundary names of the solid mesh on the interface; empty: the names of the fluid's interface groups. |
+| `fsi.fluid_density` | real | `1` | rho_f: the traction on the solid is rho_f times the flow's kinematic traction (the flow's pressure is p / rho_f). |
+| `fsi.coupling` | dirichlet_neumann | `dirichlet_neumann` | Interface conditions: dirichlet_neumann moves the fluid's interface with the solid (u = w there) and loads the solid with the fluid's traction. |
+| `fsi.acceleration` | aitken \| constant \| iqn_ils | `aitken` | The update of the interface displacement between subiterations: dynamic Aitken relaxation (Kuttler and Wall 2008), the constant factor relaxation, or the interface quasi-Newton method IQN-ILS (Degroote et al. 2009). |
+| `fsi.print_level` | int | `0` | 1: print every subiteration's residual and relaxation factor on rank 0; 0: nothing. |
+| `fsi.reuse` | int | `0` | IQN-ILS: earlier steps whose least-squares columns are kept. |
+| `fsi.relaxation` | real | `0.5` | The relaxation factor of the first subiteration (aitken) or of every one (constant), in (0, 1]. |
+| `fsi.omega_max` | real | `1` | Aitken's factor is kept within [-omega_max, omega_max]. |
+| `fsi.rtol` | real | `1e-06` | Subiterations stop when \|r\| <= rtol \|d\| + atol, r the change of the interface displacement d in a subiteration. |
+| `fsi.atol` | real | `1e-12` | Absolute part of the stopping test. |
+| `fsi.max_iterations` | int | `50` | Subiterations per step; a step that does not converge in them stops the run. |
+| `fsi.predictor` | int | `2` | The first subiteration's interface displacement: 0 the last step's, 1 or 2 its linear or quadratic extrapolation. |
 
 ## `mesh_motion`
 

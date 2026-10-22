@@ -58,7 +58,7 @@ void Case::BuildDeckMotion()
    bool moves = false;
    for (const BcSpec& s : params_.boundary_conditions)
    {
-      moves = moves || !s.motion.empty();
+      moves = moves || !s.motion.empty() || s.type == BcType::Interface;
       // A moving no_slip wall takes u = w; any other moving group has data
       // of its own that may cross the moving boundary.
       if (!s.motion.empty() && s.type != BcType::NoSlip)
@@ -94,7 +94,8 @@ void Case::BuildDeckMotion()
    const std::vector<int> all = AllBoundaryAttributes(params_, mesh_);
    for (const BcSpec& s : params_.boundary_conditions)
    {
-      if (s.motion.empty()) { continue; }
+      const bool wetted = s.type == BcType::Interface;
+      if (s.motion.empty() && !wetted) { continue; }
       std::vector<int> attrs = s.select_all ? all : s.attributes;
       if (!s.select_all)
       {
@@ -102,6 +103,23 @@ void Case::BuildDeckMotion()
          {
             attrs.push_back(NamedBoundaryAttribute(params_, mesh_, name));
          }
+      }
+      if (wetted)
+      {
+         // The coupling sets the displacement (InterfaceDisplacement()),
+         // a field on the motion's space on the reference mesh.
+         MFEM_VERIFY(s.motion.empty(), "case: an interface group moves with "
+                     "the solid; it takes no motion expression");
+         if (!interface_disp_)
+         {
+            interface_disp_ = std::make_unique<ParGridFunction>(
+                                 &own_motion_->Model().Space());
+            *interface_disp_ = 0.0;
+            interface_coeff_ = std::make_unique<VectorGridFunctionCoefficient>(
+                                  interface_disp_.get());
+         }
+         for (int a : attrs) { own_motion_->AddDisplacement(a, *interface_coeff_); }
+         continue;
       }
       auto ex = std::make_shared<VectorExpression>(s.motion,
                 s.expression_parameters);
@@ -199,7 +217,7 @@ void Case::BuildIntegrator()
       params_.vector_diffusion == VectorDiffusionStorage::Compact;
    opts.fuse_grad_div = params_.fuse_grad_div;
    // The raw right-hand side is kept only for the force on the body.
-   opts.keep_rhs = params_.forces.enabled;
+   opts.keep_rhs = params_.forces.enabled || params_.fsi.enabled;
    opts.ale_refresh_in_place =
       params_.mesh_motion.refresh == AleRefresh::InPlace;
    opts.ale_rebuild_interval = params_.mesh_motion.amg_interval;
@@ -460,11 +478,43 @@ void Case::MaybeLogDiagnostics(int cycle, double time)
 
 void Case::Step()
 {
+   MFEM_VERIFY(!in_trial_, "case: a trial step awaits CommitTrialStep() or "
+               "UndoTrialStep()");
    EnsureSetup();
    const double t_prev = integrator_->Time();
    const double wall0 = MPI_Wtime();
    integrator_->Step();
-   const double step_wall = MPI_Wtime() - wall0;
+   AfterStep(t_prev, MPI_Wtime() - wall0);
+}
+
+void Case::TrialStep()
+{
+   MFEM_VERIFY(!in_trial_, "case: a trial step awaits its verdict");
+   EnsureSetup();
+   trial_before_ = integrator_->ExportState();
+   trial_t_prev_ = integrator_->Time();
+   const double wall0 = MPI_Wtime();
+   integrator_->Step();
+   trial_wall_ = MPI_Wtime() - wall0;
+   in_trial_ = true;
+}
+
+void Case::UndoTrialStep()
+{
+   MFEM_VERIFY(in_trial_, "case: UndoTrialStep() without a trial step");
+   integrator_->UndoStep(trial_before_);
+   in_trial_ = false;
+}
+
+void Case::CommitTrialStep()
+{
+   MFEM_VERIFY(in_trial_, "case: CommitTrialStep() without a trial step");
+   in_trial_ = false;
+   AfterStep(trial_t_prev_, trial_wall_);
+}
+
+void Case::AfterStep(double t_prev, double step_wall)
+{
    ++cycle_;
    {
       INCNS_PROFILE("case::record_step");
@@ -593,6 +643,12 @@ void Case::Run()
    INCNS_PROFILE("case::run");
    EnsureSetup();
    while (!integrator_->Done() && !monitor_->Diverged()) { Step(); }
+   FinishRun();
+}
+
+void Case::FinishRun()
+{
+   EnsureSetup();
    monitor_->FlushHistory();
    WriteChannelProfiles(ChannelProfilesPath());
    if (monitor_->Diverged() && Mpi::Root())
@@ -1380,8 +1436,10 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
       {"cd", rv.cd}, {"cl", rv.cl}, {"cd_mean", rv.cd_mean}, {"cl_mean", rv.cl_mean},
       {"cl_rms", rv.cl_rms}, {"strouhal", rv.strouhal}, {"cd_max", rv.cd_max},
       {"t_cd_max", rv.t_cd_max}, {"cl_max", rv.cl_max}, {"t_cl_max", rv.t_cl_max},
-      {"pressure_difference", rv.pressure_difference}, {"re_tau", rv.re_tau}
+      {"pressure_difference", rv.pressure_difference}, {"re_tau", rv.re_tau},
+      {"displacement_x", rv.displacement_x}, {"displacement_y", rv.displacement_y}
    };
+   if (summary_hook_) { summary_hook_(j, got); }
    for (const auto& [key, ref] : refs)
    {
       if (!std::isfinite(ref)) { continue; }

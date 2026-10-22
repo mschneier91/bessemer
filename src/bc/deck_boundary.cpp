@@ -151,6 +151,13 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
             }
             for (int a : attrs_[g]) { bc.AddNoSlip(a); }
             break;
+         case BcType::Interface:
+            // The wetted surface moves with the solid: u = w.
+            MFEM_VERIFY(mesh_velocity, "boundary_conditions: the interface "
+                        "group " << g << " needs the mesh velocity (an fsi "
+                        "case)");
+            for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *mesh_velocity); }
+            break;
          case BcType::VelocityDirichlet:
          {
             VectorCoefficient* f = field ? field(s.group) : nullptr;

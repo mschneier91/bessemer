@@ -338,6 +338,15 @@ public:
    /// Advance one (accepted) step; in adaptive mode this may retry internally.
    void Step();
 
+   /**
+    * @brief Take back the step just made: the mesh goes back (a moving mesh)
+    *        and the march to @p before, the ExportState() of before that
+    *        step, so the next Step() repeats it (a coupled FSI step's
+    *        subiterations). The solvers stay and keep their guess state.
+    * @param before The state of before the step.
+    */
+   void UndoStep(const IntegratorState& before);
+
    /// March Step() until Done().
    void Run();
 
