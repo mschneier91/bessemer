@@ -295,6 +295,12 @@ const ParGridFunction& Case::MeshVelocity() const
    return mesh_w_->Field();
 }
 
+double Case::MeshVelocityLead() const
+{
+   MFEM_VERIFY(mesh_w_, "case: MeshVelocityLead() needs SetMeshMotion()");
+   return mesh_w_->Lead();
+}
+
 void Case::BuildOutput(bool restart)
 {
    output_.reset();

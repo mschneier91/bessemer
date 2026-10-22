@@ -166,8 +166,8 @@ void BoundaryConditions::AddOutflow(int attr)
 void BoundaryConditions::AddRobin(int attr, double alpha,
                                   mfem::VectorCoefficient& w)
 {
-   MFEM_VERIFY(alpha > 0.0, "BoundaryConditions: the Robin coefficient must be "
-               "positive");
+   MFEM_VERIFY(alpha >= 0.0, "BoundaryConditions: the Robin coefficient must "
+               "not be negative");
    if (!robin_constant_)
    {
       robin_constant_ = std::make_unique<ConstantCoefficient>(alpha);
@@ -190,8 +190,8 @@ void BoundaryConditions::AddRobin(int attr, mfem::Coefficient& alpha,
                &&
                robin_marker_[attr - 1] == 0,
                "BoundaryConditions: attribute already has a condition");
-   MFEM_VERIFY(alpha_max > 0.0, "BoundaryConditions: the Robin coefficient "
-               "must be positive");
+   MFEM_VERIFY(alpha_max >= 0.0, "BoundaryConditions: the Robin coefficient "
+               "must not be negative");
    MFEM_VERIFY(!robin_alpha_ || robin_alpha_ == &alpha,
                "BoundaryConditions: one Robin coefficient for all attributes");
    MFEM_VERIFY(!robin_w_ || robin_w_ == &w,

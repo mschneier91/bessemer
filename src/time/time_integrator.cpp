@@ -391,13 +391,17 @@ void StokesTimeIntegrator::AddRobinLoad(double t_new, Vector& b)
 {
    if (!bc_.HasRobin()) { return; }
    INCNS_PROFILE("time_integrator::robin_load");
-   // alpha (w, v) on the Robin faces of the current mesh.
+   // alpha (w, v) on the Robin faces of the current mesh (none on traction
+   // boundaries, alpha = 0).
    VectorCoefficient& w = *bc_.RobinVelocity();
    w.SetTime(t_new);
    ScalarVectorProductCoefficient aw(*bc_.RobinAlpha(), w);
    ParLinearForm lf(&spaces_.Velocity());
    Array<int> marker(bc_.RobinMarker());
-   lf.AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(aw), marker);
+   if (bc_.RobinAlphaMax() > 0.0)
+   {
+      lf.AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(aw), marker);
+   }
    if (boundary_traction_)
    {
       boundary_traction_->SetTime(t_new);
@@ -545,11 +549,14 @@ void StokesTimeIntegrator::MomentumResidual(Vector& r) const
    op.DivergenceUnconstrained().MultTranspose(p_true, tmp);
    r -= tmp;                                             // - B^T p
    r -= last_b_;                                         // - b
-   if (op.Robin())
+   if (bc_.HasRobin())
    {
       // Without the Robin terms: - alpha M_G u + (alpha M_G w + g).
-      op.Robin()->Mult(u_true, tmp);
-      r -= tmp;
+      if (op.Robin())
+      {
+         op.Robin()->Mult(u_true, tmp);
+         r -= tmp;
+      }
       r += robin_g_;
    }
 }

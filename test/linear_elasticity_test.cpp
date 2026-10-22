@@ -8,7 +8,10 @@
 //  E4 energy identity 2 W = (f, u) + (t, u) with zero Dirichlet data, and the
 //     LOR-AMG and Jacobi preconditioners reaching the same displacement;
 //  E5 a deck (equation: linear_elasticity) through ElasticityCase, summary
-//     written.
+//     written;
+//  E6 an elastic support (AddSupport) on a bar with lambda = 0, exact at Q2
+//     (u = a x, a = t / (E + k L)) with both preconditioners, and the
+//     clamp's reaction (TrackReaction) balancing the loaded end.
 // These pin their own orders and tolerances (unit tests); the convergence
 // rates at the deck defaults are the verify tier's (verify_elasticity_test).
 
@@ -327,5 +330,54 @@ TEST(LinearElasticity, E5_DeckThroughElasticityCase)
                 std::string::npos) << ss.str();
       EXPECT_NE(ss.str().find("\"strain_energy\""), std::string::npos);
       std::filesystem::remove(path);
+   }
+}
+
+TEST(LinearElasticity, E6_ElasticSupportAndReaction)
+{
+   for (int dim : {2, 3})
+   {
+      auto mesh = UnitBox(dim, dim == 2 ? 4 : 2);
+      // lambda = 0: uniaxial tension without lateral strain, E = 2 mu.
+      const double mu = 1.0, E = 2.0 * mu, k = 3.0, tx = 0.4;
+      Vector t(dim);
+      t = 0.0;
+      t(0) = tx;
+      VectorConstantCoefficient tc(t);
+      const std::vector<int> held =
+      AttributesWhere(*mesh, [](const Vector & c) { return c(0) < 1e-12; });
+      const std::vector<int> loaded =
+      AttributesWhere(*mesh, [](const Vector & c) { return c(0) > 1.0 - 1e-12; });
+      ASSERT_EQ(held.size(), 1u);
+      ASSERT_EQ(loaded.size(), 1u);
+      // E u' = t - k u at x = 1, u(0) = 0: u = a x.
+      const double a = tx / (E + k);
+      for (int pc = 0; pc < 2; ++pc)
+      {
+         LinearElasticity::Options o = Opts(2, 0.0, mu);
+         o.preconditioner = pc == 0 ? incns::ElasticityPC::LorAmg :
+                            incns::ElasticityPC::Jacobi;
+         LinearElasticity s(*mesh, o);
+         s.AddFixed(held[0]);
+         s.AddTraction(loaded[0], tc);
+         s.AddSupport(loaded[0], k);
+         s.TrackReaction();
+         ASSERT_TRUE(s.Solve()) << "dim " << dim << " pc " << pc;
+         VectorFunctionCoefficient exact(dim, [a](const Vector & x, Vector & u)
+         {
+            u = 0.0;
+            u(0) = a * x(0);
+         });
+         EXPECT_LT(s.Displacement().ComputeMaxError(exact), 1e-9 * a)
+               << "dim " << dim << " pc " << pc;
+         // The clamp's reaction balances the end's net load (t - k u) A.
+         const Vector& R = s.Reaction();
+         const int n = R.Size() / dim; // byNODES
+         double rx = 0.0;
+         const double* rr = R.HostRead();
+         for (int i = 0; i < n; ++i) { rx += rr[i]; }
+         MPI_Allreduce(MPI_IN_PLACE, &rx, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+         EXPECT_NEAR(rx, -(tx - k * a), 1e-9) << "dim " << dim << " pc " << pc;
+      }
    }
 }

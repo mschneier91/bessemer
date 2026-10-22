@@ -126,6 +126,10 @@ public:
    ///         first step). @pre MovingMesh().
    const mfem::ParGridFunction& MeshVelocity() const;
 
+   /// @return The BDF weight of the newest node positions in MeshVelocity()
+   ///         (dw / dx^{n+1}; 0 before the first step). @pre MovingMesh().
+   double MeshVelocityLead() const;
+
    /**
     * @brief Set the initial velocity (t = 0). Pressure has no independent
     *        initial condition. Must be called before the first Step()/Run().

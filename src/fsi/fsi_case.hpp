@@ -146,9 +146,25 @@ private:
    ///          solid's load SolidTraction() = -rho_f t. Collective.
    void LoadSolidTraction(const mfem::Vector& t);
 
-   /// Step() under Robin-Neumann: subiterations on the interface traction.
+   /// @return Robin-Robin's support stiffness alpha_s c0 on the solid.
+   double SupportStiffness() const;
+
+   /// Step() under Robin-Neumann (subiterations on the interface traction)
+   /// and Robin-Robin (on the solid's Robin data).
    /// @return Whether they converged (else failure_ says why).
    bool StepRobinNeumann();
+
+   /// Step() under Neumann-Dirichlet: subiterations on the interface
+   /// displacement.
+   /// @return Whether they converged (else failure_ says why).
+   bool StepNeumannDirichlet();
+
+   /**
+    * @brief The solid's interface reaction (Neumann-Dirichlet) as the
+    *        fluid's kinematic traction; sets InterfaceForce(). Collective.
+    * @param tau The traction (fluid velocity true dofs).
+    */
+   void ReactionTraction(mfem::Vector& tau);
 
    /// The default Robin coefficient, face by face from the solid's
    /// thickness behind each interface face; handed to the flow.
@@ -164,6 +180,11 @@ private:
    bool dynamic_ = false;      ///< Whether the solid is dynamic.
    std::vector<int> fluid_attrs_; ///< Fluid mesh interface attributes.
    std::vector<int> solid_attrs_; ///< Solid mesh interface attributes.
+   std::vector<int> solid_fixed_attrs_; ///< The solid's clamp attributes.
+   /// Neumann-Dirichlet: the solid's interface displacement data.
+   std::unique_ptr<mfem::ParGridFunction> solid_dirichlet_;
+   /// Its coefficient (the solid's Dirichlet group reads it).
+   std::unique_ptr<mfem::VectorGridFunctionCoefficient> solid_dirichlet_coeff_;
 
    /// The fluid's velocity space on the motion's reference mesh (the
    /// traction's data, interpolated in the reference configuration).
@@ -174,6 +195,9 @@ private:
    std::unique_ptr<mfem::VectorGridFunctionCoefficient> traction_coeff_;
    std::unique_ptr<InterfaceTransfer> to_solid_; ///< Fluid -> solid map.
    std::unique_ptr<InterfaceTransfer> to_fluid_; ///< Solid -> fluid map.
+   /// Solid -> the fluid's velocity space on the reference mesh
+   /// (Neumann-Dirichlet's traction).
+   std::unique_ptr<InterfaceTransfer> to_fluid_v_;
    mfem::Array<int> fluid_marker_; ///< Interface marker of the fluid mesh.
    mfem::Vector interface_force_;  ///< See InterfaceForce().
    /// The fluid's residual (its kinematic traction's moments) at the
@@ -182,8 +206,8 @@ private:
    mfem::Vector last_load_;
    /// Robin-Neumann: committed interface tractions, newest first.
    std::vector<mfem::Vector> committed_load_;
-   /// Robin-Neumann: the current subiteration's traction field (the fluid's
-   /// Robin data).
+   /// Robin-Neumann and Neumann-Dirichlet: the current subiteration's
+   /// traction field (the fluid's boundary data).
    std::unique_ptr<mfem::ParGridFunction> robin_tau_;
    /// Its coefficient (the time integrator reads it).
    std::unique_ptr<mfem::VectorGridFunctionCoefficient> robin_tau_coeff_;

@@ -82,6 +82,16 @@ public:
     */
    void AddTraction(int attr, mfem::VectorCoefficient& t);
 
+   /**
+    * @brief An elastic support on a boundary: sigma n = t - k u there, i.e.
+    *        k (u, v) on its faces in the stiffness (every scheme, static
+    *        too). The solid's side of a Robin-Robin FSI coupling, whose data
+    *        the attribute's traction carries.
+    * @param attr Boundary attribute (also given a traction, or traction-free).
+    * @param k    Stiffness per unit area, > 0; the same on every attribute.
+    */
+   void AddSupport(int attr, double k);
+
    /// @param f Body force per unit volume (borrowed; must outlive the solves).
    void SetBodyForce(mfem::VectorCoefficient& f);
 
@@ -149,7 +159,22 @@ public:
       double time = 0.0; ///< Time of the current state.
       int steps = 0;     ///< Steps since Initialize().
       bool initialized = false; ///< Whether Initialize() ran.
+      mfem::Vector reaction; ///< Reaction() (when tracked).
    };
+
+   /// Keep Reaction() up to date in every solve (one operator apply more).
+   void TrackReaction();
+
+   /**
+    * @return The force the Dirichlet boundaries exert on the solid at the
+    *         current state, as moments (true dofs; zero off the essential
+    *         dofs): the residual of the unconstrained equations there,
+    *         without the time scheme's weighting (generalized-alpha's
+    *         alpha_f, the trapezoidal start's average). Zero at
+    *         Initialize(), so a dynamic run starts from rest. @pre
+    *         TrackReaction().
+    */
+   const mfem::Vector& Reaction() const { return reaction_; }
 
    /// @return A copy of the dynamic state (a trial step's restart point).
    State ExportState() const;
@@ -273,9 +298,13 @@ private:
     * @param c Mass shift (0: static).
     * @param b Right-hand side (true dofs; overwritten by the elimination).
     * @param x Solution (true dofs).
+    * @param gamma The weight of the previous reaction in the residual at the
+    *              essential dofs: the reaction is that residual minus gamma
+    *              times the previous one (TrackReaction()).
     * @return Whether CG converged.
     */
-   bool SolveShifted(double c, mfem::Vector& b, mfem::Vector& x);
+   bool SolveShifted(double c, mfem::Vector& b, mfem::Vector& x,
+                     double gamma = 0.0);
    /// Copy the current true-dof state into the grid functions.
    void SyncFields();
 
@@ -322,6 +351,10 @@ private:
    bool pc_ready_ = false;  ///< Whether pc_ matches pc_shift_.
    double pc_shift_ = 0.0;  ///< The mass shift c pc_ was built for.
    mfem::ConstantCoefficient lor_mass_; ///< c rho in the LOR form.
+   mfem::ConstantCoefficient support_k_{0.0}; ///< AddSupport()'s k.
+   mfem::Array<int> support_marker_; ///< Supported attributes (or empty).
+   /// k (u, v) on the supported faces (true dofs), or null.
+   std::unique_ptr<mfem::HypreParMatrix> support_;
    std::unique_ptr<mfem::HypreParMatrix> lor_matrix_; ///< The LOR operator.
    std::unique_ptr<mfem::Solver> pc_;                 ///< CG preconditioner.
    mfem::Vector diag_;   ///< Operator diagonal (Jacobi; borrowed by pc_).
@@ -343,6 +376,9 @@ private:
    mfem::Vector work3_;  ///< Work vector.
    mfem::Vector work4_;  ///< Work vector (Solve with a guess).
    mfem::Vector ess_vals_; ///< Dirichlet values at the essential true dofs.
+   bool track_reaction_ = false; ///< See TrackReaction().
+   mfem::Vector reaction_;       ///< See Reaction().
+   mfem::Vector reaction_b_;     ///< The right-hand side before elimination.
    mutable mfem::Vector ework_; ///< Work vector of the energies.
    std::unique_ptr<mfem::CGSolver> cg_; ///< The CG of every K + c M solve.
 

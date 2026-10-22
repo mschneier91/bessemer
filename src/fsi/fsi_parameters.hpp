@@ -24,7 +24,17 @@ enum class FsiCoupling
    RobinNeumann,
    /// Dirichlet on the fluid (the mesh and u = w follow the solid's
    /// interface displacement), Neumann on the solid (the fluid's traction).
-   DirichletNeumann
+   DirichletNeumann,
+   /// Neumann on the fluid (the solid's interface reaction as a traction,
+   /// the mesh following the iterate), Dirichlet on the solid (the
+   /// displacement the fluid's interface velocity integrates to), iterated
+   /// on the interface displacement.
+   NeumannDirichlet,
+   /// Robin on both: the fluid's as Robin-Neumann's, the solid's
+   /// sigma_s n_s + alpha_s w = -sigma_f n + alpha_s u (an elastic support
+   /// alpha_s c0 in its stiffness, c0 the mesh velocity's BDF weight),
+   /// iterated on the solid's Robin data. alpha_s = 0 is Robin-Neumann.
+   RobinRobin
 };
 
 /// How the interface displacement is relaxed between subiterations.
@@ -61,6 +71,9 @@ struct FsiParameters
    /// The structure's thickness H in the default alpha_f; <= 0: the
    /// geometry's flag thickness.
    double structure_thickness = 0.0;
+   /// Robin-Robin: the solid's Robin coefficient alpha_s (a density times a
+   /// velocity), > 0.
+   double alpha_solid = 0.0;
    /// Relaxation: IQN-ILS by default (Aitken fails FSI1's first step under
    /// either condition; docs/fsi.md).
    FsiAcceleration acceleration = FsiAcceleration::IqnIls;
