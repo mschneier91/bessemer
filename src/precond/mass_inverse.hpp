@@ -129,8 +129,7 @@ public:
                   "mass_inverse: Chebyshev order must be in [1, 5] (MFEM's "
                   "OperatorChebyshevSmoother implements those orders)");
             }
-            cheb_ = std::make_unique<mfem::OperatorChebyshevSmoother>(
-                       mass, diag, empty_ess_, cheb_order, comm);
+            BuildChebyshev(true);
             break;
          }
          case MassInvType::AbsLumped:
@@ -187,12 +186,7 @@ public:
          }
          return;
       }
-      if (reestimate)
-      {
-         cheb_ = std::make_unique<mfem::OperatorChebyshevSmoother>(
-                    *mass_, *diag_, empty_ess_, cheb_order_, comm_);
-      }
-      else { cheb_->Setup(); }
+      BuildChebyshev(reestimate);
    }
 
    /// @return The strategy actually in use (after Auto resolution).
@@ -203,6 +197,32 @@ public:
    bool HasSolverObject() const { return static_cast<bool>(cheb_); }
 
 private:
+   /**
+    * @brief A new Chebyshev smoother on the current diagonal, the largest
+    *        eigenvalue of D^-1 M estimated when @p reestimate (as MFEM's own
+    *        constructor does it: 10 power iterations, tolerance 1e-8, seed
+    *        12345, so the arithmetic is the same) and else the kept one.
+    *
+    * Always a new smoother, never Setup() again on the old one: Setup()
+    * writes the polynomial's coefficients through Array::operator[], and
+    * Mult() has read them on the device, so on a GPU the device copy would
+    * keep the old ones (equal here, the estimate unchanged) and on MFEM's
+    * debug device the host write faults (ale_fluid_test, fsi_test).
+    */
+   void BuildChebyshev(bool reestimate)
+   {
+      if (reestimate)
+      {
+         mfem::OperatorJacobiSmoother inv_diag(*diag_, empty_ess_, 1.0);
+         mfem::ProductOperator dinv_m(&inv_diag, mass_, false, false);
+         mfem::PowerMethod power(comm_);
+         mfem::Vector ev(mass_->Width());
+         max_eig_ = power.EstimateLargestEigenvalue(dinv_m, ev, 10, 1e-8, 12345);
+      }
+      cheb_ = std::make_unique<mfem::OperatorChebyshevSmoother>(
+                 *mass_, *diag_, empty_ess_, cheb_order_, max_eig_);
+   }
+
    /**
     * @brief One seeded-random matvec vs. the diagonal multiply, globally
     *        reduced -- identical verdict on every rank.
@@ -231,6 +251,7 @@ private:
    const mfem::Vector* diag_;      ///< Its diagonal (borrowed).
    MPI_Comm comm_;                 ///< Communicator of the power iteration.
    int cheb_order_;                ///< Chebyshev order.
+   double max_eig_ = 0.0;          ///< Largest eigenvalue of D^-1 M (Chebyshev).
    MassInvType resolved_ = MassInvType::Auto; ///< Post-Auto strategy.
    mfem::Vector d_inv_;            ///< Reciprocal diagonal (DiagDirect only).
    /// The reciprocal applied: d_inv_, or the caller's (DiagDirect only).
