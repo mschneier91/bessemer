@@ -126,8 +126,10 @@ public:
     *        (StokesOperator), the right-hand side alpha (w, v) + g. The
     *        interface of a Robin-Neumann FSI coupling (docs/fsi.md).
     * @param attr  Boundary attribute (1-based, must exist in the mesh).
-    * @param alpha Robin coefficient (kinematic: per unit density), > 0;
-    *              the same on every Robin attribute.
+    * @param alpha Robin coefficient (kinematic: per unit density), >= 0;
+    *              the same on every Robin attribute. 0 makes the attribute
+    *              a traction boundary, sigma(u, p) n = g (Neumann-Dirichlet
+    *              FSI coupling).
     * @param w     The Robin data velocity (borrowed; must outlive this).
     */
    void AddRobin(int attr, double alpha, mfem::VectorCoefficient& w);
@@ -135,9 +137,10 @@ public:
    /**
     * @brief AddRobin() with a coefficient that varies along the boundary.
     * @param attr      Boundary attribute.
-    * @param alpha     Robin coefficient, > 0 on the faces (borrowed; the same
-    *                  object on every Robin attribute).
-    * @param alpha_max An upper bound of alpha, > 0 (the LOR preconditioner's
+    * @param alpha     Robin coefficient, >= 0 on the faces (borrowed; the
+    *                  same object on every Robin attribute).
+    * @param alpha_max An upper bound of alpha, >= 0; 0: no Robin term in the
+    *                  operator (a traction boundary). The LOR preconditioner's
     *                  constant stand-in: a coefficient of the high-order
     *                  mesh cannot be evaluated on the LOR mesh).
     * @param w         The Robin data velocity (borrowed).

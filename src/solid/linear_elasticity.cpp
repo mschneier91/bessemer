@@ -38,6 +38,10 @@ public:
    /// @param m The mass form (borrowed), or null.
    void SetMass(const ParBilinearForm* m) { m_ = m; }
 
+   /// @param s An elastic support's true-dof matrix, part of the stiffness
+   ///          (borrowed), or null.
+   void SetSupport(const HypreParMatrix* s) { s_ = s; }
+
    /**
     * @param ck The stiffness weight Mult() applies.
     * @param cm The mass weight Mult() applies.
@@ -77,12 +81,14 @@ public:
          yl_.Add(cm, tl_);
       }
       P_->MultTranspose(yl_, y);
+      if (s_ && ck != 0.0) { s_->Mult(ck, x, 1.0, y); }
    }
 
 private:
    const Operator* P_;              ///< Prolongation (true -> local dofs).
    const ParBilinearForm& k_;       ///< Stiffness form.
    const ParBilinearForm* m_ = nullptr; ///< Mass form, or null.
+   const HypreParMatrix* s_ = nullptr;  ///< Elastic support, or null.
    double ck_ = 1.0;                ///< Stiffness weight of Mult().
    double cm_ = 0.0;                ///< Mass weight of Mult().
    mutable Vector xl_;              ///< P x.
@@ -198,6 +204,24 @@ void LinearElasticity::AddTraction(int attr, VectorCoefficient& t)
    tractions_.push_back({attr, &t});
 }
 
+void LinearElasticity::AddSupport(int attr, double k)
+{
+   MFEM_VERIFY(!finalized_, "linear_elasticity: boundary conditions are fixed "
+               "at the first solve");
+   MFEM_VERIFY(k > 0.0, "linear_elasticity: the support stiffness must be "
+               "positive");
+   MFEM_VERIFY(support_k_.constant == 0.0 || support_k_.constant == k,
+               "linear_elasticity: one support stiffness for all attributes");
+   const Array<int> m = Marker(attr);
+   if (support_marker_.Size() == 0)
+   {
+      support_marker_.SetSize(m.Size());
+      support_marker_ = 0;
+   }
+   for (int i = 0; i < m.Size(); ++i) { if (m[i]) { support_marker_[i] = 1; } }
+   support_k_.constant = k;
+}
+
 void LinearElasticity::SetBodyForce(VectorCoefficient& f)
 {
    MFEM_VERIFY(!finalized_, "linear_elasticity: the load is fixed at the "
@@ -219,6 +243,16 @@ void LinearElasticity::Finalize()
    ess_tdofs_.GetMemory().UseDevice(true);
    ess_vals_.SetSize(ess_tdofs_.Size());
    ess_vals_.UseDevice(true);
+   if (support_marker_.Size() > 0)
+   {
+      ParBilinearForm s(fes_.get());
+      s.AddBoundaryIntegrator(new VectorMassIntegrator(support_k_),
+                              support_marker_);
+      s.Assemble();
+      s.Finalize();
+      support_.reset(s.ParallelAssemble());
+      op_->SetSupport(support_.get());
+   }
    constrained_ = std::make_unique<ConstrainedOperator>(op_.get(), ess_tdofs_);
    bc_gf_ = std::make_unique<ParGridFunction>(fes_.get());
 
@@ -277,6 +311,12 @@ void LinearElasticity::SetupPreconditioner(double c)
       diag_.UseDevice(true);
       a_->AssembleDiagonal(diag_);
       if (c != 0.0) { diag_.Add(c, m_diag_); }
+      if (support_)
+      {
+         Vector sd(diag_.Size());
+         support_->GetDiag(sd);
+         diag_ += sd;
+      }
       pc_ = std::make_unique<OperatorJacobiSmoother>(diag_, ess_tdofs_);
    }
    else
@@ -300,6 +340,11 @@ void LinearElasticity::SetupPreconditioner(double c)
       {
          lor_mass_.constant = c * opts_.density;
          lor_form.AddDomainIntegrator(new VectorMassIntegrator(lor_mass_));
+      }
+      if (support_)
+      {
+         lor_form.AddBoundaryIntegrator(new VectorMassIntegrator(support_k_),
+                                        support_marker_);
       }
       {
          INCNS_PROFILE("solid::lor_assemble");
@@ -358,10 +403,12 @@ void LinearElasticity::ApplyDirichlet(double t, Vector& x)
    x.SetSubVector(ess_tdofs_, ess_vals_);
 }
 
-bool LinearElasticity::SolveShifted(double c, Vector& b, Vector& x)
+bool LinearElasticity::SolveShifted(double c, Vector& b, Vector& x,
+                                    double gamma)
 {
    if (!pc_ready_ || c != pc_shift_) { SetupPreconditioner(c); }
    op_->SetWeights(1.0, c);
+   if (track_reaction_) { reaction_b_ = b; }
    constrained_->EliminateRHS(x, b);
    {
       INCNS_PROFILE("solid::cg");
@@ -372,7 +419,38 @@ bool LinearElasticity::SolveShifted(double c, Vector& b, Vector& x)
    converged_ = cg_->GetConverged();
    total_iterations_ += iterations_;
    max_iterations_ = std::max(max_iterations_, iterations_);
+   if (track_reaction_)
+   {
+      // R = (A x - b) at the essential dofs, less gamma R_previous.
+      INCNS_PROFILE("solid::reaction");
+      Vector& r = reaction_b_;
+      work4_.SetSize(x.Size());
+      work4_.UseDevice(true);
+      op_->Mult(x, work4_);
+      r.Neg();
+      r += work4_;
+      const double* rr = r.HostRead();
+      double* out = reaction_.HostReadWrite();
+      const int* ess = ess_tdofs_.HostRead();
+      std::vector<double> vals(ess_tdofs_.Size());
+      for (int i = 0; i < ess_tdofs_.Size(); ++i)
+      {
+         vals[i] = rr[ess[i]] - gamma * out[ess[i]];
+      }
+      reaction_.HostWrite();
+      reaction_ = 0.0;
+      out = reaction_.HostReadWrite();
+      for (int i = 0; i < ess_tdofs_.Size(); ++i) { out[ess[i]] = vals[i]; }
+   }
    return converged_;
+}
+
+void LinearElasticity::TrackReaction()
+{
+   track_reaction_ = true;
+   reaction_.SetSize(fes_->GetTrueVSize());
+   reaction_.UseDevice(true);
+   reaction_ = 0.0;
 }
 
 void LinearElasticity::SyncFields()
@@ -529,6 +607,7 @@ void LinearElasticity::Initialize(double t0, VectorCoefficient* u0,
    }
    time_ = t0;
    steps_ = 0;
+   if (track_reaction_) { reaction_ = 0.0; }
    initialized_ = true;
    SyncFields();
 }
@@ -569,7 +648,8 @@ bool LinearElasticity::Step(double dt)
       rhs_.Add(1.0 / (1.0 - af), work3_);
       x = u; // the initial guess
       ApplyDirichlet(t1, x);
-      ok = SolveShifted((1.0 - am) / ((1.0 - af) * bdt2), rhs_, x);
+      ok = SolveShifted((1.0 - am) / ((1.0 - af) * bdt2), rhs_, x,
+                        af / (1.0 - af));
       // a^{n+1} = (u^{n+1} - w)/(beta dt^2); v^{n+1} by Newmark.
       work2_ = x;
       work2_ -= w;
@@ -604,7 +684,7 @@ bool LinearElasticity::Step(double dt)
          rhs_ -= work2_;
          x = u;
          ApplyDirichlet(t1, x);
-         ok = SolveShifted(c, rhs_, x);
+         ok = SolveShifted(c, rhs_, x, 1.0); // f0 + f1: R0 + R1
          vx = x;
          vx -= u;
          vx *= 2.0 / dt;
@@ -668,6 +748,7 @@ LinearElasticity::State LinearElasticity::ExportState() const
    s.time = time_;
    s.steps = steps_;
    s.initialized = initialized_;
+   s.reaction = reaction_;
    return s;
 }
 
@@ -684,6 +765,10 @@ void LinearElasticity::ImportState(const State& s)
    time_ = s.time;
    steps_ = s.steps;
    initialized_ = s.initialized;
+   if (track_reaction_ && s.reaction.Size() == reaction_.Size())
+   {
+      reaction_ = s.reaction;
+   }
    SyncFields();
 }
 

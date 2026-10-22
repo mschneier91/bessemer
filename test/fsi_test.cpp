@@ -13,8 +13,9 @@
 //     nodes, and IQN-ILS needs fewer subiterations than Aitken;
 //  F5 a static solid couples too (on a ramped start: under the impulsive
 //     start's pressure pulse a static flag swings far out);
-//  F6 Robin-Neumann and Dirichlet-Neumann converge to the same coupled
-//     steps, the Robin one with u = w on the interface at convergence.
+//  F6 Robin-Neumann and Robin-Robin converge to Dirichlet-Neumann's coupled
+//     steps, with u = w on the interface at convergence;
+//  F7 so does Neumann-Dirichlet (on a soft flag).
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -322,31 +323,55 @@ TEST(Fsi, F5_StaticSolid)
    EXPECT_GT(fsi.Solid().MaxDisplacement(), 0.0);
 }
 
-// F6: Robin-Neumann reaches Dirichlet-Neumann's coupled solution.
-TEST(Fsi, F6_RobinNeumannMatchesDirichletNeumann)
+namespace
 {
-   const char* couplings[] = {"dirichlet_neumann", "robin_neumann"};
-   std::vector<Vector> u(2);
-   std::vector<long long> its;
-   for (int v = 0; v < 2; ++v)
+
+/**
+ * Two coupled steps with Dirichlet-Neumann and with each of @p variants
+ * (fsi keys): the same velocity to 1e-6, and u = w on the flag (which the
+ * other conditions hold only at the coupled fixed point).
+ * @param variants  fsi keys of the other conditions.
+ * @param youngs    The solid's Young's modulus.
+ * @param ramp      Whether the inflow is ramped (an impulsive start throws
+ *                  a soft flag far out).
+ * @param vel_tol   The velocities' largest difference, relative.
+ * @param its       Subiterations in the two steps, Dirichlet-Neumann first.
+ */
+void CompareWithDirichletNeumann(const std::vector<std::string>& variants,
+                                 const std::string& youngs, bool ramp,
+                                 double vel_tol, std::vector<long long>& its)
+{
+   std::vector<std::string> keys = {"  coupling: dirichlet_neumann\n"};
+   keys.insert(keys.end(), variants.begin(), variants.end());
+   std::vector<Vector> u(keys.size());
+   std::vector<double> tip(keys.size());
+   double dmax = 0.0; // the solid's largest displacement (Dirichlet-Neumann)
+   for (std::size_t v = 0; v < keys.size(); ++v)
    {
-      const Parameters p = Parameters::LoadYAMLString(
-                              Deck(std::string("  coupling: ") + couplings[v] +
-                                   "\n  max_iterations: 300\n",
-                                   "  analysis: dynamic\n", Np()));
+      std::string deck = Deck(keys[v] + "  max_iterations: 300\n",
+                              "  analysis: dynamic\n", Np(), ramp);
+      deck.replace(deck.find("youngs_modulus: 1.4e6"), 21,
+                   "youngs_modulus: " + youngs);
+      const Parameters p = Parameters::LoadYAMLString(deck);
       auto mesh = incns::MakeCaseMesh(p);
       FsiCase fsi(*mesh, p);
-      for (int s = 0; s < 2; ++s) { ASSERT_TRUE(fsi.Step()) << couplings[v] << s; }
+      for (int s = 0; s < 2; ++s) { ASSERT_TRUE(fsi.Step()) << keys[v] << s; }
       long long n = 0;
       for (const FsiCase::StepRecord& r : fsi.History()) { n += r.iterations; }
       its.push_back(n);
       Case& f = fsi.Fluid();
       u[v].SetSize(f.Spaces().Velocity().GetTrueVSize());
       f.Velocity().GetTrueDofs(u[v]);
-      if (v == 1)
+      Vector x(2), d(2);
+      x(0) = 0.6;
+      x(1) = 0.2;
+      fsi.Solid().DisplacementAt(x, d); // collective
+      tip[v] = d(1);
+      if (v == 0) { dmax = fsi.Solid().MaxDisplacement(); }
+      if (v > 0)
       {
-         // u = w on the interface: the Robin condition holds it weakly only
-         // at the coupled fixed point (to the quadrature of its two terms).
+         // u = w on the interface: imposed weakly (Robin) or through the
+         // displacement (Neumann-Dirichlet), so only at the fixed point.
          ParFiniteElementSpace& vfes = f.Spaces().Velocity();
          const ParGridFunction& w = f.MeshVelocity();
          w.HostRead();
@@ -367,19 +392,56 @@ TEST(Fsi, F6_RobinNeumannMatchesDirichletNeumann)
          MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX,
                        MPI_COMM_WORLD);
          EXPECT_GT(wmax, 0.0);
-         EXPECT_LT(err, 1e-5 * wmax);
+         EXPECT_LT(err, 1e-5 * wmax) << keys[v];
       }
       if (Mpi::Root())
       {
-         std::cout << "[fsi] " << couplings[v] << ": subiterations " << n
-                   << " in 2 steps" << std::endl;
+         std::string name = keys[v].substr(2, keys[v].size() - 3);
+         for (char& c : name) { if (c == '\n') { c = ','; } }
+         std::cout << "[fsi] " << name << ": subiterations " << n << " in 2 steps" <<
+                   std::endl;
       }
    }
    double scale = u[0].Normlinf();
    MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-   EXPECT_LT(MaxDiff(u[0], u[1]), 1e-6 * scale);
-   // Both converge; on this flag (a wall wetted on both sides, rho_s =
-   // rho_f) Robin-Neumann needs more subiterations, not fewer (docs/fsi.md).
+   for (std::size_t v = 1; v < keys.size(); ++v)
+   {
+      EXPECT_LT(MaxDiff(u[0], u[v]), vel_tol * scale) << keys[v];
+      // The coupling's tolerance is relative to the whole displacement.
+      EXPECT_NEAR(tip[v], tip[0], 1e-6 * dmax) << keys[v];
+   }
+}
+
+} // namespace
+
+// F6: Robin-Neumann and Robin-Robin reach Dirichlet-Neumann's coupled
+// solution. On this flag (a wall wetted on both sides, rho_s = rho_f) they
+// need more subiterations, not fewer (docs/fsi.md).
+TEST(Fsi, F6_RobinConditionsMatchDirichletNeumann)
+{
+   std::vector<long long> its;
+   CompareWithDirichletNeumann({"  coupling: robin_neumann\n",
+                                "  coupling: robin_robin\n  alpha_solid: 1000\n"},
+                               "1.4e6", false, 1e-6, its);
+   ASSERT_EQ(its.size(), 3u);
    EXPECT_GT(its[1], 0);
+   EXPECT_GT(its[2], 0);
+}
+
+// F7: Neumann-Dirichlet reaches Dirichlet-Neumann's coupled solution on a
+// soft flag (E 1.4e3), where it converges in fewer subiterations; on the
+// stiff one its squeeze mode stalls it (docs/fsi.md).
+TEST(Fsi, F7_NeumannDirichletMatchesDirichletNeumann)
+{
+   std::vector<long long> its;
+   // The velocities agree to 1e-6 but next to the flag's clamped root: the
+   // corner node between the flag and the cylinder carries the clamp's
+   // reaction in the solid and the cylinder's traction in the flow, and the
+   // conditions split it differently (5e-4 of the velocity there, < 1e-6 at
+   // 99 % of the dofs).
+   CompareWithDirichletNeumann({"  coupling: neumann_dirichlet\n"}, "1.4e3",
+                               true, 1e-3, its);
+   ASSERT_EQ(its.size(), 2u);
+   EXPECT_LT(its[1], its[0]);
 }
 

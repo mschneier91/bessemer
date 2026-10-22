@@ -162,7 +162,8 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
                         "group " << g << " needs the mesh velocity (an fsi "
                         "case)");
             if (params_.fsi.enabled &&
-                params_.fsi.coupling == FsiCoupling::RobinNeumann)
+                (params_.fsi.coupling == FsiCoupling::RobinNeumann ||
+                 params_.fsi.coupling == FsiCoupling::RobinRobin))
             {
                for (int a : attrs_[g])
                {
@@ -175,6 +176,14 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
                      bc.AddRobin(a, params_.FsiFluidRobin(), *mesh_velocity);
                   }
                }
+               break;
+            }
+            if (params_.fsi.enabled &&
+                params_.fsi.coupling == FsiCoupling::NeumannDirichlet)
+            {
+               // A traction boundary: the boundary traction carries the
+               // solid's reaction.
+               for (int a : attrs_[g]) { bc.AddRobin(a, 0.0, *mesh_velocity); }
                break;
             }
             for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *mesh_velocity); }

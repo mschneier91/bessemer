@@ -132,10 +132,10 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
    // divergence trial columns; empty when no Dirichlet BCs are given. Stored as
    // a member: the constrained operators MakeRef this list.
    if (ess_tdofs) { ess_tdofs_ = *ess_tdofs; }
-   if (opts_.robin_marker)
+   // alpha_max 0: a traction boundary, nothing in the operator.
+   if (opts_.robin_marker && opts_.robin_alpha_max > 0.0)
    {
-      MFEM_VERIFY(opts_.robin_alpha && opts_.robin_alpha_max > 0.0,
-                  "stokes_operator: the Robin coefficient must be positive");
+      MFEM_VERIFY(opts_.robin_alpha, "stokes_operator: no Robin coefficient");
       robin_marker_ = *opts_.robin_marker;
       robin_lor_alpha_.constant = opts_.robin_alpha_max;
       AssembleRobin();

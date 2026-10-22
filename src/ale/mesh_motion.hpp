@@ -126,8 +126,9 @@ public:
     *        motions polynomial in time of degree <= @p order.
     * @param order BDF order (1 <= order <= States() - 1, and <= 3).
     * @param w     Output on the mesh's nodal space (resized).
+    * @param c0    If not null, the weight c_0 of the newest state.
     */
-   void MeshVelocity(int order, mfem::Vector& w) const;
+   void MeshVelocity(int order, mfem::Vector& w, double* c0 = nullptr) const;
 
    /**
     * @brief The range of det F = det(dx/dX), the ratio of the current to the

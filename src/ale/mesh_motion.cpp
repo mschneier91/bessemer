@@ -257,7 +257,7 @@ void MeshMotion::Load(const std::string& path)
    if (mesh_.GetNFaceNeighbors() > 0) { mesh_.ExchangeFaceNbrNodes(); }
 }
 
-void MeshMotion::MeshVelocity(int order, Vector& w) const
+void MeshMotion::MeshVelocity(int order, Vector& w, double* c0) const
 {
    MFEM_VERIFY(order >= 1 && order <= 3, "mesh_motion: BDF order " << order
                << " is not 1, 2 or 3");
@@ -266,6 +266,7 @@ void MeshMotion::MeshVelocity(int order, Vector& w) const
                << " are kept");
    const std::vector<double> times(times_.begin(), times_.begin() + order + 1);
    const std::vector<double> c = BdfWeights(times);
+   if (c0) { *c0 = c[0]; }
    // x = X + d and the weights sum to zero: w = sum_j c_j d_j.
    w.SetSize(disp_->Size());
    w = 0.0;

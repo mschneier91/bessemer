@@ -12,6 +12,7 @@ MeshVelocityField::MeshVelocityField(ParFiniteElementSpace& vfes)
    : w_(&vfes), coeff_(&w_)
 {
    w_ = 0.0;
+   lead_ = 0.0;
 }
 
 void MeshVelocityField::Update(const MeshMotion& motion, int order)
@@ -19,7 +20,7 @@ void MeshVelocityField::Update(const MeshMotion& motion, int order)
    INCNS_PROFILE("ale::mesh_velocity");
    const ParGridFunction& d = motion.NodeDisplacement();
    Vector wn;
-   motion.MeshVelocity(order, wn);
+   motion.MeshVelocity(order, wn, &lead_);
    // The node velocity as a field on the nodal space, interpolated at the
    // velocity space's nodes (on the host, MFEM's element loop).
    ParGridFunction wnodes(const_cast<ParFiniteElementSpace*>(d.ParFESpace()));

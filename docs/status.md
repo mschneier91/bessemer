@@ -9,6 +9,22 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**FSI stage F4, part 2: Neumann-Dirichlet and Robin-Robin (2026-10-22, branch
+`claude/project-thread-xnsz2c` after PR #15 merged; human: "when this is all done and
+passes please merge").** `fsi.coupling: neumann_dirichlet | robin_robin` ([fsi.md](fsi.md)
+§3-4); all four conditions now exist. Neumann-Dirichlet: the solid's interface prescribed
+(its reaction from `LinearElasticity::TrackReaction`, unweighted by the time scheme), the
+fluid's a traction boundary (a Robin boundary with alpha 0), iterated on d with
+d~ = d + (u - w) / c0 (`Case::MeshVelocityLead`). Robin-Robin: Robin-Neumann's fluid side
+and an elastic support alpha_s c0 on the solid (`LinearElasticity::AddSupport`), iterated
+on the solid's Robin data; `fsi.alpha_solid` has no default. Both reach Dirichlet-Neumann's
+coupled steps (`fsi_test` F6, F7; the solid pieces `linear_elasticity_test` E6). FSI1
+coarse: Robin-Robin (alpha_s 1,000) 4.3 subiterations per step, the same answer, 2.8x
+Dirichlet-Neumann's wall time; Neumann-Dirichlet stops in its first steps (the flag's
+squeeze mode; on a flag 1,000x softer it needs 5x fewer subiterations than
+Dirichlet-Neumann). Cloud scratch build, CPU, np 1/2/4; not on a GPU. **Next:** FSI2/FSI3
+(F5), and the hyperelastic solid in the coupling.
+
 **FSI stage F4, part 1: Robin-Neumann, and Dirichlet-Neumann + IQN-ILS by default
 (2026-10-22, branch `claude/project-thread-xnsz2c` after PR #14 merged; human: "Ya merge
 and start F4", then the default on a decision card).** A fluid Robin condition
@@ -24,8 +40,7 @@ the same answer; solids4foam reports the same (fsi.md). Aitken fails FSI1's firs
 under both, hence the defaults `dirichlet_neumann` + `iqn_ils`. `fsi_test` F5 (static
 solid) now solves the flow to 1e-12: the static solid amplifies the flow's error ~1e5 and
 the test had passed on main at np 2 only by luck. Cloud scratch build, CPU, np 1/2/4; not
-on a GPU. **Next:** Neumann-Dirichlet and Robin-Robin (the solid's interface reaction and
-a solid Robin term), then FSI1 in every condition, FSI2/FSI3.
+on a GPU. (Part 2 above.)
 
 **FSI stage F3, the coupling framework (2026-10-22, branch
 `claude/project-thread-xnsz2c` after PR #13 merged; human: "Ya merge once it passes and

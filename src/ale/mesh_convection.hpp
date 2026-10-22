@@ -49,7 +49,12 @@ public:
    /// @return w as a vector coefficient (reads Field()).
    mfem::VectorCoefficient& Coefficient() { return coeff_; }
 
+   /// @return The BDF weight c_0 of the newest node positions in the last
+   ///         Update() (0 after Zero()): dw / dx^{n+1}.
+   double Lead() const { return lead_; }
+
 private:
+   double lead_ = 0.0;                       ///< See Lead().
    mfem::ParGridFunction w_;                 ///< w on the velocity space.
    mfem::VectorGridFunctionCoefficient coeff_; ///< Reads w_.
 };

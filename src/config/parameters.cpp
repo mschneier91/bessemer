@@ -1215,23 +1215,34 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.ReadEnum(fsi, "coupling", fp.coupling,
    {
       {"robin_neumann", FsiCoupling::RobinNeumann},
-      {"dirichlet_neumann", FsiCoupling::DirichletNeumann}
+      {"dirichlet_neumann", FsiCoupling::DirichletNeumann},
+      {"neumann_dirichlet", FsiCoupling::NeumannDirichlet},
+      {"robin_robin", FsiCoupling::RobinRobin}
    },
-   "Interface conditions. Both move the fluid's mesh with the solid's "
-   "interface and load the solid with the fluid's traction. "
+   "Interface conditions. dirichlet_neumann and robin_neumann move the "
+   "fluid's mesh with the solid's interface and load the solid with the "
+   "fluid's traction. neumann_dirichlet loads the fluid with the solid's "
+   "interface reaction and prescribes the solid's interface displacement "
+   "(the one the fluid's interface velocity integrates to), iterated on "
+   "that displacement. robin_robin adds a Robin condition on the solid, "
+   "sigma_s n_s + alpha_solid w = -sigma_f n + alpha_solid u, to "
+   "robin_neumann's (alpha_solid 0 would be robin_neumann). "
    "dirichlet_neumann imposes u = w on the fluid's interface; robin_neumann "
    "imposes sigma_f n + alpha_f u = the last subiteration's traction + "
    "alpha_f w and iterates on the traction (Badia, Nobile and Vergara 2008); "
    "it converges to the same solution, but slowly on a wall wetted on both "
    "sides (its squeeze mode; docs/fsi.md).");
    r.Read(fsi, "alpha_fluid", fp.alpha_fluid,
-          "robin_neumann: the fluid's Robin coefficient (a density times a "
+          "robin_neumann, robin_robin: the fluid's Robin coefficient (a density times a "
           "velocity, as rho_s H / dt); <= 0: rho_s h / dt face by face, h "
           "the solid's thickness behind the face (capped at the P-wave "
           "speed times dt), or structure_thickness when that is > 0.");
    r.Read(fsi, "structure_thickness", fp.structure_thickness,
           "> 0: one alpha_fluid = rho_s H / dt with this H on the whole "
           "interface instead of the face-by-face thickness.");
+   r.Read(fsi, "alpha_solid", fp.alpha_solid,
+          "robin_robin: the solid's Robin coefficient (a density times a "
+          "velocity), > 0.");
    r.ReadEnum(fsi, "acceleration", fp.acceleration,
    {
       {"aitken", FsiAcceleration::Aitken}, {"constant", FsiAcceleration::Constant},
