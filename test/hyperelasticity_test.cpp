@@ -27,18 +27,26 @@
 //     boundary in steps of its angle) rotates the interior exactly with no
 //     strain energy, where the linear model stores a lot;
 //  H6 small loads give the linear solution: the difference to
-//     LinearElasticity falls as the load squared.
+//     LinearElasticity falls as the load squared;
+//  H8 a deck (equation: hyperelasticity) through ElasticityCase: a cantilever
+//     bent to ~20 % of its length, whose tip on the mid-line moves back, where
+//     the linear model's stays (by symmetry); the summary written.
 // Runs on whatever device the test main configures (INCNS_DEVICE=cuda).
 
 #include <gtest/gtest.h>
 
+#include "config/parameters.hpp"
+#include "mesh/case_mesh.hpp"
 #include "quadrature/rule_book.hpp"
+#include "solid/elasticity_case.hpp"
 #include "solid/hyperelastic_operator.hpp"
 #include "solid/hyperelasticity.hpp"
 #include "solid/linear_elasticity.hpp"
 #include "mfem.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -647,6 +655,8 @@ std::vector<std::pair<int, int>> {{2, 0}, {3, 1}} :
          EXPECT_LT(MaxDiff(uh, ue), 1e-10) << "dim " << dim << " steps " << steps;
          EXPECT_LE(solid.MaxNewtonIterations(), 8) << "dim " << dim << " steps "
                << steps << " " << History(solid);
+         EXPECT_EQ(solid.CorrectionHistory().size(),
+                   static_cast<size_t>(solid.NewtonIterations()));
          if (Mpi::Root())
          {
             std::cout << "[H4] dim " << dim << " steps " << steps << " "
@@ -763,3 +773,92 @@ TEST(Hyperelasticity, H6_SmallLoadsGiveTheLinearSolution)
    EXPECT_LT(diff[0] / diff[1], 4.5);
 }
 
+// H8
+TEST(Hyperelasticity, H8_DeckThroughElasticityCase)
+{
+   const std::string deck =
+      "equation: hyperelasticity\n"
+      "mesh:\n"
+      "  dim: 2\n"
+      "  elements: [8, 2]\n"
+      "  lengths: [4.0, 1.0]\n"
+      "  periodic: [false, false]\n"
+      "solid:\n"
+      "  model: st_venant_kirchhoff\n"
+      "  youngs_modulus: 100.0\n"
+      "  poisson_ratio: 0.25\n"
+      "  order: 2\n"
+      "  body_force: [0.0, -0.2]\n"
+      "  load_steps: 2\n"
+      "  rtol: 1.0e-12\n"
+      "  probe: [4.0, 0.5]\n"
+      "boundary_conditions:\n"
+      "  - {select: [xmin], type: fixed}\n"
+      "  - {select: [xmax], type: traction, value: [0.0, -0.05]}\n"
+      "  - {select: [ymin, ymax], type: free}\n";
+   const incns::Parameters p = incns::Parameters::LoadYAMLString(deck);
+   EXPECT_EQ(p.equation, incns::Equation::Hyperelasticity);
+   EXPECT_EQ(p.solid.model, incns::SolidModel::StVenantKirchhoff);
+   EXPECT_EQ(p.solid.load_steps, 2);
+   const incns::Hyperelasticity::Options o = incns::HyperelasticOptions(p);
+   EXPECT_EQ(o.order, 2);
+   EXPECT_EQ(o.load_steps, 2);
+   EXPECT_NEAR(o.mu, 100.0 / 2.5, 1e-12);
+   EXPECT_NEAR(o.lambda, 100.0 * 0.25 / (1.25 * 0.5), 1e-12); // plane strain
+
+   auto mesh = incns::MakeCaseMesh(p);
+   incns::ElasticityCase c(*mesh, p);
+   ASSERT_TRUE(c.Solve()) << History(c.HyperelasticSolver());
+   Vector x(2), uh, ul;
+   x(0) = 4.0;
+   x(1) = 0.5;
+   ASSERT_TRUE(c.HyperelasticSolver().DisplacementAt(x, uh));
+   EXPECT_LE(c.HyperelasticSolver().MaxNewtonIterations(), 8)
+         << History(c.HyperelasticSolver());
+
+   // The same deck, linear: its tip on the mid-line does not move along the
+   // beam (the problem is symmetric about it up to the loads' sign).
+   std::string linear_deck = deck;
+   linear_deck.replace(linear_deck.find("hyperelasticity"),
+                       std::string("hyperelasticity").size(), "linear_elasticity");
+   const incns::Parameters pl = incns::Parameters::LoadYAMLString(linear_deck);
+   auto mesh_l = incns::MakeCaseMesh(pl);
+   incns::ElasticityCase cl(*mesh_l, pl);
+   ASSERT_TRUE(cl.Solve());
+   ASSERT_TRUE(cl.Solver().DisplacementAt(x, ul));
+   if (Mpi::Root())
+   {
+      std::cout << "[H8] tip u: hyperelastic (" << uh(0) << ", " << uh(1)
+                << "), linear (" << ul(0) << ", " << ul(1) << "); "
+                << History(c.HyperelasticSolver()) << std::endl;
+   }
+   EXPECT_LT(ul(1), -0.15 * 4.0); // bent by more than 15 % of its length
+   EXPECT_LT(uh(1), 0.0);
+   EXPECT_LT(std::abs(ul(0)), 1e-6 * std::abs(ul(1)));
+   EXPECT_LT(uh(0), -0.01 * std::abs(uh(1))); // the length is kept: it moves back
+   EXPECT_LT(std::abs(uh(1)), std::abs(ul(1)));
+
+   int np = 1;
+   MPI_Comm_size(MPI_COMM_WORLD, &np);
+   const std::string path = "hyperelasticity_H8_np" + std::to_string(np) +
+                            "_summary.json";
+   c.WriteSummary(path, "ok");
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root())
+   {
+      std::ifstream f(path);
+      ASSERT_TRUE(f.good());
+      std::stringstream ss;
+      ss << f.rdbuf();
+      for (const char* key :
+           {"\"equation\": \"hyperelasticity\"",
+            "\"model\": \"st_venant_kirchhoff\"", "\"newton\"",
+            "\"max_iterations_per_load_step\"", "\"strain_energy\"",
+            "\"found\": true"
+           })
+      {
+         EXPECT_NE(ss.str().find(key), std::string::npos) << key << "\n" << ss.str();
+      }
+      std::filesystem::remove(path);
+   }
+}

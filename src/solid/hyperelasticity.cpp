@@ -248,6 +248,7 @@ bool Hyperelasticity::Solve(double t)
    DirichletValues(t);
    u_->GetTrueDofs(x_);
    history_.clear();
+   corrections_.clear();
    newton_iterations_ = 0;
    max_newton_ = 0;
    linear_iterations_ = 0;
@@ -276,7 +277,8 @@ bool Hyperelasticity::Solve(double t)
       double ref = std::max(rnorm, fnorm);
       double tol = std::max(opts_.newton_atol, opts_.newton_rtol * ref);
       int it = 0;
-      while ((lift || rnorm > tol) && it < opts_.newton_max_iter)
+      bool small = false; // the last correction below newton_dx_rtol
+      while ((lift || (rnorm > tol && !small)) && it < opts_.newton_max_iter)
       {
          // K_T dx = -r, dx the Dirichlet increment on the Dirichlet dofs (the
          // constrained tangent is the identity there; r vanishes there).
@@ -311,6 +313,7 @@ bool Hyperelasticity::Solve(double t)
             cg_->Mult(rhs_, dx_);
          }
          linear_iterations_ += cg_->GetNumIterations();
+         const double dxnorm = std::sqrt(InnerProduct(comm, dx_, dx_));
          // Backtracking: the full step unless the residual fails to drop
          // (not on the increment's step, whose residual has new data).
          double alpha = 1.0;
@@ -329,12 +332,19 @@ bool Hyperelasticity::Solve(double t)
          x_ = trial_;
          rnorm = trial_norm;
          history_.push_back(rnorm);
+         // The full correction against the displacement: near the residual's
+         // roundoff floor it still falls quadratically (section 4 of
+         // docs/hyperelasticity.md).
+         const double xnorm = std::sqrt(InnerProduct(comm, x_, x_));
+         const double rel = xnorm > 0.0 ? dxnorm / xnorm : 0.0;
+         corrections_.push_back(rel);
+         small = !lift && opts_.newton_dx_rtol > 0.0 && rel <= opts_.newton_dx_rtol;
          lift = false;
          it++;
       }
       newton_iterations_ += it;
       max_newton_ = std::max(max_newton_, it);
-      converged_ = rnorm <= tol;
+      converged_ = rnorm <= tol || small;
    }
    total_linear_ += linear_iterations_;
    u_->SetFromTrueDofs(x_);
@@ -370,6 +380,44 @@ double Hyperelasticity::MaxDisplacement() const
    }
    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, mesh_.GetComm());
    return std::sqrt(m);
+}
+
+bool Hyperelasticity::DisplacementAt(const Vector& x, Vector& u) const
+{
+   // As LinearElasticity::DisplacementAt.
+   const int dim = mesh_.Dimension();
+   bool same = probe_cached_ && probe_x_.Size() == dim;
+   for (int d = 0; same && d < dim; ++d) { same = probe_x_(d) == x(d); }
+   if (!same)
+   {
+      DenseMatrix pts(dim, 1);
+      for (int d = 0; d < dim; ++d) { pts(d, 0) = x(d); }
+      Array<int> elems;
+      Array<IntegrationPoint> ips;
+      mesh_.FindPoints(pts, elems, ips, /*warn=*/false); // collective
+      probe_elem_ = (elems.Size() > 0 && elems[0] >= 0) ? elems[0] : -1;
+      if (probe_elem_ >= 0) { probe_ip_ = ips[0]; }
+      probe_x_ = x;
+      probe_cached_ = true;
+   }
+   u.SetSize(dim);
+   u = 0.0;
+   double found = 0.0;
+   if (probe_elem_ >= 0)
+   {
+      u_->HostRead();
+      u_->GetVectorValue(probe_elem_, probe_ip_, u);
+      found = 1.0;
+   }
+   Vector sum(dim + 1);
+   for (int d = 0; d < dim; ++d) { sum(d) = u(d); }
+   sum(dim) = found;
+   MPI_Allreduce(MPI_IN_PLACE, sum.GetData(), dim + 1, MPI_DOUBLE, MPI_SUM,
+                 mesh_.GetComm());
+   if (sum(dim) < 0.5) { u = 0.0; return false; }
+   // ParMesh::FindPoints gives each point to one rank; divide in case not.
+   for (int d = 0; d < dim; ++d) { u(d) = sum(d) / sum(dim); }
+   return true;
 }
 
 void Hyperelasticity::SetSolution(const Vector& x)

@@ -93,7 +93,8 @@ and all numerics stay in C++. Run it as `mpirun -np N python case.py`; there is 
 (numba-compiled). Three entry points:
 
 - `incns.run_deck(deck)` runs a deck (a path, a dict or `Parameters`) exactly as
-  `run_case` does, flows and `linear_elasticity` solids alike, and returns the summary
+  `run_case` does, flows and `linear_elasticity` or `hyperelasticity` solids alike, and
+  returns the summary
   as a dict.
 - `incns.Parameters.from_dict({...})` (or `from_yaml`, `from_yaml_string`) reaches every
   deck key, nested as in the YAML; an unknown key raises `ValueError`.

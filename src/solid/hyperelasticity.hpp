@@ -32,7 +32,8 @@ namespace incns
  * tangent). A step converges when its residual (true dofs, Dirichlet entries
  * out) falls below max(newton_atol, newton_rtol r_ref), r_ref the largest of its
  * first residual, its load's norm and its increment's right-hand side (the
- * tangent applied to it, free rows). The API mirrors
+ * tangent applied to it, free rows), or when a correction falls below
+ * newton_dx_rtol times the displacement. The API mirrors
  * LinearElasticity's (static part). Every quadrature rule is owned here, so the
  * solver must not outlive its mesh.
  */
@@ -46,11 +47,16 @@ public:
       double lambda = 1.0; ///< First Lame parameter (plane strain in 2D).
       double mu = 1.0;     ///< Shear modulus.
       HyperelasticMaterial material = HyperelasticMaterial::StVenantKirchhoff;
-      /// Newton: residual reduction per load step. Not much below 1e-8: the
-      /// residual's roundoff floor was 3e-11 of the load on a small cantilever
-      /// (H6), and grows with slenderness and refinement.
+      /// Newton: residual reduction per load step. The residual has a
+      /// roundoff floor that grows with slenderness and refinement (3e-11 of
+      /// the load on H6's small cantilever, 1e-7 on CSM1's flag at 4e4 dofs),
+      /// so newton_dx_rtol usually decides on fine meshes.
       double newton_rtol = 1e-8;
       double newton_atol = 0.0;   ///< Newton: absolute residual tolerance.
+      /// Newton: a load step also converges when a correction's norm falls
+      /// below this times the displacement's (0: off). Corrections keep
+      /// falling quadratically to ~1e-15, below the residual's floor.
+      double newton_dx_rtol = 1e-10;
       int newton_max_iter = 25;   ///< Newton iterations per load step.
       int load_steps = 1;         ///< Load steps of a Solve().
       bool line_search = false;   ///< Backtracking on the residual norm.
@@ -129,6 +135,9 @@ public:
    /// @return The last Solve()'s residual norms, every Newton iterate of every
    ///         load step in order.
    const std::vector<double>& ResidualHistory() const { return history_; }
+   /// @return The last Solve()'s Newton corrections, each ||dx|| / ||u|| after
+   ///         it, every load step in order.
+   const std::vector<double>& CorrectionHistory() const { return corrections_; }
    /// @return Whether the last Solve() converged.
    bool Converged() const { return converged_; }
    /// @return Global number of true displacement dofs.
@@ -142,6 +151,16 @@ public:
    double ExternalWork() const;
    /// @return max over the nodes of |u_h|. Collective.
    double MaxDisplacement() const;
+
+   /**
+    * @brief The displacement at a physical point of the reference
+    *        configuration. Collective: every rank passes the same point. The
+    *        point search is cached for the last point asked for.
+    * @param x Point (dim coordinates).
+    * @param u The displacement there (dim components).
+    * @return False when no element contains the point (u is then zero).
+    */
+   bool DisplacementAt(const mfem::Vector& x, mfem::Vector& u) const;
 
    /**
     * @brief Take @p x (true dofs) as the displacement, the next Solve()'s
@@ -202,7 +221,14 @@ private:
    mfem::Vector ess_jump_; ///< Its increment over the current displacement.
    mfem::Vector x_, r_, dx_, rhs_, trial_; ///< Newton work vectors.
 
+   /// Point of the cached DisplacementAt() search.
+   mutable mfem::Vector probe_x_;
+   mutable int probe_elem_ = -1;             ///< Its element on this rank, or -1.
+   mutable mfem::IntegrationPoint probe_ip_; ///< Its reference point.
+   mutable bool probe_cached_ = false;       ///< Whether probe_x_ is searched.
+
    std::vector<double> history_; ///< Residual norms of the last Solve().
+   std::vector<double> corrections_; ///< Its relative correction norms.
    int newton_iterations_ = 0, max_newton_ = 0, linear_iterations_ = 0;
    long long total_linear_ = 0;
    bool converged_ = false;

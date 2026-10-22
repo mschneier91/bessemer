@@ -134,8 +134,14 @@ linear elasticity PA cannot launch there and is 11-25x slower at Q3-Q5. Geometry
 fly is shelved (human 2026-10-21: under 2 % of the solver's memory). Milestone 2 began
 on 2026-10-22 with the static solver, `Hyperelasticity` (Newton, load steps, line search,
 the reference LOR-AMG; tests H4-H6: an exact homogeneous finite deformation, a strain-free
-180-degree rotation, and the linear limit at O(load^2)). **Next:** the deck
-(`equation: hyperelasticity`), then Turek-Hron CSM1/CSM2.
+180-degree rotation, and the linear limit at O(load^2)). Its deck,
+`equation: hyperelasticity` through `ElasticityCase` (linear decks bitwise unchanged), runs
+`cases/turek_hron_csm{1,2}.yaml`. Point A converges to within 1-2e-4 of the benchmark's
+values (FeatFlow table, checked 2026-10-22), about the spread of the benchmark's own
+levels. Verify tier: `verify_hyperelasticity_test` (a finite manufactured deformation's
+rates, CSM1/CSM2). Newton also stops on a small correction, since the residual's roundoff
+floor reached 1e-7 of the load on fine flag meshes. **Next:** dynamics (milestone 3,
+CSM3).
 
 **Mesh deformation from a deck (2026-10-21, branch `claude/project-thread-hq7y8y`;
 human: "add the capability to deform a given mesh using the structural solver ...

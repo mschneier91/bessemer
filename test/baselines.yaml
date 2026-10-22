@@ -258,3 +258,45 @@ verification:
       steps_per_period: 200
       periods: 3
       tolerance: 0.005
+  # Large-deformation elasticity (verify_hyperelasticity_test), St.
+  # Venant-Kirchhoff, static. V1: the manufactured finite deformation u_i =
+  # a prod_d sin(pi x_d) (gradient up to a pi), held on the whole boundary,
+  # under -Div P; each study runs at `orders` and at the deck default order over
+  # `default_levels`. a = 0.05: J >= 0.84 and the acoustic tensor's least
+  # eigenvalue 0.18 (2D, mu 0.385). At a = 0.1 (J 0.69) it is -0.025: SVK
+  # loses strong ellipticity and Newton diverges on fine meshes (2026-10-22).
+  hyperelasticity:
+    youngs_modulus: 1.0
+    poisson_ratio: 0.3
+    rtol: 1.0e-12        # CG, each Newton correction
+    newton_rtol: 1.0e-10
+    mms_amplitude: 0.05
+    mms_2d:              # unit square, n x n elements per level
+      orders: [2, 3, 4]
+      levels: [4, 8, 16]
+      default_levels: [2, 3, 4]
+    mms_3d:              # unit cube, n^3 elements per level
+      orders: [2, 3]
+      levels: [2, 4, 8]
+      default_levels: [2, 3, 4]
+    # V2: Turek & Hron (2006) CSM1 and CSM2 through a deck: the flag (0.35 x
+    # 0.02) clamped to the cylinder, rho_s g = 1000 x 2 per reference volume,
+    # nu_s = 0.4, plane strain; point A = (0.6, 0.2). Reference u(A): the
+    # benchmark's own table (FeatFlow, "CSM tests", level 4+2, 164092 Q2 dofs;
+    # read 2026-10-22), whose finest levels spread by ~1e-4 relative (CSM1 u_y
+    # -66.0965 at 4+0 to -66.1029 at 4+3, e-3). This solver converges (Q6 on
+    # 16 x 2 to 64 x 8 flag meshes) to within 1.1e-4 (u_y) and 1.8e-4 (u_x) of
+    # it. Levels are [n_flag, n_flag_y]; the finest must be within `tolerance`
+    # (relative) of each component.
+    turek_hron_csm:
+      poisson_ratio: 0.4
+      body_force: [0.0, -2000.0]
+      order: 6
+      levels: [[16, 2], [32, 4]]
+      tolerance: 5.0e-4
+      csm1:
+        youngs_modulus: 1.4e6  # mu_s = 0.5e6
+        reference_u_a: [-7.18766e-3, -66.1023e-3]
+      csm2:
+        youngs_modulus: 5.6e6  # mu_s = 2.0e6
+        reference_u_a: [-0.468999e-3, -16.9739e-3]

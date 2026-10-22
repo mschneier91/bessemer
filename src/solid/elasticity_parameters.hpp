@@ -1,8 +1,8 @@
 /**
  * @file elasticity_parameters.hpp
- * @brief Settings of the linear elasticity solver (deck section `solid`):
- *        material, plane model, displacement order, linear solver and time
- *        integration.
+ * @brief Settings of the elasticity solvers (deck section `solid`):
+ *        material, plane model, displacement order, linear solver, time
+ *        integration, and the hyperelastic model with its Newton settings.
  */
 #pragma once
 
@@ -47,6 +47,13 @@ enum class SolidTimeScheme
    Bdf
 };
 
+/// The hyperelastic material (deck `solid.model`, equation hyperelasticity).
+enum class SolidModel
+{
+   /// St. Venant-Kirchhoff: W = lambda/2 (tr E)^2 + mu E : E.
+   StVenantKirchhoff
+};
+
 /**
  * @brief Chung-Hulbert generalized-alpha parameters (J. Appl. Mech. 60
  *        (1993) 371-375).
@@ -79,8 +86,9 @@ inline GeneralizedAlphaCoefficients GeneralizedAlpha(double rho_inf)
 }
 
 /**
- * @brief Linear elasticity settings: an isotropic, homogeneous material
- *        (E, Poisson's ratio), small strains, displacement-only.
+ * @brief Elasticity settings: an isotropic, homogeneous material (E,
+ *        Poisson's ratio), displacement-only; small strains (equation
+ *        linear_elasticity) or a hyperelastic model (equation hyperelasticity).
  */
 struct ElasticityParameters
 {
@@ -107,6 +115,16 @@ struct ElasticityParameters
    SolidTimeScheme time_scheme = SolidTimeScheme::GeneralizedAlpha;
    int bdf_order = 2;    ///< BDF order (2 or 3) of time_scheme bdf.
    double rho_inf = 0.8; ///< Generalized-alpha high-frequency radius, [0, 1].
+
+   /// Equation hyperelasticity: the material.
+   SolidModel model = SolidModel::StVenantKirchhoff;
+   double newton_rtol = 1e-8; ///< Newton residual reduction per load step.
+   double newton_atol = 0.0;  ///< Newton absolute residual tolerance.
+   /// Newton: converged also when ||dx|| <= newton_dx_rtol ||u|| (0: off).
+   double newton_dx_rtol = 1e-10;
+   int newton_max_iter = 25;  ///< Newton iterations per load step.
+   int load_steps = 1;        ///< Load steps of a static solve.
+   bool line_search = false;  ///< Newton's backtracking line search.
 
    /// @param order_u The fluid's velocity order. @return The order in effect.
    int Order(int order_u) const { return order > 0 ? order : order_u; }
