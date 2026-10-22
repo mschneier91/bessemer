@@ -100,6 +100,8 @@ MeshMotion::Options MotionOptions(int order)
 /// Max over the true dofs of |a - b| (global).
 double MaxDiff(const Vector& a, const Vector& b)
 {
+   a.HostRead(); // on a device the solver's results are current there only
+   b.HostRead();
    double m = 0.0;
    for (int i = 0; i < a.Size(); ++i) { m = std::max(m, std::abs(a(i) - b(i))); }
    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
@@ -111,6 +113,7 @@ double MaxDeviation(const ParGridFunction& u, const Vector& value)
 {
    Vector ut(u.ParFESpace()->GetTrueVSize());
    u.GetTrueDofs(ut);
+   ut.HostRead();
    const int n = ut.Size() / value.Size();
    double m = 0.0;
    for (int c = 0; c < value.Size(); ++c)
@@ -129,6 +132,7 @@ double PressureSpread(const ParGridFunction& p)
 {
    Vector pt(p.ParFESpace()->GetTrueVSize());
    p.GetTrueDofs(pt);
+   pt.HostRead();
    double mm[2] = {-1e300, -1e300};
    for (int i = 0; i < pt.Size(); ++i)
    {
@@ -291,6 +295,7 @@ TEST(AleFluid, A3_RigidBoxCarriesTheFluid)
          {
             Vector wt(flow.Spaces().Velocity().GetTrueVSize());
             flow.MeshVelocity().GetTrueDofs(wt);
+            wt.HostRead();
             const int nd = wt.Size() / 2;
             w = 0.0;
             if (nd > 0) { w(0) = wt(0); w(1) = wt(nd); }
@@ -421,6 +426,8 @@ TEST(AleFluid, A5_CutStepMovesTheMeshBack)
    // The nodes are the motion's at t_final: X + (0.4, 0.1) t.
    const GridFunction& x = *mesh->GetNodes();
    const Vector& X = motion.ReferenceNodes();
+   x.HostRead();
+   X.HostRead();
    const int nn = x.Size() / 2;
    double err = 0.0;
    for (int i = 0; i < nn; ++i)
@@ -565,6 +572,8 @@ TEST(AleFluid, A8_DeckMovesTheMesh)
    // The nodes are the reference ones translated by V t.
    const GridFunction& x = *mesh->GetNodes();
    const Vector& X = flow.Motion().ReferenceNodes();
+   x.HostRead();
+   X.HostRead();
    const int nn = x.Size() / 2;
    double err = 0.0;
    for (int i = 0; i < nn; ++i)
