@@ -17,6 +17,8 @@
 namespace incns
 {
 
+class TrueDofExchange;
+
 /// What the tangent keeps from its linearization point: memory against
 /// work per apply (per quadrature point in 3D: 18, 9 or about 3 numbers).
 enum class TangentStorage
@@ -24,12 +26,12 @@ enum class TangentStorage
    /// F and S at every point: the least arithmetic per apply.
    StressAndDeformation,
    /// F at every point; S recomputed in every apply. The default: half the
-   /// data of StressAndDeformation and, on an H100 at Q6, 5 % faster (less to
-   /// read); as fast on the CPU (docs/hyperelasticity.md section 3).
+   /// data of StressAndDeformation and, on an H100, faster (less to read); as
+   /// fast on the CPU (docs/hyperelasticity.md section 3).
    Deformation,
-   /// The displacement's element vector (its L-vector where the gather is
-   /// fused, 3D on a device); F and S recomputed in every apply (one more
-   /// gradient pass).
+   /// The displacement (its element vector; where the gather is fused, 3D on
+   /// a device, what the kernels read: its true dofs and ghosts, or its
+   /// L-vector); F and S recomputed in every apply (one more gradient pass).
    Displacement
 };
 
@@ -42,9 +44,10 @@ enum class TangentStorage
  * components by sum factorization, the material law at every point, the
  * transposed gradient back to the dofs (MFEM's kernels::internal helpers, as
  * GradDivIntegrator's apply; in 3D on a device by lines, the gradients kept in
- * shared memory, as the momentum apply of change 56, and the kernels read the
- * L-vector through the restriction's gather map and write it back themselves,
- * with no E-vectors). Tensor-product elements (quads, hexes) with as
+ * shared memory, as the momentum apply of change 56; the gather and scatter
+ * are fused into the kernels, which read and write the true dofs of a
+ * conforming space directly (the shared dofs through TrueDofExchange) and the
+ * L-vector otherwise, with no E-vectors). Tensor-product elements (quads, hexes) with as
  * many points per direction as dofs (the Gauss rule of order 2k + 1, the
  * linear solver's), k from 1 to 7. Lambda and mu are per element (the mesh
  * motion's stiffening).
@@ -112,11 +115,13 @@ private:
    /// The by-lines path's maps from the restriction's gather map (lines_
    /// false where the restriction is not an ElementRestriction).
    void SetupLines(ElementScratch* scratch);
-   /// u (true dofs) as an L-vector: u itself or P u in ul_.
+   /// What the by-lines kernels read for u (true dofs): u itself (its ghosts
+   /// gathered by the exchange), or the L-vector P u in ul_.
    const mfem::Vector& LocalInput(const mfem::Vector& u) const;
-   /// The L-vector the by-lines kernels write for y (true dofs): y or yl_.
+   /// What the by-lines kernels write for y (true dofs): y, or yl_.
    mfem::Vector& LocalOutput(mfem::Vector& y) const;
-   /// The shared dofs' slots summed into @p yl, then y = P^T yl if needed.
+   /// The slots summed into @p yl (and the ghosts' sums), then the exchange's
+   /// reduce into y, or y = P^T yl.
    void FinishOutput(mfem::Vector& yl, mfem::Vector& y) const;
 
    mfem::ParFiniteElementSpace& fes_;
@@ -137,17 +142,23 @@ private:
    bool own_e_ = true, own_l_ = true; ///< Whether ue_/ye_ and ul_/yl_ are own.
    bool p_identity_ = false; ///< Whether the prolongation is the identity.
 
-   /// 3D on a device: the by-lines kernels read the L-vector through the
-   /// gather map and write it back themselves (no E-vectors): a dof one
-   /// element holds directly, a shared dof through its slots, summed in
-   /// element order (deterministic, no atomics).
+   /// 3D on a device: the by-lines kernels read their input through a gather
+   /// map and write their output themselves (no E-vectors): a dof one element
+   /// holds (and no other rank shares) directly, the others through their
+   /// slots, summed in element order (deterministic, no atomics). A conforming
+   /// space: true dofs in and out, the shared dofs other ranks own (ghosts)
+   /// through ex_; otherwise the L-vector.
    bool lines_ = false;
-   const mfem::Array<int>* gmap_ =
-      nullptr; ///< E-dof to L-dof (the restriction's).
-   mfem::Array<int> dmap_; ///< Per E-dof: its L-dof, or -1 - its slot if shared.
-   mfem::Array<int> sdof_, soff_, sidx_; ///< Shared L-dofs and their slots (CSR).
-   mutable mfem::Vector slots_; ///< (slots, 3): the shared dofs' contributions.
-   int nd_ = 0, nslots_ = 0; ///< Scalar L-dofs, slots.
+   std::unique_ptr<TrueDofExchange> ex_;
+   mfem::Array<int> gsrc_; ///< With ex_: per E-dof its true dof, or -1 - ghost.
+   const mfem::Array<int>* gmap_ = nullptr; ///< gsrc_, or the restriction's.
+   mfem::Array<int> dmap_; ///< Per E-dof: its output index, or -1 - its slot.
+   mfem::Array<int> sdof_, soff_,
+        sidx_; ///< Slotted dofs' destinations, slots (CSR).
+   mutable mfem::Vector slots_; ///< (slots, 3): the slotted dofs' contributions.
+   int stride_ = 0, nslots_ =
+                    0; ///< The component stride of input and output, slots.
+   int lin_ghosts_ = -1; ///< With ex_: where lin_'s ghosts start (Displacement).
    bool own_slots_ = true;
    std::unique_ptr<Tangent> tangent_;
 };

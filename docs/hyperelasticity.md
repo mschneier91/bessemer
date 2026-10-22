@@ -35,11 +35,13 @@ CSM1/CSM2).
 - `TangentStorage` sets what the tangent keeps from its linearization point:
   - `Deformation` (the default): F at every point, with S recomputed in each apply.
   - `StressAndDeformation`: F and S.
-  - `Displacement`: the displacement only (its element vector; in 3D on a device its
-    L-vector), with F and S recomputed by one more gradient pass.
+  - `Displacement`: the displacement only (its element vector; in 3D on a device what the
+    kernels read: its true dofs and ghosts, or its L-vector), with F and S recomputed by
+    one more gradient pass.
 - The operator can borrow its work vectors from an `ElementScratch`. It keeps no L-vectors
-  where the prolongation is the identity (one rank, no hanging nodes), and in 3D on a
-  device no E-vectors (the gather and scatter are fused into the kernels).
+  where the prolongation is the identity (one rank, no hanging nodes). In 3D on a device
+  it keeps no E-vectors (the gather and scatter are fused into the kernels), and on a
+  conforming space no L-vectors at any rank count (`TrueDofExchange`, section 4).
 - `bench/bench_hyperelastic.cpp` reports, per order and storage: the bytes per vector dof,
   the device memory added, and the residual, linearization and tangent times. MFEM's
   linear `ElasticityIntegrator` in partial assembly is the reference.
@@ -65,8 +67,17 @@ smaller and faster (section 3 below).
 - **HM:** the three storages give the same tangent to 1e-13 and order their memory as
   expected; borrowed buffers leave results bitwise unchanged.
 
-Passed on the CPU at np 1, 2 and 4 and on H100s at np 1 and 2 at every step; for the
-current code, jobs 49573352 (CPU) and 49572810, 49573345 (GPU).
+`test/true_dof_exchange_test.cpp` (`true_dof_exchange_test`), for vector and scalar
+spaces at orders 1 to 3:
+
+- **X1:** the exchange's gather is exactly MFEM's P.
+- **X2:** its reduce is P^T to roundoff and writes every true dof.
+- **X3:** two reduces agree bitwise.
+
+np 4 on the CPU covers dofs that three or more ranks share.
+
+Passed on the CPU at np 1, 2 and 4 and on H100s at np 1 and 2 at every step; for round 3
+(section 4), job 49575822 on the CPU and, on H100s, job 49575048 together with round 4.
 
 ## 3. Memory and speed
 
@@ -164,6 +175,26 @@ vectors borrowed from an `ElementScratch`. Rates are million vector dofs per sec
     Q2-Q3 tangent 6-10 % against round 2 without it (one more sync per component on small
     blocks); it stays ahead of round 1 there.
   - The outputs are written, not added to, so these applies zero nothing.
+- **Round 3: the shared dofs exchanged directly.** At np 2, MFEM's device prolongation
+  cost 0.15 ms (P u) and 0.17 ms (P^T y) per Q6 apply: all of the np 2 overhead (job
+  49573701). Most of it copies every owned dof between the true-dof vector and the
+  L-vector (`SetSubArray`, `ExtractSubArray`).
+  - On a conforming space the kernels now read and write true dofs directly.
+    `TrueDofExchange` (`operators/true_dof_exchange.hpp`) sends the owners' shared dofs
+    to the ranks that hold them as ghosts. It returns the ghosts' contributions, which
+    the owners add in a fixed order (by neighbor rank, then position): deterministic,
+    with no atomics. Only shared dofs move, over GPU-aware MPI.
+  - The message order follows MFEM's group topology (each group's master and its group
+    number there), with no MFEM internals.
+  - A dof is written directly only if one local element holds it and no other rank
+    shares it. The others go through slots, and `ScatterSlots` writes their sums into the
+    true-dof vector or the ghosts' buffer.
+  - Nonconforming spaces keep the L-vector and MFEM's prolongation.
+  - Measured together with round 4 (section 3).
+  - Gotcha: filling a `Vector` through sub-vector aliases on the device does not mark
+    the base's device copy valid. The base's next `Read()` brings the stale host data
+    back (job 49574179, the `Displacement` storage). Write through the base's own
+    `Write()` pointer instead.
 
 ## 5. Next
 
@@ -174,7 +205,7 @@ vectors borrowed from an `ElementScratch`. Rates are million vector dofs per sec
   - fit 7 blocks per SM: the shared memory per block (37 KB at Q6) is the limit now.
     Unpadded stacks would take 28 KB, but the padding was designed for rows of 8 lanes
     and fits N = 7 poorly anyway (ncu counts 16M bank conflicts per tangent apply).
-  - weak scaling: two GPUs reach 76-79 % of one (the exchange of the parallel prolongation
-    is not profiled yet).
+  - weak scaling: round 3 (section 4) replaces MFEM's prolongation on conforming spaces;
+    what is left of the exchange could overlap with the interior elements' work.
 - **Milestone 2:** Newton with load steps, the fixed reference LOR-AMG preconditioner, the
   deck (`equation: hyperelasticity`), CSM1 and CSM2.

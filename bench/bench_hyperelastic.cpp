@@ -158,6 +158,23 @@ int main(int argc, char** argv)
          }
       }
 
+      // At np > 1: the parallel prolongation alone, the operator's input (P u) and
+      // output (P^T y) exchanges.
+      const Operator* P = fes.GetProlongationMatrix();
+      if (P && !dynamic_cast<const IdentityOperator*>(P))
+      {
+         Vector ul(fes.GetVSize());
+         ul.UseDevice(true);
+         const double tp = Time(reps, [&] { P->Mult(u, ul); });
+         const double tpt = Time(reps, [&] { P->MultTranspose(ul, y); });
+         if (Mpi::Root())
+         {
+            std::printf("%-3d %-4d %10lld P    P u %.3f ms, P^T y %.3f ms\n", p, n,
+                        static_cast<long long>(ndof), 1e3 * tp, 1e3 * tpt);
+            std::fflush(stdout);
+         }
+      }
+
       // Reference: MFEM's linear elasticity PA (cannot launch on a GPU at 3D p >= 6).
       if (!(gpu && p >= 6))
       {

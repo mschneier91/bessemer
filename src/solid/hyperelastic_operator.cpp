@@ -6,6 +6,8 @@
  */
 #include "solid/hyperelastic_operator.hpp"
 
+#include "operators/true_dof_exchange.hpp"
+
 // This TU defines device kernels (mfem::forall_2D). A host compiler would
 // build them as host loops over device pointers, which segfaults on a GPU;
 // src/CMakeLists.txt marks this file LANGUAGE CUDA, and this line turns a lost
@@ -589,28 +591,32 @@ struct Args
    const real_t* wdet = nullptr;   ///< w det J, (N^3, ne)
    const real_t* lambda = nullptr; ///< Per element.
    const real_t* mu = nullptr;     ///< Per element.
-   const real_t* x = nullptr;      ///< L-vector (3 nd): u or the direction.
-   const real_t* lin = nullptr;    ///< The linearization (MODE 2: u's L-vector).
-   real_t* y = nullptr;            ///< Output L-vector: its single-element dofs.
+   /// Input (3 stride): u or the direction, true dofs or the L-vector.
+   const real_t* x = nullptr;
+   const real_t* ghosts = nullptr; ///< The input's ghosts, (3, ghosts).
+   const real_t* lin = nullptr;    ///< The linearization (MODE 2: as x).
+   const real_t* linghosts = nullptr; ///< MODE 2: the linearization's ghosts.
+   real_t* y = nullptr;            ///< Output, as x: its single-element dofs.
    real_t* fs = nullptr;           ///< Stored F (and S), (N^3, 9 STORE, ne).
    real_t* we = nullptr;           ///< Energy partial sums, (N^2, ne).
-   const int* gmap = nullptr;      ///< E-dof to L-dof (lexicographic, (N^3, ne)).
-   const int* dmap = nullptr;      ///< E-dof to its L-dof or -1 - its slot.
+   const int* gmap = nullptr;      ///< E-dof to its input index or -1 - ghost.
+   const int* dmap = nullptr;      ///< E-dof to its output index or -1 - slot.
    real_t* slots = nullptr;        ///< Shared dofs' contributions, (ns, 3).
-   int nd = 0;                     ///< Scalar L-dofs.
+   int stride = 0;                 ///< The component stride of x, lin and y.
    int ns = 0;                     ///< Slots.
 };
 
 #if defined(MFEM_USE_CUDA) && defined(__CUDACC__)
 /// Component c's reference gradient on the thread's column (qx, qy) = (tx,
-/// ty) of the stacks s0, s1, s2 (k = x, y, z), its dofs read from the
-/// component's L-vector @p xc at the thread's x line of L-dofs @p gi (the
-/// gather fused). Collocated: B along x, y and z to the values U at the points
+/// ty) of the stacks s0, s1, s2 (k = x, y, z), its dofs read at the thread's
+/// x line @p gi from the component's input @p xc (gi >= 0) or its ghosts
+/// @p gc (stride 3, at -1 - gi): the gather fused. Collocated: B along x, y and z to the values U at the points
 /// (in sXG, as a stack), then D = G B^-1 along each direction there: 6 N^4
 /// multiply-adds per component against change 56's 8 N^4 (B and G in every
 /// stage). Ends with each thread's own column written (no sync after it).
 template <int N>
-__device__ inline void GradLines(const real_t* __restrict__ xc, const int* gi,
+__device__ inline void GradLines(const real_t* __restrict__ xc,
+                                 const real_t* __restrict__ gc, const int* gi,
                                  const int tx, const int ty, const Basis<N>& bs,
                                  real_t* sXB, real_t* sXG, real_t* s0, real_t* s1,
                                  real_t* s2)
@@ -620,7 +626,11 @@ __device__ inline void GradLines(const real_t* __restrict__ xc, const int* gi,
    {
       real_t u[N];
       MFEM_UNROLL(N)
-      for (int dx = 0; dx < N; ++dx) { u[dx] = xc[gi[dx]]; }
+      for (int dx = 0; dx < N; ++dx)
+      {
+         const int s = gi[dx];
+         u[dx] = s >= 0 ? xc[s] : gc[3 * (-1 - s)];
+      }
       MFEM_UNROLL(N)
       for (int qx = 0; qx < N; ++qx)
       {
@@ -687,8 +697,9 @@ __device__ inline void GradLines(const real_t* __restrict__ xc, const int* gi,
 /// y, z; each thread's own column written by the point loop) into its dofs,
 /// collocated as GradLines: D^T along each direction at the points, summed,
 /// then B^T along z, y and x. The thread's x line of dofs @p di goes to the
-/// component's L-vector @p yc where a single element holds the dof (di >= 0)
-/// and to its slot in @p sc otherwise (-1 - di; summed by ScatterSlots).
+/// component's output @p yc where a single element holds the dof and no other
+/// rank shares it (di >= 0), to its slot in @p sc otherwise (-1 - di; summed
+/// by ScatterSlots).
 template <int N>
 __device__ inline void GradTransposeLines(const int tx, const int ty,
       const Basis<N>& bs, real_t* sXB,
@@ -837,7 +848,8 @@ PointwiseKernel(const __grid_constant__ Args<N> a)
       for (int c = 0; c < 3; ++c)
       {
          real_t* s = st + 3 * c * L::YS;
-         GradLines<N>(a.x + a.nd * c, gi, tx, ty, a.bs, sXB, sXG, s, s + L::YS,
+         GradLines<N>(a.x + a.stride * c, a.ghosts + c, gi, tx, ty, a.bs, sXB, sXG, s,
+                      s + L::YS,
                       s + 2 * L::YS);
       }
    }
@@ -879,7 +891,7 @@ PointwiseKernel(const __grid_constant__ Args<N> a)
       {
          real_t* s = st + 3 * c * L::YS;
          GradTransposeLines<N>(tx, ty, a.bs, sXB, sXG, s, s + L::YS, s + 2 * L::YS,
-                               di, a.y + a.nd * c, a.slots + a.ns * c);
+                               di, a.y + a.stride * c, a.slots + a.ns * c);
       }
    }
 }
@@ -906,7 +918,8 @@ TangentKernel(const __grid_constant__ Args<N> a)
          for (int c = 0; c < 3; ++c)
          {
             real_t* s = st + (9 + 3 * c) * L::YS;
-            GradLines<N>(a.lin + a.nd * c, gi, tx, ty, a.bs, sXB, sXG, s,
+            GradLines<N>(a.lin + a.stride * c, a.linghosts + c, gi, tx, ty, a.bs, sXB, sXG,
+                         s,
                          s + L::YS, s + 2 * L::YS);
          }
       }
@@ -914,7 +927,8 @@ TangentKernel(const __grid_constant__ Args<N> a)
       for (int c = 0; c < 3; ++c)
       {
          real_t* s = st + 3 * c * L::YS;
-         GradLines<N>(a.x + a.nd * c, gi, tx, ty, a.bs, sXB, sXG, s, s + L::YS,
+         GradLines<N>(a.x + a.stride * c, a.ghosts + c, gi, tx, ty, a.bs, sXB, sXG, s,
+                      s + L::YS,
                       s + 2 * L::YS);
       }
    }
@@ -957,7 +971,7 @@ TangentKernel(const __grid_constant__ Args<N> a)
    {
       real_t* s = st + 3 * c * L::YS;
       GradTransposeLines<N>(tx, ty, a.bs, sXB, sXG, s, s + L::YS, s + 2 * L::YS,
-                            di, a.y + a.nd * c, a.slots + a.ns * c);
+                            di, a.y + a.stride * c, a.slots + a.ns * c);
    }
 }
 
@@ -991,14 +1005,17 @@ bool Lines3D(int dim)
 /// (HyperelasticOperator::SetupLines).
 struct LinesMaps
 {
-   const Array<int>* gmap = nullptr; ///< E-dof to L-dof.
-   const Array<int>* dmap = nullptr; ///< E-dof to L-dof, or -1 - its slot.
+   const Array<int>* gmap = nullptr; ///< E-dof to input index, or -1 - ghost.
+   const Array<int>* dmap = nullptr; ///< E-dof to output index, or -1 - slot.
    Vector* slots = nullptr;          ///< (ns, 3).
-   int nd = 0, ns = 0;               ///< Scalar L-dofs, slots.
+   int stride = 0, ns = 0;           ///< Component stride, slots.
+   const Vector* ghosts = nullptr;   ///< The input's ghosts (the exchange's).
+   int linghosts = -1; ///< MODE 2: where lin's ghosts start (-1: none).
 };
 
-/// Pointwise3D's by-lines counterpart: x and y are L-vectors; y gets its
-/// single-element dofs and the slots their shared dofs' contributions
+/// Pointwise3D's by-lines counterpart: x and y are true-dof vectors (a
+/// conforming space; x's ghosts in m.ghosts) or L-vectors; y gets its
+/// single-element dofs, the slots their shared dofs' contributions
 /// (ScatterSlots finishes it).
 template <class MAT, int N, bool RESIDUAL, int STORE, bool ENERGY>
 void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
@@ -1015,8 +1032,9 @@ void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    a.lambda = lam.Read();
    a.mu = mu.Read();
    a.x = x.Read();
+   a.ghosts = (m.ghosts && m.ghosts->Size() > 0) ? m.ghosts->Read() : a.x;
    a.gmap = m.gmap->Read();
-   a.nd = m.nd;
+   a.stride = m.stride;
    a.ns = m.ns;
    if constexpr(RESIDUAL)
    {
@@ -1037,8 +1055,8 @@ void PointwiseLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
 #endif
 }
 
-/// Tangent3D's by-lines counterpart: x, y (and lin for MODE 2) are
-/// L-vectors, as PointwiseLines3D's.
+/// Tangent3D's by-lines counterpart: x, y (and lin for MODE 2, its ghosts at
+/// m.linghosts) as PointwiseLines3D's.
 template <class MAT, int N, int MODE>
 void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                     const Vector& jinv, const Vector& wdet, const Vector& lam,
@@ -1054,12 +1072,14 @@ void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
    a.lambda = lam.Read();
    a.mu = mu.Read();
    a.lin = lin.Read();
+   a.linghosts = (MODE == 2 && m.linghosts >= 0) ? a.lin + m.linghosts : a.lin;
    a.x = x.Read();
+   a.ghosts = (m.ghosts && m.ghosts->Size() > 0) ? m.ghosts->Read() : a.x;
    a.y = y.Write();
    a.gmap = m.gmap->Read();
    a.dmap = m.dmap->Read();
    a.slots = m.slots->Write();
-   a.nd = m.nd;
+   a.stride = m.stride;
    a.ns = m.ns;
    lines::Launch<N>(lines::TangentKernel<MAT, N, MODE, 1>, a, NE,
                     MODE == 2 ? 18 : 9);
@@ -1072,17 +1092,20 @@ void TangentLines3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
 #endif
 }
 
-/// y(j, c) = the sum of the shared L-dof j's slots for each component, in
-/// slot (element) order: the by-lines scatter's second half.
+/// Each slotted dof's slots summed per component, in slot (element) order:
+/// the by-lines scatter's second half. Destination sdof[k] >= 0: y's entry
+/// (component stride @p stride); < 0: ghost -1 - sdof[k] of @p g, (3, ghosts),
+/// the exchange's sums for the owners.
 void ScatterSlots(const Array<int>& sdof, const Array<int>& soff,
-                  const Array<int>& sidx, const Vector& slots, const int nd,
-                  const int ns, Vector& y)
+                  const Array<int>& sidx, const Vector& slots, const int stride,
+                  const int ns, Vector& y, Vector* g)
 {
    const int n = sdof.Size();
    if (n == 0) { return; }
    const auto J = sdof.Read(), O = soff.Read(), I = sidx.Read();
    const auto S = slots.Read();
    auto Y = y.ReadWrite();
+   real_t* G = (g && g->Size() > 0) ? g->Write() : Y; // Y: never written then
    mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int k)
    {
       const int j = J[k], k0 = O[k], k1 = O[k + 1];
@@ -1090,7 +1113,8 @@ void ScatterSlots(const Array<int>& sdof, const Array<int>& soff,
       {
          real_t v = 0.0;
          for (int i = k0; i < k1; ++i) { v += S[I[i] + ns * c]; }
-         Y[j + nd * c] = v;
+         if (j >= 0) { Y[j + stride * c] = v; }
+         else { G[3 * (-1 - j) + c] = v; }
       }
    });
 }
@@ -1134,7 +1158,8 @@ public:
    {
       const auto& m = *op_.maps_;
       const int mode = 2 - StoreFor(op_.storage_); // 0 F,S; 1 F; 2 displacement
-      const LinesMaps lm{op_.gmap_, &op_.dmap_, &op_.slots_, op_.nd_, op_.nslots_};
+      const LinesMaps lm{op_.gmap_, &op_.dmap_, &op_.slots_, op_.stride_, op_.nslots_,
+                         op_.ex_ ? &op_.ex_->Ghosts() : nullptr, op_.lin_ghosts_};
       const Vector* xl = nullptr;
       Vector* yl = nullptr;
       if (op_.lines_)
@@ -1234,8 +1259,12 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
    lines_ = Lines3D(dim_);
    if (lines_) { SetupLines(scratch); }
    const int nstore = StoreFor(storage_);
+   // Displacement storage: the E-vector, or what the by-lines kernels read: the
+   // L-vector, or the true dofs with the ghosts after them.
+   const int nlu = ex_ ? Height() + 3 * ex_->NumGhosts() : fes.GetVSize();
    lin_.SetSize(nstore > 0 ? nq * nstore * dim_ * dim_ * ne_ :
-                (lines_ ? fes.GetVSize() : restriction_->Height()));
+                (lines_ ? nlu : restriction_->Height()));
+   lin_ghosts_ = ex_ ? Height() : -1;
    lin_.UseDevice(true);
 
    const int ne_size = restriction_->Height(), nl = fes.GetVSize();
@@ -1257,7 +1286,7 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
    // the true dofs are the local dofs -- no L-vectors at all.
    const Operator* P = fes.GetProlongationMatrix();
    p_identity_ = !P || dynamic_cast<const IdentityOperator*>(P) != nullptr;
-   if (p_identity_)
+   if (p_identity_ || ex_) // the exchange: true dofs in and out
    {
       own_l_ = false;
    }
@@ -1284,8 +1313,9 @@ std::size_t HyperelasticOperator::MemoryBytes() const
    if (own_l_) { n += ul_.Size() + yl_.Size(); }
    if (own_slots_) { n += slots_.Size(); }
    const std::size_t ni = dmap_.Size() + sdof_.Size() + soff_.Size() +
-                          sidx_.Size();
-   return n * sizeof(real_t) + ni * sizeof(int);
+                          sidx_.Size() + gsrc_.Size();
+   return n * sizeof(real_t) + ni * sizeof(int) +
+          (ex_ ? ex_->MemoryBytes() : 0);
 }
 
 void HyperelasticOperator::SetupLines(ElementScratch* scratch)
@@ -1306,17 +1336,48 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
       MFEM_VERIFY(h[i] >= 0 && h[i] < nd, "HyperelasticOperator: an H1 gather map");
       count[h[i]]++;
    }
-   // A dof one element holds is written directly; a shared one gets a slot
-   // per element, in element (E-dof) order.
+   // A conforming space: the kernels read and write true dofs, the shared dofs
+   // other ranks own (ghosts) through the exchange. Otherwise the L-vector.
+   std::vector<int> io(nd);   // per L-dof: its input/output index, or -1 - ghost
+   std::vector<char> remote(nd, 0); // another rank needs or adds to its result
+   if (fes_.Conforming())
+   {
+      ex_ = std::make_unique<TrueDofExchange>(fes_);
+      const int* ls = ex_->LocalSource().HostRead();
+      std::vector<int> tl(ex_->TrueStride(), -1);
+      for (int j = 0; j < nd; j++)
+      {
+         io[j] = ls[j];
+         if (ls[j] < 0) { remote[j] = 1; }
+         else { tl[ls[j]] = j; }
+      }
+      const Array<int>& os = ex_->OwnedShared();
+      const int* o = os.HostRead();
+      for (int k = 0; k < os.Size(); k++) { remote[tl[o[k]]] = 1; }
+      stride_ = ex_->TrueStride();
+      gsrc_.SetSize(g.Size());
+      int* gs = gsrc_.HostWrite();
+      for (int i = 0; i < g.Size(); i++) { gs[i] = io[h[i]]; }
+      gmap_ = &gsrc_;
+   }
+   else
+   {
+      for (int j = 0; j < nd; j++) { io[j] = j; }
+      stride_ = nd;
+      gmap_ = &g;
+   }
+   // A dof one element holds and no other rank shares is written directly;
+   // the others get a slot per element, in element (E-dof) order.
+   auto direct = [&](int j) { return count[j] == 1 && !remote[j]; };
    dmap_.SetSize(g.Size());
    int* dm = dmap_.HostWrite();
    int ns = 0;
-   for (int i = 0; i < g.Size(); i++) { dm[i] = count[h[i]] == 1 ? h[i] : -1 - ns++; }
+   for (int i = 0; i < g.Size(); i++) { dm[i] = direct(h[i]) ? io[h[i]] : -1 - ns++; }
    int nsh = 0;
    for (int j = 0; j < nd; j++)
    {
       MFEM_VERIFY(count[j] > 0, "HyperelasticOperator: a dof in no local element");
-      if (count[j] > 1) { nsh++; }
+      if (!direct(j)) { nsh++; }
    }
    sdof_.SetSize(nsh);
    soff_.SetSize(nsh + 1);
@@ -1326,8 +1387,8 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
    so[0] = 0;
    for (int j = 0, k = 0; j < nd; j++)
    {
-      if (count[j] < 2) { continue; }
-      sd[k] = j;
+      if (direct(j)) { continue; }
+      sd[k] = io[j]; // the destination: an output index, or -1 - ghost
       next[j] = so[k];
       so[k + 1] = so[k] + count[j];
       k++;
@@ -1338,8 +1399,6 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
    {
       if (dm[i] < 0) { si[next[h[i]]++] = -1 - dm[i]; } // ascending slots
    }
-   gmap_ = &g;
-   nd_ = nd;
    nslots_ = ns;
    if (scratch && scratch->Size() >= 3 * ns)
    {
@@ -1355,6 +1414,12 @@ void HyperelasticOperator::SetupLines(ElementScratch* scratch)
 
 const Vector& HyperelasticOperator::LocalInput(const Vector& u) const
 {
+   if (ex_)
+   {
+      ex_->GatherBegin(u);
+      ex_->GatherEnd();
+      return u;
+   }
    if (p_identity_) { return u; }
    fes_.GetProlongationMatrix()->Mult(u, ul_);
    return ul_;
@@ -1363,12 +1428,20 @@ const Vector& HyperelasticOperator::LocalInput(const Vector& u) const
 Vector& HyperelasticOperator::LocalOutput(Vector& y) const
 {
    y.SetSize(Height());
-   return p_identity_ ? y : yl_;
+   return (p_identity_ || ex_) ? y : yl_;
 }
 
 void HyperelasticOperator::FinishOutput(Vector& yl, Vector& y) const
 {
-   ScatterSlots(sdof_, soff_, sidx_, slots_, nd_, nslots_, yl);
+   if (ex_)
+   {
+      ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, y,
+                   &ex_->GhostSums());
+      ex_->ReduceBegin();
+      ex_->ReduceEnd(y);
+      return;
+   }
+   ScatterSlots(sdof_, soff_, sidx_, slots_, stride_, nslots_, yl, nullptr);
    if (!p_identity_) { fes_.GetProlongationMatrix()->MultTranspose(yl_, y); }
 }
 
@@ -1401,7 +1474,7 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
    {
       const Vector& xl = LocalInput(u);
       Vector& yl = LocalOutput(r);
-      const LinesMaps lm{gmap_, &dmap_, &slots_, nd_, nslots_};
+      const LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_, ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
       WithPoints(n1d_, [&](auto nc)
       {
          constexpr int N = decltype(nc)::value;
@@ -1441,12 +1514,28 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
    else { ToElements(u); }
    if (nstore == 0)
    {
-      // The displacement (its L-vector or E-vector): the tangent recomputes
-      // F and S.
-      lin_ = lines_ ? *xl : ue_;
+      // The displacement (true dofs and ghosts, the L-vector or the E-vector):
+      // the tangent recomputes F and S.
+      if (ex_)
+      {
+         // Copied into lin_ itself: written through sub-vector aliases on a
+         // device, lin_'s device copy is not marked valid, and its next Read()
+         // brings the stale host data back (hyperelasticity_test HM, job
+         // 49574179).
+         const int n = Height(), ng = 3 * ex_->NumGhosts();
+         const auto U = u.Read();
+         auto L = lin_.Write();
+         mfem::forall(n, [ = ] MFEM_HOST_DEVICE(int i) { L[i] = U[i]; });
+         if (ng > 0)
+         {
+            const auto G = ex_->Ghosts().Read();
+            mfem::forall(ng, [ = ] MFEM_HOST_DEVICE(int i) { L[n + i] = G[i]; });
+         }
+      }
+      else { lin_ = lines_ ? *xl : ue_; }
       return *tangent_;
    }
-   const LinesMaps lm{gmap_, &dmap_, &slots_, nd_, nslots_};
+   const LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_, ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
    WithPoints(n1d_, [&](auto nc)
    {
       constexpr int N = decltype(nc)::value;
@@ -1490,7 +1579,7 @@ double HyperelasticOperator::Energy(const Vector& u) const
    const Vector* xl = nullptr;
    if (lines_) { xl = &LocalInput(u); }
    else { ToElements(u); }
-   const LinesMaps lm{gmap_, &dmap_, &slots_, nd_, nslots_};
+   const LinesMaps lm{gmap_, &dmap_, &slots_, stride_, nslots_, ex_ ? &ex_->Ghosts() : nullptr, lin_ghosts_};
    WithPoints(n1d_, [&](auto nc)
    {
       constexpr int N = decltype(nc)::value;

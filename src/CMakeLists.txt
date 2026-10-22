@@ -27,6 +27,7 @@ add_library(incns STATIC
   operators/stokes_operator.cpp
   operators/collocated_mass.cpp
   operators/element_scratch.cpp
+  operators/true_dof_exchange.cpp
   operators/pa_operator.cpp
   operators/convection.cpp
   operators/directional_do_nothing.cpp
@@ -99,7 +100,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # points and the rotation-number statistics; operators/subgrid_stress.cpp --
 # the LES subgrid stress at the quadrature points and its contraction with
 # the test functions; solid/hyperelastic_operator.cpp -- the hyperelastic
-# residual, energy and tangent kernels; util/device_sync.cpp -- no kernel,
+# residual, energy and tangent kernels; operators/true_dof_exchange.cpp -- the
+# shared dofs' pack and accumulate; util/device_sync.cpp -- no kernel,
 # but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
@@ -131,6 +133,7 @@ if(USE_CUDA)
                               time/oifs_convection.cpp
                               precond/rotational_schur.cpp
                               solid/hyperelastic_operator.cpp
+                              operators/true_dof_exchange.cpp
                               util/device_sync.cpp
                               PROPERTIES LANGUAGE CUDA)
   target_link_libraries(incns PUBLIC CUDA::cudart)
