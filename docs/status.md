@@ -9,6 +9,24 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**FSI stage F4, part 1: Robin-Neumann, and Dirichlet-Neumann + IQN-ILS by default
+(2026-10-22, branch `claude/project-thread-xnsz2c` after PR #14 merged; human: "Ya merge
+and start F4", then the default on a decision card).** A fluid Robin condition
+(sigma_f n + alpha u = tau + alpha w; `BoundaryConditions::AddRobin`, a Robin block in
+`StokesOperator`, `StokesTimeIntegrator::SetBoundaryTraction`; test `robin_test` R1-R3)
+and `fsi.coupling: robin_neumann | dirichlet_neumann` ([fsi.md](fsi.md) §2). Robin-Neumann
+iterates on the interface traction (on d, the load was hidden state and IQN-ILS
+stalled); alpha_f = rho_s min(h, c_P dt) / dt face by face, h the solid's thickness
+behind the face (`fsi.alpha_fluid` / `fsi.structure_thickness` override). It reaches
+Dirichlet-Neumann's coupled steps to 1e-6 (`fsi_test` F6) but is slower on the two-sided
+flag: FSI1 coarse to t = 15, 6.6 subiterations per step against 4.4, each ~3x costlier,
+the same answer; solids4foam reports the same (fsi.md). Aitken fails FSI1's first step
+under both, hence the defaults `dirichlet_neumann` + `iqn_ils`. `fsi_test` F5 (static
+solid) now solves the flow to 1e-12: the static solid amplifies the flow's error ~1e5 and
+the test had passed on main at np 2 only by luck. Cloud scratch build, CPU, np 1/2/4; not
+on a GPU. **Next:** Neumann-Dirichlet and Robin-Robin (the solid's interface reaction and
+a solid Robin term), then FSI1 in every condition, FSI2/FSI3.
+
 **FSI stage F3, the coupling framework (2026-10-22, branch
 `claude/project-thread-xnsz2c` after PR #13 merged; human: "Ya merge once it passes and
 then do the coupling").** Partitioned Dirichlet-Neumann coupling of the ALE flow and the
