@@ -74,11 +74,13 @@ and per-step history.
 dynamic (generalized-alpha or BDF), plane strain or plane stress
 ([docs/elasticity.md](docs/elasticity.md)).
 
-**Mesh motion:** a pseudo-solid mesh deformation with Jacobian stiffening, the first piece
-of an ALE formulation toward fluid-structure interaction. It is a library feature for now,
-with no deck keys ([docs/mesh_motion.md](docs/mesh_motion.md)); the ALE fluid and a
-hyperelastic solid ([docs/design/hyperelasticity_spec.md](docs/design/hyperelasticity_spec.md))
-come next.
+**Moving meshes and fluid-structure interaction:** a pseudo-solid mesh deformation with
+Jacobian stiffening (`equation: mesh_motion`, [docs/mesh_motion.md](docs/mesh_motion.md)),
+the ALE fluid on a mesh moved by prescribed boundary motion
+([docs/ale_fluid.md](docs/ale_fluid.md)), and the flow coupled with the linear solid by
+partitioned subiterations in every step, with Aitken or IQN-ILS acceleration (section `fsi`,
+[docs/fsi.md](docs/fsi.md)). The Robin interface conditions and a hyperelastic solid
+([docs/design/hyperelasticity_spec.md](docs/design/hyperelasticity_spec.md)) come next.
 
 **Running it:** MPI-parallel on CPUs and NVIDIA GPUs (CUDA). Cases are YAML decks, Python
 scripts (module `incns`: `run_deck`, `Parameters.from_dict`, or step a `Case` yourself) or

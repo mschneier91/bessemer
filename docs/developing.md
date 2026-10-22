@@ -161,6 +161,11 @@ src/
                prescribed boundary displacements, det F and quality, ParaView),
                mesh_convection (the ALE fluid's mesh velocity on the velocity space
                and its explicit convection C(w)u; docs/ale_fluid.md)
+  fsi/         fsi_parameters (section fsi), interface_transfer (point-search
+               interpolation between the fluid's and the solid's reference
+               meshes), interface_accelerator (constant, dynamic Aitken,
+               IQN-ILS), fsi_case (partitioned Dirichlet-Neumann coupling,
+               the traction from the momentum residual; docs/fsi.md)
   util/        profiler (INCNS_PROFILE), device, json (run summaries)
   exact/       tgv2d.hpp
 apps/          run_case (YAML driver), taylor_green, dfg_cylinder (DFG 2D-1/2D-2/2D-3),

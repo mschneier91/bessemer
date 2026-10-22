@@ -1,4 +1,4 @@
-# Turek & Hron: cylinder with a flag (CFD1–3)
+# Turek & Hron: cylinder with a flag (CFD1–3, FSI1)
 
 The fluid tests of the Turek & Hron (2006) FSI benchmark, with the flag rigid:
 the first step toward FSI1–3 (docs/ale_fluid.md, "Next"). A channel 2.5 × 0.41,
@@ -58,3 +58,36 @@ it is ±0.4) stay where they were: what is left there is not this mesh family's 
   the reference has −7.2·10⁻³ (the geometric effect a small-strain model has not).
   CSM1–3 proper need the St. Venant-Kirchhoff solid.
 - Not run on a GPU.
+
+## FSI1
+
+The flag elastic (`fsi1.yaml`, [docs/fsi.md](../../docs/fsi.md)): the CFD1 flow
+coupled with the flag of FSI1 (ρ_s = ρ_f = 1000, ν_s = 0.4, μ_s = 0.5·10⁶), steady;
+Dirichlet-Neumann subiterations with IQN-ILS (two steps reused) to 10⁻⁴ at every
+step, the flag solved statically, the **linear** solid (Turek & Hron's is St.
+Venant-Kirchhoff). Reference: drag 14.295, lift 0.7638, tip (point A) displacement
+u_x 2.270·10⁻⁵, u_y 8.209·10⁻⁴. Q4/Q3 fluid, Q4 solid, IMEX, Δt 0.01 to t = 15.
+
+| Mesh | Elements (fluid / solid) | Subiterations per step | Wall | Drag | Lift | u_x(A) | u_y(A) |
+|---|---|---|---|---|---|---|---|
+| coarse | 314 / 22 | 4.4 (≤ 40) | 7.3 min | 14.338 (+0.30 %) | 0.7602 (−0.48 %) | 2.418·10⁻⁵ (+6.5 %) | 8.204·10⁻⁴ (−0.06 %) |
+| `level: 1` | 1,256 / 88 | 4.1 (≤ 48) | 32 min | 14.311 (+0.11 %) | 0.7600 (−0.50 %) | 2.390·10⁻⁵ (+5.3 %) | 8.264·10⁻⁴ (+0.67 %) |
+
+Cloud scratch build, CPU, np 4, 2026-10-22. What the errors are:
+
+- **The march must run past t ≈ 10.** The flag settles slowly after the inflow ramp
+  (t ≤ 2): u_y was 4.0 % short at t = 5 (the first version of this deck stopped there,
+  lift −2.4 %), 0.2 % at t = 8 and steady to 0.05 % from t = 10 (coarse mesh).
+- **u_x is the linear solid's.** Bending shortens the flag by ½∫(w′)² ds ≈
+  0.571 u_y²/L for its deflection shape, 1.1·10⁻⁶ = 4.9 % of the reference u_x, which a
+  small-strain model does not have; after it the u_x error is +1.6 % (coarse) and
+  +0.4 % (level 1).
+- **Not the solid's mesh or the coupling tolerance.** The flag under CSM1's load moves
+  u_y by under 0.03 % from 8 × 2 Q4 elements to 32 × 8 Q4 or Q6; `fsi.rtol` 10⁻⁴ and
+  10⁻⁶ give the same digits (and 10⁻⁴ a third of the subiterations).
+- The lift and u_y move together (the deflected flag lowers the lift, about −430 per
+  metre of u_y in the reference values), so the level-1 run's higher u_y explains most of
+  its lower lift. The remaining 0.5–0.7 % is not separated: the linear solid's missing
+  stress stiffening (its axial tension, about 2.6 N, would lower u_y by of order 1 %:
+  an estimate), the traction applied on the undeformed interface, the fluid mesh.
+  The SVK solid will tell.

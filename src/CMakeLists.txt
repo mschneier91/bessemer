@@ -77,6 +77,9 @@ add_library(incns STATIC
   ale/mesh_motion.cpp
   ale/mesh_convection.cpp
   ale/mesh_motion_case.cpp
+  fsi/interface_accelerator.cpp
+  fsi/interface_transfer.cpp
+  fsi/fsi_case.cpp
   solver/case.cpp)
 
 # Public: headers are included as "mesh/...", "spaces/..." from this root, and

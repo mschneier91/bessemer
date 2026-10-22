@@ -9,6 +9,33 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**FSI stage F3, the coupling framework (2026-10-22, branch
+`claude/project-thread-xnsz2c` after PR #13 merged; human: "Ya merge once it passes and
+then do the coupling").** Partitioned Dirichlet-Neumann coupling of the ALE flow and the
+linear solid, iterated in every step ([fsi.md](fsi.md)): deck section `fsi`, boundary
+type `interface` (a wall moving with the solid, u = w), the solid on the geometry's solid
+part (`cylinder_channel` with a flag only, so far). New: `Case::TrialStep / UndoTrialStep
+/ CommitTrialStep` and `StokesTimeIntegrator::UndoStep`, `LinearElasticity::ExportState /
+ImportState`, `Case::InterfaceDisplacement`, `Case::SetSummaryHook`, `Case::FinishRun`;
+`src/fsi/`: `InterfaceTransfer` (point-search interpolation between the reference
+meshes, exact on the matching Turek-Hron interface), `InterfaceAccelerator` (constant,
+dynamic Aitken (the default, human 2026-10-21), IQN-ILS with `reuse`), `FsiCase` (the
+traction from the momentum residual through the interface mass matrix, rho_f times the
+fluid's force exactly). On `fsi_test`'s impulsive start (rho_s = rho_f) IQN-ILS took 27
+subiterations in two steps against Aitken's 54-62; the constant relaxation at 0.5
+diverges. The flow solver's `rtol` must sit well below `fsi.rtol` (else the residual
+stalls at the solver's noise and IQN-ILS wanders). Tests `fsi_test` F1-F5 and
+`run_case_fsi_flag` (`cases/fsi_flag.yaml`), np 1/2/4, cloud scratch build, CPU; not on
+a GPU. Not yet: Robin conditions and Neumann-Dirichlet (F4), gslib's map, restarts, the
+SVK solid (F1, the maintainer's). FSI1 (`benchmarks/turek_hron/fsi1.yaml`, Q4, linear solid,
+np 4, to t = 15): coarse mesh (7 min) drag +0.30 %, lift -0.48 %, tip u_y -0.06 %, u_x
++6.5 %; `level: 1` (32 min) +0.11 %, -0.50 %, +0.67 %, +5.3 %; 4.1-4.4 subiterations per
+step. The first version stopped at t = 5, before the flag had settled (u_y -4.0 %, lift
+-2.4 %; human 2026-10-22: "explore the error first"); u_x's error is mostly the linear
+solid's missing bending shortening (+4.9 %); solid mesh and `fsi.rtol` ruled out
+(benchmarks/turek_hron/README.md). **Next:** F4 (Robin-Neumann
+default, Robin-Robin, Neumann-Dirichlet), then FSI2/FSI3.
+
 **ALE stage 3: the solvers refreshed in place after a move (2026-10-22, branch
 `claude/project-thread-xnsz2c` after PR #11 merged; human: "Ok merge please and go to
 stage 3").** `mesh_motion.refresh: in_place | rebuild` (case default in_place; the

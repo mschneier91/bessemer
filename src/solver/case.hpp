@@ -21,9 +21,13 @@
 #include "spaces/mixed_spaces.hpp"
 #include "time/cfl.hpp"
 #include "time/time_integrator.hpp"
+#include "util/json.hpp"
 #include "mfem.hpp"
 
+#include <functional>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace incns
@@ -160,8 +164,46 @@ public:
     */
    void WriteProfile(const std::string& path) const;
 
+   /// Adds sections and reference values to WriteSummary(): called on every
+   /// rank (it may be collective) with the summary and the (key, value)
+   /// pairs compared with the deck's reference values.
+   using SummaryHook = std::function<void(Json&,
+                                          std::vector<std::pair<std::string, double>>&)>;
+
+   /// @param hook The summary hook (SummaryHook; FsiCase's coupling section).
+   void SetSummaryHook(SummaryHook hook) { summary_hook_ = std::move(hook); }
+
+   /// After a march driven from outside Run() (Step()s, trial steps):
+   /// flush the history and write what Run() writes at its end.
+   void FinishRun();
+
    /// Advance one accepted step (writes output on the configured interval).
    void Step();
+
+   /**
+    * @brief Make the next step as a trial (a coupled FSI step's
+    *        subiteration): the integrator steps, and nothing is recorded or
+    *        written until CommitTrialStep(). UndoTrialStep() takes it back.
+    */
+   void TrialStep();
+
+   /// Take back the trial step: the mesh and the march return to before it.
+   void UndoTrialStep();
+
+   /// Accept the trial step: record it, log, write output and checkpoints as
+   /// Step() does.
+   void CommitTrialStep();
+
+   /**
+    * @brief The displacement of the boundary groups of type `interface`, on
+    *        the mesh motion's space (the reference mesh): the coupling sets
+    *        it before each trial step. Null without such groups.
+    * @return The field, or null.
+    */
+   mfem::ParGridFunction* InterfaceDisplacement()
+   {
+      return interface_disp_.get();
+   }
 
    /// @return Current time (nondimensional, t*).
    double Time() const;
@@ -364,7 +406,20 @@ private:
    /// The diagnostics' assembled forms; rebuilt when the mesh changes.
    std::unique_ptr<FlowDiagnostics> flow_diag_;
    int cycle_ = 0; ///< Accepted-step counter for output.
+   /// The march before a trial step (TrialStep()).
+   IntegratorState trial_before_;
+   double trial_t_prev_ = 0.0; ///< Time before the trial step.
+   double trial_wall_ = 0.0;   ///< Wall time of the trial step.
+   bool in_trial_ = false;     ///< Whether a trial step awaits its verdict.
+   /// The interface groups' displacement (InterfaceDisplacement()).
+   std::unique_ptr<mfem::ParGridFunction> interface_disp_;
+   /// Its coefficient, the interface groups' mesh-motion data.
+   std::unique_ptr<mfem::VectorGridFunctionCoefficient> interface_coeff_;
+   /// Record, log and write after a step (Step(), CommitTrialStep()).
+   /// @param t_prev Time before the step. @param step_wall Its wall time.
+   void AfterStep(double t_prev, double step_wall);
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
+   SummaryHook summary_hook_; ///< See SetSummaryHook().
    bool memory_hint_done_ = false; ///< memory.max_dofs considered (once).
    std::vector<AdaptStats> adapt_log_; ///< AMR events and initial passes.
    /// Convective CFL estimator on the current mesh (time.cfl_max, NSE only).

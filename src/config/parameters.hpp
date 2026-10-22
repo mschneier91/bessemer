@@ -17,6 +17,7 @@
 #include "post/body_force.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/rotational_schur.hpp"
+#include "fsi/fsi_parameters.hpp"
 #include "solid/elasticity_parameters.hpp"
 #include "solver/outer_solver.hpp"
 #include "solver/solution_projection.hpp"
@@ -77,7 +78,10 @@ enum class BcType
    /// expression of x, y, z, t (`expression`).
    Displacement,
    Traction,          ///< Solid: a constant traction sigma n (`value`).
-   Free               ///< Solid: traction-free.
+   Free,              ///< Solid: traction-free.
+   /// A flow's fluid-solid interface (section fsi): a no-slip wall that
+   /// moves with the solid (u = w).
+   Interface
 };
 
 /// Spatial shape of a deck-given boundary velocity (BcType::Velocity).
@@ -280,6 +284,9 @@ struct ReferenceValues
    double t_cl_max = std::nan("");    ///< Its time.
    double pressure_difference = std::nan(""); ///< The probe's p1 - p2.
    double re_tau = std::nan(""); ///< Channel: the achieved Re_tau.
+   /// FSI: the solid probe's displacement (x, y), at the end of the run.
+   double displacement_x = std::nan("");
+   double displacement_y = std::nan(""); ///< See displacement_x.
 };
 
 /**
@@ -567,6 +574,9 @@ struct Parameters
 
    /// The solid of an equation: linear_elasticity case (deck section `solid`).
    ElasticityParameters solid;
+   /// Fluid-structure interaction (deck section `fsi`): the flow coupled
+   /// with the solid of section `solid`.
+   FsiParameters fsi;
    /// The mesh deformation of equation mesh_motion (deck `mesh_motion`).
    MeshMotionParameters mesh_motion;
 

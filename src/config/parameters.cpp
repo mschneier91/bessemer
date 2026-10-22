@@ -772,12 +772,13 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          else if (ty == "displacement") { s.type = BcType::Displacement; }
          else if (ty == "traction") { s.type = BcType::Traction; }
          else if (ty == "free") { s.type = BcType::Free; }
+         else if (ty == "interface") { s.type = BcType::Interface; }
          else
          {
             MFEM_VERIFY(ty == "velocity_dirichlet",
                         "parameters: unknown boundary type '" << ty
-                        << "' (no_slip|outflow|velocity|velocity_dirichlet; "
-                        "solid: fixed|displacement|traction|free)");
+                        << "' (no_slip|outflow|velocity|velocity_dirichlet|"
+                        "interface; solid: fixed|displacement|traction|free)");
             s.type = BcType::VelocityDirichlet;
          }
          const bool by_expression = s.type == BcType::Displacement &&
@@ -932,7 +933,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    }
    for (const BcSpec& s : p.boundary_conditions)
    {
-      p.moving_mesh = p.moving_mesh || !s.motion.empty();
+      p.moving_mesh = p.moving_mesh || !s.motion.empty() ||
+                      s.type == BcType::Interface;
    }
 
    const DeckSection output = r.Section(root, "output",
@@ -1082,6 +1084,11 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "The pressure-difference probe's value.");
    r.Read(ref, "re_tau", rv.re_tau,
           "Channel: Re_tau from the time-averaged wall shear stress.");
+   r.Read(ref, "displacement_x", rv.displacement_x,
+          "FSI: the x displacement of the solid's probe (solid.probe) at the "
+          "end of the run.");
+   r.Read(ref, "displacement_y", rv.displacement_y,
+          "FSI: its y displacement.");
 
    ElasticityParameters& sp = p.solid;
    const DeckSection solid = r.Section(root, "solid",
@@ -1146,6 +1153,66 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Generalized-alpha spectral radius at infinite frequency, in [0, 1]: "
           "1 is the trapezoidal rule (energy-conserving, no damping), smaller "
           "values damp the unresolved high frequencies more.");
+
+   FsiParameters& fp = p.fsi;
+   const DeckSection fsi = r.Section(root, "fsi", "Fluid-structure "
+                                     "interaction (docs/fsi.md): the flow of "
+                                     "this deck, whose boundary groups of type "
+                                     "interface are the wetted surface, "
+                                     "coupled with the solid of section solid "
+                                     "on its own mesh, iterated in every time "
+                                     "step (partitioned, Dirichlet-Neumann).");
+   r.Read(fsi, "enabled", fp.enabled, "Run the coupled problem.");
+   r.Declare(fsi, "solid_fixed", "string list", "[]", "",
+             "Boundary names of the solid mesh held fixed (the clamp).");
+   if (fsi.Has("solid_fixed"))
+   {
+      fp.solid_fixed = fsi.Get("solid_fixed").as<std::vector<std::string>>();
+   }
+   r.Declare(fsi, "solid_interface", "string list", "[]", "",
+             "Boundary names of the solid mesh on the interface; empty: the "
+             "names of the fluid's interface groups.");
+   if (fsi.Has("solid_interface"))
+   {
+      fp.solid_interface =
+         fsi.Get("solid_interface").as<std::vector<std::string>>();
+   }
+   r.Read(fsi, "fluid_density", fp.fluid_density,
+          "rho_f: the traction on the solid is rho_f times the flow's "
+          "kinematic traction (the flow's pressure is p / rho_f).");
+   r.ReadEnum(fsi, "coupling", fp.coupling,
+   {{"dirichlet_neumann", FsiCoupling::DirichletNeumann}},
+   "Interface conditions: dirichlet_neumann moves the fluid's interface with "
+   "the solid (u = w there) and loads the solid with the fluid's traction.");
+   r.ReadEnum(fsi, "acceleration", fp.acceleration,
+   {
+      {"aitken", FsiAcceleration::Aitken}, {"constant", FsiAcceleration::Constant},
+      {"iqn_ils", FsiAcceleration::IqnIls}
+   },
+   "The update of the interface displacement between subiterations: dynamic "
+   "Aitken relaxation (Kuttler and Wall 2008), the constant factor "
+   "relaxation, or the interface quasi-Newton method IQN-ILS (Degroote et "
+   "al. 2009).");
+   r.Read(fsi, "print_level", fp.print_level,
+          "1: print every subiteration's residual and relaxation factor on "
+          "rank 0; 0: nothing.");
+   r.Read(fsi, "reuse", fp.reuse,
+          "IQN-ILS: earlier steps whose least-squares columns are kept.");
+   r.Read(fsi, "relaxation", fp.relaxation,
+          "The relaxation factor of the first subiteration (aitken) or of "
+          "every one (constant), in (0, 1].");
+   r.Read(fsi, "omega_max", fp.omega_max,
+          "Aitken's factor is kept within [-omega_max, omega_max].");
+   r.Read(fsi, "rtol", fp.rtol,
+          "Subiterations stop when |r| <= rtol |d| + atol, r the change of "
+          "the interface displacement d in a subiteration.");
+   r.Read(fsi, "atol", fp.atol, "Absolute part of the stopping test.");
+   r.Read(fsi, "max_iterations", fp.max_iterations,
+          "Subiterations per step; a step that does not converge in them "
+          "stops the run.");
+   r.Read(fsi, "predictor", fp.predictor,
+          "The first subiteration's interface displacement: 0 the last "
+          "step's, 1 or 2 its linear or quadratic extrapolation.");
 
    MeshMotionParameters& mm = p.mesh_motion;
    const DeckSection motion = r.Section(root, "mesh_motion",
@@ -1337,6 +1404,8 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    bool held = false;
    for (const BcSpec& s : p.boundary_conditions)
    {
+      MFEM_VERIFY(s.type != BcType::Interface || p.fsi.enabled,
+                  "parameters: boundary type interface needs fsi.enabled");
       const bool solid_type = s.type == BcType::Fixed ||
                               s.type == BcType::Displacement ||
                               s.type == BcType::Traction ||
@@ -1370,6 +1439,38 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
       MFEM_VERIFY(p.convective_form == ConvectiveForm::Convective,
                   "parameters: the rotational form on a moving mesh is not "
                   "available");
+   }
+   if (p.fsi.enabled)
+   {
+      const FsiParameters& f = p.fsi;
+      bool wetted = false;
+      for (const BcSpec& s : p.boundary_conditions)
+      {
+         wetted = wetted || s.type == BcType::Interface;
+      }
+      MFEM_VERIFY(wetted, "parameters: fsi needs a boundary group of type "
+                  "interface (the wetted surface)");
+      MFEM_VERIFY(p.equation == Equation::Stokes ||
+                  p.equation == Equation::NavierStokes,
+                  "parameters: fsi couples a flow (equation navier_stokes or "
+                  "stokes) with the solid of section solid");
+      MFEM_VERIFY(p.restart_from.empty(), "parameters: an fsi run cannot restart "
+                  "yet (the solid's state is not checkpointed)");
+      MFEM_VERIFY(p.step_control == StepControl::Fixed,
+                  "parameters: fsi takes fixed steps (time.step_control: "
+                  "fixed): the fluid and the solid step together");
+      MFEM_VERIFY(f.fluid_density > 0.0 && f.relaxation > 0.0 &&
+                  f.relaxation <= 1.0 && f.omega_max > 0.0 && f.rtol > 0.0 &&
+                  f.atol >= 0.0 && f.max_iterations >= 1 &&
+                  f.predictor >= 0 && f.predictor <= 2 && f.reuse >= 0,
+                  "parameters: bad fsi settings (fluid_density > 0, "
+                  "relaxation in (0, 1], omega_max > 0, rtol > 0, atol >= 0, "
+                  "max_iterations >= 1, predictor 0-2, reuse >= 0)");
+      const ElasticityParameters& sp = p.solid;
+      MFEM_VERIFY(sp.youngs_modulus > 0.0 && sp.poisson_ratio > -1.0 &&
+                  sp.poisson_ratio < 0.5 && sp.density > 0.0,
+                  "parameters: bad solid material (youngs_modulus > 0, "
+                  "poisson_ratio in (-1, 1/2), density > 0)");
    }
    if (motion || p.moving_mesh)
    {

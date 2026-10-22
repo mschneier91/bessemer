@@ -10,6 +10,7 @@
 // code 2).
 
 #include "ale/mesh_motion_case.hpp"
+#include "fsi/fsi_case.hpp"
 #include "bc/boundary_names.hpp"
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
@@ -107,6 +108,23 @@ int main(int argc, char* argv[])
       if (Mpi::Root())
       {
          std::cout << "run_case: mesh_motion  status="
+                   << (ok ? "ok" : "diverged") << "  summary: " << summary
+                   << std::endl;
+      }
+      return ok ? 0 : 2;
+   }
+
+   // Fluid-structure interaction: the flow and the solid of section solid,
+   // coupled in every step (fsi/fsi_case).
+   if (params.fsi.enabled)
+   {
+      incns::FsiCase fsi(mesh, params);
+      fsi.WriteSummary(summary, "running");
+      const bool ok = fsi.Run();
+      fsi.WriteSummary(summary, ok ? "ok" : "diverged");
+      if (Mpi::Root())
+      {
+         std::cout << "run_case: fsi  t=" << fsi.Fluid().Time() << "  status="
                    << (ok ? "ok" : "diverged") << "  summary: " << summary
                    << std::endl;
       }

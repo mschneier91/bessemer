@@ -1372,6 +1372,14 @@ void StokesTimeIntegrator::Step()
    }
 }
 
+void StokesTimeIntegrator::UndoStep(const IntegratorState& before)
+{
+   MFEM_VERIFY(before.completed_steps == step_count_ - 1, "time_integrator: "
+               "UndoStep() takes back one step from the state of before it");
+   RevertMesh();
+   ImportState(before);
+}
+
 void StokesTimeIntegrator::Run()
 {
    INCNS_PROFILE("time_integrator::run");

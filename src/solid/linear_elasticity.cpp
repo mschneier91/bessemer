@@ -656,6 +656,37 @@ bool LinearElasticity::Step(double dt)
    return ok;
 }
 
+LinearElasticity::State LinearElasticity::ExportState() const
+{
+   State s;
+   s.u_hist = u_hist_;
+   s.v_hist = v_hist_;
+   s.t_hist = t_hist_;
+   s.a_n = a_n_;
+   s.f_n = f_n_;
+   s.load = load_;
+   s.time = time_;
+   s.steps = steps_;
+   s.initialized = initialized_;
+   return s;
+}
+
+void LinearElasticity::ImportState(const State& s)
+{
+   MFEM_VERIFY(s.u_hist.size() == u_hist_.size() || !initialized_,
+               "linear_elasticity: the state is not this solver's");
+   u_hist_ = s.u_hist;
+   v_hist_ = s.v_hist;
+   t_hist_ = s.t_hist;
+   a_n_ = s.a_n;
+   f_n_ = s.f_n;
+   load_ = s.load;
+   time_ = s.time;
+   steps_ = s.steps;
+   initialized_ = s.initialized;
+   SyncFields();
+}
+
 double LinearElasticity::KineticEnergy() const
 {
    if (v_hist_.empty()) { return 0.0; }
