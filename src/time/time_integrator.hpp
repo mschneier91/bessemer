@@ -303,6 +303,29 @@ public:
     * @param w      The mesh velocity on the velocity space (borrowed).
     */
    void SetMeshMotion(MeshMotion& motion, MeshVelocityField& w);
+
+   /**
+    * @brief Robin boundaries (BoundaryConditions::AddRobin): a load g on
+    *        the momentum rows, added to every step's right-hand side with
+    *        alpha (w, v) on the Robin faces. The traction there is then
+    *        sigma n = g + alpha (w - u) in the residual's sense:
+    *        MomentumResidual() returns the residual without the Robin
+    *        terms, whose Robin rows are the load the boundary carries.
+    * @param g Load on the velocity true dofs (borrowed; read at each step),
+    *          or null for none.
+    */
+   void SetBoundaryLoad(const mfem::Vector* g) { boundary_load_ = g; }
+
+   /**
+    * @brief SetBoundaryLoad() as a traction field: the load is (g, v) on the
+    *        Robin faces of the current mesh, assembled at each step (so it
+    *        follows the moving mesh; the coupling's Robin data).
+    * @param g Traction (kinematic) as a coefficient (borrowed), or null.
+    */
+   void SetBoundaryTraction(mfem::VectorCoefficient* g)
+   {
+      boundary_traction_ = g;
+   }
    /**
     * @brief On a closed domain (no outflow), abort at a move that changes the
     *        mesh's volume by more than 1e-6 relative.
@@ -665,6 +688,13 @@ private:
     *              step's own order).
     */
    void AddMeshConvection(double t_new, mfem::Vector& b, int ext = 0);
+   /**
+    * @brief Robin boundaries: b += alpha (w, v) on the Robin faces + the
+    *        load of SetBoundaryLoad(); kept for MomentumResidual().
+    * @param t_new Time of the step's new state.
+    * @param b     Momentum right-hand side (added to).
+    */
+   void AddRobinLoad(double t_new, mfem::Vector& b);
    /// The volume of the current mesh (collective).
    double MeshVolume() const;
    /**
@@ -789,6 +819,10 @@ private:
    /// ALE: C(w) for the current mesh and w (rebuilt after each move).
    std::unique_ptr<MeshConvection> mesh_conv_;
    mfem::Vector ale_ustar_; ///< ALE: the extrapolated velocity u*.
+   const mfem::Vector* boundary_load_ = nullptr; ///< Robin load (borrowed).
+   /// Robin traction (borrowed; SetBoundaryTraction()).
+   mfem::VectorCoefficient* boundary_traction_ = nullptr;
+   mfem::Vector robin_g_; ///< The last step's Robin right-hand side.
    mfem::Vector ale_y_;     ///< ALE: C(w) u*.
    bool mesh_moved_ = false; ///< ALE: the current attempt moved the mesh.
    /// ALE on a closed domain (pressure null space) with u = w on the moving

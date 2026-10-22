@@ -119,6 +119,48 @@ public:
    void AddOutflow(int attr);
 
    /**
+    * @brief Mark a boundary attribute as a Robin boundary: the traction is
+    *        sigma(u, p) n = g + alpha (w - u), w the given velocity and g a
+    *        load the caller sets (StokesTimeIntegrator::SetBoundaryLoad).
+    *        The momentum block gets alpha (u, v) on these faces
+    *        (StokesOperator), the right-hand side alpha (w, v) + g. The
+    *        interface of a Robin-Neumann FSI coupling (docs/fsi.md).
+    * @param attr  Boundary attribute (1-based, must exist in the mesh).
+    * @param alpha Robin coefficient (kinematic: per unit density), > 0;
+    *              the same on every Robin attribute.
+    * @param w     The Robin data velocity (borrowed; must outlive this).
+    */
+   void AddRobin(int attr, double alpha, mfem::VectorCoefficient& w);
+
+   /**
+    * @brief AddRobin() with a coefficient that varies along the boundary.
+    * @param attr      Boundary attribute.
+    * @param alpha     Robin coefficient, > 0 on the faces (borrowed; the same
+    *                  object on every Robin attribute).
+    * @param alpha_max An upper bound of alpha, > 0 (the LOR preconditioner's
+    *                  constant stand-in: a coefficient of the high-order
+    *                  mesh cannot be evaluated on the LOR mesh).
+    * @param w         The Robin data velocity (borrowed).
+    */
+   void AddRobin(int attr, mfem::Coefficient& alpha, double alpha_max,
+                 mfem::VectorCoefficient& w);
+
+   /// @return Whether any attribute is a Robin boundary.
+   bool HasRobin() const { return robin_alpha_ != nullptr; }
+
+   /// @return The Robin coefficient (null without Robin boundaries).
+   mfem::Coefficient* RobinAlpha() const { return robin_alpha_; }
+
+   /// @return An upper bound of RobinAlpha() (0 without Robin boundaries).
+   double RobinAlphaMax() const { return robin_alpha_max_; }
+
+   /// @return Per-attribute Robin flags.
+   const mfem::Array<int>& RobinMarker() const { return robin_marker_; }
+
+   /// @return The Robin data velocity (null without Robin boundaries).
+   mfem::VectorCoefficient* RobinVelocity() const { return robin_w_; }
+
+   /**
     * @brief Whether every Dirichlet coefficient is a constant
     *        (mfem::VectorConstantCoefficient, e.g. no-slip): data that does not
     *        depend on time or position. Deck `velocity` conditions are
@@ -249,6 +291,12 @@ private:
    int max_attr_;                      ///< Largest boundary attribute in the mesh.
    mfem::Array<int> dirichlet_marker_; ///< Per-attribute Dirichlet flags.
    mfem::Array<int> outflow_marker_;   ///< Per-attribute outflow flags.
+   mfem::Array<int> robin_marker_;     ///< Per-attribute Robin flags.
+   mfem::Coefficient* robin_alpha_ = nullptr; ///< Robin coefficient.
+   double robin_alpha_max_ = 0.0; ///< Its upper bound.
+   /// A constant coefficient given as a number (AddRobin(int, double, ...)).
+   std::unique_ptr<mfem::ConstantCoefficient> robin_constant_;
+   mfem::VectorCoefficient* robin_w_ = nullptr; ///< Robin data velocity.
    /// Per-attribute "owns real boundary faces" flags. MakePeriodic keeps the
    /// base mesh's boundary elements but their faces are topologically interior,
    /// so attributes are classified by face topology (globally reduced); BCs on

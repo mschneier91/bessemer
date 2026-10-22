@@ -117,7 +117,9 @@ std::vector<std::string> DeckBoundaryConditions::CoverageProblems() const
 void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
                                    const FieldLookup& field,
                                    bool require_coverage,
-                                   VectorCoefficient* mesh_velocity)
+                                   VectorCoefficient* mesh_velocity,
+                                   Coefficient* robin_alpha,
+                                   double robin_alpha_max)
 {
    if (require_coverage)
    {
@@ -152,10 +154,29 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
             for (int a : attrs_[g]) { bc.AddNoSlip(a); }
             break;
          case BcType::Interface:
-            // The wetted surface moves with the solid: u = w.
+            // The wetted surface moves with the solid: u = w, imposed
+            // (Dirichlet-Neumann) or weakly through the Robin condition
+            // (Robin-Neumann; the time integrator's boundary load carries the
+            // traction).
             MFEM_VERIFY(mesh_velocity, "boundary_conditions: the interface "
                         "group " << g << " needs the mesh velocity (an fsi "
                         "case)");
+            if (params_.fsi.enabled &&
+                params_.fsi.coupling == FsiCoupling::RobinNeumann)
+            {
+               for (int a : attrs_[g])
+               {
+                  if (robin_alpha)
+                  {
+                     bc.AddRobin(a, *robin_alpha, robin_alpha_max, *mesh_velocity);
+                  }
+                  else
+                  {
+                     bc.AddRobin(a, params_.FsiFluidRobin(), *mesh_velocity);
+                  }
+               }
+               break;
+            }
             for (int a : attrs_[g]) { bc.AddVelocityDirichlet(a, *mesh_velocity); }
             break;
          case BcType::VelocityDirichlet:

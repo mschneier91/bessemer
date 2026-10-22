@@ -1193,7 +1193,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                                      "interface are the wetted surface, "
                                      "coupled with the solid of section solid "
                                      "on its own mesh, iterated in every time "
-                                     "step (partitioned, Dirichlet-Neumann).");
+                                     "step (partitioned: fsi.coupling).");
    r.Read(fsi, "enabled", fp.enabled, "Run the coupled problem.");
    r.Declare(fsi, "solid_fixed", "string list", "[]", "",
              "Boundary names of the solid mesh held fixed (the clamp).");
@@ -1213,9 +1213,25 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "rho_f: the traction on the solid is rho_f times the flow's "
           "kinematic traction (the flow's pressure is p / rho_f).");
    r.ReadEnum(fsi, "coupling", fp.coupling,
-   {{"dirichlet_neumann", FsiCoupling::DirichletNeumann}},
-   "Interface conditions: dirichlet_neumann moves the fluid's interface with "
-   "the solid (u = w there) and loads the solid with the fluid's traction.");
+   {
+      {"robin_neumann", FsiCoupling::RobinNeumann},
+      {"dirichlet_neumann", FsiCoupling::DirichletNeumann}
+   },
+   "Interface conditions. Both move the fluid's mesh with the solid's "
+   "interface and load the solid with the fluid's traction. "
+   "dirichlet_neumann imposes u = w on the fluid's interface; robin_neumann "
+   "imposes sigma_f n + alpha_f u = the last subiteration's traction + "
+   "alpha_f w and iterates on the traction (Badia, Nobile and Vergara 2008); "
+   "it converges to the same solution, but slowly on a wall wetted on both "
+   "sides (its squeeze mode; docs/fsi.md).");
+   r.Read(fsi, "alpha_fluid", fp.alpha_fluid,
+          "robin_neumann: the fluid's Robin coefficient (a density times a "
+          "velocity, as rho_s H / dt); <= 0: rho_s h / dt face by face, h "
+          "the solid's thickness behind the face (capped at the P-wave "
+          "speed times dt), or structure_thickness when that is > 0.");
+   r.Read(fsi, "structure_thickness", fp.structure_thickness,
+          "> 0: one alpha_fluid = rho_s H / dt with this H on the whole "
+          "interface instead of the face-by-face thickness.");
    r.ReadEnum(fsi, "acceleration", fp.acceleration,
    {
       {"aitken", FsiAcceleration::Aitken}, {"constant", FsiAcceleration::Constant},
@@ -1224,7 +1240,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "The update of the interface displacement between subiterations: dynamic "
    "Aitken relaxation (Kuttler and Wall 2008), the constant factor "
    "relaxation, or the interface quasi-Newton method IQN-ILS (Degroote et "
-   "al. 2009).");
+   "al. 2009; the default: Aitken fails Turek-Hron FSI1's first step). "
+   "robin_neumann relaxes the interface traction instead.");
    r.Read(fsi, "print_level", fp.print_level,
           "1: print every subiteration's residual and relaxation factor on "
           "rank 0; 0: nothing.");

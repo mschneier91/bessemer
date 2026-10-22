@@ -89,6 +89,15 @@ struct StokesOperatorOptions
    const mfem::ParGridFunction* lagged_velocity = nullptr;
    /// The rotation term's alpha: 1 for BDF, 1/2 for the trapezoidal starter.
    double rotation_alpha = 1.0;
+   /// Robin boundaries: alpha (u, v) on the faces whose attributes this
+   /// marks is added to the momentum block (BoundaryConditions::AddRobin).
+   /// Null (the default): none. Copied.
+   const mfem::Array<int>* robin_marker = nullptr;
+   /// The Robin coefficient alpha (kinematic), > 0 on the Robin faces with
+   /// robin_marker (borrowed: must outlive the operator).
+   mfem::Coefficient* robin_alpha = nullptr;
+   /// An upper bound of robin_alpha: the LOR source's constant stand-in.
+   double robin_alpha_max = 0.0;
    /// Include the rotation term in the LOR source (needs lagged_velocity and
    /// a non-frozen lor_momentum): w is copied to the LOR space by true dofs
    /// and the LOR operator re-assembled by AssembleLorMomentum() each step.
@@ -275,6 +284,14 @@ public:
    mfem::Operator& MomentumUnconstrained() { return *Aunc_.Ptr(); }
 
    /**
+    * @brief The Robin term alpha (u, v) on the Robin faces, assembled on
+    *        true dofs (part of the momentum block; rebuilt by
+    *        UpdateGeometry()).
+    * @return The matrix, or null without Robin boundaries.
+    */
+   const mfem::HypreParMatrix* Robin() const { return robin_.get(); }
+
+   /**
     * @brief The divergence block B (velocity -> pressure true dofs) with NO
     *        Dirichlet columns eliminated; MultTranspose applies B^T.
     * @return Unconstrained rectangular operator.
@@ -390,6 +407,11 @@ private:
    /// The non-frozen LOR source, from the current mass_coeff_ (nothing
    /// otherwise).
    void BuildLorSource();
+   /// Assemble the Robin term and its diagonal on the current mesh.
+   void AssembleRobin();
+   /// Add the Robin face integrator to a LOR source form.
+   /// @param form The LOR form.
+   void AddRobinIntegrator(mfem::ParBilinearForm& form);
    /// Assemble rest_diag_ from the current momentum form's diffusion and
    /// grad-div integrators (no assembly of their data: a proxy form).
    void AssembleRestDiagonal(mfem::BilinearFormIntegrator& diffusion);
@@ -489,6 +511,14 @@ private:
    /// diagonal shift.
    mfem::OperatorPtr Arest_;
    mfem::OperatorPtr Aunc_; ///< Momentum block, unconstrained (reactions).
+   /// The momentum block without the Robin term, under Aunc_ (empty
+   /// without Robin boundaries).
+   mfem::OperatorPtr Abase_;
+   mfem::Array<int> robin_marker_; ///< Robin attributes (empty: none).
+   /// The Robin coefficient's bound, for the LOR source.
+   mfem::ConstantCoefficient robin_lor_alpha_;
+   std::unique_ptr<mfem::HypreParMatrix> robin_; ///< See Robin().
+   mfem::Vector robin_diag_; ///< Its diagonal (true dofs).
    mfem::OperatorPtr Bunc_; ///< Divergence block, unconstrained.
    /// Rotation-term PA form (lagged velocity only); Delta-t independent, so
    /// built once -- the vorticity is updated in place every step.

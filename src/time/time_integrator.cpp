@@ -216,6 +216,8 @@ void StokesTimeIntegrator::RequireConstantVolume()
    MFEM_VERIFY(motion_, "time_integrator: RequireConstantVolume() after "
                "SetMeshMotion()");
    closed_volume_ = bc_.PressureNullspaceExists() ? MeshVolume() : -1.0;
+   MFEM_VERIFY(!bc_.HasRobin() || !opts_.adaptive, "time_integrator: Robin "
+               "boundaries with error-controlled steps are not supported");
 }
 
 void StokesTimeIntegrator::CopyGuessState(const SolverGuessState& from,
@@ -385,6 +387,36 @@ void StokesTimeIntegrator::RefreshSolversInPlace(bool count)
    }
 }
 
+void StokesTimeIntegrator::AddRobinLoad(double t_new, Vector& b)
+{
+   if (!bc_.HasRobin()) { return; }
+   INCNS_PROFILE("time_integrator::robin_load");
+   // alpha (w, v) on the Robin faces of the current mesh.
+   VectorCoefficient& w = *bc_.RobinVelocity();
+   w.SetTime(t_new);
+   ScalarVectorProductCoefficient aw(*bc_.RobinAlpha(), w);
+   ParLinearForm lf(&spaces_.Velocity());
+   Array<int> marker(bc_.RobinMarker());
+   lf.AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(aw), marker);
+   if (boundary_traction_)
+   {
+      boundary_traction_->SetTime(t_new);
+      lf.AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(*boundary_traction_),
+                               marker);
+   }
+   lf.Assemble();
+   robin_g_.SetSize(b.Size());
+   robin_g_.UseDevice(true);
+   lf.ParallelAssemble(robin_g_);
+   if (boundary_load_)
+   {
+      MFEM_VERIFY(boundary_load_->Size() == b.Size(), "time_integrator: the "
+                  "boundary load's size");
+      robin_g_ += *boundary_load_;
+   }
+   b += robin_g_;
+}
+
 void StokesTimeIntegrator::AddMeshConvection(double t_new, Vector& b, int ext)
 {
    if (!motion_) { return; }
@@ -513,6 +545,13 @@ void StokesTimeIntegrator::MomentumResidual(Vector& r) const
    op.DivergenceUnconstrained().MultTranspose(p_true, tmp);
    r -= tmp;                                             // - B^T p
    r -= last_b_;                                         // - b
+   if (op.Robin())
+   {
+      // Without the Robin terms: - alpha M_G u + (alpha M_G w + g).
+      op.Robin()->Mult(u_true, tmp);
+      r -= tmp;
+      r += robin_g_;
+   }
 }
 
 void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
@@ -1188,6 +1227,7 @@ bool StokesTimeIntegrator::StepStartup()
       }
    }
 
+   AddRobinLoad(t_new, b);
    if (opts_.keep_rhs) { last_b_ = b; } // raw RHS, for MomentumResidual
    if (opts_.retry_on_failure) { p_saved_ = p_; }
    CapKrylovDim(*solver);
@@ -1228,6 +1268,7 @@ bool StokesTimeIntegrator::StepFixed()
       UpdateLaggedVelocity(t_new);
       solver.UpdateRotation();
    }
+   AddRobinLoad(t_new, b);
    if (opts_.keep_rhs) { last_b_ = b; } // raw RHS, for MomentumResidual
    if (opts_.retry_on_failure) { p_saved_ = p_; }
    CapKrylovDim(solver);
