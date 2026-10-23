@@ -1,6 +1,7 @@
 #include "solid/linear_elasticity.hpp"
 
 #include "solid/element_scaled_coefficient.hpp"
+#include "solid/hyperelastic_operator.hpp"
 
 #include "precond/hypre_device.hpp"
 #include "time/multistep_coeffs.hpp"
@@ -15,23 +16,33 @@ namespace incns
 using namespace mfem;
 
 /**
- * @brief y = P^T (c_K K + c_M M) P x on true dofs, from the two partially
- *        assembled forms (no assembled matrix, no boundary conditions).
+ * @brief y = (c_K K + c_M M) x on true dofs: K on true dofs itself, or P^T K
+ *        P from MFEM's partially assembled form; P^T M P from the mass form
+ *        (no assembled matrix, no boundary conditions).
  */
 class LinearElasticity::TrueOperator : public Operator
 {
 public:
    /**
     * @param fes The displacement space.
-    * @param k   The stiffness form (borrowed).
+    * @param k   The stiffness on true dofs (borrowed), or null.
+    * @param kl  The stiffness form on local dofs where @p k is null
+    *            (borrowed).
     */
-   TrueOperator(const ParFiniteElementSpace& fes, const ParBilinearForm& k)
-      : Operator(fes.GetTrueVSize()), P_(fes.GetProlongationMatrix()), k_(k)
+   TrueOperator(const ParFiniteElementSpace& fes, const Operator* k,
+                const ParBilinearForm* kl)
+      : Operator(fes.GetTrueVSize()), P_(fes.GetProlongationMatrix()), k_(k),
+        kl_(kl)
    {
       for (Vector* v : {&xl_, &yl_, &tl_})
       {
          v->SetSize(fes.GetVSize());
          v->UseDevice(true);
+      }
+      if (k_)
+      {
+         tt_.SetSize(Height());
+         tt_.UseDevice(true);
       }
    }
 
@@ -64,29 +75,46 @@ public:
     */
    void Apply(double ck, double cm, const Vector& x, Vector& y) const
    {
-      P_->Mult(x, xl_);
-      if (ck != 0.0)
+      y.SetSize(Height());
+      const bool own = ck != 0.0 && k_;  // K on true dofs
+      const bool form = ck != 0.0 && !k_; // MFEM's form, on local dofs
+      if (form || cm != 0.0)
       {
-         k_.Mult(xl_, yl_);
-         if (ck != 1.0) { yl_ *= ck; }
+         P_->Mult(x, xl_);
+         if (form)
+         {
+            kl_->Mult(xl_, yl_);
+            if (ck != 1.0) { yl_ *= ck; }
+         }
+         else
+         {
+            yl_ = 0.0;
+         }
+         if (cm != 0.0)
+         {
+            MFEM_VERIFY(m_, "linear_elasticity: the mass form is not built");
+            m_->Mult(xl_, tl_); // BilinearForm::AddMult needs an assembled matrix
+            yl_.Add(cm, tl_);
+         }
+         P_->MultTranspose(yl_, own ? tt_ : y);
       }
-      else
+      if (own)
       {
-         yl_ = 0.0;
+         k_->Mult(x, y);
+         if (ck != 1.0) { y *= ck; }
+         if (cm != 0.0) { y += tt_; }
       }
-      if (cm != 0.0)
+      else if (!form && cm == 0.0)
       {
-         MFEM_VERIFY(m_, "linear_elasticity: the mass form is not built");
-         m_->Mult(xl_, tl_); // BilinearForm::AddMult needs an assembled matrix
-         yl_.Add(cm, tl_);
+         y = 0.0;
       }
-      P_->MultTranspose(yl_, y);
       if (s_ && ck != 0.0) { s_->Mult(ck, x, 1.0, y); }
    }
 
 private:
    const Operator* P_;              ///< Prolongation (true -> local dofs).
-   const ParBilinearForm& k_;       ///< Stiffness form.
+   const Operator* k_;              ///< Stiffness on true dofs, or null.
+   const ParBilinearForm* kl_;      ///< Stiffness form (k_ null).
    const ParBilinearForm* m_ = nullptr; ///< Mass form, or null.
    const HypreParMatrix* s_ = nullptr;  ///< Elastic support, or null.
    double ck_ = 1.0;                ///< Stiffness weight of Mult().
@@ -94,6 +122,7 @@ private:
    mutable Vector xl_;              ///< P x.
    mutable Vector yl_;              ///< The local result.
    mutable Vector tl_;              ///< M P x.
+   mutable Vector tt_;              ///< P^T M P x (with k_).
 };
 
 LinearElasticity::LinearElasticity(ParMesh& mesh, const Options& opts)
@@ -126,13 +155,31 @@ LinearElasticity::LinearElasticity(ParMesh& mesh, const Options& opts)
    fes_ = std::make_unique<ParFiniteElementSpace>(&mesh_, fec_.get(), dim,
           Ordering::byNODES);
 
-   a_ = std::make_unique<ParBilinearForm>(fes_.get());
-   a_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
-   auto* integ = new ElasticityIntegrator(*lambda_, *mu_);
-   integ->SetIntRule(&DomainRule());
-   a_->AddDomainIntegrator(integ);
-   a_->Assemble();
-   op_ = std::make_unique<TrueOperator>(*fes_, *a_);
+   if (opts_.order <= 7)
+   {
+      // lambda and mu per element, as the coefficients evaluate them.
+      const int ne = mesh_.GetNE();
+      const double* f = opts_.element_stiffness ?
+                        opts_.element_stiffness->HostRead() : nullptr;
+      Vector lam(ne), mu(ne);
+      for (int e = 0; e < ne; ++e)
+      {
+         lam(e) = opts_.lambda * (f ? f[e] : 1.0);
+         mu(e) = opts_.mu * (f ? f[e] : 1.0);
+      }
+      k_ = std::make_unique<HyperelasticOperator>(
+              *fes_, DomainRule(), HyperelasticMaterial::LinearElastic, lam, mu);
+   }
+   else
+   {
+      a_ = std::make_unique<ParBilinearForm>(fes_.get());
+      a_->SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      auto* integ = new ElasticityIntegrator(*lambda_, *mu_);
+      integ->SetIntRule(&DomainRule());
+      a_->AddDomainIntegrator(integ);
+      a_->Assemble();
+   }
+   op_ = std::make_unique<TrueOperator>(*fes_, k_.get(), a_.get());
 
    u_ = std::make_unique<ParGridFunction>(fes_.get());
    *u_ = 0.0;
@@ -143,6 +190,19 @@ LinearElasticity::LinearElasticity(ParMesh& mesh, const Options& opts)
       v->UseDevice(true);
       *v = 0.0;
    }
+}
+
+void LinearElasticity::ApplyStiffness(const Vector& x, Vector& y) const
+{
+   op_->Apply(1.0, 0.0, x, y);
+}
+
+void LinearElasticity::StiffnessDiagonal(Vector& d) const
+{
+   d.SetSize(fes_->GetTrueVSize());
+   d.UseDevice(true);
+   if (k_) { k_->AssembleDiagonal(d); }
+   else { a_->AssembleDiagonal(d); }
 }
 
 LinearElasticity::~LinearElasticity()
@@ -307,9 +367,7 @@ void LinearElasticity::SetupPreconditioner(double c)
    lor_matrix_.reset();
    if (opts_.preconditioner == ElasticityPC::Jacobi)
    {
-      diag_.SetSize(fes_->GetTrueVSize());
-      diag_.UseDevice(true);
-      a_->AssembleDiagonal(diag_);
+      StiffnessDiagonal(diag_);
       if (c != 0.0) { diag_.Add(c, m_diag_); }
       if (support_)
       {

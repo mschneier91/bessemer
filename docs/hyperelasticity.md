@@ -29,6 +29,11 @@ benchmark's to 0.4-1.7 % at its time step.
   `Tangent(F, S, dF) -> dP = dF S + F dS` with `dS = lambda tr(dE) I + 2 mu dE` and
   `dE = sym(F^T dF)`, and `Energy(F) -> W`. Matrices are column-major. A new material is
   a new struct with the same three functions, not new kernels (spec D2, D4).
+  `LinearElastic` is small-strain linear elasticity, `Tangent` only (dP = lambda tr(dF)
+  I + mu (dF + dF^T), St. Venant-Kirchhoff's tangent at F = I bit for bit): with it the
+  operator is `LinearElasticity`'s stiffness K. It stores no linearization, `Mult` is K u
+  from grad u itself, and `AssembleDiagonal` (the tangent's at u = 0, for either
+  material) gives its Jacobi smoother.
 - `src/solid/hyperelastic_operator.{hpp,cpp}`: `HyperelasticOperator`.
   - `Mult(u)` is the internal force R(u) = int P(F(u)) : grad_X v dX on true dofs, with
     F = I + grad_X u.

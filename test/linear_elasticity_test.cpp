@@ -1,6 +1,10 @@
 // Linear elasticity (src/solid): exactness and consistency at np 1/2/4.
-//  E1 the partially assembled operator equals MFEM's assembled
-//     ElasticityIntegrator matrix (2D on a distorted mesh, 3D);
+//  E1 the operator and its diagonal equal MFEM's at orders 1 to 7 in 2D
+//     and 3D (curved, distorted elements, per-element stiffness factors):
+//     its assembled ElasticityIntegrator matrix up to 3D Q3, its partial
+//     assembly above (where it launches; on a GPU to Q5) and St.
+//     Venant-Kirchhoff's tangent at u = 0 with a probed diagonal; on a
+//     nonconforming mesh too (the diagonal there |P|^T d, as MFEM's);
 //  E2 a quadratic displacement is reproduced exactly by Q2 (2D, 3D), with a
 //     Dirichlet face and the exact traction on every other face;
 //  E3 the Timoshenko-Goodier cantilever (plane stress, an exact cubic) is
@@ -22,6 +26,8 @@
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
 #include "solid/elasticity_case.hpp"
+#include "solid/element_scaled_coefficient.hpp"
+#include "solid/hyperelastic_operator.hpp"
 #include "solid/linear_elasticity.hpp"
 #include "mfem.hpp"
 
@@ -33,6 +39,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace mfem;
 using namespace elasticity_test;
@@ -132,49 +140,204 @@ std::unique_ptr<Exact> Quadratic(int dim, double lambda, double mu)
    return std::make_unique<Exact>(dim, uf, gf, ff, lambda, mu);
 }
 
-} // namespace
-
-TEST(LinearElasticity, E1_PartialAssemblyMatchesTheAssembledMatrix)
+/// Non-affine elements: a smooth distortion of the nodes.
+void Distort(Mesh& m, int dim)
 {
-   for (int dim : {2, 3})
+   m.Transform([dim](const Vector & x, Vector & y)
    {
-      const int order = dim == 2 ? 3 : 2;
-      Mesh serial = dim == 2 ?
-                    Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true, 1.0, 1.0) :
-                    Mesh::MakeCartesian3D(2, 3, 2, Element::HEXAHEDRON, 1.0, 1.0, 1.0);
-      // Non-affine elements: a smooth distortion of the vertices.
-      serial.Transform([dim](const Vector & x, Vector & y)
+      y = x;
+      y(0) += 0.1 * std::sin(M_PI * x(1)) * x(0);
+      y(1) += 0.07 * std::sin(M_PI * x(0));
+      if (dim == 3) { y(2) += 0.05 * x(0) * x(1) + 0.04 * std::sin(M_PI * x(1)); }
+   });
+}
+
+/// Per-element stiffness factors in [0.5, 1.5], from the element centres
+/// (no communication: a rank without elements takes no part).
+Vector Factors(ParMesh& mesh)
+{
+   Vector f(mesh.GetNE()), c;
+   for (int e = 0; e < mesh.GetNE(); ++e)
+   {
+      mesh.GetElementCenter(e, c);
+      const double z = c.Size() == 3 ? c(2) : 0.0;
+      f(e) = 1.0 + 0.5 * std::sin(3.1 * c(0) + 1.7 * c(1) + 1.3 * z);
+   }
+   return f;
+}
+
+/// The largest |a - b| over the largest |b|, across ranks.
+double RelMax(const Vector& a, const Vector& b)
+{
+   const real_t* pa = a.HostRead();
+   const real_t* pb = b.HostRead();
+   double m[2] = {0.0, 0.0};
+   for (int i = 0; i < a.Size(); ++i)
+   {
+      m[0] = std::max(m[0], std::abs(pa[i] - pb[i]));
+      m[1] = std::max(m[1], std::abs(pb[i]));
+   }
+   MPI_Allreduce(MPI_IN_PLACE, m, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   return m[0] / m[1];
+}
+
+/// What LinearElasticity's K and diagonal are checked against.
+enum class Ref
+{
+   /// MFEM's assembled ElasticityIntegrator matrix and its diagonal.
+   Assembled,
+   /// MFEM's partial assembly: its operator and AssembleDiagonal (|P|^T d
+   /// on a nonconforming mesh).
+   Partial,
+   /// St. Venant-Kirchhoff's tangent at u = 0 (the same operator through
+   /// the other material), the diagonal probed by unit vectors.
+   Svk
+};
+
+/// The relative errors of K x and of the diagonal against @p ref (the
+/// element factors in both).
+std::pair<double, double> Compare(ParMesh& mesh, int order, Ref ref)
+{
+   const double lambda = 1.7, mu = 0.6;
+   const Vector f = Factors(mesh);
+   LinearElasticity::Options o = Opts(order, lambda, mu);
+   o.element_stiffness = &f;
+   LinearElasticity s(mesh, o);
+   ParFiniteElementSpace& fes = s.Space();
+   const int n = fes.GetTrueVSize();
+   Vector x(n), y1(n), y2(n), d1(n), d2(n);
+   x.Randomize(1 + Mpi::WorldRank());
+   s.ApplyStiffness(x, y1);
+   s.StiffnessDiagonal(d1);
+
+   incns::ElementScaledCoefficient lam(lambda, f), mc(mu, f);
+   ParBilinearForm form(&fes);
+   std::unique_ptr<HypreParMatrix> M;
+   std::unique_ptr<incns::HyperelasticOperator> svk;
+   Vector le(mesh.GetNE()), me(mesh.GetNE());
+   if (ref == Ref::Svk)
+   {
+      for (int e = 0; e < mesh.GetNE(); ++e)
       {
-         y = x;
-         y(0) += 0.1 * std::sin(M_PI * x(1)) * x(0);
-         y(1) += 0.07 * std::sin(M_PI * x(0));
-         if (dim == 3) { y(2) += 0.05 * x(0) * x(1); }
-      });
-      auto mesh = Partition(serial);
-      LinearElasticity s(*mesh, Opts(order, 1.7, 0.6));
-
-      ParBilinearForm full(&s.Space());
-      ConstantCoefficient lam(1.7), mu(0.6);
-      auto* integ = new ElasticityIntegrator(lam, mu);
-      integ->SetIntRule(&s.DomainRule());
-      full.AddDomainIntegrator(integ);
-      full.Assemble();
-      full.Finalize();
-      std::unique_ptr<HypreParMatrix> M(full.ParallelAssemble());
-
+         le(e) = lambda * f(e);
+         me(e) = mu * f(e);
+      }
+      svk = std::make_unique<incns::HyperelasticOperator>(
+               fes, s.DomainRule(), incns::HyperelasticMaterial::StVenantKirchhoff, le,
+               me);
+      Vector zero(n);
+      zero.UseDevice(true);
+      zero = 0.0;
+      svk->GetGradient(zero).Mult(x, y2);
+      // The diagonal at a few dofs: e_g^T K e_g.
+      const HYPRE_BigInt ng = fes.GlobalTrueVSize(), off = fes.GetMyTDofOffset();
+      double m[2] = {0.0, 0.0};
+      for (int j = 0; j < 6; ++j)
+      {
+         const HYPRE_BigInt g = (2 * j + 1) * ng / 12;
+         const bool mine = g >= off && g < off + n;
+         Vector e(n), ke(n);
+         e.UseDevice(true);
+         e = 0.0;
+         if (mine) { e.HostReadWrite()[g - off] = 1.0; }
+         s.ApplyStiffness(e, ke);
+         if (mine)
+         {
+            const double r = ke.HostRead()[g - off], v = d1.HostRead()[g - off];
+            m[0] = std::max(m[0], std::abs(r - v));
+            m[1] = std::max(m[1], std::abs(r));
+         }
+      }
+      MPI_Allreduce(MPI_IN_PLACE, m, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      y1 -= y2;
+      return {std::sqrt(InnerProduct(MPI_COMM_WORLD, y1, y1) /
+                        InnerProduct(MPI_COMM_WORLD, y2, y2)), m[0] / m[1]};
+   }
+   auto* integ = new ElasticityIntegrator(lam, mc);
+   integ->SetIntRule(&s.DomainRule());
+   form.AddDomainIntegrator(integ);
+   if (ref == Ref::Assembled)
+   {
+      form.Assemble();
+      form.Finalize();
+      M.reset(form.ParallelAssemble());
+      M->Mult(x, y2);
+      M->GetDiag(d2);
+   }
+   else
+   {
+      form.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+      form.Assemble();
       OperatorPtr A;
       Array<int> none;
-      s.Form().FormSystemMatrix(none, A);
+      form.FormSystemMatrix(none, A);
+      A->Mult(x, y2);
+      d2.UseDevice(true);
+      form.AssembleDiagonal(d2);
+   }
+   y1 -= y2;
+   const double kdiff = std::sqrt(InnerProduct(MPI_COMM_WORLD, y1, y1) /
+                                  InnerProduct(MPI_COMM_WORLD, y2, y2));
+   return {kdiff, RelMax(d1, d2)};
+}
 
-      const int n = s.Space().GetTrueVSize();
-      Vector x(n), y1(n), y2(n);
-      x.Randomize(1 + Mpi::WorldRank());
-      A->Mult(x, y1);
-      M->Mult(x, y2);
-      const double ref = std::sqrt(InnerProduct(MPI_COMM_WORLD, y2, y2));
-      y1 -= y2;
-      const double diff = std::sqrt(InnerProduct(MPI_COMM_WORLD, y1, y1));
-      EXPECT_LT(diff, 1e-12 * ref) << "dim " << dim;
+} // namespace
+
+TEST(LinearElasticity, E1_OperatorAndDiagonalMatchTheReferences)
+{
+   // MFEM's partial assembly cannot launch its 3D kernel on a GPU past
+   // 1024 threads per block, 3 (k + 1)^3.
+   const bool gpu = Device::Allows(Backend::CUDA_MASK | Backend::HIP_MASK);
+   for (int dim : {2, 3})
+   {
+      for (int order = 1; order <= 7; ++order)
+      {
+         // Curved (quadratic geometry), distorted elements.
+         Mesh serial = dim == 2 ?
+                       Mesh::MakeCartesian2D(4, 3, Element::QUADRILATERAL, true, 1.0, 1.0) :
+                       Mesh::MakeCartesian3D(2, 2, 1, Element::HEXAHEDRON, 1.0, 1.0, 1.0);
+         serial.SetCurvature(2);
+         Distort(serial, dim);
+         auto mesh = Partition(serial);
+         // The assembled matrix takes tens of seconds from 3D Q4 (MFEM's
+         // element matrices, then the sparse insertion).
+         std::vector<Ref> refs;
+         if (dim == 2 || order <= 3) { refs.push_back(Ref::Assembled); }
+         else
+         {
+            const int threads = 3 * (order + 1) * (order + 1) * (order + 1);
+            if (!gpu || threads <= 1024) { refs.push_back(Ref::Partial); }
+            refs.push_back(Ref::Svk);
+         }
+         for (Ref r : refs)
+         {
+            const auto [kdiff, ddiff] = Compare(*mesh, order, r);
+            EXPECT_LT(kdiff, 1e-12) << "dim " << dim << " order " << order << " ref "
+                                    << static_cast<int>(r);
+            EXPECT_LT(ddiff, 1e-12) << "dim " << dim << " order " << order << " ref "
+                                    << static_cast<int>(r);
+         }
+      }
+   }
+   // Hanging nodes (one element refined): K against the assembled matrix,
+   // the diagonal against MFEM's partial assembly (|P|^T d there).
+   for (int dim : {2, 3})
+   {
+      Mesh serial = dim == 2 ?
+                    Mesh::MakeCartesian2D(3, 3, Element::QUADRILATERAL, true, 1.0, 1.0) :
+                    Mesh::MakeCartesian3D(2, 2, 2, Element::HEXAHEDRON, 1.0, 1.0, 1.0);
+      serial.EnsureNCMesh();
+      Array<Refinement> refs;
+      refs.Append(Refinement(0));
+      serial.GeneralRefinement(refs);
+      Distort(serial, dim);
+      auto mesh = Partition(serial);
+      const int order = dim == 2 ? 3 : 2;
+      EXPECT_LT(Compare(*mesh, order, Ref::Assembled).first, 1e-12)
+            << "nonconforming, dim " << dim;
+      const auto [kdiff, ddiff] = Compare(*mesh, order, Ref::Partial);
+      EXPECT_LT(kdiff, 1e-12) << "nonconforming, dim " << dim;
+      EXPECT_LT(ddiff, 1e-12) << "nonconforming, dim " << dim;
    }
 }
 

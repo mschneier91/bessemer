@@ -15,11 +15,14 @@
 namespace incns
 {
 
-/// The hyperelastic material models (deck `solid.model`).
+/// The hyperelastic material models (deck `solid.model`), and the linear one.
 enum class HyperelasticMaterial
 {
    /// St. Venant-Kirchhoff: W = lambda/2 (tr E)^2 + mu E : E.
-   StVenantKirchhoff
+   StVenantKirchhoff,
+   /// Small-strain linear elasticity (LinearElastic): LinearElasticity's
+   /// operator, not a deck model.
+   LinearElastic
 };
 
 /**
@@ -151,6 +154,47 @@ struct StVenantKirchhoff
          }
       }
       return 0.5 * lambda * tr * tr + mu * ee;
+   }
+};
+
+/**
+ * @brief Small-strain linear elasticity: the stress lambda tr(eps) I + 2 mu
+ *        eps of eps = sym(grad u) is linear in grad u, so the tangent is the
+ *        stress law itself and needs no linearization point (it is St.
+ *        Venant-Kirchhoff's tangent at F = I, S = 0, bit for bit).
+ *
+ * HyperelasticOperator applies it through the tangent only: the residual is
+ * K u, from grad u itself (not from F - I, which would lose digits).
+ */
+struct LinearElastic
+{
+   /**
+    * @brief dP = lambda tr(dF) I + mu (dF + dF^T).
+    * @param F      Unused (the tangent does not depend on it).
+    * @param S      Unused.
+    * @param dF     The increment's gradient (DIM x DIM).
+    * @param lambda First Lame parameter.
+    * @param mu     Shear modulus.
+    * @param dP     Output.
+    */
+   template <int DIM>
+   MFEM_HOST_DEVICE static void Tangent(const mfem::real_t* F,
+                                        const mfem::real_t* S,
+                                        const mfem::real_t* dF, mfem::real_t lambda,
+                                        mfem::real_t mu, mfem::real_t* dP)
+   {
+      MFEM_CONTRACT_VAR(F);
+      MFEM_CONTRACT_VAR(S);
+      mfem::real_t tr = 0.0;
+      for (int i = 0; i < DIM; i++) { tr += dF[i + DIM * i]; }
+      for (int j = 0; j < DIM; j++)
+      {
+         for (int i = 0; i < DIM; i++)
+         {
+            dP[i + DIM * j] = mu * (dF[i + DIM * j] + dF[j + DIM * i]) +
+                              (i == j ? lambda* tr : 0.0);
+         }
+      }
    }
 };
 

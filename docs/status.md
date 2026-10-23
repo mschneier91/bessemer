@@ -9,6 +9,20 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Linear elasticity on our kernels: 3D Q6 on a GPU (2026-10-22, branch `elastic-own`;
+human: "ya go ahead with the elasticity fix").** `LinearElasticity`'s stiffness is
+`HyperelasticOperator` with a linear material at orders 1 to 7 (MFEM's partial assembly
+above): MFEM's elasticity kernel could not launch in 3D from Q6 on a GPU (1,029 threads
+per block), which stopped the solid, ALE mesh motion and the FSI solid there. A
+sum-factorized diagonal for the Jacobi smoother. Results change at roundoff (decks to the
+printed digits; Jacobi CG counts within 1 %); `Form()` gave way to `ApplyStiffness()` and
+`StiffnessDiagonal()`. CPU, np 2, 3D cantilevers: Jacobi Q6 141.9 -> 8.1 s, LOR-AMG Q6
+20.7 -> 13.0 s ([elasticity.md](elasticity.md) §3). CPU np 1/2/4 and the debug device
+pass. Two H100s (job 49656532): every 3D Q6 cantilever runs (they stopped in MFEM's kernel
+before) and matches the CPU to 1e-11; `verify_elasticity_test` passes whole at np 1 and 2
+(V2's 3D level included). The suite's GPU failures there are main's: `fsi_test`, the FSI
+flag deck, `linear_elasticity_test` E6 at np 2 (cudaFree; under investigation).
+
 **FSI stage F4, part 2: Neumann-Dirichlet and Robin-Robin (2026-10-22, branch
 `claude/project-thread-xnsz2c` after PR #15 merged; human: "when this is all done and
 passes please merge").** `fsi.coupling: neumann_dirichlet | robin_robin` ([fsi.md](fsi.md)

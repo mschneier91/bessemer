@@ -55,6 +55,10 @@ enum class TangentStorage
  * The geometry (J^-1 and w det J at every point) is computed once from the
  * mesh's geometric factors at the rule and kept; the mesh's cache is left as
  * it is (the owner of the rule clears it, as LinearElasticity does).
+ *
+ * With the linear material (HyperelasticMaterial::LinearElastic, LinearElasticity's
+ * stiffness K) the operator is its own tangent: Mult() applies K, GetGradient()
+ * returns it without work, and nothing of a linearization is stored.
  */
 class HyperelasticOperator : public mfem::Operator
 {
@@ -66,7 +70,8 @@ public:
     * @param material The material model.
     * @param lambda   First Lame parameter per local element.
     * @param mu       Shear modulus per local element.
-    * @param storage  What the tangent keeps (TangentStorage).
+    * @param storage  What the tangent keeps (TangentStorage; the linear
+    *                 material keeps nothing).
     * @param scratch  Work buffers to borrow (sized for @p fes; borrowed, must
     *                 outlive this; null: own them). No apply of this
     *                 operator may run inside another borrower's.
@@ -90,8 +95,19 @@ public:
     */
    mfem::Operator& GetGradient(const mfem::Vector& u) const override;
 
-   /// @return The strain energy int W(F(u)) dX (true dofs). Collective.
+   /// @return The strain energy int W(F(u)) dX (true dofs; 1/2 u . K u with
+   ///         the linear material). Collective.
    double Energy(const mfem::Vector& u) const;
+
+   /**
+    * @brief The diagonal of the tangent at the reference configuration (u =
+    *        0: linear elasticity's stiffness, for either material), on true
+    *        dofs as ParBilinearForm::AssembleDiagonal gives it: summed over
+    *        the elements and ranks sharing a dof, |P|^T d on a nonconforming
+    *        space. For a Jacobi smoother (setup work: own temporaries).
+    * @param diag Output (true dofs).
+    */
+   void AssembleDiagonal(mfem::Vector& diag) const override;
 
    /// @return The vector space.
    mfem::ParFiniteElementSpace& Space() const { return fes_; }

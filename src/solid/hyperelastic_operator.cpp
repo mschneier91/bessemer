@@ -101,7 +101,8 @@ void SetupGeometry(int nq, int ne, const IntegrationRule& ir, const Vector& jac,
 // ENERGY: sum over the thread's points of W w det J into (N, N, ne) -- per
 // point in 2D, per z-column in 3D.
 // The tangent's MODE: 0 F and S stored, 1 F stored, 2 the displacement's
-// E-vector (F from one more gradient pass); S recomputed unless stored.
+// E-vector (F from one more gradient pass); S recomputed unless stored; 3
+// nothing (LinearElastic, whose tangent depends on neither).
 // ---------------------------------------------------------------------------
 
 template <class MAT, int N, bool RESIDUAL, int STORE, bool ENERGY>
@@ -263,7 +264,7 @@ void Tangent2D(int NE, const Array<real_t>& b, const Array<real_t>& g,
             {
                for (int i = 0; i < D2; i++) { S[i] = FS(qx, qy, D2 + i, e); }
             }
-            else
+            else if constexpr(MODE != 3)
             {
                real_t P[D2] = {};
                MAT::template Stress<DIM>(F, lame, mue, S, P);
@@ -466,7 +467,7 @@ void Tangent3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
                {
                   for (int i = 0; i < D2; i++) { S[i] = FS(qx, qy, qz, D2 + i, e); }
                }
-               else
+               else if constexpr(MODE != 3)
                {
                   real_t P[D2] = {};
                   MAT::template Stress<DIM>(F, lame, mue, S, P);
@@ -953,7 +954,7 @@ TangentKernel(const __grid_constant__ Args<N> a)
          PhysicalGradient<N>(st + 9 * L::YS, i, JI, F);
          F[0] += 1.0; F[4] += 1.0; F[8] += 1.0;
       }
-      else
+      else if constexpr(MODE != 3)
       {
          MFEM_UNROLL(9)
          for (int m = 0; m < 9; ++m) { F[m] = a.lin[q + NQ * (m + NS * e)]; }
@@ -963,7 +964,7 @@ TangentKernel(const __grid_constant__ Args<N> a)
          MFEM_UNROLL(9)
          for (int m = 0; m < 9; ++m) { S[m] = a.lin[q + NQ * (9 + m + NS * e)]; }
       }
-      else
+      else if constexpr(MODE != 3)
       {
          real_t P[9];
          MAT::template Stress<3>(F, lam, mu, S, P);
@@ -1132,6 +1133,215 @@ void ScatterSlots(const Array<int>& sdof, const Array<int>& soff,
 }
 
 /// f(std::integral_constant<int, N>) for N = n in 2..8 (compile-time sizes).
+// ---------------------------------------------------------------------------
+// The diagonal of the tangent at u = 0 (linear elasticity's), per element: at
+// dof i of component c, sum over the points of g_i^T Q_c g_i, g_i the
+// reference gradient of the shape function and Q_c = w det J (mu J^-1 J^-T +
+// (lambda + mu) j_c j_c^T), j_c the c-th column of J^-1 (mu |grad phi|^2 +
+// (lambda + mu) (d_c phi)^2). For each pair k <= l of reference directions,
+// Q_c(k, l) at the points is contracted one direction at a time with the 1D
+// factor X_k X_l (G along the pair's own directions, B along the others), as
+// MFEM's diffusion diagonal does: N^(dim+1) per pair. Setup work (a Jacobi
+// smoother's), host and device alike.
+// ---------------------------------------------------------------------------
+
+/// X_k(q, i) X_l(q, i) along direction @p dir: G along k (and l), else B.
+template <class T>
+MFEM_HOST_DEVICE inline real_t PairFactor(const T& B, const T& G, int k, int l,
+      int dir, int q, int i)
+{
+   const real_t a = (k == dir) ? G(q, i) : B(q, i);
+   const real_t c = (l == dir) ? G(q, i) : B(q, i);
+   return a * c;
+}
+
+template <int N>
+void ReferenceDiagonal2D(int NE, const Array<real_t>& b, const Array<real_t>& g,
+                         const Vector& jinv, const Vector& wdet,
+                         const Vector& lam, const Vector& mu, Vector& d)
+{
+   constexpr int DIM = 2;
+   const auto B = Reshape(b.Read(), N, N), G = Reshape(g.Read(), N, N); // (q, i)
+   const auto JI = Reshape(jinv.Read(), N, N, DIM, DIM, NE);
+   const auto WD = Reshape(wdet.Read(), N, N, NE);
+   const auto L = lam.Read(), MU = mu.Read();
+   auto DE = Reshape(d.Write(), N, N, DIM, NE);
+   mfem::forall_2D<N* N>(NE, N, N, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      MFEM_SHARED real_t sQ[N][N], sA[N][N], sD[N][N];
+      const real_t lame = L[e], mue = MU[e];
+      for (int c = 0; c < DIM; ++c)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(ix, x, N) { sD[iy][ix] = 0.0; }
+         }
+         for (int k = 0; k < DIM; ++k)
+         {
+            for (int l = k; l < DIM; ++l)
+            {
+               // Q_c(k, l), twice off the diagonal (Q_c is symmetric).
+               MFEM_FOREACH_THREAD_DIRECT(qy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(qx, x, N)
+                  {
+                     real_t s = 0.0;
+                     for (int m = 0; m < DIM; ++m)
+                     {
+                        s += JI(qx, qy, k, m, e) * JI(qx, qy, l, m, e);
+                     }
+                     const real_t q = mue * s + (lame + mue) * JI(qx, qy, k, c, e) *
+                                      JI(qx, qy, l, c, e);
+                     sQ[qy][qx] = (k == l ? 1.0 : 2.0) * WD(qx, qy, e) * q;
+                  }
+               }
+               MFEM_SYNC_THREAD;
+               MFEM_FOREACH_THREAD_DIRECT(qy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+                  {
+                     real_t s = 0.0;
+                     for (int qx = 0; qx < N; ++qx)
+                     {
+                        s += PairFactor(B, G, k, l, 0, qx, ix) * sQ[qy][qx];
+                     }
+                     sA[qy][ix] = s;
+                  }
+               }
+               MFEM_SYNC_THREAD;
+               MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+                  {
+                     real_t s = 0.0;
+                     for (int qy = 0; qy < N; ++qy)
+                     {
+                        s += PairFactor(B, G, k, l, 1, qy, iy) * sA[qy][ix];
+                     }
+                     sD[iy][ix] += s;
+                  }
+               }
+               MFEM_SYNC_THREAD;
+            }
+         }
+         MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(ix, x, N) { DE(ix, iy, c, e) = sD[iy][ix]; }
+         }
+         MFEM_SYNC_THREAD;
+      }
+   });
+}
+
+template <int N>
+void ReferenceDiagonal3D(int NE, const Array<real_t>& b, const Array<real_t>& g,
+                         const Vector& jinv, const Vector& wdet,
+                         const Vector& lam, const Vector& mu, Vector& d)
+{
+   constexpr int DIM = 3;
+   const auto B = Reshape(b.Read(), N, N), G = Reshape(g.Read(), N, N); // (q, i)
+   const auto JI = Reshape(jinv.Read(), N, N, N, DIM, DIM, NE);
+   const auto WD = Reshape(wdet.Read(), N, N, N, NE);
+   const auto L = lam.Read(), MU = mu.Read();
+   auto DE = Reshape(d.Write(), N, N, N, DIM, NE);
+   mfem::forall_2D<N* N>(NE, N, N, [ = ] MFEM_HOST_DEVICE(int e)
+   {
+      MFEM_SHARED real_t sQ[N][N][N], sA[N][N][N], sC[N][N][N], sD[N][N][N];
+      const real_t lame = L[e], mue = MU[e];
+      for (int c = 0; c < DIM; ++c)
+      {
+         MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+            {
+               for (int iz = 0; iz < N; ++iz) { sD[iz][iy][ix] = 0.0; }
+            }
+         }
+         for (int k = 0; k < DIM; ++k)
+         {
+            for (int l = k; l < DIM; ++l)
+            {
+               // Q_c(k, l), twice off the diagonal (Q_c is symmetric).
+               MFEM_FOREACH_THREAD_DIRECT(qy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(qx, x, N)
+                  {
+                     for (int qz = 0; qz < N; ++qz)
+                     {
+                        real_t s = 0.0;
+                        for (int m = 0; m < DIM; ++m)
+                        {
+                           s += JI(qx, qy, qz, k, m, e) * JI(qx, qy, qz, l, m, e);
+                        }
+                        const real_t q = mue * s + (lame + mue) * JI(qx, qy, qz, k, c, e) *
+                                         JI(qx, qy, qz, l, c, e);
+                        sQ[qz][qy][qx] = (k == l ? 1.0 : 2.0) * WD(qx, qy, qz, e) * q;
+                     }
+                  }
+               }
+               MFEM_SYNC_THREAD;
+               MFEM_FOREACH_THREAD_DIRECT(qy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+                  {
+                     for (int qz = 0; qz < N; ++qz)
+                     {
+                        real_t s = 0.0;
+                        for (int qx = 0; qx < N; ++qx)
+                        {
+                           s += PairFactor(B, G, k, l, 0, qx, ix) * sQ[qz][qy][qx];
+                        }
+                        sA[qz][qy][ix] = s;
+                     }
+                  }
+               }
+               MFEM_SYNC_THREAD;
+               MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+                  {
+                     for (int qz = 0; qz < N; ++qz)
+                     {
+                        real_t s = 0.0;
+                        for (int qy = 0; qy < N; ++qy)
+                        {
+                           s += PairFactor(B, G, k, l, 1, qy, iy) * sA[qz][qy][ix];
+                        }
+                        sC[qz][iy][ix] = s;
+                     }
+                  }
+               }
+               MFEM_SYNC_THREAD;
+               MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+               {
+                  MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+                  {
+                     for (int iz = 0; iz < N; ++iz)
+                     {
+                        real_t s = 0.0;
+                        for (int qz = 0; qz < N; ++qz)
+                        {
+                           s += PairFactor(B, G, k, l, 2, qz, iz) * sC[qz][iy][ix];
+                        }
+                        sD[iz][iy][ix] += s;
+                     }
+                  }
+               }
+               MFEM_SYNC_THREAD;
+            }
+         }
+         MFEM_FOREACH_THREAD_DIRECT(iy, y, N)
+         {
+            MFEM_FOREACH_THREAD_DIRECT(ix, x, N)
+            {
+               for (int iz = 0; iz < N; ++iz) { DE(ix, iy, iz, c, e) = sD[iz][iy][ix]; }
+            }
+         }
+         MFEM_SYNC_THREAD;
+      }
+   });
+}
+
 template <class F>
 void WithPoints(int n, F&& f)
 {
@@ -1187,12 +1397,17 @@ public:
    void Mult(const Vector& w, Vector& y) const override
    {
       const auto& m = *op_.maps_;
-      const int mode = 2 - StoreFor(op_.storage_); // 0 F,S; 1 F; 2 displacement
+      // St. Venant-Kirchhoff by storage: 0 F,S; 1 F; 2 the displacement; the
+      // linear material 3 (nothing).
+      const int mode = op_.material_ == HyperelasticMaterial::LinearElastic ? 3 :
+                       2 - StoreFor(op_.storage_);
       auto modes = [&](auto&& run)
       {
-         if (mode == 0) { run(std::integral_constant<int, 0> {}); }
-         else if (mode == 1) { run(std::integral_constant<int, 1> {}); }
-         else { run(std::integral_constant<int, 2> {}); }
+         using SVK = StVenantKirchhoff;
+         if (mode == 0) { run(SVK(), std::integral_constant<int, 0> {}); }
+         else if (mode == 1) { run(SVK(), std::integral_constant<int, 1> {}); }
+         else if (mode == 2) { run(SVK(), std::integral_constant<int, 2> {}); }
+         else { run(LinearElastic(), std::integral_constant<int, 3> {}); }
       };
       if (op_.lines_)
       {
@@ -1202,11 +1417,12 @@ public:
             WithPoints(op_.n1d_, [&](auto nc)
             {
                constexpr int N = decltype(nc)::value;
-               modes([&](auto mc)
+               modes([&](auto mat, auto mc)
                {
+                  using MAT = decltype(mat);
                   constexpr int MODE = decltype(mc)::value;
-                  TangentLines3D<StVenantKirchhoff, N, MODE>(n, m.B, m.G, op_.jinv_,
-                        op_.wdet_, op_.lambda_, op_.mu_, op_.lin_, x, yl, lm);
+                  TangentLines3D<MAT, N, MODE>(n, m.B, m.G, op_.jinv_,
+                                               op_.wdet_, op_.lambda_, op_.mu_, op_.lin_, x, yl, lm);
                });
             });
          });
@@ -1218,20 +1434,21 @@ public:
       WithPoints(op_.n1d_, [&](auto nc)
       {
          constexpr int N = decltype(nc)::value;
-         modes([&](auto mc)
+         modes([&](auto mat, auto mc)
          {
+            using MAT = decltype(mat);
             constexpr int MODE = decltype(mc)::value;
             if (op_.dim_ == 2)
             {
-               Tangent2D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
-                                                     op_.wdet_, op_.lambda_, op_.mu_,
-                                                     op_.lin_, op_.ue_, op_.ye_);
+               Tangent2D<MAT, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
+                                       op_.wdet_, op_.lambda_, op_.mu_,
+                                       op_.lin_, op_.ue_, op_.ye_);
             }
             else
             {
-               Tangent3D<StVenantKirchhoff, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
-                                                     op_.wdet_, op_.lambda_, op_.mu_,
-                                                     op_.lin_, op_.ue_, op_.ye_);
+               Tangent3D<MAT, N, MODE>(op_.ne_, m.B, m.G, op_.jinv_,
+                                       op_.wdet_, op_.lambda_, op_.mu_,
+                                       op_.lin_, op_.ue_, op_.ye_);
             }
          });
       });
@@ -1254,7 +1471,8 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
    ParMesh& mesh = *fes.GetParMesh();
    dim_ = mesh.Dimension();
    ne_ = mesh.GetNE();
-   MFEM_VERIFY(material_ == HyperelasticMaterial::StVenantKirchhoff,
+   MFEM_VERIFY(material_ == HyperelasticMaterial::StVenantKirchhoff ||
+               material_ == HyperelasticMaterial::LinearElastic,
                "HyperelasticOperator: unknown material");
    MFEM_VERIFY(fes.GetVDim() == dim_ && fes.GetOrdering() == Ordering::byNODES &&
                mesh.SpaceDimension() == dim_,
@@ -1295,8 +1513,10 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
    // Displacement storage: the E-vector, or what the by-lines kernels read: the
    // L-vector, or the true dofs with the ghosts after them.
    const int nlu = ex_ ? Height() + 3 * ex_->NumGhosts() : fes.GetVSize();
-   lin_.SetSize(nstore > 0 ? nq * nstore * dim_ * dim_ * ne_ :
-                (lines_ ? nlu : restriction_->Height()));
+   // The linear material's tangent needs nothing of a linearization point.
+   const bool linear = material_ == HyperelasticMaterial::LinearElastic;
+   lin_.SetSize(linear ? 0 : (nstore > 0 ? nq * nstore * dim_ * dim_ * ne_ :
+                              (lines_ ? nlu : restriction_->Height())));
    lin_ghosts_ = ex_ ? Height() : -1;
    lin_.UseDevice(true);
 
@@ -1538,6 +1758,11 @@ void HyperelasticOperator::FromElements(Vector& y) const
 
 void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
 {
+   if (material_ == HyperelasticMaterial::LinearElastic)
+   {
+      tangent_->Mult(u, r); // K u, from grad u itself
+      return;
+   }
    if (lines_)
    {
       Vector& yl = LocalOutput(r);
@@ -1577,6 +1802,7 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
 
 Operator& HyperelasticOperator::GetGradient(const Vector& u) const
 {
+   if (material_ == HyperelasticMaterial::LinearElastic) { return *tangent_; }
    const int nstore = StoreFor(storage_);
    if (lines_ && nstore == 0)
    {
@@ -1656,6 +1882,13 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
 
 double HyperelasticOperator::Energy(const Vector& u) const
 {
+   if (material_ == HyperelasticMaterial::LinearElastic)
+   {
+      Vector ku(Height());
+      ku.UseDevice(true);
+      tangent_->Mult(u, ku);
+      return 0.5 * InnerProduct(fes_.GetComm(), u, ku);
+   }
    // Partial sums per point (2D) or per z-column (3D): N^2 per element,
    // allocated on the first call.
    if (qe_.Size() != n1d_ * n1d_ * ne_)
@@ -1703,6 +1936,46 @@ double HyperelasticOperator::Energy(const Vector& u) const
    double global = 0.0;
    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM, fes_.GetComm());
    return global;
+}
+
+void HyperelasticOperator::AssembleDiagonal(Vector& diag) const
+{
+   Vector de(restriction_->Height());
+   de.UseDevice(true);
+   WithPoints(n1d_, [&](auto nc)
+   {
+      constexpr int N = decltype(nc)::value;
+      if (dim_ == 2)
+      {
+         ReferenceDiagonal2D<N>(ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_,
+                                de);
+      }
+      else
+      {
+         ReferenceDiagonal3D<N>(ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_,
+                                de);
+      }
+   });
+   diag.SetSize(Height());
+   diag.UseDevice(true);
+   if (p_identity_)
+   {
+      restriction_->MultTranspose(de, diag);
+      return;
+   }
+   Vector dl(fes_.GetVSize());
+   dl.UseDevice(true);
+   restriction_->MultTranspose(de, dl);
+   const Operator* P = fes_.GetProlongationMatrix();
+   if (fes_.Conforming())
+   {
+      P->MultTranspose(dl, diag);
+      return;
+   }
+   // An AMR mesh: |P|^T d, MFEM's convergent diagonal there.
+   const auto* hp = dynamic_cast<const HypreParMatrix*>(P);
+   MFEM_VERIFY(hp, "HyperelasticOperator: unsupported prolongation type");
+   hp->AbsMultTranspose(1.0, dl, 0.0, diag);
 }
 
 } // namespace incns

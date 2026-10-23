@@ -67,14 +67,16 @@ needed. Not built.
   (`ElasticityParameters`, `PlaneModel`, `ElasticityPC`, `SolidAnalysis`,
   `SolidTimeScheme`, `GeneralizedAlpha()`).
 - `src/solid/linear_elasticity.{hpp,cpp}`: `LinearElasticity`, the solver. Vector
-  H1 on GLL nodes ordered by nodes; MFEM's `ElasticityIntegrator` in partial
-  assembly at the RuleBook's Gauss-Legendre rule of order 2k + 1 (k + 1 points per
-  direction); Dirichlet data projected on the boundary and eliminated; CG
+  H1 on GLL nodes ordered by nodes; the stiffness is `HyperelasticOperator` with the
+  linear material (`LinearElastic`: the hyperelastic solver's sum-factorized kernels, by
+  lines on a device in 3D, [hyperelasticity.md](hyperelasticity.md)) at orders 1 to 7,
+  MFEM's `ElasticityIntegrator` in partial assembly above, at the RuleBook's
+  Gauss-Legendre rule of order 2k + 1 (k + 1 points per direction); Dirichlet data projected on the boundary and eliminated; CG
   preconditioned by one BoomerAMG V-cycle in systems mode on the LOR (Q1 on the
   GLL nodes) rediscretization, the same machinery as the fluid's velocity block
   (`solid.preconditioner: jacobi` uses the operator's diagonal instead).
-  Dynamics adds a PA `VectorMassIntegrator` form; K + c M is applied as the two
-  forms on true dofs (no combined form, no assembled matrix), and a change of c
+  Dynamics adds a PA `VectorMassIntegrator` form; K + c M is applied as K and
+  the mass form on true dofs (no combined form, no assembled matrix), and a change of c
   (the BDF ramp, a shortened last step) rebuilds only the preconditioner.
   Post-processing: strain and kinetic energy (operator applies, on the device),
   external work, max |u|, the displacement at a point (search cached).
@@ -106,7 +108,7 @@ Per vector DOF, 3D, double precision:
 
 | Piece | Q2 | Q6 | Note |
 |---|---|---|---|
-| Operator data (MFEM PA) | ~180 B | ~85 B | 20 numbers per quadrature point: Jacobian (9), lambda, mu, and a 9-number work array |
+| Operator data | ~120 B | ~55 B | J^-1 and w det J at every point (10 numbers; MFEM's PA kept 20, ~180 / ~85 B) and the gather maps; Q6 from the hyperelastic operator's measured 93 B less its F |
 | Mass data (dynamics) | ~9 B | ~4 B | one number per quadrature point |
 | CG vectors (r, z, p) + constrained-operator work (2) + the operator's three local vectors | ~70 B | ~70 B | |
 | State and work (dynamics) | ~60-80 B | ~60-80 B | generalized-alpha u (2 levels), v, a, f^n + 4 work; BDF3 4 levels of u and v |
@@ -114,20 +116,30 @@ Per vector DOF, 3D, double precision:
 
 So the AMG dominates: a static or dynamic solve fits roughly 25-35M DOFs on an
 80 GB H100.
-Two later wins: a sum-factorized elasticity kernel of bessemer's own (MFEM's
-apply evaluates the full element basis at every point, which is slow at Q6;
-the in-repo grad-div kernel is half of it already), and point-block Jacobi /
+Two later wins: a sum-factorized elasticity kernel of bessemer's own (done
+2026-10-22: the hyperelastic kernels with the linear material, below), and point-block Jacobi /
 Chebyshev preconditioning where dynamics makes the system mass-dominated (small
 dt), as for the fluid; `solid.preconditioner: jacobi` is the first step there
 and needs no assembled matrix. BoomerAMG with rigid-body modes would improve the static AMG but
-needs the byVDIM ordering MFEM's elasticity PA does not support.
+needs the byVDIM ordering the operator does not support.
+
+**Speed on the CPU (measured 2026-10-22, np 2, the 3D cantilever of 216 elements,
+`runs/elastgpu`).** Our operator against MFEM's partial assembly, the same results (to
+roundoff): Jacobi-preconditioned static solves 141.9 -> 8.1 s at Q6 and 55.1 -> 3.4 s at
+Q5 (the operator is the whole cost there); LOR-AMG Q6 20.7 -> 13.0 s and Q5 18.6 -> 7.5
+s (the AMG setup remains); generalized-alpha Q5 215 -> 140 s (the mass form and the
+V-cycles remain).
 
 ## 4. Verification
 
 Fast tier (`linear_elasticity_test`, np 1/2/4; pins its own orders):
 
-- E1: the PA operator equals MFEM's assembled `ElasticityIntegrator` matrix
-  (2D distorted mesh at Q3, 3D at Q2) to 1e-12.
+- E1: the operator and its diagonal equal MFEM's to 1e-12 at orders 1 to 7, 2D and
+  3D, on curved, distorted elements with per-element stiffness factors: its assembled
+  `ElasticityIntegrator` matrix up to 3D Q3, above that its partial assembly (where it
+  launches: on a GPU to Q5) and St. Venant-Kirchhoff's tangent at u = 0 with the
+  diagonal probed by unit vectors; on a nonconforming mesh too (the diagonal there
+  |P|^T d, as MFEM's).
 - E2: a full quadratic displacement is reproduced exactly at Q2 (2D, 3D), one
   face held, the exact traction on all others, the exact body force.
 - E3: the Timoshenko-Goodier cantilever (Theory of Elasticity, 1970, section 21;
@@ -192,4 +204,7 @@ material: they belong to the large-deformation solver (`equation: hyperelasticit
 1. Large deformation (St. Venant-Kirchhoff, total Lagrangian, Newton), for
    Turek-Hron CSM and FSI.
 2. The ALE fluid and the coupling.
-3. Measured memory and throughput on a GPU (nothing here has run on one).
+3. Measured memory and throughput on a GPU. The first check (2026-10-19) ran 2D and 3D
+   to Q5; from 3D Q6 MFEM's elasticity kernel could not launch (3 (k + 1)^3 = 1,029
+   threads per block), now replaced by our operator (2026-10-22): the 3D Q6 cantilevers run on
+   two H100s and match the CPU to 1e-11 (job 49656532).

@@ -17,14 +17,18 @@
 namespace incns
 {
 
+class HyperelasticOperator;
+
 /**
  * @brief Finds u in [H1 Q_k]^dim with
  *        (2 mu eps(u), eps(v)) + (lambda div u, div v) = (f, v) + (t, v)_N
  *        for every v vanishing on the Dirichlet boundary.
  *
- * The operator is MFEM's ElasticityIntegrator in partial assembly (it runs on
- * the device) at the RuleBook's Gauss-Legendre rule of order 2k + 1 (k + 1
- * points per direction). Boundaries are fixed (u = 0), prescribed displacement,
+ * The stiffness is HyperelasticOperator with the linear material at orders 1
+ * to 7 (sum-factorized kernels, by lines on a device in 3D) and MFEM's
+ * ElasticityIntegrator in partial assembly above (on a GPU its 3D kernel
+ * cannot launch from Q6: 3 (k+1)^3 threads per block), at the RuleBook's
+ * Gauss-Legendre rule of order 2k + 1 (k + 1 points per direction). Boundaries are fixed (u = 0), prescribed displacement,
  * traction (natural) or, by omission, traction-free. Every quadrature rule is
  * owned here, so the solver must not outlive its mesh (the destructor clears
  * the mesh's rule-keyed geometric factors, developing.md section 6).
@@ -205,8 +209,17 @@ public:
    const mfem::ParGridFunction& Displacement() const { return *u_; }
    /// @return The displacement space (vector H1, ordered by nodes).
    mfem::ParFiniteElementSpace& Space() { return *fes_; }
-   /// @return The partially assembled bilinear form (no boundary conditions).
-   mfem::ParBilinearForm& Form() { return *a_; }
+   /**
+    * @brief y = K x on true dofs (no boundary conditions; an elastic
+    *        support's term included).
+    */
+   void ApplyStiffness(const mfem::Vector& x, mfem::Vector& y) const;
+   /**
+    * @brief The diagonal of K on true dofs, as ParBilinearForm::
+    *        AssembleDiagonal gives it (|P|^T d on a nonconforming mesh), an
+    *        elastic support's not included. What the Jacobi smoother uses.
+    */
+   void StiffnessDiagonal(mfem::Vector& d) const;
    /// @return The rules every integrator here uses.
    const RuleBook& Rules() const { return rules_; }
    /// @return The quadrature rule of the operator and the load.
@@ -325,7 +338,10 @@ private:
    std::unique_ptr<mfem::Coefficient> mu_;     ///< Shear modulus.
    std::unique_ptr<mfem::Coefficient> lor_lambda_; ///< lambda on the LOR mesh.
    std::unique_ptr<mfem::Coefficient> lor_mu_;     ///< mu on the LOR mesh.
-   std::unique_ptr<mfem::ParBilinearForm> a_;     ///< PA elasticity form.
+   /// The stiffness on true dofs (orders 1 to 7), or null.
+   std::unique_ptr<HyperelasticOperator> k_;
+   /// MFEM's PA elasticity form (orders above 7), or null.
+   std::unique_ptr<mfem::ParBilinearForm> a_;
    mfem::ConstantCoefficient rho_;                ///< Density.
    std::unique_ptr<mfem::ParBilinearForm> m_;     ///< PA mass form (dynamics).
    std::unique_ptr<TrueOperator> op_;             ///< K + c M on true dofs.
