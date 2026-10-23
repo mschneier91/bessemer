@@ -1232,6 +1232,16 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "alpha_f w and iterates on the traction (Badia, Nobile and Vergara 2008); "
    "it converges to the same solution, but slowly on a wall wetted on both "
    "sides (its squeeze mode; docs/fsi.md).");
+   r.ReadEnum(fsi, "solid", fp.solid,
+   {
+      {"linear_elasticity", FsiSolidModel::LinearElasticity},
+      {"hyperelasticity", FsiSolidModel::Hyperelasticity}
+   },
+   "The solid's model: linear_elasticity (small strain) or hyperelasticity "
+   "(large deformation, the material of solid.model; the Turek-Hron "
+   "benchmarks' St. Venant-Kirchhoff). hyperelasticity takes the fluid's "
+   "traction per reference area and, so far, coupling dirichlet_neumann "
+   "only.");
    r.Read(fsi, "alpha_fluid", fp.alpha_fluid,
           "robin_neumann, robin_robin: the fluid's Robin coefficient (a density times a "
           "velocity, as rho_s H / dt); <= 0: rho_s h / dt face by face, h "
@@ -1531,6 +1541,17 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                   sp.poisson_ratio < 0.5 && sp.density > 0.0,
                   "parameters: bad solid material (youngs_modulus > 0, "
                   "poisson_ratio in (-1, 1/2), density > 0)");
+      MFEM_VERIFY(f.solid != FsiSolidModel::Hyperelasticity ||
+                  f.coupling == FsiCoupling::DirichletNeumann,
+                  "parameters: fsi.solid hyperelasticity couples by "
+                  "dirichlet_neumann only so far (the other conditions pass a "
+                  "traction per current area; docs/fsi.md)");
+      MFEM_VERIFY(f.solid != FsiSolidModel::Hyperelasticity ||
+                  sp.analysis == SolidAnalysis::Dynamic,
+                  "parameters: fsi.solid hyperelasticity needs solid.analysis: "
+                  "dynamic (a massless solid makes the subiterations explore "
+                  "displacements far beyond the flag's, where St. "
+                  "Venant-Kirchhoff folds; docs/fsi.md)");
    }
    if (motion || p.moving_mesh)
    {

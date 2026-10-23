@@ -1,0 +1,75 @@
+# Turek & Hron (2006) FSI2: the elastic flag behind the cylinder in a periodic
+# self-sustained oscillation (README.md). FSI2: mean inflow 1 (Re 100), flag density 10,000
+# (rho_s / rho_f = 10), shear modulus 0.5e6 (E = 1.4e6),
+# Poisson's ratio 0.4; fluid nu = 1e-3, density 1000. The solid is St.
+# Venant-Kirchhoff (fsi.solid hyperelasticity), dynamic, plane strain, coupled
+# in every step by Dirichlet-Neumann subiterations with IQN-ILS (docs/fsi.md),
+# the solid stepped by BDF2 like the fluid.
+# The inflow ramps over 2 time units; the oscillation then grows from
+# roundoff, so the run is long. Turek & Hron's values are over the last
+# period, mean +- amplitude from the extremes:
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/fsi2.yaml
+#   python3 benchmarks/turek_hron/fsi.py fsi2 fsi2/fsi2_forces.csv fsi2/fsi2_fsi.csv
+
+equation: navier_stokes
+physics:
+  nu: 1.0e-3
+discretization:
+  order_u: 4
+  order_p: 3
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    flag_length: 0.35
+    flag_thickness: 0.02
+    n_flag: 8
+    n_flag_y: 2
+    n_down: 16
+time:
+  dt: 0.0005
+  t_final: 15
+  step_control: fixed
+  convection: imex
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 1.5, height: 0.41,
+     time_profile: ramp, time_scale: 2.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [flag], type: interface}
+  - {select: [outflow], type: outflow}
+mesh_motion:
+  stiffening: 1
+solid:
+  newton_atol: 1.0e-9    # the SVK residual's roundoff floor at tiny loads
+  model: st_venant_kirchhoff
+  youngs_modulus: 1.4e6
+  poisson_ratio: 0.4
+  plane: strain
+  density: 10000
+  analysis: dynamic
+  time_scheme: bdf      # BDF2, the fluid's scheme: undamped generalized-alpha
+                        # (rho_inf 1) left a step-to-step force ripple
+  probe: [0.6, 0.2]
+fsi:
+  enabled: true
+  solid: hyperelasticity
+  solid_fixed: [cylinder]
+  fluid_density: 1000
+  acceleration: iqn_ils
+  reuse: 2
+  rtol: 1.0e-6          # 1e-4 leaves a coupling error that the added mass
+                        # turns into a force ripple 100x larger (docs/fsi.md)
+solver:
+  rtol: 1.0e-9          # well below fsi.rtol, or the subiterations stall
+forces:
+  enabled: true
+  boundaries: [cylinder, flag]
+  reference_velocity: 1.0
+  reference_area: 0.002
+  interval: 1
+output:
+  path: fsi2
+  name: fsi2
+  progress: 0.5

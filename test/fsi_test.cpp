@@ -15,7 +15,9 @@
 //     start's pressure pulse a static flag swings far out);
 //  F6 Robin-Neumann and Robin-Robin converge to Dirichlet-Neumann's coupled
 //     steps, with u = w on the interface at convergence;
-//  F7 so does Neumann-Dirichlet (on a soft flag).
+//  F7 so does Neumann-Dirichlet (on a soft flag);
+//  F8 the St. Venant-Kirchhoff solid reaches the linear one's coupled steps
+//     at small strain.
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -346,7 +348,8 @@ namespace
  */
 void CompareWithDirichletNeumann(const std::vector<std::string>& variants,
                                  const std::string& youngs, bool ramp,
-                                 double vel_tol, std::vector<long long>& its)
+                                 double vel_tol, std::vector<long long>& its,
+                                 double tip_tol = 1e-6)
 {
    std::vector<std::string> keys = {"  coupling: dirichlet_neumann\n"};
    keys.insert(keys.end(), variants.begin(), variants.end());
@@ -415,7 +418,12 @@ void CompareWithDirichletNeumann(const std::vector<std::string>& variants,
    {
       EXPECT_LT(MaxDiff(u[0], u[v]), vel_tol * scale) << keys[v];
       // The coupling's tolerance is relative to the whole displacement.
-      EXPECT_NEAR(tip[v], tip[0], 1e-6 * dmax) << keys[v];
+      EXPECT_NEAR(tip[v], tip[0], tip_tol * dmax) << keys[v];
+      if (Mpi::Root())
+      {
+         std::cout << "[fsi] tip u_y " << tip[v] << " against " << tip[0]
+                   << " (largest displacement " << dmax << ")" << std::endl;
+      }
    }
 }
 
@@ -452,3 +460,18 @@ TEST(Fsi, F7_NeumannDirichletMatchesDirichletNeumann)
    EXPECT_LT(its[1], its[0]);
 }
 
+// F8: the St. Venant-Kirchhoff solid (fsi.solid hyperelasticity, loaded by
+// the traction per reference area) reaches the linear solid's coupled steps
+// where the strains are small. On the ramped start the flows differ at second
+// order in the displacement (E 1.4e6 / 1.4e7 / 1.4e8: 9e-5 / 4e-6 / 7e-8 of
+// the velocity), the tip by ~1e-3 of itself at every E (both solids alone
+// agree to 1e-10: the traction's quadrature, presumably).
+TEST(Fsi, F8_HyperelasticSolidMatchesTheLinearOneAtSmallStrain)
+{
+   std::vector<long long> its;
+   CompareWithDirichletNeumann({"  coupling: dirichlet_neumann\n"
+                                "  solid: hyperelasticity\n"},
+                               "1.4e7", true, 1e-3, its, 1e-4);
+   ASSERT_EQ(its.size(), 2u);
+   EXPECT_GT(its[1], 0);
+}

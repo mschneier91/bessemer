@@ -37,6 +37,17 @@ enum class FsiCoupling
    RobinRobin
 };
 
+/// The solid's model (`fsi.solid`).
+enum class FsiSolidModel
+{
+   /// Small-strain linear elasticity (LinearElasticity): the load on the
+   /// reference configuration, no geometric stiffening or shortening.
+   LinearElasticity,
+   /// Large deformation, St. Venant-Kirchhoff by default (Hyperelasticity,
+   /// `solid.model`): the Turek-Hron benchmarks' solid.
+   Hyperelasticity
+};
+
 /// How the interface displacement is relaxed between subiterations.
 enum class FsiAcceleration
 {
@@ -64,6 +75,8 @@ struct FsiParameters
    double fluid_density = 1.0; ///< rho_f: the fluid's traction is rho_f times
    ///< the kinematic one.
    FsiCoupling coupling = FsiCoupling::DirichletNeumann; ///< Conditions.
+   /// The solid's model.
+   FsiSolidModel solid = FsiSolidModel::LinearElasticity;
    /// The fluid's Robin coefficient alpha_f (a density times a velocity);
    /// <= 0: Badia, Nobile and Vergara's rho_s H / dt (Parameters::
    /// FsiFluidRobin()).

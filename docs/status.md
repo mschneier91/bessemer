@@ -4,10 +4,30 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-21)
+## Where development left off (2026-10-23)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**FSI stage F5: the St. Venant-Kirchhoff solid in the coupling, FSI1-FSI3 (2026-10-23,
+branch `claude/project-thread-xnsz2c`; human: "Ok ya pull down the latest and do F5").**
+`fsi.solid: linear_elasticity | hyperelasticity` (`FsiSolid`, fsi/fsi_solid.hpp: an adapter
+over either class); the SVK solid takes the nominal traction (the fluid's moments through the
+reference interface's mass, `FsiCase::NominalTractionFromLoad`), Dirichlet-Neumann only, and
+dynamic only: a static SVK solid is refused (human 2026-10-23, "that sounds right"; a massless
+solid makes the subiterations try 0.1-0.5 m on FSI1, where SVK folds; the linear one survives
+by staying linear; docs/fsi.md §1). Tests `fsi_test` F8 (SVK = linear at small strain),
+`run_case_rejects_static_svk_fsi`. Decks `benchmarks/turek_hron/fsi1_svk.yaml`, `fsi2.yaml`,
+`fsi3.yaml` (BDF2 solid, `fsi.rtol` 1e-6, `solver.rtol` 1e-9: at 1e-4 and undamped
+generalized-alpha FSI3's forces carried a growing step-to-step ripple), `fsi.py`. Coarse
+mesh, np 4: FSI1 SVK u_x +2.0 % (linear +6.5 %), u_y -1.4 %, drag +0.30 %, lift -0.06 %;
+FSI3 displacement amplitudes -3.7/-4.0 %, frequency +2.0 %, drag mean +0.4 %, drag and lift
+amplitudes +17 / -8.5 % (not separated; mesh and dt not varied), 5.7 h. FSI2: running.
+Found in Hyperelasticity (not changed): Newton cannot stop at tiny loads, its residual's
+roundoff floor (~4.5e-11 on the flag) is above both relative tests; the decks set
+`solid.newton_atol` 1e-9. Cloud scratch build, CPU; fast tier as on main there (the 10 known
+scratch-build failures). Not on a GPU. **Next:** FSI2's result, the meshes for FSI3's force
+amplitudes, an absolute Newton floor in Hyperelasticity, SVK under the other conditions.
 
 **The GPU suite is green again: diagonals of matrices with empty rows (2026-10-23,
 `1b5e44e`).** MFEM's `HypreParMatrix::GetDiag` and hypre's Jacobi read each row's first

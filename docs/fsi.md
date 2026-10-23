@@ -12,9 +12,11 @@ fully coupled and iterated; 2026-10-22, "then do the coupling".
 Built so far (CPU only): the four interface conditions, Dirichlet-Neumann
 (the default), Robin-Neumann, Neumann-Dirichlet and Robin-Robin (sections
 2-4), with constant, dynamic Aitken or IQN-ILS updates, the linear
-(small-strain) solid, static or dynamic, matching or non-matching interfaces
-by point search. Not yet: the St. Venant-Kirchhoff solid in the coupling,
-restarts, a GPU run.
+(small-strain) solid or the St. Venant-Kirchhoff one (`fsi.solid`, stage F5;
+Dirichlet-Neumann and dynamic only; FSI1-3 in
+benchmarks/turek_hron/README.md), static or dynamic, matching or non-matching
+interfaces by point search. Not yet: the St. Venant-Kirchhoff solid under the
+other three conditions, restarts, a GPU run.
 
 ## 1. The coupling
 
@@ -58,11 +60,53 @@ derivative of the interface's positions, so the kinematic condition holds in
 the fluid's own discrete sense (geometric consistency), not as the solid's
 velocity.
 
-**The solid's traction is applied on the reference interface.** The traction
-is a Cauchy traction on the moved interface; the small-strain solid integrates
-it over the undeformed one. The two differ at the order of the strain, the
-small-strain model's own error. The St. Venant-Kirchhoff solid will take the
-nominal traction.
+**The solid's traction** (`fsi.solid`). The fluid's moments are those of a
+Cauchy traction on the moved interface, sigma n dGamma, and those of the
+nominal traction (per reference area) on the reference one, P N dGamma_0: the
+same numbers. The St. Venant-Kirchhoff solid (`fsi.solid: hyperelasticity`,
+`Hyperelasticity`, total Lagrangian) takes the nominal one, M_Gamma0 t_0 =
+-rho_f r with the reference interface's mass (`FsiCase::NominalTractionFromLoad`),
+a dead load within each subiteration (the subiterations themselves carry the
+follower part, so the solid needs no follower-load linearization). The
+small-strain solid (`linear_elasticity`, the default) takes the Cauchy traction
+of the moved interface on its undeformed one; the two differ at the order of
+the strain, the small-strain model's own error, and the F3/F4 results stay
+bitwise. The other conditions pass the solid a traction field per current
+area (Robin-Neumann, Robin-Robin) or take its reaction as one
+(Neumann-Dirichlet), so they refuse the St. Venant-Kirchhoff solid until their
+iterate becomes the moments. `FsiSolid` (fsi/fsi_solid.hpp) is the common
+interface: an adapter over either class, whose methods have the same names.
+
+**The St. Venant-Kirchhoff solid must be dynamic** (`solid.analysis:
+dynamic`; a static one is refused at setup, test
+`run_case_rejects_static_svk_fsi`). A static solid has no mass, the worst
+added-mass case for Dirichlet-Neumann: the interface velocity w ~ d / dt
+turns a small displacement into a large load change, and the flag's bending
+compliance turns that back into a large displacement. On FSI1's first step
+the second subiteration's displacement jumps from 6e-6 m to 0.011 m with
+either solid (traced 2026-10-23: every Newton solve converged, CG to 1e-13).
+The linear solid stays linear however far out IQN-ILS explores, and the
+subiterations recover; the SVK flag meets trial displacements of 0.1-0.5 m,
+longer than the flag itself, folds and finds spurious equilibria, and the
+subiterations never come back. The dynamic flag reaches the same steady
+state (benchmarks/turek_hron/fsi1_svk.yaml).
+
+**The force ripple at a density ratio of one** (FSI3, 2026-10-23). With
+rho_s = rho_f the added mass turns the coupling's leftover interface error
+into a force through 1/dt^2: at `fsi.rtol` 1e-4 the lift carried a
+step-to-step ripple that grew with the flag's motion (+-25,000 against a
+reference amplitude of 150 by t = 4.5), the displacement smooth. Undamped
+generalized-alpha (rho_inf 1) made it 17x worse than a BDF2 solid, whose
+velocity matches the fluid's BDF2 mesh velocity. The FSI2/FSI3 decks
+therefore step the solid by BDF2 and couple to `fsi.rtol` 1e-6 (the ripple
+100x smaller, 4.4 -> 5.0 subiterations per step), with `solver.rtol` 1e-9:
+the flow solve must sit well below the coupling tolerance, or IQN-ILS stalls
+on its noise (at the default it stopped in the third step).
+
+**Newton at tiny loads.** The SVK residual has a roundoff floor near
+eps E |Omega_s| (4.5e-11 on the Turek-Hron flag), and both of Newton's
+relative tests can sit below it when the load is small (the first steps of a
+ramp), so Newton runs to its cap. The FSI decks set `solid.newton_atol: 1e-9`.
 
 ## 2. Robin-Neumann (`fsi.coupling: robin_neumann`)
 
@@ -204,7 +248,8 @@ subiterations in two steps, IQN-ILS reusing two steps 25, Aitken 54-62
 steps, at 0.5 divergent. A density ratio of one is the hard case of
 Dirichlet-Neumann coupling (the added-mass effect; Causin, Gerbeau and Nobile
 2005); on this flag IQN-ILS handles it better than the Robin condition does
-(section 2), and FSI3 is the test still ahead.
+(section 2). On FSI3 itself, IQN-ILS to 1e-6 takes 4.5 subiterations per
+step (benchmarks/turek_hron/README.md).
 
 ## 6. The interface maps (`fsi/interface_transfer`)
 
@@ -240,6 +285,7 @@ fsi:
   solid_fixed: [cylinder]   # the solid mesh's clamp
   solid_interface: []       # empty: the fluid's interface names
   fluid_density: 1000       # the solid's load is rho_f times the kinematic one
+  solid: linear_elasticity  # | hyperelasticity (St. Venant-Kirchhoff, solid.model)
   coupling: dirichlet_neumann  # | robin_neumann | neumann_dirichlet | robin_robin
   alpha_fluid: 0            # robin_*: <= 0 face by face (section 2)
   structure_thickness: 0    # robin_*: > 0 one alpha = rho_s H / dt
@@ -291,7 +337,9 @@ fluid's interface sits at the solid's, IQN-ILS needs fewer subiterations than
 Aitken; F5 a static solid on a ramped start; F6 Robin-Neumann and Robin-Robin
 (alpha_s 1,000) converge to Dirichlet-Neumann's steps (velocity to 1e-6, the
 tip to 1e-6 of the displacement), with u = w on the interface; F7 so does
-Neumann-Dirichlet on a soft flag, in fewer subiterations. `robin_test` R1-R3
+Neumann-Dirichlet on a soft flag, in fewer subiterations; F8 the St.
+Venant-Kirchhoff solid reaches the linear one's steps at small strain (the
+tip to 1e-4 of the displacement). `robin_test` R1-R3
 covers the fluid's Robin condition alone. The deck end to end:
 `run_case_fsi_flag` ([cases/fsi_flag.yaml](../cases/fsi_flag.yaml), ten
 dynamic steps, 9-12 subiterations each with IQN-ILS, 5 s at np 2).
