@@ -771,6 +771,10 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   step); ours copies and sums (`HangingProlongation`, 2026-10-23). A host read of a
   `HypreParMatrix` (`HostRead()`) must hand it back (`HypreRead()`): its next SpMV otherwise
   takes hypre's host path with device vectors and segfaults, on a GPU only.
+- **Boundary and interface `HypreParMatrix`es have empty rows**: never take their diagonal
+  with `GetDiag` or precondition them with `HypreSmoother::Jacobi` (both read each row's
+  first entry as its diagonal: garbage on a host, an illegal access or NaNs on a GPU). Use
+  `HypreDiagonal` (precond/hypre_device), and Jacobi on it with 1 where a row has none.
 - **Aliases (`MakeRef`) on device memory:** `alias.SyncMemory(base)` before use,
   `alias.SyncAliasMemory(base)` after writing through it (MFEM's BlockVector protocol).
 - **Never hand MFEM device paths a hypre-malloc'd buffer:** use

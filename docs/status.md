@@ -9,6 +9,17 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The GPU suite is green again: diagonals of matrices with empty rows (2026-10-23,
+`1b5e44e`).** MFEM's `HypreParMatrix::GetDiag` and hypre's Jacobi read each row's first
+entry as its diagonal; a boundary or interface mass has empty rows off its faces (a rank
+without the faces, no entry at all). On a host that was garbage in two Jacobi diagonals (the
+elastic support's, the Robin term's); on a GPU an illegal access (`linear_elasticity_test`
+E6, `robin_test` R1 at np 2) or a NaN now and then (`fsi_test` F3, the FSI flag deck: hypre's
+Jacobi in `FsiCase`'s interface mass solve; compute-sanitizer initcheck). `HypreDiagonal`
+(precond/hypre_device) searches each row; the interface mass solve preconditions with Jacobi
+on it. Main's GPU suite: 92/92 at np 1 and 2 (job 49679538), the first clean one since the
+FSI work; CPU fast tier np 1/2/4. `fsi_test` F2's cross-run check allows the GPU's 1e-7.
+
 **The structured hanging-node prolongation (2026-10-23, branch `hanging-p`; human: "ok you
 can do this after").** On nonconforming meshes the true-dof applies take
 `HangingProlongation` (copies for the unconstrained dofs, weighted sums for the hanging
@@ -30,7 +41,7 @@ printed digits; Jacobi CG counts within 1 %); `Form()` gave way to `ApplyStiffne
 pass. Two H100s (job 49656532): every 3D Q6 cantilever runs (they stopped in MFEM's kernel
 before) and matches the CPU to 1e-11; `verify_elasticity_test` passes whole at np 1 and 2
 (V2's 3D level included). The suite's GPU failures there are main's: `fsi_test`, the FSI
-flag deck, `linear_elasticity_test` E6 at np 2 (cudaFree; under investigation).
+flag deck, `linear_elasticity_test` E6 at np 2 (cudaFree; fixed since, `1b5e44e`).
 
 **FSI stage F4, part 2: Neumann-Dirichlet and Robin-Robin (2026-10-22, branch
 `claude/project-thread-xnsz2c` after PR #15 merged; human: "when this is all done and
