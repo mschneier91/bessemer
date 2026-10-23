@@ -1089,14 +1089,18 @@ re-resolved on the cluster on 2026-10-10 (MUMPS and the pin).
 
 **Open decisions for the human:** OIFS CFL 2 as the default for production runs.
 
-**Open finding (2026-10-09):** DFG 2D-3 on the refreshed stack differs from the 10-07
-study: C_D,max 2.94858 at dt 0.001 (study 2.94451, a 0.14% spatial shift) and dt 0.0015
-now diverges at t = 3.91 (the study found it stable; threshold ~0.0017). Bitwise the same
-with the pre-OIFS code (`530f93d`) on the new stack, so not this branch's code; the
-square cylinder is bitwise unchanged across the refresh (driver OIFS CFL 2: 1.4265 /
-0.3923 / 0.1565, 2,191 steps, both stacks). Suspects: MFEM 17d1afc → 1c19aba (curved
-DFG mesh / quadrature?) or a code change between the 10-07 study and 10-08. The deck uses
-dt 0.001.
+**DFG 2D-3's 2026-10-09 "shift": resolved 2026-10-23 (human: "look into this").** Not
+the stack and not a code change: a different grad-div. The 10-07 study ran with grad-div
+gamma = 1 h_K (`apps/dfg_cylinder -gd 1`); the deck of 10-09 (`2394084`) set none, and
+`physics.grad_div` defaulted to 0 then. Both reproduce exactly on today's CPU stack (MFEM
+4.10 + PR 5464, hypre 3.1), the old commits built there: the 10-09 deck as it was gives
+C_D,max 2.94857870 at t 3.93632 and diverges at dt 0.0015 at t = 3.9105; the same deck
+with `physics.grad_div: 1` gives the study's 2.94451202, stable at dt 0.0015 (2.94451768);
+the study's code (`55509f1`) and `530f93d` give 2.94451202 too (jobs 49658244, 49659444).
+Grad-div off is closer to John's drag peak on this coarse mesh (0.08% against 0.22%) but
+lowers the explicit convection's stability edge below dt 0.0015. Today's defaults (OIFS,
+BDF3, collocated mass, gamma = (6 / k_u) h_K) give C_D,max 2.94319 (0.26%), C_L,max 9.2%,
+dp(8) 3.4%, stable at 0.0015 (job 49657642); the deck's comment now says so.
 
 ## Log: state and decisions (last full update 2026-10-08)
 
