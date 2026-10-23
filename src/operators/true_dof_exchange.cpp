@@ -139,6 +139,81 @@ TrueDofExchange::TrueDofExchange(ParFiniteElementSpace& fes)
       }
       scount_[i] = static_cast<int>(sdof.size()) - soff_[i];
    }
+   lsrc_.SetSize(nd);
+   std::copy(src.begin(), src.end(), lsrc_.HostWrite());
+   Finish(sdof);
+}
+
+TrueDofExchange::TrueDofExchange(MPI_Comm comm, int ntd, HYPRE_BigInt first,
+                                 const HYPRE_BigInt* ghosts, int ng)
+   : comm_(comm), vdim_(1), ntd_(ntd), ng_(ng)
+{
+   int np = 1;
+   MPI_Comm_size(comm_, &np);
+   // Every rank's first true dof, and the total: the owners' ranges.
+   std::vector<HYPRE_BigInt> starts(np + 1, 0);
+   MPI_Allgather(&first, 1, HYPRE_MPI_BIG_INT, starts.data(), 1,
+                 HYPRE_MPI_BIG_INT, comm_);
+   HYPRE_BigInt mine = ntd, total = 0;
+   MPI_Allreduce(&mine, &total, 1, HYPRE_MPI_BIG_INT, MPI_SUM, comm_);
+   starts[np] = total;
+
+   // The ghosts by owner (ascending numbers: ascending owners).
+   std::vector<int> need(np, 0);
+   for (int g = 0; g < ng; g++)
+   {
+      MFEM_VERIFY(g == 0 || ghosts[g] > ghosts[g - 1], "TrueDofExchange: the "
+                  "ghosts must be ascending");
+      const int o = static_cast<int>(std::upper_bound(starts.begin(), starts.end(),
+                                     ghosts[g]) - starts.begin()) - 1;
+      MFEM_VERIFY(o >= 0 && o < np && (ghosts[g] < first || ghosts[g] >= first + ntd),
+                  "TrueDofExchange: ghost " << ghosts[g] << " out of range or owned");
+      need[o]++;
+   }
+   // Who reads what from this rank.
+   std::vector<int> give(np, 0);
+   MPI_Alltoall(need.data(), 1, MPI_INT, give.data(), 1, MPI_INT, comm_);
+   std::vector<int> ndispl(np, 0), gdispl(np, 0);
+   for (int p = 1; p < np; p++)
+   {
+      ndispl[p] = ndispl[p - 1] + need[p - 1];
+      gdispl[p] = gdispl[p - 1] + give[p - 1];
+   }
+   std::vector<HYPRE_BigInt> asked(gdispl[np - 1] + give[np - 1]);
+   MPI_Alltoallv(const_cast<HYPRE_BigInt*>(ghosts), need.data(), ndispl.data(),
+                 HYPRE_MPI_BIG_INT, asked.data(), give.data(), gdispl.data(),
+                 HYPRE_MPI_BIG_INT, comm_);
+
+   for (int p = 0; p < np; p++)
+   {
+      if (need[p] > 0 || give[p] > 0) { nbr_.push_back(p); }
+   }
+   const int nn = static_cast<int>(nbr_.size());
+   soff_.assign(nn, 0);
+   scount_.assign(nn, 0);
+   goff_.assign(nn, 0);
+   gcount_.assign(nn, 0);
+   std::vector<int> sdof;
+   for (int i = 0; i < nn; i++)
+   {
+      const int p = nbr_[i];
+      goff_[i] = ndispl[p];
+      gcount_[i] = need[p];
+      soff_[i] = static_cast<int>(sdof.size());
+      for (int k = gdispl[p]; k < gdispl[p] + give[p]; k++)
+      {
+         const HYPRE_BigInt t = asked[k] - first;
+         MFEM_VERIFY(t >= 0 && t < ntd, "TrueDofExchange: asked for a dof not "
+                     "owned here");
+         sdof.push_back(static_cast<int>(t));
+      }
+      scount_[i] = give[p];
+   }
+   Finish(sdof);
+}
+
+void TrueDofExchange::Finish(const std::vector<int>& sdof)
+{
    ns_ = static_cast<int>(sdof.size());
 
    // Reduce: per owned shared true dof, its send-list positions, ascending
@@ -161,15 +236,13 @@ TrueDofExchange::TrueDofExchange(ParFiniteElementSpace& fes)
          ro[++m] = k;
       }
    }
-   lsrc_.SetSize(nd);
-   std::copy(src.begin(), src.end(), lsrc_.HostWrite());
    sdof_.SetSize(ns_);
    std::copy(sdof.begin(), sdof.end(), sdof_.HostWrite());
    sbuf_.SetSize(vdim_ * ns_);
    gbuf_.SetSize(vdim_ * ng_);
    sbuf_.UseDevice(true);
    gbuf_.UseDevice(true);
-   req_.reserve(2 * nn);
+   req_.reserve(2 * nbr_.size());
 }
 
 TrueDofExchange::~TrueDofExchange() = default;

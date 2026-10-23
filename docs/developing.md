@@ -765,6 +765,12 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   `Array<int>` they silently drag a device vector back to the host. Mark index lists
   `list.GetMemory().UseDevice(true)` and build them through `HostWrite()` (never `Append`
   onto a possibly device-valid buffer). Found by the debug device in OIFS (2026-10-09).
+- **Prolongations in true-dof applies: `MixedSpaces::VelocityProlongation()` /
+  `PressureProlongation()`, not `fes.GetProlongationMatrix()`.** On a hanging-node mesh MFEM's
+  is an assembled `HypreParMatrix` with a stored transpose (a quarter of a curved adaptive
+  step); ours copies and sums (`HangingProlongation`, 2026-10-23). A host read of a
+  `HypreParMatrix` (`HostRead()`) must hand it back (`HypreRead()`): its next SpMV otherwise
+  takes hypre's host path with device vectors and segfaults, on a GPU only.
 - **Aliases (`MakeRef`) on device memory:** `alias.SyncMemory(base)` before use,
   `alias.SyncAliasMemory(base)` after writing through it (MFEM's BlockVector protocol).
 - **Never hand MFEM device paths a hypre-malloc'd buffer:** use

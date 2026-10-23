@@ -47,7 +47,8 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
    {
       fly_ = std::make_unique<OifsConvection>(spaces_.Velocity(), *rule_,
                                               scratch, /*on_the_fly=*/true,
-                                              /*self_only=*/true);
+                                              /*self_only=*/true,
+                                              spaces_.VelocityProlongation());
       return;
    }
    // Curved elements at orders 6 and 7: the OIFS kernel's self apply by
@@ -60,7 +61,8 @@ Convection::Convection(MixedSpaces& spaces, const RuleBook& rules,
    {
       fly_ = std::make_unique<OifsConvection>(vfes, *rule_, scratch,
                                               /*on_the_fly=*/false,
-                                              /*self_only=*/true);
+                                              /*self_only=*/true,
+                                              spaces_.VelocityProlongation());
       return;
    }
 

@@ -12,6 +12,8 @@
 namespace incns
 {
 
+class HangingProlongation;
+
 /**
  * @brief Owns the velocity and pressure parallel finite element spaces for the
  *        coupled (monolithic) mixed method, plus the saddle-point block offsets.
@@ -35,6 +37,7 @@ public:
     * @param order_p Pressure polynomial order @c k_p (>= 1).
     */
    MixedSpaces(mfem::ParMesh& mesh, int order_u, int order_p);
+   ~MixedSpaces();
 
    /// @return The (mutable) velocity space.
    mfem::ParFiniteElementSpace& Velocity() { return *vfes_; }
@@ -72,6 +75,17 @@ public:
    /// Release the spaces' transfer operators (every GridFunction updated).
    void UpdatesFinished();
 
+   /**
+    * @brief The spaces' prolongations for applies: MFEM's on a conforming
+    *        mesh; on a nonconforming one a HangingProlongation (MFEM's is an
+    *        assembled HypreParMatrix with a stored transpose), built on the
+    *        first call after construction or Update(): collective then.
+    *        Valid until the next Update(), as MFEM's own.
+    */
+   const mfem::Operator* VelocityProlongation() const;
+   /// @copydoc VelocityProlongation
+   const mfem::Operator* PressureProlongation() const;
+
    /// @return Global velocity true-dof count (collective reduction).
    HYPRE_BigInt GlobalVelocityTDofs() const { return vfes_->GlobalTrueVSize(); }
    /// @return Global pressure true-dof count (collective reduction).
@@ -87,6 +101,8 @@ private:
    std::unique_ptr<mfem::ParFiniteElementSpace> pfes_;    ///< Pressure space.
    /// Local (per-rank) true-dof block offsets.
    mfem::Array<int> block_true_offsets_;
+   /// The nonconforming spaces' prolongations (built on demand), or null.
+   mutable std::unique_ptr<HangingProlongation> vp_, pp_;
 };
 
 } // namespace incns

@@ -44,6 +44,24 @@ public:
    /// @param fes A conforming space, vdim 1 or ordered by nodes (borrowed;
    ///            the scalar group communicator is built from it).
    explicit TrueDofExchange(mfem::ParFiniteElementSpace& fes);
+
+   /**
+    * @brief The exchange of scalar true dofs for a given ghost list: the
+    *        dofs other ranks own that this rank reads (a nonconforming
+    *        space's prolongation, HangingProlongation). Collective.
+    *
+    * Ghost g is @p ghosts[g]; owned true dof t is @p first + t. The owners
+    * learn who reads what in one all-to-all at setup. LocalSource() is empty
+    * (no local-dof map here); VDim() is 1.
+    * @param comm   The communicator.
+    * @param ntd    This rank's true dofs.
+    * @param first  The global number of its first.
+    * @param ghosts The global numbers of the ghosts, ascending, none owned
+    *               here (borrowed for the call).
+    * @param ng     Their count.
+    */
+   TrueDofExchange(MPI_Comm comm, int ntd, HYPRE_BigInt first,
+                   const HYPRE_BigInt* ghosts, int ng);
    ~TrueDofExchange();
 
    TrueDofExchange(const TrueDofExchange&) = delete;
@@ -78,6 +96,10 @@ public:
    std::size_t MemoryBytes() const;
 
 private:
+   /// The send list, the reduce CSR and the buffers, once nbr_, soff_,
+   /// scount_, goff_, gcount_ and ng_ are set.
+   void Finish(const std::vector<int>& sdof);
+
    void Start(mfem::real_t* recv, const int* rcount, const int* roff,
               const mfem::real_t* send, const int* scount, const int* soff,
               int tag) const;

@@ -276,8 +276,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
          mass_form_->AddDomainIntegrator(mi);
          mass_form_->Assemble();
          // Unconstrained: no ConstrainedOperator wrapper (two vectors saved).
-         TrueDofOperator(mass_form_->GetProlongation(), *mass_form_,
-                         mass_form_->GetProlongation(), M_);
+         TrueDofOperator(spaces_.VelocityProlongation(), *mass_form_,
+                         spaces_.VelocityProlongation(), M_);
       }
    }
 
@@ -300,8 +300,8 @@ StokesOperator::StokesOperator(MixedSpaces& spaces, const RuleBook& rules,
       // One P_p^T B P_u for both: unconstrained as it is (reactions), and
       // wrapped with the constraints -- what FormRectangularSystemMatrix
       // builds, without a second RAP and its work vectors.
-      TrueDofOperator(div_form_->GetProlongation(), *div_form_,
-                      div_form_->GetOutputProlongation(), Bunc_);
+      TrueDofOperator(spaces_.VelocityProlongation(), *div_form_,
+                      spaces_.PressureProlongation(), Bunc_);
       B_.Reset(new RectangularConstrainedOperator(Bunc_.Ptr(), ess_tdofs_,
                ess_p_tdofs_, false), true);
    }
@@ -431,8 +431,8 @@ Operator& StokesOperator::ViscousUnconstrained()
                       *scratch_);
       viscous_form_->AddDomainIntegrator(kui);
       viscous_form_->Assemble();
-      TrueDofOperator(viscous_form_->GetProlongation(), *viscous_form_,
-                      viscous_form_->GetProlongation(), Kunc_);
+      TrueDofOperator(spaces_.VelocityProlongation(), *viscous_form_,
+                      spaces_.VelocityProlongation(), Kunc_);
    }
    return *Kunc_.Ptr();
 }
@@ -590,15 +590,15 @@ void StokesOperator::BuildMomentum()
       {
          // c0 M is c0 times the mass diagonal, added at every apply with c0
          // read then: a new mass factor re-assembles nothing.
-         TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
-                         momentum_form_->GetProlongation(), Arest_);
+         TrueDofOperator(spaces_.VelocityProlongation(), *momentum_form_,
+                         spaces_.VelocityProlongation(), Arest_);
          base.Reset(new DiagonalShiftOperator(*Arest_.Ptr(), mass_diag_,
                                               opts_.mass_coeff), true);
       }
       else
       {
-         TrueDofOperator(momentum_form_->GetProlongation(), *momentum_form_,
-                         momentum_form_->GetProlongation(), base);
+         TrueDofOperator(spaces_.VelocityProlongation(), *momentum_form_,
+                         spaces_.VelocityProlongation(), base);
       }
       if (robin_)
       {

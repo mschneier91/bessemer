@@ -64,11 +64,15 @@ public:
     *                direction the self apply then forms the Jacobians and the
     *                wind's quadrature data chunk by chunk; on straight-sided
     *                ones it needs @p on_the_fly.
+    * @param prolongation The space's prolongation for the applies
+    *                (MixedSpaces::VelocityProlongation(); borrowed, must
+    *                outlive this); null: MFEM's.
     */
    OifsConvection(mfem::ParFiniteElementSpace& vfes,
                   const mfem::IntegrationRule& ir,
                   ElementScratch* scratch = nullptr, bool on_the_fly = false,
-                  bool self_only = false);
+                  bool self_only = false,
+                  const mfem::Operator* prolongation = nullptr);
 
    /**
     * @brief Whether the on-the-fly path is available: Supported(), 9 or more

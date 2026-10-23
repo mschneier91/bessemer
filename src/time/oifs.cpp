@@ -158,7 +158,9 @@ OifsAdvector::OifsAdvector(MixedSpaces& spaces, const RuleBook& rules,
       const IntegrationRule& ir = rules_.Get(Geometry::CUBE, 3 * spaces_.OrderU());
       if (OifsConvection::Supported(V, ir))
       {
-         combo_ = std::make_unique<OifsConvection>(V, ir, scratch, on_the_fly);
+         combo_ = std::make_unique<OifsConvection>(V, ir, scratch, on_the_fly,
+                  /*self_only=*/false,
+                  spaces_.VelocityProlongation());
       }
    }
    // Host-only: the projections run on the host (MFEM's boundary loop), and

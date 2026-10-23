@@ -13,6 +13,7 @@ add_library(incns STATIC
   amr/mesh_census.cpp
   amr/history_projection.cpp
   spaces/mixed_spaces.cpp
+  spaces/hanging_prolongation.cpp
   quadrature/rule_book.cpp
   util/profiler.cpp
   util/profiled_operator.cpp
@@ -105,7 +106,8 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # the LES subgrid stress at the quadrature points and its contraction with
 # the test functions; solid/hyperelastic_operator.cpp -- the hyperelastic
 # residual, energy and tangent kernels; operators/true_dof_exchange.cpp -- the
-# shared dofs' pack and accumulate; util/device_sync.cpp -- no kernel,
+# shared dofs' pack and accumulate; spaces/hanging_prolongation.cpp -- a
+# nonconforming space's P and P^T; util/device_sync.cpp -- no kernel,
 # but MFEM_DEVICE_SYNC is only cudaDeviceSynchronize() under nvcc.
 #
 # Why it must be nvcc: MFEM_HOST_DEVICE and forall's GPU dispatch are both
@@ -119,6 +121,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # The other entries open with the #error guard (CLAUDE.md).
 if(USE_CUDA)
   set_source_files_properties(bc/boundary_conditions.cpp
+                              spaces/hanging_prolongation.cpp
                               operators/grad_div_integrator.cpp
                               operators/collocated_mass.cpp
                               operators/lean_vector_diffusion.cpp

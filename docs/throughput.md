@@ -1515,3 +1515,49 @@ profile's 11 paths, ~25M DOFs on one H100, ms per step:
 
 The curved adaptive meshes gain least: a fifth of their step is hypre's SpMV of the assembled
 hanging-node prolongation, which none of these changes touch.
+
+## The structured hanging-node prolongation (2026-10-23)
+
+Human 2026-10-22: "ok you can do this after" (the elasticity fix), following the hot spots of
+2026-10-19: on the curved adaptive cylinder hypre's SpMV was 21 % of a step at np 1 and the
+largest kernel at np 4 (25 %), almost all of it the assembled hanging-node prolongation P
+and its stored transpose in every true-dof apply.
+
+**What it is.** `HangingProlongation` (src/spaces/hanging_prolongation.{hpp,cpp}), built once
+from MFEM's assembled P of a nonconforming space:
+- `Mult`: a local dof whose row of P is the identity copies its true dof (or a ghost); a
+  hanging dof sums its weighted masters, in the order of P's row (hypre's order);
+- `MultTranspose`: per true dof and per ghost, the weighted sum of the local dofs that refer
+  to it, in the order of the local dofs; the ghosts' sums are added at their owners in a
+  fixed order: no atomics, no stored transpose;
+- the masters other ranks own (P's off-processor columns) arrive by `TrueDofExchange`'s
+  gather, now constructible from a ghost list (one all-to-all at setup);
+- `MixedSpaces::VelocityProlongation()` / `PressureProlongation()` hand it out on a
+  nonconforming mesh (MFEM's own on a conforming one), built on first use and dropped at
+  `Update()`; `StokesOperator`'s true-dof operators and `OifsConvection` take it.
+
+**Measured** (one H100, the 2026-10-19 decks `p6_cyl_hang_{oifs,imex}_schur_l57` at nz 2 and
+32,000 elements, ~25M DOFs, Nsight Systems; main's binary against hanging-p's on the same node,
+job 49677250):
+
+| Path | main ms/step | hypre SpMV (share, calls) | hanging-p ms/step | P and P^T kernels | change |
+|---|---|---|---|---|---|
+| Curved adaptive OIFS Schur | 848.8 | 213.2 ms (25.1 %, 527) | 771.3 | 30.0 + 45.2 ms | -9.1 % |
+| Curved adaptive IMEX Schur | 679.1 | 173.9 ms (25.6 %, 529) | 584.4 | 20.8 + 31.6 ms | -13.9 % |
+
+The SpMV left after it (39-41 ms, ~264-306 calls a step) is the AMG's. The apply and the
+transpose cost 0.20-0.21 and 0.30-0.32 ms per call at ~25M DOFs, near the memory bandwidth
+for what they read (an index, a value and, in the transpose, a weight per entry); a transpose
+that skips the weights of plain copies would save perhaps 15 ms of a step more (an estimate).
+The GPU suite at np 1 and 2 fails only what main fails (the FSI and Robin tests; status.md),
+every AMR, OIFS and hanging-node test passes.
+
+**Results** change at roundoff on hanging-node meshes (the transposed sums' order differs from
+hypre's stored transpose): the OIFS square cylinder with AMR to t = 12 (11 adaptations) has
+the same mesh history as main and forces within 5e-7 (job 49662829). Conforming meshes take
+MFEM's prolongation as before.
+
+**A GPU-only trap, found on the way.** Reading MFEM's P on the host (`HostRead()`) moves the
+hypre matrix to host memory; its next SpMV then took hypre's host path with device vectors
+and segfaulted, on a GPU only (job 49664616). MFEM's own host reads hand it back
+(`HypreRead()`, as `MergeDiagAndOffd` does); so does the constructor now.

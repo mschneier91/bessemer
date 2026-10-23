@@ -922,7 +922,7 @@ bool OifsConvection::OnTheFlyEligible(const ParFiniteElementSpace& vfes,
 OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
                                const IntegrationRule& ir,
                                ElementScratch* scratch, bool on_the_fly,
-                               bool self_only)
+                               bool self_only, const Operator* prolongation)
    : vfes_(vfes), ir_(ir)
 {
    MFEM_VERIFY(Supported(vfes, ir), "oifs_convection: no kernel for this "
@@ -993,8 +993,8 @@ OifsConvection::OifsConvection(ParFiniteElementSpace& vfes,
    }
    // One rank: the prolongation is the identity, and the local-dof copies
    // (xl_, yl_) would only copy.
-   prolong_ = IsIdentityProlongation(vfes.GetProlongationMatrix())
-              ? nullptr : vfes.GetProlongationMatrix();
+   const Operator* P = prolongation ? prolongation : vfes.GetProlongationMatrix();
+   prolong_ = IsIdentityProlongation(P) ? nullptr : P;
    const int nq = ir.GetNPoints();
    for (Vector* v : {&op_, &ue_, &uq_, &xl_, &xe_, &ye_, &yl_})
    {

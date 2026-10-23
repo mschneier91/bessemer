@@ -9,6 +9,15 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The structured hanging-node prolongation (2026-10-23, branch `hanging-p`; human: "ok you
+can do this after").** On nonconforming meshes the true-dof applies take
+`HangingProlongation` (copies for the unconstrained dofs, weighted sums for the hanging
+ones, a fixed-order transpose, ghost masters through `TrueDofExchange`) in place of MFEM's
+assembled P and its stored transpose. One H100, curved adaptive cylinder (~25M DOFs): OIFS
+Schur 848.8 -> 771.3 ms/step (-9.1 %), IMEX Schur 679.1 -> 584.4 (-13.9 %)
+([throughput.md](throughput.md)). Results change at roundoff on hanging-node meshes only.
+CPU fast tier np 1/2/4, debug device (AMR, OIFS), GPU suite np 1/2: no failures beyond main's.
+
 **Linear elasticity on our kernels: 3D Q6 on a GPU (2026-10-22, branch `elastic-own`;
 human: "ya go ahead with the elasticity fix").** `LinearElasticity`'s stiffness is
 `HyperelasticOperator` with a linear material at orders 1 to 7 (MFEM's partial assembly

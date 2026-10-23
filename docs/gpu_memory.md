@@ -121,7 +121,9 @@ problems on each) and cost a lot when 100M DOFs share one GPU:
    included, plus a stored copy of its transpose (`EnsureMultTranspose`). A structured P
    (copy the true dofs, store only the hanging rows' weights, often one pattern shared by
    many faces, and apply the transpose deterministically without a second copy) would remove
-   most of the remaining hanging-node cost. Related: `GetEssentialTrueDofs` builds that full
+   most of the remaining hanging-node cost. **Done in bessemer (2026-10-23):**
+   `HangingProlongation` (throughput.md, "The structured hanging-node prolongation"),
+   9-14 % of a curved adaptive step on an H100. Related: `GetEssentialTrueDofs` builds that full
    matrix just to find the constrained dofs (~13 B/DOF even on uniform meshes).
 3. *Control over geometric data.* The mesh caches Jacobians and determinants for every rule
    anyone asks for, for the rest of the run, with no way to release one entry, and computing

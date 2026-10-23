@@ -1,6 +1,7 @@
 #include "spaces/mixed_spaces.hpp"
 
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
+#include "spaces/hanging_prolongation.hpp"
 
 namespace incns
 {
@@ -39,8 +40,35 @@ MixedSpaces::MixedSpaces(ParMesh& mesh, int order_u, int order_p)
    block_true_offsets_.PartialSum();
 }
 
+MixedSpaces::~MixedSpaces() = default;
+
+namespace
+{
+
+const Operator* ProlongationOf(ParFiniteElementSpace& fes,
+                               std::unique_ptr<HangingProlongation>& own)
+{
+   if (fes.Conforming()) { return fes.GetProlongationMatrix(); }
+   if (!own) { own = std::make_unique<HangingProlongation>(fes); }
+   return own.get();
+}
+
+} // namespace
+
+const Operator* MixedSpaces::VelocityProlongation() const
+{
+   return ProlongationOf(*vfes_, vp_);
+}
+
+const Operator* MixedSpaces::PressureProlongation() const
+{
+   return ProlongationOf(*pfes_, pp_);
+}
+
 void MixedSpaces::Update()
 {
+   vp_.reset(); // of the old spaces
+   pp_.reset();
    vfes_->Update();
    pfes_->Update();
    block_true_offsets_[0] = 0;
