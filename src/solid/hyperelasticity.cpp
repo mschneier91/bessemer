@@ -458,7 +458,12 @@ bool Hyperelasticity::Newton(double c, double theta, const Vector* y,
       const double xnorm = std::sqrt(InnerProduct(comm, x, x));
       const double rel = xnorm > 0.0 ? dxnorm / xnorm : 0.0;
       corrections_.push_back(rel);
-      small = !lift && opts_.newton_dx_rtol > 0.0 && rel <= opts_.newton_dx_rtol;
+      // Or against an absolute size (Options::newton_dx_atol).
+      const double rms = dxnorm / std::sqrt(static_cast<double>
+                                            (fes_->GlobalTrueVSize()));
+      small = !lift && ((opts_.newton_dx_rtol > 0.0 &&
+                         rel <= opts_.newton_dx_rtol) ||
+                        (opts_.newton_dx_atol > 0.0 && rms <= opts_.newton_dx_atol));
       lift = false;
       it++;
    }

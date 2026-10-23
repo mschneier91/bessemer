@@ -53,6 +53,11 @@ public:
       int newton_max_iter = 25;      ///< Newton iterations per solve.
       int load_steps = 1;            ///< Load steps per solve.
       bool line_search = false;      ///< Newton's backtracking.
+      /// Newton also stops when a correction moves the nodes by less than
+      /// this times the domain's size (RMS over the dofs): the data of a
+      /// coupled run's first moves is near zero, where the residual sits at
+      /// its roundoff floor (Hyperelasticity::Options::newton_dx_atol).
+      double position_tol = 1e-10;
    };
 
    /**

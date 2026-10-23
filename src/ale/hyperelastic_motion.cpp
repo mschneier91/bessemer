@@ -39,6 +39,12 @@ HyperelasticMotion::HyperelasticMotion(ParMesh& reference, int order,
    o.newton_max_iter = opts.newton_max_iter;
    o.load_steps = opts.load_steps;
    o.line_search = opts.line_search;
+   // The domain's size (its bounding box's diagonal), the scale of the nodes'
+   // positions. Collective.
+   Vector lo, hi;
+   reference.GetBoundingBox(lo, hi);
+   lo -= hi;
+   o.newton_dx_atol = opts.position_tol * lo.Norml2();
    if (opts.stiffening > 0.0)
    {
       factors_ = LinearElasticMotion::StiffeningFactors(reference, opts.stiffening);

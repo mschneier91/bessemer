@@ -65,6 +65,12 @@ public:
       /// below this times the displacement's (0: off). Corrections keep
       /// falling quadratically to ~1e-15, below the residual's floor.
       double newton_dx_rtol = 1e-10;
+      /// Newton: a load step also converges when a correction's RMS over the
+      /// true dofs falls below this (0: off). For data near zero (a coupled
+      /// run's first mesh moves) neither other test can pass: the residual's
+      /// floor is absolute (P's O(mu) terms cancel at F = I), above
+      /// newton_rtol of a tiny reference, and the displacement has no scale.
+      double newton_dx_atol = 0.0;
       int newton_max_iter = 25;   ///< Newton iterations per load step.
       int load_steps = 1;         ///< Load steps of a Solve().
       bool line_search = false;   ///< Backtracking on the residual norm.

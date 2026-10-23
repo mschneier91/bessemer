@@ -201,6 +201,8 @@ The static solver (milestone 2):
   is in [0.855, 1.146] at 45 degrees (3 Newton iterations there, at most 8 allowed),
   every node returns to rest to 1e-10, and a checkpoint after the second move restarts
   bitwise (on a host).
+- **H9b:** the same model from rest by 1e-14, 1e-8 and 1e-4 radians converges in at most
+  3 Newton iterations (section 4, near-zero data).
 - **H10:** a dynamic cantilever's state exported after three steps; two more steps, then
   the state imported and the two steps again: the same displacement, velocity and
   reaction (bitwise on a host), generalized-alpha and BDF2.
@@ -481,6 +483,13 @@ iterations and CG iterations of the move:
   about 1e-15 on every mesh (CSM1: 2.1e-5, 1.1e-8, 1e-15). So a step also converges at
   `newton_dx_rtol` = 1e-10 (on by default), five orders above where the corrections
   stop. `newton_rtol` stays at 1e-8, not the 1e-10 of the spec's sample deck.
+- **Near-zero data: an absolute correction test.** The neo-Hookean mesh motion's first
+  move in FSI2 (2026-10-23) did not converge: the flag at rest gives data near 1e-15,
+  where neither test can pass. The residual's floor is absolute (P's O(mu) terms cancel
+  at F = I), above `newton_rtol` of so small a reference, and the relative correction has
+  no scale. `newton_dx_atol` (an RMS correction over the true dofs; off by default) ends
+  Newton there; `HyperelasticMotion` sets it to 1e-10 of the domain's size
+  (`position_tol`), far below what node positions need (H9b).
 - **SVK loses strong ellipticity in moderate compression.** V1 first used amplitude 0.1:
   J down to 0.69 in 2D (E = 1, nu = 0.3). There the acoustic tensor's least eigenvalue
   is -0.025 (+0.18 at amplitude 0.05), so the continuous problem is ill-posed. Newton

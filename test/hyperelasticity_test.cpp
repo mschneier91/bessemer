@@ -41,6 +41,9 @@
 //  H9 the neo-Hookean mesh motion (ale/hyperelastic_motion.hpp) turns the DFG
 //     cylinder by 45 degrees and back: the body's nodes follow the turn, det
 //     F > 0, every node returns to rest, a checkpoint restarts bitwise;
+//  H9b the same model from rest by 1e-14, 1e-8 and 1e-4 radians (a coupled
+//     run's first moves: data near zero, the residual at its roundoff floor)
+//     converges in at most 3 Newton iterations;
 //  H10 ExportState / ImportState: a step repeated from an exported state is
 //     the same step (generalized-alpha and BDF2; bitwise on a host);
 //  H11 the reaction (TrackReaction) on the held faces of H4's homogeneous
@@ -1396,6 +1399,39 @@ TEST(Hyperelasticity, H9_MeshMotionTurnsTheCylinder)
    EXPECT_LE(diff, incns_test::ReproTol(0.0)); // bitwise on a host
    MPI_Barrier(MPI_COMM_WORLD);
    std::remove((path + ".r" + std::to_string(Mpi::WorldRank())).c_str());
+}
+
+// H9b
+TEST(Hyperelasticity, H9b_MeshMotionNearRest)
+{
+   // A coupled run's first moves carry data near zero (the flag at rest):
+   // the residual sits at its roundoff floor, above newton_rtol of the tiny
+   // reference, and the displacement has no scale; the correction's size
+   // against the domain's ends Newton (HyperelasticMotion::position_tol).
+   using namespace turned_cylinder;
+   const incns::CylinderChannelSpec spec;
+   for (double a : {1e-14, 1e-8, 1e-4})
+   {
+      VectorFunctionCoefficient g(2, [spec, a](const Vector & X, double t,
+                                  Vector & d)
+      {
+         Turn(spec, a * t, X, d);
+      });
+      auto mesh = CylinderChannel(spec);
+      incns::MeshMotion motion(*mesh, incns::MeshMotion::Options(),
+                               incns::HyperelasticMotion::Factory(
+                                  incns::HyperelasticMotion::Options()));
+      motion.AddDisplacement(incns::kCylinderBody, g);
+      auto& model = static_cast<incns::HyperelasticMotion&>(motion.Model());
+      ASSERT_TRUE(motion.Move(1.0)) << "angle " << a << " "
+                                    << History(model.Solver());
+      EXPECT_LE(model.Solver().NewtonIterations(), 3) << "angle " << a;
+      EXPECT_LT(BoundaryNodeError(*mesh, motion.ReferenceNodes(), spec, a, true),
+                1e-12) << "angle " << a;
+      double jmin, jmax;
+      motion.JacobianRange(jmin, jmax);
+      EXPECT_GT(jmin, 0.0) << "angle " << a;
+   }
 }
 
 // H10
