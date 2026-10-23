@@ -15,7 +15,10 @@ namespace incns
 enum class MeshMotionModelType
 {
    /// Linear elasticity with Jacobian stiffening (LinearElasticMotion).
-   LinearElastic
+   LinearElastic,
+   /// A neo-Hookean pseudo-solid with Jacobian stiffening
+   /// (HyperelasticMotion): large motions.
+   NeoHookean
 };
 
 /// How a moving-mesh flow refreshes its solvers after each move (deck

@@ -323,3 +323,14 @@ verification:
         reference_frequency: 1.0995
         tolerance: 0.025
         tolerance_frequency: 0.01
+    # V3: the DFG cylinder (CylinderChannelSpec defaults, Q3) turned about its
+    # centre in moves of step_degrees up to top_degrees and back, the walls
+    # held, stiffening chi = 1, by the linear, St. Venant-Kirchhoff and
+    # neo-Hookean models. reach_degrees: the neo-Hookean model's least reach
+    # (every move converged, det F > 0). Measured 2026-10-23 (np 4): linear 90
+    # (min det F 0.21 there, inverted at 100), St. Venant-Kirchhoff 40,
+    # neo-Hookean 180 (min det F 0.25 there).
+    mesh_motion:
+      step_degrees: 10.0
+      top_degrees: 180.0
+      reach_degrees: 180.0

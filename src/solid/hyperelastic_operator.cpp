@@ -1360,6 +1360,18 @@ void WithPoints(int n, F&& f)
    }
 }
 
+/// Runs f(mat, n) for the operator's nonlinear material (St. Venant-Kirchhoff
+/// or neo-Hookean) and @p n points per direction.
+template <class F>
+void WithMaterialPoints(HyperelasticMaterial m, int n, F&& f)
+{
+   WithPoints(n, [&](auto nc)
+   {
+      if (m == HyperelasticMaterial::NeoHookean) { f(NeoHookean(), nc); }
+      else { f(StVenantKirchhoff(), nc); }
+   });
+}
+
 /// @return What the linearization stores per point, in dim^2 blocks: 2 F
 ///         and S, 1 F, 0 nothing (the displacement's E-vector instead).
 int StoreFor(TangentStorage s)
@@ -1397,17 +1409,24 @@ public:
    void Mult(const Vector& w, Vector& y) const override
    {
       const auto& m = *op_.maps_;
-      // St. Venant-Kirchhoff by storage: 0 F,S; 1 F; 2 the displacement; the
+      // A nonlinear material by storage: 0 F,S; 1 F; 2 the displacement; the
       // linear material 3 (nothing).
       const int mode = op_.material_ == HyperelasticMaterial::LinearElastic ? 3 :
                        2 - StoreFor(op_.storage_);
+      auto stored = [&](auto mat, auto&& run)
+      {
+         if (mode == 0) { run(mat, std::integral_constant<int, 0> {}); }
+         else if (mode == 1) { run(mat, std::integral_constant<int, 1> {}); }
+         else { run(mat, std::integral_constant<int, 2> {}); }
+      };
       auto modes = [&](auto&& run)
       {
-         using SVK = StVenantKirchhoff;
-         if (mode == 0) { run(SVK(), std::integral_constant<int, 0> {}); }
-         else if (mode == 1) { run(SVK(), std::integral_constant<int, 1> {}); }
-         else if (mode == 2) { run(SVK(), std::integral_constant<int, 2> {}); }
-         else { run(LinearElastic(), std::integral_constant<int, 3> {}); }
+         if (mode == 3) { run(LinearElastic(), std::integral_constant<int, 3> {}); }
+         else if (op_.material_ == HyperelasticMaterial::NeoHookean)
+         {
+            stored(NeoHookean(), run);
+         }
+         else { stored(StVenantKirchhoff(), run); }
       };
       if (op_.lines_)
       {
@@ -1472,6 +1491,7 @@ HyperelasticOperator::HyperelasticOperator(ParFiniteElementSpace& fes,
    dim_ = mesh.Dimension();
    ne_ = mesh.GetNE();
    MFEM_VERIFY(material_ == HyperelasticMaterial::StVenantKirchhoff ||
+               material_ == HyperelasticMaterial::NeoHookean ||
                material_ == HyperelasticMaterial::LinearElastic,
                "HyperelasticOperator: unknown material");
    MFEM_VERIFY(fes.GetVDim() == dim_ && fes.GetOrdering() == Ordering::byNODES &&
@@ -1768,10 +1788,10 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
       Vector& yl = LocalOutput(r);
       ForLines(u, [&](const Vector & x, const LinesMaps & lm, int n)
       {
-         WithPoints(n1d_, [&](auto nc)
+         WithMaterialPoints(material_, n1d_, [&](auto mat, auto nc)
          {
             constexpr int N = decltype(nc)::value;
-            PointwiseLines3D<StVenantKirchhoff, N, true, 0, false>(
+            PointwiseLines3D<decltype(mat), N, true, 0, false>(
                n, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, x, &yl, nullptr,
                nullptr, lm);
          });
@@ -1781,18 +1801,18 @@ void HyperelasticOperator::Mult(const Vector& u, Vector& r) const
    }
    ToElements(u);
    ye_ = 0.0;
-   WithPoints(n1d_, [&](auto nc)
+   WithMaterialPoints(material_, n1d_, [&](auto mat, auto nc)
    {
       constexpr int N = decltype(nc)::value;
       if (dim_ == 2)
       {
-         Pointwise2D<StVenantKirchhoff, N, true, 0, false>(
+         Pointwise2D<decltype(mat), N, true, 0, false>(
             ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, &ye_, nullptr,
             nullptr);
       }
       else
       {
-         Pointwise3D<StVenantKirchhoff, N, true, 0, false>(
+         Pointwise3D<decltype(mat), N, true, 0, false>(
             ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, &ye_, nullptr,
             nullptr);
       }
@@ -1837,13 +1857,13 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
    {
       ForLines(u, [&](const Vector & x, const LinesMaps & lm, int n)
       {
-         WithPoints(n1d_, [&](auto nc)
+         WithMaterialPoints(material_, n1d_, [&](auto mat, auto nc)
          {
             constexpr int N = decltype(nc)::value;
             stores([&](auto sc)
             {
                constexpr int STORE = decltype(sc)::value;
-               PointwiseLines3D<StVenantKirchhoff, N, false, STORE, false>(
+               PointwiseLines3D<decltype(mat), N, false, STORE, false>(
                   n, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, x, nullptr, &lin_,
                   nullptr, lm);
             });
@@ -1857,7 +1877,7 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
       lin_ = ue_; // the displacement's E-vector: the tangent recomputes F, S
       return *tangent_;
    }
-   WithPoints(n1d_, [&](auto nc)
+   WithMaterialPoints(material_, n1d_, [&](auto mat, auto nc)
    {
       constexpr int N = decltype(nc)::value;
       stores([&](auto sc)
@@ -1865,13 +1885,13 @@ Operator& HyperelasticOperator::GetGradient(const Vector& u) const
          constexpr int STORE = decltype(sc)::value;
          if (dim_ == 2)
          {
-            Pointwise2D<StVenantKirchhoff, N, false, STORE, false>(
+            Pointwise2D<decltype(mat), N, false, STORE, false>(
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, &lin_,
                nullptr);
          }
          else
          {
-            Pointwise3D<StVenantKirchhoff, N, false, STORE, false>(
+            Pointwise3D<decltype(mat), N, false, STORE, false>(
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, &lin_,
                nullptr);
          }
@@ -1900,10 +1920,10 @@ double HyperelasticOperator::Energy(const Vector& u) const
    {
       ForLines(u, [&](const Vector & x, const LinesMaps & lm, int n)
       {
-         WithPoints(n1d_, [&](auto nc)
+         WithMaterialPoints(material_, n1d_, [&](auto mat, auto nc)
          {
             constexpr int N = decltype(nc)::value;
-            PointwiseLines3D<StVenantKirchhoff, N, false, 0, true>(
+            PointwiseLines3D<decltype(mat), N, false, 0, true>(
                n, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, x, nullptr, nullptr,
                &qe_, lm);
          });
@@ -1912,18 +1932,18 @@ double HyperelasticOperator::Energy(const Vector& u) const
    else
    {
       ToElements(u);
-      WithPoints(n1d_, [&](auto nc)
+      WithMaterialPoints(material_, n1d_, [&](auto mat, auto nc)
       {
          constexpr int N = decltype(nc)::value;
          if (dim_ == 2)
          {
-            Pointwise2D<StVenantKirchhoff, N, false, 0, true>(
+            Pointwise2D<decltype(mat), N, false, 0, true>(
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
                &qe_);
          }
          else
          {
-            Pointwise3D<StVenantKirchhoff, N, false, 0, true>(
+            Pointwise3D<decltype(mat), N, false, 0, true>(
                ne_, maps_->B, maps_->G, jinv_, wdet_, lambda_, mu_, ue_, nullptr, nullptr,
                &qe_);
          }

@@ -20,6 +20,9 @@ enum class HyperelasticMaterial
 {
    /// St. Venant-Kirchhoff: W = lambda/2 (tr E)^2 + mu E : E.
    StVenantKirchhoff,
+   /// Compressible neo-Hookean: W = mu/2 (tr C - dim) - mu ln J + lambda/2
+   /// (ln J)^2.
+   NeoHookean,
    /// Small-strain linear elasticity (LinearElastic): LinearElasticity's
    /// operator, not a deck model.
    LinearElastic
@@ -154,6 +157,142 @@ struct StVenantKirchhoff
          }
       }
       return 0.5 * lambda * tr * tr + mu * ee;
+   }
+};
+
+/**
+ * @brief Compressible neo-Hookean: W(F) = mu/2 (tr C - dim) - mu ln J +
+ *        lambda/2 (ln J)^2, C = F^T F, J = det F, so P = mu F + (lambda ln J -
+ *        mu) F^-T and S = mu I + (lambda ln J - mu) C^-1.
+ *
+ * Polyconvex, and W -> infinity as J -> 0: compression costs ever more, so
+ * an element resists being folded flat -- what St. Venant-Kirchhoff lacks
+ * (it lost strong ellipticity near J = 0.7, and failed as a mesh-motion
+ * pseudo-solid past ~45 degrees on the turned cylinder). At small strain it is
+ * linear elasticity with the same lambda and mu. J must stay positive (ln J).
+ */
+struct NeoHookean
+{
+   /**
+    * @brief F^-1 and det F.
+    * @param F  The deformation gradient (DIM x DIM).
+    * @param Fi Output: F^-1.
+    * @return det F.
+    */
+   template <int DIM>
+   MFEM_HOST_DEVICE static mfem::real_t Inverse(const mfem::real_t* F,
+         mfem::real_t* Fi)
+   {
+      if constexpr(DIM == 2)
+      {
+         const mfem::real_t J = F[0] * F[3] - F[2] * F[1];
+         Fi[0] = F[3] / J;
+         Fi[1] = -F[1] / J;
+         Fi[2] = -F[2] / J;
+         Fi[3] = F[0] / J;
+         return J;
+      }
+      else
+      {
+         // Cofactors, column-major: F(i, j) = F[i + 3 j].
+         const mfem::real_t c00 = F[4] * F[8] - F[7] * F[5];
+         const mfem::real_t c01 = F[7] * F[2] - F[1] * F[8];
+         const mfem::real_t c02 = F[1] * F[5] - F[4] * F[2];
+         const mfem::real_t J = F[0] * c00 + F[3] * c01 + F[6] * c02;
+         Fi[0] = c00 / J;
+         Fi[1] = c01 / J;
+         Fi[2] = c02 / J;
+         Fi[3] = (F[6] * F[5] - F[3] * F[8]) / J;
+         Fi[4] = (F[0] * F[8] - F[6] * F[2]) / J;
+         Fi[5] = (F[3] * F[2] - F[0] * F[5]) / J;
+         Fi[6] = (F[3] * F[7] - F[6] * F[4]) / J;
+         Fi[7] = (F[6] * F[1] - F[0] * F[7]) / J;
+         Fi[8] = (F[0] * F[4] - F[3] * F[1]) / J;
+         return J;
+      }
+   }
+
+   /**
+    * @brief The second and first Piola-Kirchhoff stresses.
+    * @param F      Deformation gradient (DIM x DIM), det F > 0.
+    * @param lambda First Lame parameter.
+    * @param mu     Shear modulus.
+    * @param S      Output: S = mu I + (lambda ln J - mu) C^-1.
+    * @param P      Output: P = mu F + (lambda ln J - mu) F^-T.
+    */
+   template <int DIM>
+   MFEM_HOST_DEVICE static void Stress(const mfem::real_t* F, mfem::real_t lambda,
+                                       mfem::real_t mu, mfem::real_t* S,
+                                       mfem::real_t* P)
+   {
+      mfem::real_t Fi[DIM * DIM];
+      const mfem::real_t J = Inverse<DIM>(F, Fi);
+      const mfem::real_t a = lambda * log(J) - mu;
+      for (int j = 0; j < DIM; j++)
+      {
+         for (int i = 0; i < DIM; i++)
+         {
+            mfem::real_t ci = 0.0; // C^-1(i, j) = (F^-1 F^-T)(i, j)
+            for (int k = 0; k < DIM; k++) { ci += Fi[i + DIM * k] * Fi[j + DIM * k]; }
+            S[i + DIM * j] = (i == j ? mu : 0.0) + a * ci;
+            P[i + DIM * j] = mu * F[i + DIM * j] + a * Fi[j + DIM * i];
+         }
+      }
+   }
+
+   /**
+    * @brief dP = mu dF + lambda tr(F^-1 dF) F^-T + (mu - lambda ln J) F^-T
+    *        dF^T F^-T.
+    * @param F      Deformation gradient (DIM x DIM).
+    * @param S      Unused (the tangent is formed from F).
+    * @param dF     Its increment.
+    * @param lambda First Lame parameter.
+    * @param mu     Shear modulus.
+    * @param dP     Output.
+    */
+   template <int DIM>
+   MFEM_HOST_DEVICE static void Tangent(const mfem::real_t* F,
+                                        const mfem::real_t* S,
+                                        const mfem::real_t* dF, mfem::real_t lambda,
+                                        mfem::real_t mu, mfem::real_t* dP)
+   {
+      MFEM_CONTRACT_VAR(S);
+      mfem::real_t Fi[DIM * DIM], M[DIM * DIM];
+      const mfem::real_t J = Inverse<DIM>(F, Fi);
+      const mfem::real_t b = mu - lambda * log(J);
+      mfem::real_t tr = 0.0;
+      for (int j = 0; j < DIM; j++)
+      {
+         for (int i = 0; i < DIM; i++)
+         {
+            mfem::real_t m = 0.0; // M = F^-1 dF
+            for (int k = 0; k < DIM; k++) { m += Fi[i + DIM * k] * dF[k + DIM * j]; }
+            M[i + DIM * j] = m;
+         }
+         tr += M[j + DIM * j];
+      }
+      for (int j = 0; j < DIM; j++)
+      {
+         for (int i = 0; i < DIM; i++)
+         {
+            mfem::real_t a = 0.0; // (F^-T dF^T F^-T)(i, j) = (M F^-1)(j, i)
+            for (int k = 0; k < DIM; k++) { a += M[j + DIM * k] * Fi[k + DIM * i]; }
+            dP[i + DIM * j] = mu * dF[i + DIM * j] + lambda * tr * Fi[j + DIM * i] +
+                              b * a;
+         }
+      }
+   }
+
+   /// @return The strain energy density W(F).
+   template <int DIM>
+   MFEM_HOST_DEVICE static mfem::real_t Energy(const mfem::real_t* F,
+         mfem::real_t lambda, mfem::real_t mu)
+   {
+      mfem::real_t Fi[DIM * DIM];
+      const mfem::real_t lj = log(Inverse<DIM>(F, Fi));
+      mfem::real_t c = 0.0; // tr C = |F|^2
+      for (int i = 0; i < DIM * DIM; i++) { c += F[i] * F[i]; }
+      return 0.5 * mu * (c - DIM) - mu * lj + 0.5 * lambda * lj * lj;
    }
 };
 

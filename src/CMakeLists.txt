@@ -76,6 +76,8 @@ add_library(incns STATIC
   solid/hyperelasticity.cpp
   solid/elasticity_case.cpp
   ale/linear_elastic_motion.cpp
+  ale/hyperelastic_motion.cpp
+  ale/mesh_motion_factory.cpp
   ale/mesh_motion.cpp
   ale/mesh_convection.cpp
   ale/mesh_motion_case.cpp

@@ -13,7 +13,10 @@
 //     point A against the benchmark's reference values (FeatFlow), converging
 //     as the flag mesh is refined. CSM3: the flag released from rest, dynamic;
 //     the mean, amplitude and frequency of point A's oscillation against the
-//     benchmark's at its time step.
+//     benchmark's at its time step;
+//  V3 mesh motion: the DFG cylinder turned about its centre by a large angle
+//     and back, the walls held, by the linear, St. Venant-Kirchhoff and
+//     neo-Hookean models: each one's reach.
 // Settings and thresholds: baselines.yaml `verification.hyperelasticity`.
 // Theory (V1): ||u - u_h||_L2 at k + 1, |u - u_h|_H1 at k. Pass: the rate
 // fitted over all levels >= theory - rate_margin.
@@ -21,7 +24,12 @@
 #include <gtest/gtest.h>
 
 #include "elasticity_test_util.hpp"
+#include "turned_cylinder.hpp"
 #include "verify_util.hpp"
+
+#include "ale/hyperelastic_motion.hpp"
+#include "ale/linear_elastic_motion.hpp"
+#include "ale/mesh_motion.hpp"
 
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
@@ -401,4 +409,90 @@ TEST(VerifyHyperelasticity, V2_TurekHronCSM3)
    EXPECT_NEAR(oy.amplitude, ry[1], tol * ry[1]) << st.str();
    EXPECT_NEAR(ox.frequency, rf, tol_f * rf) << st.str();
    EXPECT_NEAR(oy.frequency, rf, tol_f * rf) << st.str();
+}
+
+TEST(VerifyHyperelasticity, V3_CylinderTurnedFar)
+{
+   // The DFG cylinder turned about its centre in steps of step_degrees up to
+   // top_degrees and back, every other boundary held, stiffening chi = 1: the
+   // linear, St. Venant-Kirchhoff and neo-Hookean models. Each one's reach,
+   // the largest angle on the way up with every move converged and det F > 0.
+   // The neo-Hookean model must reach at least as far as the linear one and
+   // reach_degrees, converge at every move, and return to rest
+   // (docs/hyperelasticity.md section 4).
+   using namespace turned_cylinder;
+   const YAML::Node s = Settings()["mesh_motion"];
+   const double step = s["step_degrees"].as<double>() * M_PI / 180.0;
+   const double top = s["top_degrees"].as<double>() * M_PI / 180.0;
+   const int n = static_cast<int>(std::lround(top / step));
+   const incns::CylinderChannelSpec spec;
+   VectorFunctionCoefficient g(2, [spec, top](const Vector & X, double t,
+                               Vector & d)
+   {
+      Turn(spec, TurnAngle(t, top), X, d);
+   });
+   const char* names[3] = {"linear_elastic", "st_venant_kirchhoff", "neo_hookean"};
+   double reach[3] = {0.0, 0.0, 0.0};
+   for (int m = 0; m < 3; ++m)
+   {
+      auto mesh = CylinderChannel(spec);
+      incns::MeshMotionModelFactory factory;
+      if (m == 0)
+      {
+         factory = incns::LinearElasticMotion::Factory(
+                      incns::LinearElasticMotion::Options());
+      }
+      else
+      {
+         incns::HyperelasticMotion::Options h;
+         h.material = m == 1 ? incns::HyperelasticMaterial::StVenantKirchhoff :
+                      incns::HyperelasticMaterial::NeoHookean;
+         factory = incns::HyperelasticMotion::Factory(h);
+      }
+      incns::MeshMotion motion(*mesh, incns::MeshMotion::Options(), factory);
+      motion.AddDisplacement(incns::kCylinderBody, g);
+      bool valid = true, all = true;
+      for (int k = 1; k <= 2 * n; ++k)
+      {
+         const bool ok = motion.Move(k * step);
+         all = all && ok;
+         double jmin, jmax;
+         motion.JacobianRange(jmin, jmax);
+         const double deg = TurnAngle(k * step, top) * 180.0 / M_PI;
+         if (k <= n)
+         {
+            valid = valid && ok && jmin > 0.0;
+            if (valid) { reach[m] = deg; }
+         }
+         int newton = 0;
+         if (m > 0)
+         {
+            newton = static_cast<incns::HyperelasticMotion&>(motion.Model())
+                     .Solver().NewtonIterations();
+         }
+         if (Mpi::Root())
+         {
+            std::cout << "[V3] " << names[m] << " " << std::lround(deg)
+                      << " deg: det F in [" << jmin << ", " << jmax << "], "
+                      << (ok ? "converged" : "NOT converged") << ", Newton "
+                      << newton << ", CG " << motion.Model().Iterations()
+                      << std::endl;
+         }
+      }
+      const double rest = RestError(*mesh, motion.ReferenceNodes());
+      if (Mpi::Root())
+      {
+         std::cout << "[V3] " << names[m] << ": reach " << reach[m]
+                   << " deg; back at rest: max |x - X| " << rest << ", every move "
+                   << (all ? "converged" : "NOT converged") << std::endl;
+      }
+      if (m == 2)
+      {
+         EXPECT_TRUE(all) << "a neo-Hookean move did not converge";
+         EXPECT_LT(rest, 1e-10);
+      }
+   }
+   EXPECT_GE(reach[2], reach[0]) << "the neo-Hookean model turns the cylinder "
+                                 "less far than the linear one";
+   EXPECT_GE(reach[2], s["reach_degrees"].as<double>());
 }

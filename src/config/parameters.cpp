@@ -1160,9 +1160,16 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "1 is the trapezoidal rule (energy-conserving, no damping), smaller "
           "values damp the unresolved high frequencies more.");
    r.ReadEnum(solid, "model", sp.model,
-   {{"st_venant_kirchhoff", SolidModel::StVenantKirchhoff}},
-   "Equation hyperelasticity: the material. St. Venant-Kirchhoff, W = lambda/2 "
-   "(tr E)^2 + mu E : E with E the Green-Lagrange strain (plane strain in 2D).");
+   {
+      {"st_venant_kirchhoff", SolidModel::StVenantKirchhoff},
+      {"neo_hookean", SolidModel::NeoHookean}
+   },
+   "Equation hyperelasticity: the material (plane strain in 2D). St. "
+   "Venant-Kirchhoff: W = lambda/2 (tr E)^2 + mu E : E, E the Green-Lagrange "
+   "strain (the Turek-Hron benchmarks'). Neo-Hookean: W = mu/2 (tr C - dim) - "
+   "mu ln J + lambda/2 (ln J)^2, which resists compression without bound "
+   "(J -> 0) where St. Venant-Kirchhoff softens; both are the linear model at "
+   "small strain.");
    r.Read(solid, "newton_rtol", sp.newton_rtol,
           "Equation hyperelasticity: a load step converges when its residual "
           "falls below newton_rtol times the largest of its first residual, its "
@@ -1298,9 +1305,16 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                                         "(docs/ale_fluid.md); steps is then "
                                         "not used.");
    r.ReadEnum(motion, "model", mm.model,
-   {{"linear_elastic", MeshMotionModelType::LinearElastic}},
-   "The extension model: small-strain linear elasticity on the reference "
-   "mesh with Jacobian stiffening (Stein, Tezduyar and Benney 2003).");
+   {
+      {"linear_elastic", MeshMotionModelType::LinearElastic},
+      {"neo_hookean", MeshMotionModelType::NeoHookean}
+   },
+   "The extension model, both with the Jacobian stiffening. linear_elastic: "
+   "small-strain linear elasticity on the reference mesh (Stein, Tezduyar and "
+   "Benney 2003), the standard for moderate motions. neo_hookean: a "
+   "neo-Hookean pseudo-solid, one Newton solve per move: frame-indifferent, so "
+   "a turned body region costs nothing, and its energy grows without bound as "
+   "an element is squeezed flat (docs/mesh_motion.md); for large motions.");
    r.Read(motion, "poisson_ratio", mm.poisson_ratio,
           "Poisson's ratio of the pseudo-solid (-1 < nu < 1/2); its Young's "
           "modulus does not matter (the problem is displacement-driven).");

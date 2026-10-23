@@ -51,7 +51,10 @@ enum class SolidTimeScheme
 enum class SolidModel
 {
    /// St. Venant-Kirchhoff: W = lambda/2 (tr E)^2 + mu E : E.
-   StVenantKirchhoff
+   StVenantKirchhoff,
+   /// Compressible neo-Hookean: W = mu/2 (tr C - dim) - mu ln J + lambda/2
+   /// (ln J)^2.
+   NeoHookean
 };
 
 /**

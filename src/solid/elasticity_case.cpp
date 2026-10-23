@@ -49,6 +49,9 @@ Hyperelasticity::Options HyperelasticOptions(const Parameters& p)
       case SolidModel::StVenantKirchhoff:
          o.material = HyperelasticMaterial::StVenantKirchhoff;
          break;
+      case SolidModel::NeoHookean:
+         o.material = HyperelasticMaterial::NeoHookean;
+         break;
    }
    o.newton_rtol = s.newton_rtol;
    o.newton_atol = s.newton_atol;
@@ -403,7 +406,11 @@ void ElasticityCase::WriteSummary(const std::string& path,
    }
    Json& c = j["case"];
    c["equation"].Set(hyper_ ? "hyperelasticity" : "linear_elasticity");
-   if (hyper_) { c["model"].Set("st_venant_kirchhoff"); }
+   if (hyper_)
+   {
+      c["model"].Set(s.model == SolidModel::NeoHookean ? "neo_hookean" :
+                     "st_venant_kirchhoff");
+   }
    c["dim"].Set(dim);
    c["order"].Set(Order());
    c["youngs_modulus"].Set(s.youngs_modulus);

@@ -5,14 +5,17 @@
 //     differences of P; frame indifference P(QF) = Q P(F); no stress under a
 //     rotation; the small-strain limit P(I + eps H) / eps -> lambda tr(H) I +
 //     mu (H + H^T), the linear model's stress;
+//  H1b the same for the neo-Hookean material, and its energy growing without
+//     bound as J -> 0 (St. Venant-Kirchhoff's stays bounded);
 //  H2 the partially assembled residual and tangent equal MFEM's
 //     HyperelasticNLFIntegrator with an independent SVK model (full assembly,
 //     its unknown the deformed position X + u) at a finite random displacement
 //     on curved meshes: 2D Q3, 3D Q2, 2D Q6; at 3D Q6 the residual only (that
-//     full-assembly tangent is too slow for a test; H3 covers it);
+//     full-assembly tangent is too slow for a test; H3 covers it); H2b the
+//     same with an independent neo-Hookean model;
 //  H3 the tangent is the residual's derivative (the Taylor remainder falls as
 //     eps^2) and the residual the energy's (a central difference), 2D Q3, 3D Q2,
-//     3D Q6;
+//     3D Q6, for both materials;
 //  HD two applies agree bitwise (no atomics on a device).
 //  HM the three tangent storages give the same tangent (to roundoff), the
 //     displacement storage keeps the least memory, and borrowed work buffers
@@ -35,6 +38,9 @@
 //     the linear model's stays (by symmetry); the summary written. Dynamic: a
 //     load applied suddenly at rest, the midpoint rule's energy balance, the
 //     history CSV with the Newton iterations;
+//  H9 the neo-Hookean mesh motion (ale/hyperelastic_motion.hpp) turns the DFG
+//     cylinder by 45 degrees and back: the body's nodes follow the turn, det
+//     F > 0, every node returns to rest, a checkpoint restarts bitwise;
 //  H10 ExportState / ImportState: a step repeated from an exported state is
 //     the same step (generalized-alpha and BDF2; bitwise on a host);
 //  H11 the reaction (TrackReaction) on the held faces of H4's homogeneous
@@ -51,17 +57,24 @@
 #include "mesh/case_mesh.hpp"
 #include "quadrature/rule_book.hpp"
 #include "solid/elasticity_case.hpp"
+#include "turned_cylinder.hpp"
+
+#include "ale/hyperelastic_motion.hpp"
+#include "ale/mesh_motion.hpp"
 #include "solid/hyperelastic_operator.hpp"
 #include "solid/hyperelasticity.hpp"
 #include "solid/linear_elasticity.hpp"
 #include "mfem.hpp"
 
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using namespace mfem;
@@ -70,6 +83,7 @@ using incns::HyperelasticOperator;
 using incns::RuleBook;
 using incns::TangentStorage;
 using incns::ElementScratch;
+using incns::NeoHookean;
 using incns::StVenantKirchhoff;
 
 namespace
@@ -156,6 +170,69 @@ private:
    double lambda_, mu_;
 };
 
+/// The neo-Hookean model written independently of
+/// solid/hyperelastic_material.hpp: W = mu/2 (|F|^2 - dim) - mu ln J + lambda/2
+/// (ln J)^2, P = mu F + (lambda ln J - mu) F^-T, and the tangent in index form,
+/// dP_ak / dF_bl = mu d_ab d_kl + lambda F^-1_lb F^-1_ka - (lambda ln J - mu)
+/// F^-1_kb F^-1_la.
+class NeoHookeanReference : public HyperelasticModel
+{
+public:
+   NeoHookeanReference(double lambda, double mu) : lambda_(lambda), mu_(mu) {}
+
+   real_t EvalW(const DenseMatrix& F) const override
+   {
+      const double lj = std::log(F.Det());
+      return 0.5 * mu_ * (F.FNorm2() - F.Height()) - mu_ * lj +
+             0.5 * lambda_ * lj * lj;
+   }
+
+   void EvalP(const DenseMatrix& F, DenseMatrix& P) const override
+   {
+      DenseMatrix FiT(F.Height());
+      CalcInverseTranspose(F, FiT);
+      P = F;
+      P *= mu_;
+      P.Add(lambda_ * std::log(F.Det()) - mu_, FiT);
+   }
+
+   void AssembleH(const DenseMatrix& F, const DenseMatrix& DS, const real_t w,
+                  DenseMatrix& A) const override
+   {
+      const int dof = DS.Height(), dim = DS.Width();
+      DenseMatrix Fi(dim);
+      CalcInverse(F, Fi);
+      const double lj = std::log(F.Det());
+      for (int j = 0; j < dof; j++)
+      {
+         for (int b = 0; b < dim; b++)
+         {
+            for (int i = 0; i < dof; i++)
+            {
+               for (int a = 0; a < dim; a++)
+               {
+                  double s = 0.0;
+                  for (int k = 0; k < dim; k++)
+                  {
+                     for (int l = 0; l < dim; l++)
+                     {
+                        const double c = (a == b && k == l ? mu_ : 0.0) +
+                                         lambda_ * Fi(l, b) * Fi(k, a) -
+                                         (lambda_ * lj - mu_) * Fi(k, b) * Fi(l, a);
+                        s += DS(i, k) * c * DS(j, l);
+                     }
+                  }
+                  A(i + a * dof, j + b * dof) += w * s;
+               }
+            }
+         }
+      }
+   }
+
+private:
+   double lambda_, mu_;
+};
+
 // An n^dim box with order-k nodes moved by a smooth map (curved elements).
 Mesh BoxMesh(int dim, int n, int k)
 {
@@ -175,7 +252,8 @@ Mesh BoxMesh(int dim, int n, int k)
 
 struct Problem
 {
-   Problem(int dim, int n, int k)
+   Problem(int dim, int n, int k,
+           HyperelasticMaterial material = HyperelasticMaterial::StVenantKirchhoff)
       : serial(BoxMesh(dim, n, k)), mesh(MPI_COMM_WORLD, serial), fec(k, dim),
         fes(&mesh, &fec, dim, Ordering::byNODES)
    {
@@ -185,8 +263,7 @@ struct Problem
       mu.SetSize(mesh.GetNE());
       lambda = kLambda;
       mu = kMu;
-      op = std::make_unique<HyperelasticOperator>(
-              fes, *ir, HyperelasticMaterial::StVenantKirchhoff, lambda, mu);
+      op = std::make_unique<HyperelasticOperator>(fes, *ir, material, lambda, mu);
    }
    ~Problem() { mesh.DeleteGeometricFactors(); } // keyed by rules' rules
 
@@ -201,6 +278,29 @@ struct Problem
       X.ProjectCoefficient(id);
       Vector t;
       X.GetTrueDofs(t);
+      return t;
+   }
+
+   /// A smooth finite displacement, every gradient entry at most 1.5 pi
+   /// @p a (det F > 0 for a <= 0.05, which neo-Hookean's ln J needs; a random
+   /// one folds high-order elements).
+   Vector Smooth(double a)
+   {
+      ParGridFunction U(&fes);
+      const int dim = fes.GetVDim();
+      VectorFunctionCoefficient f(dim, [a, dim](const Vector & x, Vector & y)
+      {
+         for (int c = 0; c < dim; c++)
+         {
+            y(c) = a * std::sin(M_PI * (x(0) + 0.5 * c)) *
+                   std::sin(M_PI * (x(1) + 0.25 * c)) *
+                   (dim == 3 ? std::cos(0.5 * M_PI * (c + 1) * x(2)) : 1.0);
+         }
+      });
+      U.ProjectCoefficient(f);
+      Vector t;
+      U.GetTrueDofs(t);
+      t.UseDevice(true);
       return t;
    }
 
@@ -269,16 +369,16 @@ DenseMatrix Rotation(int dim, double angle)
    return Q;
 }
 
-template <int DIM>
+template <class MAT, class REF, int DIM>
 void MaterialChecks()
 {
    constexpr int D2 = DIM * DIM;
-   SvkReference ref(kLambda, kMu);
+   REF ref(kLambda, kMu);
    for (int trial = 0; trial < 5; trial++)
    {
       const DenseMatrix F = RandomF(DIM, 11 + trial, 0.6);
       real_t S[D2], P[D2];
-      StVenantKirchhoff::Stress<DIM>(F.GetData(), kLambda, kMu, S, P);
+      MAT::template Stress<DIM>(F.GetData(), kLambda, kMu, S, P);
       DenseMatrix Pref;
       ref.EvalP(F, Pref);
       double scale = Pref.MaxMaxNorm();
@@ -286,7 +386,7 @@ void MaterialChecks()
       {
          EXPECT_NEAR(P[i], Pref.GetData()[i], 1e-14 * scale) << "P, dim " << DIM;
       }
-      EXPECT_NEAR(StVenantKirchhoff::Energy<DIM>(F.GetData(), kLambda, kMu),
+      EXPECT_NEAR(MAT::template Energy<DIM>(F.GetData(), kLambda, kMu),
                   ref.EvalW(F), 1e-14 * std::max(1.0, ref.EvalW(F)));
 
       // The tangent against central differences of P.
@@ -294,16 +394,16 @@ void MaterialChecks()
       DenseMatrix dFm(dF);
       for (int i = 0; i < DIM; i++) { dFm(i, i) -= 1.0; } // drop RandomF's I
       real_t dP[D2], Pp[D2], Pm[D2], Fp[D2], Fm[D2], Sx[D2];
-      StVenantKirchhoff::Tangent<DIM>(F.GetData(), S, dFm.GetData(), kLambda, kMu,
-                                      dP);
+      MAT::template Tangent<DIM>(F.GetData(), S, dFm.GetData(), kLambda, kMu,
+                                 dP);
       const double eps = 1e-5;
       for (int i = 0; i < D2; i++)
       {
          Fp[i] = F.GetData()[i] + eps * dFm.GetData()[i];
          Fm[i] = F.GetData()[i] - eps * dFm.GetData()[i];
       }
-      StVenantKirchhoff::Stress<DIM>(Fp, kLambda, kMu, Sx, Pp);
-      StVenantKirchhoff::Stress<DIM>(Fm, kLambda, kMu, Sx, Pm);
+      MAT::template Stress<DIM>(Fp, kLambda, kMu, Sx, Pp);
+      MAT::template Stress<DIM>(Fm, kLambda, kMu, Sx, Pm);
       double dmax = 0.0, err = 0.0;
       for (int i = 0; i < D2; i++)
       {
@@ -320,7 +420,7 @@ void MaterialChecks()
       DenseMatrix Pm_(P, DIM, DIM);
       Mult(Q, Pm_, QP);
       real_t Sq[D2], Pq[D2];
-      StVenantKirchhoff::Stress<DIM>(QF.GetData(), kLambda, kMu, Sq, Pq);
+      MAT::template Stress<DIM>(QF.GetData(), kLambda, kMu, Sq, Pq);
       for (int i = 0; i < D2; i++)
       {
          EXPECT_NEAR(Pq[i], QP.GetData()[i], 1e-13 * scale) << "frame, dim " << DIM;
@@ -331,9 +431,12 @@ void MaterialChecks()
    {
       const DenseMatrix Q = Rotation(DIM, angle);
       real_t S[D2], P[D2];
-      StVenantKirchhoff::Stress<DIM>(Q.GetData(), kLambda, kMu, S, P);
+      MAT::template Stress<DIM>(Q.GetData(), kLambda, kMu, S, P);
       for (int i = 0; i < D2; i++) { EXPECT_LT(std::fabs(P[i]), 1e-14); }
-      EXPECT_LT(StVenantKirchhoff::Energy<DIM>(Q.GetData(), kLambda, kMu), 1e-28);
+      // SVK's energy is quadratic in the roundoff of E, neo-Hookean's linear.
+      const double w_tol = std::is_same<MAT, StVenantKirchhoff>::value ? 1e-28 :
+                           1e-14;
+      EXPECT_LT(MAT::template Energy<DIM>(Q.GetData(), kLambda, kMu), w_tol);
    }
    // The small-strain limit: P(I + eps H) / eps -> lambda tr(H) I + mu (H + H^T).
    const DenseMatrix H = RandomF(DIM, 51, 2.0);
@@ -354,7 +457,7 @@ void MaterialChecks()
    {
       real_t F[D2], S[D2], P[D2];
       for (int i = 0; i < D2; i++) { F[i] = (i % (DIM + 1) == 0 ? 1.0 : 0.0) + eps * Hm.GetData()[i]; }
-      StVenantKirchhoff::Stress<DIM>(F, kLambda, kMu, S, P);
+      MAT::template Stress<DIM>(F, kLambda, kMu, S, P);
       double e = 0.0;
       for (int i = 0; i < D2; i++) { e = std::max(e, std::fabs(P[i] / eps - sigma.GetData()[i])); }
       errs[n++] = e / sigma.MaxMaxNorm();
@@ -370,27 +473,50 @@ void MaterialChecks()
 // H1
 TEST(Hyperelasticity, H1_StVenantKirchhoffAtAPoint)
 {
-   MaterialChecks<2>();
-   MaterialChecks<3>();
+   MaterialChecks<StVenantKirchhoff, SvkReference, 2>();
+   MaterialChecks<StVenantKirchhoff, SvkReference, 3>();
 }
 
-// H2
-TEST(Hyperelasticity, H2_OperatorsMatchMfemHyperelasticIntegrator)
+// H1b
+TEST(Hyperelasticity, H1b_NeoHookeanAtAPoint)
 {
-   // dim, elements per direction, order, check the tangent.
-   const int cases[][4] = {{2, 3, 3, 1}, {3, 2, 2, 1}, {2, 2, 6, 1}, {3, 2, 6, 0}};
+   MaterialChecks<NeoHookean, NeoHookeanReference, 2>();
+   MaterialChecks<NeoHookean, NeoHookeanReference, 3>();
+   // Squeezed toward J = 0 along one axis: neo-Hookean's energy grows without
+   // bound (-mu ln J), St. Venant-Kirchhoff's stays below its J = 0 value.
+   double prev = 0.0;
+   for (double t : {1e-1, 1e-2, 1e-3, 1e-6})
+   {
+      const real_t F[9] = {t, 0, 0, 0, 1, 0, 0, 0, 1};
+      const double w = NeoHookean::Energy<3>(F, kLambda, kMu);
+      EXPECT_GT(w, prev) << "J " << t;
+      prev = w;
+      EXPECT_LT(StVenantKirchhoff::Energy<3>(F, kLambda, kMu),
+                0.125 * kLambda + 0.25 * kMu + 1e-12) << "J " << t;
+   }
+   EXPECT_GT(prev, 50.0 * (kLambda + kMu));
+}
+
+/// H2's comparison: the operators of @p material against MFEM's
+/// HyperelasticNLFIntegrator with @p model, per case {dim, elements per
+/// direction, order, check the tangent}.
+void CompareWithMfem(HyperelasticMaterial material, HyperelasticModel& model,
+                     const std::vector<std::array<int, 4>>& cases)
+{
    for (const auto& c : cases)
    {
       const int dim = c[0], k = c[2];
-      Problem p(dim, c[1], k);
-      SvkReference model(kLambda, kMu);
+      Problem p(dim, c[1], k, material);
       ParNonlinearForm nlf(&p.fes);
       auto* integ = new HyperelasticNLFIntegrator(&model);
       integ->SetIntRule(p.ir);
       nlf.AddDomainIntegrator(integ);
 
       const int n = p.fes.GetTrueVSize();
-      Vector u = Random(n, 3, 0.1), x = p.Identity();
+      // SVK's law holds for any F; neo-Hookean's needs det F > 0.
+      Vector u = material == HyperelasticMaterial::StVenantKirchhoff ?
+                 Random(n, 3, 0.1) : p.Smooth(0.05);
+      Vector x = p.Identity();
       x.UseDevice(true);
       x += u;
       Vector r(n), rref(n);
@@ -423,49 +549,78 @@ TEST(Hyperelasticity, H2_OperatorsMatchMfemHyperelasticIntegrator)
    }
 }
 
+// H2
+TEST(Hyperelasticity, H2_OperatorsMatchMfemHyperelasticIntegrator)
+{
+   SvkReference model(kLambda, kMu);
+   CompareWithMfem(HyperelasticMaterial::StVenantKirchhoff, model,
+   {{2, 3, 3, 1}, {3, 2, 2, 1}, {2, 2, 6, 1}, {3, 2, 6, 0}});
+}
+
+// H2b
+TEST(Hyperelasticity, H2b_NeoHookeanMatchesMfemHyperelasticIntegrator)
+{
+   NeoHookeanReference model(kLambda, kMu);
+   CompareWithMfem(HyperelasticMaterial::NeoHookean, model,
+   {{2, 3, 3, 1}, {3, 2, 2, 1}, {3, 2, 6, 0}});
+}
+
 // H3
 TEST(Hyperelasticity, H3_TangentAndResidualAreDerivatives)
 {
    const int cases[][3] = {{2, 3, 3}, {3, 2, 2}, {3, 2, 6}}; // dim, n, order
-   for (const auto& c : cases)
-   {
-      const int dim = c[0], k = c[2];
-      Problem p(dim, c[1], k);
-      const int n = p.fes.GetTrueVSize();
-      Vector u = Random(n, 13, 0.1), w = Random(n, 17, 0.1);
-      Vector r0(n), kw(n), r1(n), t(n), d(n);
-      for (Vector* v : {&r0, &kw, &r1, &t, &d}) { v->UseDevice(true); }
-      p.op->Mult(u, r0);
-      p.op->GetGradient(u).Mult(w, kw);
-
-      // Taylor: |R(u + eps w) - R(u) - eps K w| falls as eps^2.
-      double prev = 0.0;
-      for (double eps : {4e-3, 2e-3, 1e-3})
+   for (const auto material :
+        {
+           HyperelasticMaterial::StVenantKirchhoff,
+           HyperelasticMaterial::NeoHookean
+        })
+      for (const auto& c : cases)
       {
-         add(u, eps, w, t);
-         p.op->Mult(t, r1);
-         add(r1, -1.0, r0, d);
-         d.Add(-eps, kw);
-         const double rem = Norm(d);
-         if (prev > 0.0)
-         {
-            EXPECT_GT(prev / rem, 3.5) << "dim " << dim << " k " << k << " eps " << eps;
-            EXPECT_LT(prev / rem, 4.6) << "dim " << dim << " k " << k << " eps " << eps;
-         }
-         prev = rem;
-      }
+         const int dim = c[0], k = c[2];
+         Problem p(dim, c[1], k, material);
+         const int n = p.fes.GetTrueVSize();
+         Vector u = material == HyperelasticMaterial::StVenantKirchhoff ?
+                    Random(n, 13, 0.1) : p.Smooth(0.05);
+         Vector w = Random(n, 17, 0.1);
+         Vector r0(n), kw(n), r1(n), t(n), d(n);
+         for (Vector* v : {&r0, &kw, &r1, &t, &d}) { v->UseDevice(true); }
+         p.op->Mult(u, r0);
+         p.op->GetGradient(u).Mult(w, kw);
 
-      // R(u) . w against a central difference of the energy.
-      const double eps = 1e-4;
-      add(u, eps, w, t);
-      const double wp = p.op->Energy(t);
-      add(u, -eps, w, t);
-      const double wm = p.op->Energy(t);
-      const double dw = (wp - wm) / (2.0 * eps), rw = Dot(r0, w);
-      EXPECT_NEAR(dw, rw, 1e-7 * std::fabs(rw)) << "energy, dim " << dim << " k " <<
-            k;
-      EXPECT_GT(std::fabs(rw), 1e-8);
-   }
+         // Taylor: |R(u + eps w) - R(u) - eps K w| falls as eps^2.
+         double prev = 0.0;
+         for (double eps : {4e-3, 2e-3, 1e-3})
+         {
+            add(u, eps, w, t);
+            p.op->Mult(t, r1);
+            add(r1, -1.0, r0, d);
+            d.Add(-eps, kw);
+            const double rem = Norm(d);
+            if (prev > 0.0)
+            {
+               EXPECT_GT(prev / rem, 3.5) << "dim " << dim << " k " << k << " eps " << eps;
+               EXPECT_LT(prev / rem, 4.6) << "dim " << dim << " k " << k << " eps " << eps;
+            }
+            prev = rem;
+         }
+
+         // R(u) . w against a fourth-order central difference of the energy
+         // (Richardson on two steps; the second-order one's eps^2 error was
+         // 2e-7 of it for neo-Hookean along this rough direction).
+         auto central = [&](double h)
+         {
+            add(u, h, w, t);
+            const double wp = p.op->Energy(t);
+            add(u, -h, w, t);
+            return (wp - p.op->Energy(t)) / (2.0 * h);
+         };
+         const double eps = 1e-4;
+         const double dw = (4.0 * central(0.5 * eps) - central(eps)) / 3.0;
+         const double rw = Dot(r0, w);
+         EXPECT_NEAR(dw, rw, 1e-7 * std::fabs(rw)) << "energy, dim " << dim << " k " <<
+               k;
+         EXPECT_GT(std::fabs(rw), 1e-8);
+      }
 }
 
 // HD
@@ -1159,6 +1314,88 @@ TEST(Hyperelasticity, H8_DynamicDeckThroughElasticityCase)
       EXPECT_EQ(rows, 14); // the initial state and 13 steps
       std::filesystem::remove_all(dir);
    }
+}
+
+// H9
+TEST(Hyperelasticity, H9_MeshMotionTurnsTheCylinder)
+{
+   // The DFG cylinder turned by 45 degrees in three moves and back, the
+   // walls held, the neo-Hookean model: the body's nodes follow the turn
+   // exactly, det F > 0, every node returns to rest; a checkpoint after the
+   // second move restarts bitwise.
+   using namespace turned_cylinder;
+   const incns::CylinderChannelSpec spec;
+   const double top = M_PI / 4.0;
+   VectorFunctionCoefficient g(2, [spec, top](const Vector & X, double t,
+                               Vector & d)
+   {
+      Turn(spec, TurnAngle(t, top), X, d);
+   });
+   int np = 1;
+   MPI_Comm_size(MPI_COMM_WORLD, &np);
+   const std::string path = "hyperelasticity_test_H9_np" + std::to_string(np);
+   auto run = [&](bool load, bool save, Vector & nodes_out)
+   {
+      auto mesh = CylinderChannel(spec);
+      incns::MeshMotion motion(*mesh, incns::MeshMotion::Options(),
+                               incns::HyperelasticMotion::Factory(
+                                  incns::HyperelasticMotion::Options()));
+      motion.AddDisplacement(incns::kCylinderBody, g);
+      auto& model = static_cast<incns::HyperelasticMotion&>(motion.Model());
+      EXPECT_STREQ(model.Name(), "neo_hookean");
+      int first = 1;
+      if (load)
+      {
+         motion.Load(path);
+         first = motion.MoveCount() + 1;
+      }
+      for (int k = first; k <= 6; ++k)
+      {
+         const double t = k * top / 3.0;
+         ASSERT_TRUE(motion.Move(t)) << "move " << k << " "
+                                     << History(model.Solver());
+         EXPECT_LE(model.Solver().NewtonIterations(), 8) << "move " << k;
+         if (save && k == 2) { motion.Save(path); }
+         if (k == 4)
+         {
+            nodes_out = *mesh->GetNodes(); // 30 degrees on the way back
+            nodes_out.HostRead();
+         }
+         if (k == 3 && !load && !save)
+         {
+            const Vector& x0 = motion.ReferenceNodes();
+            EXPECT_LT(BoundaryNodeError(*mesh, x0, spec, top, true), 1e-12);
+            EXPECT_LT(BoundaryNodeError(*mesh, x0, spec, top, false), 1e-14);
+            double jmin, jmax;
+            motion.JacobianRange(jmin, jmax);
+            EXPECT_GT(jmin, 0.0);
+            if (Mpi::Root())
+            {
+               std::cout << "[H9] 45 degrees: det F in [" << jmin << ", " << jmax
+                         << "], Newton " << model.Solver().NewtonIterations()
+                         << ", CG " << model.Iterations() << std::endl;
+            }
+         }
+      }
+      if (!load && !save)
+      {
+         EXPECT_LT(RestError(*mesh, motion.ReferenceNodes()), 1e-10);
+      }
+   };
+   Vector fresh, saved, restarted;
+   run(false, false, fresh);
+   run(false, true, saved);
+   MPI_Barrier(MPI_COMM_WORLD);
+   run(true, false, restarted);
+   ASSERT_EQ(fresh.Size(), restarted.Size());
+   double diff = 0.0;
+   for (int i = 0; i < fresh.Size(); ++i)
+   {
+      diff = std::max(diff, std::abs(fresh(i) - restarted(i)));
+   }
+   EXPECT_LE(diff, incns_test::ReproTol(0.0)); // bitwise on a host
+   MPI_Barrier(MPI_COMM_WORLD);
+   std::remove((path + ".r" + std::to_string(Mpi::WorldRank())).c_str());
 }
 
 // H10

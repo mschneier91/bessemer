@@ -7,7 +7,10 @@
 //     positive; the peak node moved by the parabola's peak;
 //  C2 3D: a cube's bottom face pushed up by a sin^2 bump: the same checks;
 //  C3 a constant displacement of every boundary is a translation: det F = 1
-//     and every node moves by it.
+//     and every node moves by it;
+//  C4 model neo_hookean: a rotation of every boundary by 60 degrees (four
+//     moves) is a rigid rotation of the mesh, det F = 1 and every node at R X,
+//     which the linear model cannot give.
 
 #include <gtest/gtest.h>
 
@@ -147,6 +150,48 @@ boundary_conditions:
    {
       err = std::max(err, std::abs(dh[fes.DofToVDof(i, 0)] - 0.1));
       err = std::max(err, std::abs(dh[fes.DofToVDof(i, 1)] + 0.05));
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   EXPECT_LT(err, 1e-8);
+   double lo, hi;
+   c.Motion().JacobianRange(lo, hi);
+   EXPECT_NEAR(lo, 1.0, 1e-8);
+   EXPECT_NEAR(hi, 1.0, 1e-8);
+}
+
+TEST(MeshMotionCase, C4_NeoHookeanRotatesRigidly)
+{
+   const Parameters p = Parameters::LoadYAMLString(R"(
+equation: mesh_motion
+mesh: {dim: 2, elements: [4, 4], lengths: [1.0, 1.0], periodic: [false, false]}
+mesh_motion: {model: neo_hookean, order: 2, steps: 4}
+time: {t_final: 1.0}
+boundary_conditions:
+  - select: [all]
+    type: displacement
+    expression: ["cos(a * t) * (x - 0.5) - sin(a * t) * (y - 0.5) + 0.5 - x",
+                 "sin(a * t) * (x - 0.5) + cos(a * t) * (y - 0.5) + 0.5 - y"]
+    parameters: {a: 1.0471975511965976}
+)");
+   std::unique_ptr<ParMesh> mesh = incns::MakeCaseMesh(p);
+   MeshMotionCase c(*mesh, p);
+   ASSERT_TRUE(c.Run());
+   EXPECT_STREQ(c.Motion().Model().Name(), "neo_hookean");
+   const ParGridFunction& d = c.Motion().NodeDisplacement();
+   const ParFiniteElementSpace& fes = *d.ParFESpace();
+   const Vector& X = c.Motion().ReferenceNodes();
+   const double* dh = d.HostRead();
+   const double* xh = X.HostRead();
+   const double a = 1.0471975511965976;
+   double err = 0.0;
+   for (int i = 0; i < fes.GetNDofs(); ++i)
+   {
+      const double x = xh[fes.DofToVDof(i, 0)] - 0.5;
+      const double y = xh[fes.DofToVDof(i, 1)] - 0.5;
+      err = std::max(err, std::abs(dh[fes.DofToVDof(i, 0)] -
+                                   (std::cos(a) * x - std::sin(a) * y - x)));
+      err = std::max(err, std::abs(dh[fes.DofToVDof(i, 1)] -
+                                   (std::sin(a) * x + std::cos(a) * y - y)));
    }
    MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
    EXPECT_LT(err, 1e-8);

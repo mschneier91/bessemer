@@ -1,6 +1,6 @@
 #include "ale/mesh_motion_case.hpp"
 
-#include "ale/linear_elastic_motion.hpp"
+#include "ale/mesh_motion_factory.hpp"
 #include "bc/boundary_names.hpp"
 #include "bc/deck_boundary.hpp"
 #include "config/expression.hpp"
@@ -103,16 +103,7 @@ MeshMotionCase::MeshMotionCase(ParMesh& mesh, const Parameters& params)
    MeshMotion::Options o;
    o.order = 0; // the nodal order
    o.geometry_order = mm.Order(params_.order_u); // for a mesh without nodes
-   LinearElasticMotion::Options e;
-   e.poisson_ratio = mm.poisson_ratio;
-   e.stiffening = mm.stiffening;
-   e.preconditioner = mm.preconditioner;
-   e.rtol = mm.rtol;
-   e.atol = mm.atol;
-   e.max_iter = mm.max_iter;
-   e.basis_size = mm.basis_size;
-   motion_ = std::make_unique<MeshMotion>(mesh_, o,
-                                          LinearElasticMotion::Factory(e));
+   motion_ = std::make_unique<MeshMotion>(mesh_, o, DeckMeshMotionFactory(mm));
 
    const std::vector<int> all = AllBoundaryAttributes(params_, mesh_);
    for (const BcSpec& s : params_.boundary_conditions)
