@@ -22,11 +22,14 @@ by staying linear; docs/fsi.md §1). Tests `fsi_test` F8 (SVK = linear at small 
 generalized-alpha FSI3's forces carried a growing step-to-step ripple), `fsi.py`. Coarse
 mesh, np 4: FSI1 SVK u_x +2.0 % (linear +6.5 %), u_y -1.4 %, drag +0.30 %, lift -0.06 %;
 FSI3 displacement amplitudes -3.7/-4.0 %, frequency +2.0 %, drag mean +0.4 %, drag and lift
-amplitudes +17 / -8.5 % (not separated; mesh and dt not varied), 5.7 h. FSI2: running.
+amplitudes +17 / -8.5 % (not separated; mesh and dt not varied), 5.7 h. FSI2 is not
+reached: at t = 8.6 (tip u_y 58 of 81 mm) the linear-elastic mesh motion folds the cells
+by the flag (stiffening 4: t = 8.86), so it needs the hyperelastic mesh motion
+(benchmarks/turek_hron/README.md, FSI2).
 Found in Hyperelasticity (not changed): Newton cannot stop at tiny loads, its residual's
 roundoff floor (~4.5e-11 on the flag) is above both relative tests; the decks set
 `solid.newton_atol` 1e-9. Cloud scratch build, CPU; fast tier as on main there (the 10 known
-scratch-build failures). Not on a GPU. **Next:** FSI2's result, the meshes for FSI3's force
+scratch-build failures). Not on a GPU. **Next:** a mesh motion for large rotations (FSI2), the meshes for FSI3's force
 amplitudes, an absolute Newton floor in Hyperelasticity, SVK under the other conditions.
 
 **The GPU suite is green again: diagonals of matrices with empty rows (2026-10-23,

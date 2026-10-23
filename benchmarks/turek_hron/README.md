@@ -149,5 +149,17 @@ subiterations stall in the third step).
 `fsi2.yaml`: Ū = 1 (Re 100), ρ_s = 10⁴, μ_s = 0.5·10⁶, the large-amplitude
 oscillation, the same settings as FSI3 at Δt 5·10⁻⁴ to t = 15. Reference: u_x(A)
 −14.58 ± 12.44, u_y(A) 1.23 ± 80.6 (mm), frequency 2.0 (u_y), drag 208.83 ± 73.75, lift
-0.88 ± 234.2. Results: not yet run to the end.
+0.88 ± 234.2.
+
+**Not reached yet: the fluid mesh folds first.** Coarse mesh, np 4, 2026-10-23: the
+oscillation grows from rest at about 3 subiterations per step (the coupling is not the
+limit), but at t = 8.6, with the tip's u_y at 58 mm of the reference 81 mm and still
+growing, the linear-elastic mesh motion (`mesh_motion.stiffening: 1`) inverted the cells
+next to the flag (min det F −0.72) and the run stopped. With stiffening 4 it reached
+t = 8.86 (u_y 61 mm, u_x −17 mm) before the flow solve failed. Bending the flag boundary
+alone in a `mesh_motion` deck (a cantilever shape in y, no tip rotation or shortening),
+the coarse mesh survives tip deflections of 48 / 48 / 80 / 90 mm at stiffening 1 / 2 /
+3 / 4; the real motion, which also shortens and rotates the tip, is harder. FSI2 needs a
+mesh motion that follows large rotations (the hyperelastic mesh motion, or an
+incremental update), not a coupling change.
 
