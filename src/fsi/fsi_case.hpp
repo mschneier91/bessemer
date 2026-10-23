@@ -8,8 +8,8 @@
 #pragma once
 
 #include "fsi/interface_accelerator.hpp"
+#include "fsi/fsi_solid.hpp"
 #include "fsi/interface_transfer.hpp"
-#include "solid/linear_elasticity.hpp"
 #include "solver/case.hpp"
 
 #include <memory>
@@ -40,9 +40,11 @@ namespace incns
  * rtol |d~| + atol: the fluid's trial step is committed. Otherwise the fluid
  * step is undone and d <- d + omega r with Aitken's omega.
  *
- * The solid is the small-strain one (the traction, a Cauchy traction on the
- * moved interface, is applied on the reference interface); St.
- * Venant-Kirchhoff takes its place when it lands.
+ * The solid is the small-strain one or, with fsi.solid hyperelasticity, the
+ * St. Venant-Kirchhoff one (FsiSolid). The latter is loaded with the
+ * traction per reference area: the fluid's interface moments inverted with
+ * the reference interface's mass (sigma n dGamma = P N dGamma_0). The linear
+ * one takes the current interface's traction on its reference interface.
  */
 class FsiCase
 {
@@ -82,8 +84,8 @@ public:
    /// @return The flow.
    Case& Fluid() { return *fluid_; }
 
-   /// @return The solid.
-   LinearElasticity& Solid() { return *solid_; }
+   /// @return The solid (fsi.solid).
+   FsiSolid& Solid() { return *solid_; }
 
    /// @return The solid's mesh.
    mfem::ParMesh& SolidMesh() { return *solid_mesh_; }
@@ -134,6 +136,15 @@ private:
    void LoadSolid(const mfem::Vector& load);
 
    /**
+    * @brief The traction per reference area (the fluid's velocity space on
+    *        the motion's reference mesh) whose moments on the reference
+    *        interface are @p load. Collective.
+    * @param load Moments (velocity true dofs; interface entries read).
+    * @param t    The kinematic nominal traction (true dofs of ref_vfes_).
+    */
+   void NominalTractionFromLoad(const mfem::Vector& load, mfem::Vector& t);
+
+   /**
     * @brief The traction field whose moments on the current mesh's
     *        interface are @p load; sets InterfaceForce(). Collective.
     * @param load Moments (velocity true dofs; interface entries read).
@@ -142,8 +153,9 @@ private:
     */
    void TractionFromLoad(const mfem::Vector& load, mfem::Vector& t);
 
-   /// @param t The fluid's kinematic traction (velocity true dofs): the
-   ///          solid's load SolidTraction() = -rho_f t. Collective.
+   /// @param t The fluid's kinematic traction (velocity true dofs; per
+   ///          reference area under Dirichlet-Neumann): the solid's load
+   ///          SolidTraction() = -rho_f t. Collective.
    void LoadSolidTraction(const mfem::Vector& t);
 
    /// @return Robin-Robin's support stiffness alpha_s c0 on the solid.
@@ -176,7 +188,7 @@ private:
    std::unique_ptr<mfem::ParMesh> solid_mesh_; ///< The solid's mesh.
    std::unique_ptr<Case> fluid_;               ///< The flow.
    std::unique_ptr<mfem::VectorCoefficient> u0_; ///< Its initial velocity.
-   std::unique_ptr<LinearElasticity> solid_;   ///< The solid.
+   std::unique_ptr<FsiSolid> solid_;           ///< The solid.
    bool dynamic_ = false;      ///< Whether the solid is dynamic.
    std::vector<int> fluid_attrs_; ///< Fluid mesh interface attributes.
    std::vector<int> solid_attrs_; ///< Solid mesh interface attributes.

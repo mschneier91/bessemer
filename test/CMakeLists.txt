@@ -316,6 +316,14 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   set_tests_properties(run_case_rejects_volume_change_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "changes the volume of a closed domain")
+  # FSI with a static St. Venant-Kirchhoff solid must be refused at setup.
+  add_test(NAME run_case_rejects_static_svk_fsi_np${np}
+    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+            ${CMAKE_CURRENT_SOURCE_DIR}/decks/fsi_static_svk.yaml
+            --summary run_case_static_svk_np${np}_summary.json)
+  set_tests_properties(run_case_rejects_static_svk_fsi_np${np} PROPERTIES
+    LABELS "${_labels}" PROCESSORS ${np}
+    PASS_REGULAR_EXPRESSION "fsi.solid hyperelasticity needs solid.analysis: dynamic")
   # A deck that sets a key twice must be refused, not run with the first value.
   add_test(NAME run_case_rejects_duplicate_key_np${np}
     COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>

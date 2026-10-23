@@ -5,6 +5,8 @@
 #include "mesh/case_mesh.hpp"
 #include "precond/hypre_device.hpp"
 #include "solid/elasticity_case.hpp"
+#include "solid/hyperelasticity.hpp"
+#include "solid/linear_elasticity.hpp"
 #include "util/profiler.hpp"
 
 #include <algorithm>
@@ -227,10 +229,24 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
 
    // The solid, on the geometry's solid part.
    solid_params_.cylinder_channel.solid = true;
-   solid_params_.equation = Equation::LinearElasticity;
+   const bool hyper = f.solid == FsiSolidModel::Hyperelasticity;
+   solid_params_.equation = hyper ? Equation::Hyperelasticity :
+                            Equation::LinearElasticity;
    solid_mesh_ = MakeCaseMesh(solid_params_, fluid_mesh_.GetComm());
-   solid_ = std::make_unique<LinearElasticity>(*solid_mesh_,
-            ElasticityOptions(solid_params_));
+   if (hyper)
+   {
+      solid_ = std::make_unique<FsiSolidAdapter<Hyperelasticity>>(
+                  std::make_unique<Hyperelasticity>(
+                     *solid_mesh_, HyperelasticOptions(solid_params_)),
+                  "hyperelasticity");
+   }
+   else
+   {
+      solid_ = std::make_unique<FsiSolidAdapter<LinearElasticity>>(
+                  std::make_unique<LinearElasticity>(
+                     *solid_mesh_, ElasticityOptions(solid_params_)),
+                  "linear_elasticity");
+   }
    MFEM_VERIFY(!f.solid_fixed.empty(), "fsi_case: fsi.solid_fixed names no "
                "boundary (the solid's clamp)");
    solid_fixed_attrs_ = NamedAttributes(solid_params_, *solid_mesh_,
@@ -271,7 +287,7 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
       for (int a : solid_attrs_) { solid_->AddSupport(a, SupportStiffness()); }
    }
    dynamic_ = params_.solid.analysis == SolidAnalysis::Dynamic;
-   if (dynamic_) { solid_->Initialize(0.0); }
+   if (dynamic_) { solid_->Initialize(); }
 
    // The interface maps, both in the reference configurations.
    MeshMotion& motion = fluid_->Motion();
@@ -341,11 +357,16 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
       s["wall_seconds"].Set(wall_);
       if (!failure_.empty()) { s["failure"].Set(failure_); }
       Json& so = s["solid"];
+      so["model"].Set(solid_->Name());
       so["analysis"].Set(dynamic_ ? "dynamic" : "static");
-      so["order"].Set(solid_->GetOptions().order);
+      so["order"].Set(solid_->Order());
       so["elements"].Set(static_cast<long long>(solid_mesh_->GetGlobalNE()));
       so["dofs"].Set(static_cast<long long>(solid_->GlobalTrueDofs()));
       so["cg_iterations"].Set(solid_->TotalIterations());
+      if (solid_->TotalNewtonIterations() > 0)
+      {
+         so["newton_iterations"].Set(solid_->TotalNewtonIterations());
+      }
       so["max_displacement"].Set(solid_->MaxDisplacement());
       for (int c = 0; c < interface_force_.Size(); ++c)
       {
@@ -477,8 +498,30 @@ void FsiCase::UpdateLoad()
 void FsiCase::LoadSolid(const Vector& load)
 {
    Vector t;
-   TractionFromLoad(load, t);
+   TractionFromLoad(load, t); // and InterfaceForce()
+   // The large-deformation solid takes the traction per reference area; the
+   // small-strain one the current one (the same to first order; bitwise the
+   // F3/F4 results, which every coupling shares).
+   if (params_.fsi.solid == FsiSolidModel::Hyperelasticity)
+   {
+      NominalTractionFromLoad(load, t);
+   }
    LoadSolidTraction(t);
+}
+
+void FsiCase::NominalTractionFromLoad(const Vector& load, Vector& t)
+{
+   INCNS_PROFILE("fsi::nominal_traction");
+   // The moments of the Cauchy traction on the moved interface are those of
+   // the nominal one on the reference interface (sigma n dGamma = P N
+   // dGamma_0): the reference interface's mass gives P N.
+   const int n = ref_vfes_->GetTrueVSize();
+   MFEM_VERIFY(load.Size() == n, "fsi_case: load size");
+   Array<int> iface;
+   ref_vfes_->GetEssentialTrueDofs(fluid_marker_, iface);
+   std::vector<char> on(n, 0);
+   for (int i : iface) { on[i] = 1; }
+   InterfaceMassSolve(*ref_vfes_, fluid_marker_, load, on, t);
 }
 
 void FsiCase::TractionFromLoad(const Vector& load, Vector& t)
@@ -614,8 +657,7 @@ bool FsiCase::Step()
    Vector d(n), dt_vec(n), r(n);
    Predict(d);
    ParGridFunction solid_d(&mfes);
-   LinearElasticity::State s0;
-   if (dynamic_) { s0 = solid_->ExportState(); }
+   if (dynamic_) { solid_->SaveState(); }
    const double dt = params_.dt;
    accel_->NewStep();
    StepRecord rec;
@@ -627,7 +669,7 @@ bool FsiCase::Step()
       bool solid_ok = true;
       if (dynamic_)
       {
-         solid_->ImportState(s0);
+         solid_->RestoreState();
          solid_ok = solid_->Step(dt);
       }
       else
@@ -761,8 +803,7 @@ bool FsiCase::StepRobinNeumann()
    ParGridFunction dv_ref(ref_vfes_.get());
    PredictLoad(tau);
    ParGridFunction solid_d(&mfes);
-   LinearElasticity::State s0;
-   if (dynamic_) { s0 = solid_->ExportState(); }
+   if (dynamic_) { solid_->SaveState(); }
    const double dt = params_.dt;
    fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get());
    accel_->NewStep();
@@ -773,7 +814,7 @@ bool FsiCase::StepRobinNeumann()
       bool solid_ok = true;
       if (dynamic_)
       {
-         solid_->ImportState(s0);
+         solid_->RestoreState();
          solid_ok = solid_->Step(dt);
       }
       else
@@ -893,8 +934,7 @@ bool FsiCase::StepNeumannDirichlet()
    Predict(d);
    ParGridFunction dtilde(&mfes), slip(&mfes);
    ParGridFunction uw_ref(ref_vfes_.get());
-   LinearElasticity::State s0;
-   if (dynamic_) { s0 = solid_->ExportState(); }
+   if (dynamic_) { solid_->SaveState(); }
    const double dt = params_.dt;
    fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get());
    accel_->NewStep();
@@ -906,7 +946,7 @@ bool FsiCase::StepNeumannDirichlet()
       bool solid_ok = true;
       if (dynamic_)
       {
-         solid_->ImportState(s0);
+         solid_->RestoreState();
          solid_ok = solid_->Step(dt);
       }
       else

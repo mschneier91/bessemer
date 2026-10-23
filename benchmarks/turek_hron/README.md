@@ -1,4 +1,4 @@
-# Turek & Hron: cylinder with a flag (CFD1–3, FSI1)
+# Turek & Hron: cylinder with a flag (CFD1–3, FSI1–3)
 
 The fluid tests of the Turek & Hron (2006) FSI benchmark, with the flag rigid:
 the first step toward FSI1–3 (docs/ale_fluid.md, "Next"). A channel 2.5 × 0.41,
@@ -90,4 +90,76 @@ Cloud scratch build, CPU, np 4, 2026-10-22. What the errors are:
   its lower lift. The remaining 0.5–0.7 % is not separated: the linear solid's missing
   stress stiffening (its axial tension, about 2.6 N, would lower u_y by of order 1 %:
   an estimate), the traction applied on the undeformed interface, the fluid mesh.
-  The SVK solid will tell.
+  The SVK solid will tell, and it does (below).
+
+**With the St. Venant-Kirchhoff solid** (`fsi1_svk.yaml`, `fsi.solid: hyperelasticity`,
+the flag dynamic: generalized-alpha, ρ_∞ 0.5; a static SVK flag does not couple,
+[docs/fsi.md](../../docs/fsi.md) §1), coarse mesh, np 4, 7.1 min, 3-5 subiterations per
+step, forces averaged over t ∈ [10, 15] (the dynamic flag leaves a small ripple on the
+lift):
+
+| Solid | Drag | Lift | u_x(A) | u_y(A) |
+|---|---|---|---|---|
+| linear (above) | +0.30 % | −0.48 % | +6.5 % | −0.06 % |
+| St. Venant-Kirchhoff | 14.338 (+0.30 %) | 0.7634 (−0.06 %) | 2.315·10⁻⁵ (+2.0 %) | 8.095·10⁻⁴ (−1.4 %) |
+
+All three changes are the ones estimated above: u_x loses the shortening (the +1.6 %
+left after it, +2.0 % measured), u_y drops by the stress stiffening (of order 1 %,
+−1.3 % measured), and the lift rises with the lower deflection (−430 per metre of u_y:
++0.6 %, +0.42 % measured). The remaining u_y and u_x errors are the coarse mesh's, not
+separated yet (the `level: 1` SVK run is not done).
+
+## FSI3
+
+The flag in a self-sustained oscillation (`fsi3.yaml`): Ū = 2 (Re 200), ρ_s = ρ_f =
+1000 (the strongest added mass), μ_s = 2·10⁶, ν_s = 0.4, the St. Venant-Kirchhoff
+solid (`fsi.solid: hyperelasticity`, plane strain) stepped by BDF2 like the fluid,
+Dirichlet-Neumann with IQN-ILS (two steps reused) to `fsi.rtol` 10⁻⁶, the flow solver to
+10⁻⁹. Q4/Q3 fluid on the coarse mesh (314 elements), Q4 solid (8 × 2), IMEX, Δt
+2.5·10⁻⁴ (IMEX's convective limit here: 5·10⁻⁴ diverges) to t = 10. The oscillation
+grows from rest, overshoots at t ≈ 4 and is periodic from t ≈ 7; the last period
+equals the mean of the last three to 2·10⁻⁴. Mean ± amplitude over the last period
+(`python3 fsi.py fsi3 fsi3/fsi3_forces.csv fsi3/fsi3_fsi.csv`), displacements of point A
+in mm:
+
+| | bessemer | Turek & Hron | error |
+|---|---|---|---|
+| u_x(A) | −2.59 ± 2.44 | −2.69 ± 2.53 | amplitude −3.7 % |
+| u_y(A) | 1.42 ± 33.02 | 1.48 ± 34.38 | amplitude −4.0 % |
+| frequency | 5.40 | 5.3 | +2.0 % |
+| drag | 459.1 ± 26.5 | 457.3 ± 22.66 | mean +0.4 %, amplitude +17 % |
+| lift | 2.7 ± 137.0 | 2.22 ± 149.78 | amplitude −8.5 % |
+
+4.5 subiterations per step, 40,000 steps, 5.7 h at np 4 (cloud scratch build, CPU,
+2026-10-23, sharing the cores with other runs part of the time). Not separated yet: the
+drag and lift amplitudes are the largest errors; CFD3 suggests the fluid mesh (refining
+it moved CFD3's lift amplitude by 1.1 %), and neither the mesh nor Δt has been varied
+here.
+
+Two settings matter, both found on this case (docs/fsi.md §1): with the solid on
+generalized-alpha at ρ_∞ = 1 and `fsi.rtol` 10⁻⁴ the forces carried a step-to-step
+ripple that grew with the flag's motion to ±25,000 in the lift by t = 4.5, while the
+displacement stayed smooth. The coupling's residual error, times the added mass and
+1/Δt², is the ripple; BDF2 cut it 17×, `fsi.rtol` 10⁻⁶ a further 100× for 4.4 → 5.0
+subiterations per step. `solver.rtol` must then sit well below it (at the default the
+subiterations stall in the third step).
+
+## FSI2
+
+`fsi2.yaml`: Ū = 1 (Re 100), ρ_s = 10⁴, μ_s = 0.5·10⁶, the large-amplitude
+oscillation, the same settings as FSI3 at Δt 5·10⁻⁴ to t = 15. Reference: u_x(A)
+−14.58 ± 12.44, u_y(A) 1.23 ± 80.6 (mm), frequency 2.0 (u_y), drag 208.83 ± 73.75, lift
+0.88 ± 234.2.
+
+**Not reached yet: the fluid mesh folds first.** Coarse mesh, np 4, 2026-10-23: the
+oscillation grows from rest at about 3 subiterations per step (the coupling is not the
+limit), but at t = 8.6, with the tip's u_y at 58 mm of the reference 81 mm and still
+growing, the linear-elastic mesh motion (`mesh_motion.stiffening: 1`) inverted the cells
+next to the flag (min det F −0.72) and the run stopped. With stiffening 4 it reached
+t = 8.86 (u_y 61 mm, u_x −17 mm) before the flow solve failed. Bending the flag boundary
+alone in a `mesh_motion` deck (a cantilever shape in y, no tip rotation or shortening),
+the coarse mesh survives tip deflections of 48 / 48 / 80 / 90 mm at stiffening 1 / 2 /
+3 / 4; the real motion, which also shortens and rotates the tip, is harder. FSI2 needs a
+mesh motion that follows large rotations (the hyperelastic mesh motion, or an
+incremental update), not a coupling change.
+

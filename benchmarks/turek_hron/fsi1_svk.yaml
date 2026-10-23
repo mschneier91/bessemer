@@ -1,0 +1,77 @@
+# Turek & Hron (2006) FSI1 with their solid, St. Venant-Kirchhoff
+# (fsi.solid: hyperelasticity): fsi1.yaml's flow and flag, the flag
+# dynamic. A static SVK flag does not couple: a massless solid is the
+# worst added-mass case for Dirichlet-Neumann, the first subiterations try
+# displacements of 0.1-0.5 m, and SVK folds there (docs/fsi.md); the
+# linear solid survives them only because it stays linear. The dynamic
+# flag (generalized-alpha, rho_inf 0.5 to damp the start) settles to the
+# same steady state. Coarse mesh, np 4, 7 min on a 4-core CPU: drag
+# +0.30 %, lift -0.06 % (averaged over t 10-15), tip u_x +2.0 % (the
+# linear solid: +6.5 %), u_y -1.4 % (README.md).
+#
+#   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/fsi1_svk.yaml
+#   -> fsi1_svk/fsi1_summary.json, fsi1_svk/fsi1_fsi.csv
+
+equation: navier_stokes
+physics:
+  nu: 1.0e-3
+discretization:
+  order_u: 4
+  order_p: 3
+mesh:
+  dim: 2
+  geometry: cylinder_channel
+  cylinder_channel:
+    length: 2.5
+    flag_length: 0.35
+    flag_thickness: 0.02
+    n_flag: 8
+    n_flag_y: 2
+    n_down: 16
+time:
+  dt: 0.01
+  t_final: 15
+  step_control: fixed
+  convection: imex
+boundary_conditions:
+  - {select: [inflow], type: velocity, profile: parabolic, u_max: 0.3, height: 0.41,
+     time_profile: ramp, time_scale: 2.0}
+  - {select: [walls, cylinder], type: no_slip}
+  - {select: [flag], type: interface}
+  - {select: [outflow], type: outflow}
+mesh_motion:
+  stiffening: 1
+solid:
+  newton_atol: 1.0e-9    # the SVK residual's roundoff floor at tiny loads
+  plane: strain
+  analysis: dynamic
+  time_scheme: generalized_alpha
+  rho_inf: 0.5
+  youngs_modulus: 1.4e6
+  poisson_ratio: 0.4
+  density: 1000
+  probe: [0.6, 0.2]
+fsi:
+  enabled: true
+  solid_fixed: [cylinder]
+  fluid_density: 1000
+  solid: hyperelasticity
+  acceleration: iqn_ils
+  reuse: 2
+  rtol: 1.0e-4
+  atol: 1.0e-10
+forces:
+  enabled: true
+  boundaries: [cylinder, flag]
+  reference_velocity: 1.0
+  reference_area: 0.002
+  interval: 10
+output:
+  path: fsi1_svk
+  name: fsi1
+  progress: 100
+reference:
+  cd: 14.295
+  cl: 0.7638
+  displacement_x: 2.27e-5
+  displacement_y: 8.209e-4
