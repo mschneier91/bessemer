@@ -757,8 +757,8 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   Kernels go in a NAMED namespace (nvcc rejects extended lambdas in internal-linkage scope).
 - **Device-resident vectors in the solve path:** `UseDevice(true)`, `BlockVector`s with
   `Device::GetMemoryType()` (no-ops on CPU). The **debug device** (`INCNS_DEVICE=debug`,
-  `scripts/debug_device.sh`) faults on unsynced host access; sweep GREEN 106/106 at np 1/2
-  (2026-10-09; refined-periodic NC solves skip there) — a failure is a regression. **It
+  `scripts/debug_device.sh`) faults on unsynced host access; sweep GREEN 187/187 at np 1/2
+  (2026-10-22; refined-periodic NC solves skip there) — a failure is a regression. **It
   cannot catch a host-compiled `forall`** — only a real GPU run proves the GPU path.
 - **`Vector::Get/SetSubVector(const Array<int>&, Vector&)` pick host or device from the
   INDEX ARRAY and the value vector, not the target** (this MFEM): with a plain host
@@ -780,6 +780,12 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   "illegal memory access" (pure-MFEM repro: 400 doubles pass, 1032 fail; ASan clean). Hit by
   refined PERIODIC NC meshes; such tests skip on the debug device only
   (`amr_test::DebugDeviceSkipsPeriodicNcSolves`). Upstream-report candidate.
+- **MFEM debug-device false positive (2026-10-22):** `GetAliasHostPtr` protects the base's
+  device range but records only the host side, so the base's next device access faults
+  (every host-hypre `HypreParMatrix::Mult` reads through an alias; hit by `run_monitor_test`
+  R5, the rolling checkpoint, `mesh_census_test` C2). `scripts/debug_device.sh` preloads
+  `scripts/debug_device_shim.cpp`, which records both sides; drop it when MFEM does.
+  Upstream-report candidate.
 - **RuleBook lifetime:** it owns every rule and must outlive every integrator AND the mesh's
   rule-keyed geometric-factor cache (a stale key at a reused address gave NaNs):
   `Case::~Case` calls `mesh.DeleteGeometricFactors()`; in tests declare the RuleBook

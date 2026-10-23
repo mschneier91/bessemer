@@ -12,9 +12,12 @@
 # separate build is needed -- it reuses build/cpu. It is much slower (mprotect on
 # every access), so this is a diagnostic sweep, not part of the agentic loop.
 #
-# STATUS (2026-10-09): GREEN -- 114/114 (every fast-tier test at np 1 and 2, ~15
+# STATUS (2026-10-22): GREEN -- 187/187 (every fast-tier test at np 1 and 2, ~14
 # min). Tests that solve on refined PERIODIC nonconforming meshes skip
 # those solves here only (an MFEM debug-device false positive, see CLAUDE.md).
+# A second one, a host read through an alias (MFEM loses track of the base's
+# device protection), is corrected for the sweep by debug_device_shim.cpp,
+# preloaded below (INCNS_NO_DEBUG_SHIM=1 runs MFEM's own bookkeeping).
 # The last failure was an intermittent page-protection fault from wrapping
 # hypre-malloc'd vectors (see CLAUDE.md, "Never hand MFEM device paths a
 # hypre-malloc'd buffer"), so a red sweep now means a REGRESSION. Green here is
@@ -34,6 +37,13 @@ if [ ! -d "$BUILD_DIR" ]; then
 fi
 
 cd "$BUILD_DIR"
+# The alias bookkeeping fix (see debug_device_shim.cpp), built per sweep.
+SHIM=""
+if [ "${INCNS_NO_DEBUG_SHIM:-0}" != 1 ]; then
+  SHIM="$BUILD_DIR/debug_device_shim.so"
+  mpicxx -O2 -shared -fPIC -o "$SHIM" "$_script_dir/debug_device_shim.cpp" -ldl
+fi
+
 # np in {1, 2}: partition paths are exercised at 2; the mprotect overhead makes
 # a wider sweep needlessly slow for a fallback hunt.
-INCNS_DEVICE=debug ctest --output-on-failure -L fast -E "_np4$" "$@"
+INCNS_DEVICE=debug LD_PRELOAD="$SHIM" ctest --output-on-failure -L fast -E "_np4$" "$@"
