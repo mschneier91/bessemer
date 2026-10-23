@@ -11,6 +11,7 @@
 
 #include "mesh/mesh_size_coefficient.hpp"
 #include "mesh/periodic_box.hpp" // AssertTensorProductGeometry
+#include "precond/hypre_device.hpp"
 #include "util/profiler.hpp"
 
 #include <vector>
@@ -645,9 +646,9 @@ void StokesOperator::AssembleRobin()
    r.Assemble();
    r.Finalize();
    robin_.reset(r.ParallelAssemble());
-   robin_diag_.SetSize(spaces_.Velocity().GetTrueVSize());
    robin_diag_.UseDevice(true);
-   robin_->GetDiag(robin_diag_);
+   // A boundary-sized matrix: rows without a diagonal entry (HypreDiagonal).
+   HypreDiagonal(*robin_, robin_diag_);
 }
 
 void StokesOperator::AddRobinIntegrator(ParBilinearForm& form)

@@ -86,6 +86,32 @@ std::string HypreAmgDeviceProblems(mfem::HypreBoomerAMG& amg)
    return out.str();
 }
 
+void HypreDiagonal(const mfem::HypreParMatrix& A, mfem::Vector& d)
+{
+   A.HostRead();
+   {
+      mfem::SparseMatrix diag; // the local block: this rank's rows and columns
+      A.GetDiag(diag);
+      const int n = diag.Height();
+      const int* I = diag.HostReadI();
+      const int* J = diag.HostReadJ();
+      const mfem::real_t* V = diag.HostReadData();
+      d.SetSize(n);
+      mfem::real_t* dh = d.HostWrite();
+      for (int i = 0; i < n; i++)
+      {
+         dh[i] = 0.0;
+         for (int k = I[i]; k < I[i + 1]; k++)
+         {
+            if (J[k] == i) { dh[i] = V[k]; break; }
+         }
+      }
+   }
+   // Back to hypre's memory space (a host read leaves it on the host, and its
+   // next device SpMV would take hypre's host path).
+   A.HypreRead();
+}
+
 void VerifyHypreAmgOnDevice(mfem::HypreBoomerAMG& amg, const char* what)
 {
    const std::string problems = HypreAmgDeviceProblems(amg);

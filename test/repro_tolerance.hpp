@@ -29,15 +29,18 @@ namespace incns_test
  * @brief Relative tolerance for a bitwise-reproducibility assertion.
  * @param host_tol The bound to demand when the arithmetic really is
  *                 reproducible (CPU and debug-device backends).
- * @return @p host_tol on host backends; a loosened bound on a real GPU.
+ * @param gpu_tol  The bound on a real GPU: by default ~60x the measured
+ *                 1.5e-11 floor of one run against another, still orders
+ *                 below any discretization-error scale these cases resolve.
+ *                 Runs whose iterations stop at a solver tolerance (coupled
+ *                 FSI steps) differ at that tolerance instead.
+ * @return @p host_tol on host backends; @p gpu_tol on a real GPU.
  */
-inline double ReproTol(double host_tol)
+inline double ReproTol(double host_tol, double gpu_tol = 1e-9)
 {
    const bool real_gpu = mfem::Device::Allows(mfem::Backend::CUDA_MASK |
                          mfem::Backend::HIP_MASK);
-   // ~60x the measured 1.5e-11 floor, and still orders below any
-   // discretization-error scale these cases resolve.
-   return real_gpu ? 1e-9 : host_tol;
+   return real_gpu ? gpu_tol : host_tol;
 }
 
 } // namespace incns_test

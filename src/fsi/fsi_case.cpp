@@ -3,6 +3,7 @@
 #include "bc/boundary_names.hpp"
 #include "config/initial_conditions.hpp"
 #include "mesh/case_mesh.hpp"
+#include "precond/hypre_device.hpp"
 #include "solid/elasticity_case.hpp"
 #include "util/profiler.hpp"
 
@@ -175,7 +176,16 @@ void InterfaceMassSolve(ParFiniteElementSpace& fes, Array<int>& marker,
    for (int i = 0; i < n; ++i) { dst[i] = on[i] ? src[i] : 0.0; }
    t.SetSize(n);
    t = 0.0;
-   HypreSmoother jacobi(*M, HypreSmoother::Jacobi);
+   // Jacobi on M's diagonal, 1 where a row has none: off the interface the
+   // boundary mass's rows are empty (EliminateRowsCols cannot put a 1 there),
+   // and hypre's Jacobi read past them -- now and then a NaN on a GPU
+   // (compute-sanitizer initcheck, job 49677951).
+   Vector dg;
+   HypreDiagonal(*M, dg);
+   double* dgh = dg.HostReadWrite();
+   for (int i = 0; i < n; ++i) { if (dgh[i] == 0.0) { dgh[i] = 1.0; } }
+   const Array<int> none;
+   OperatorJacobiSmoother jacobi(dg, none);
    CGSolver cg(fes.GetComm());
    cg.SetOperator(*M);
    cg.SetPreconditioner(jacobi);

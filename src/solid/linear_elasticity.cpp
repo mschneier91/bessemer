@@ -371,8 +371,8 @@ void LinearElasticity::SetupPreconditioner(double c)
       if (c != 0.0) { diag_.Add(c, m_diag_); }
       if (support_)
       {
-         Vector sd(diag_.Size());
-         support_->GetDiag(sd);
+         Vector sd; // a boundary-sized matrix: rows without a diagonal entry
+         HypreDiagonal(*support_, sd);
          diag_ += sd;
       }
       pc_ = std::make_unique<OperatorJacobiSmoother>(diag_, ess_tdofs_);

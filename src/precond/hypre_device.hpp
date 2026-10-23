@@ -48,4 +48,20 @@ std::string HypreAmgDeviceProblems(mfem::HypreBoomerAMG& amg);
  */
 void VerifyHypreAmgOnDevice(mfem::HypreBoomerAMG& amg, const char* what);
 
+/**
+ * @brief The diagonal of a square HypreParMatrix whose rows may have no
+ *        diagonal entry, zero there: boundary and interface masses, whose
+ *        rows off their faces are empty (and a rank without such faces has
+ *        no entry at all).
+ *
+ * MFEM's HypreParMatrix::GetDiag, and hypre's Jacobi (HypreSmoother), read
+ * each row's first entry as its diagonal: an empty row gives the next row's
+ * entry, or reads past the arrays -- garbage on a host, an illegal access or
+ * a NaN on a GPU (linear_elasticity_test E6 and robin_test R1 at np 2, fsi_test
+ * F3 now and then; 2026-10-23). Host work, once per assembly.
+ * @param A The matrix (its data are read on the host, then handed back).
+ * @param d The diagonal (true dofs).
+ */
+void HypreDiagonal(const mfem::HypreParMatrix& A, mfem::Vector& d);
+
 } // namespace incns

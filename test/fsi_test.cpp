@@ -20,6 +20,8 @@
 
 #include <gtest/gtest.h>
 
+#include "repro_tolerance.hpp"
+
 #include "bc/boundary_names.hpp"
 #include "config/parameters.hpp"
 #include "fsi/fsi_case.hpp"
@@ -194,7 +196,10 @@ TEST(Fsi, F2_TrialStepUndoesAndCommits)
    const double scale = u1.Normlinf();
    EXPECT_GT(MaxDiff(u1, u3), 1e-8 * scale); // the interface mattered
    EXPECT_LT(MaxDiff(u1, u2), 1e-9 * scale);
-   EXPECT_LT(MaxDiff(u2, u_step), 1e-9 * scale);
+   // Another FsiCase's steps: on a GPU its AMG hierarchy differs
+   // (repro_tolerance.hpp), and the coupled steps' iterates at their solver
+   // tolerance with it (3.2e-9 measured, job 49606285).
+   EXPECT_LT(MaxDiff(u2, u_step), incns_test::ReproTol(1e-9, 1e-7) * scale);
    EXPECT_EQ(f.Motion().MoveCount(), 2);
 }
 
