@@ -1282,7 +1282,7 @@ void LinesApply(const int NE, const Array<real_t>& b, const Array<real_t>& g,
 
 } // namespace leandiff
 
-/// The fused apply by lines on a device (leandiff::LinesApply): in 3D at
+/// The fused apply by lines on a CUDA device (leandiff::LinesApply): in 3D at
 /// (D1D, Q1D) = (7, 8) and (8, 9), the compact data @p d read or, with @p w
 /// non-null, formed from J, the rule's weights @p w and the constant
 /// coefficient @p nu. @return Whether it ran (false: the caller applies with
@@ -1294,7 +1294,10 @@ static bool FusedLinesApply(const int dim, const int d1d, const int q1d,
                             const Vector& j, const Vector& alpha,
                             const Vector& x, Vector& y)
 {
-   if (dim != 3 || NE == 0 || !Device::Allows(Backend::DEVICE_MASK))
+   // CUDA only: LinesApply launches nothing in a host build, and MFEM's debug
+   // device passes a DEVICE_MASK check, so y was left unapplied there
+   // (lean_vector_diffusion_test L3, L4 on the debug device).
+   if (dim != 3 || NE == 0 || !Device::Allows(Backend::CUDA_MASK))
    {
       return false;
    }
