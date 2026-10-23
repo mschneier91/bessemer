@@ -42,8 +42,16 @@ det F 0.65 at 90, 0.25 at 180; 2-5 Newton iterations per 10-degree move; back at
 2e-12), where the linear model reaches 90 (0.21) and inverts at 100, and St.
 Venant-Kirchhoff fails after 40 ([hyperelasticity.md](hyperelasticity.md) §3). The linear
 model stays the default (the standard for moderate motions; neo-Hookean costs a Newton
-solve per move). FSI decks reach it through `Case` too: the other thread's FSI2, which the
-linear mesh motion folds at t = 8.6, is being rerun with it. CPU np 1/2/4, the debug device
+solve per move). FSI decks reach it through `Case` too, and **FSI2 is reached with it**
+(`benchmarks/turek_hron/fsi2.yaml` plus `mesh_motion.model: neo_hookean`, np 8, jobs
+49696518 and 49697143). The deck as it is stops at t = 8.60 (tip u_y 57.5 mm, as the other
+thread found); with neo-Hookean it runs to t = 15, det F in [0.40, 1.54], periodic from
+t = 11 (u_y amplitude 75.92 mm over the last eight periods). Last period against Turek &
+Hron: u_x -13.15 +- 11.39 (-14.58 +- 12.44), u_y 1.25 +- 75.92 (1.23 +- 80.6) mm, drag
+205.1 +- 67.8 (208.83 +- 73.75), lift 0.95 +- 220.8 (0.88 +- 234.2), u_y frequency 1.924
+(2.0): amplitudes 5.7-8.4 % low, means within 2 %, on the coarse mesh (not separated, as
+FSI3's). 3.18 subiterations per step, 2.17 h at np 8, about 1.7x the linear run's time per
+step. Its first move needed the near-rest Newton test (`294a29e`). CPU np 1/2/4, the debug device
 and the verify tier (jobs 49695435, 49695655, 49696320); the GPU suite was still queued at
 landing (human: "Push into main ... still run the GPU stuff too"). The parked SVK branch
 `hyper-m4` is superseded.
