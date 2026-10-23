@@ -162,10 +162,11 @@ namespace
 
 // The curved on-the-fly rate against the stored one: on a GPU both
 // contractions are nvcc's and fuse alike (bit for bit); on the CPU build MFEM
-// is compiled with the target's FMA and bessemer without (2e-15 measured).
+// is compiled with the target's FMA and bessemer without (2e-15 measured), the
+// debug device included (it runs that build's arithmetic).
 double CurvedTolerance()
 {
-   return Device::Allows(Backend::DEVICE_MASK) ? 0.0 : 1e-14;
+   return Device::Allows(Backend::CUDA_MASK | Backend::HIP_MASK) ? 0.0 : 1e-14;
 }
 
 } // namespace
