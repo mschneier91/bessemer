@@ -1,12 +1,13 @@
 # Hyperelasticity
 
-Large-deformation solids in the total Lagrangian form, St. Venant-Kirchhoff (SVK) first.
+Large-deformation solids in the total Lagrangian form: St. Venant-Kirchhoff (SVK) and
+neo-Hookean.
 The design and its decisions are in [design/hyperelasticity_spec.md](design/hyperelasticity_spec.md).
 Human 2026-10-21: "start specking on adding hyperelasticity and at venant Kirkhoff
 model", then "go with your recommendations, commit the spec and start M1", then "after
 this is a good time to also start optimizing memory and then do performance engineering".
 
-**State (2026-10-22):** milestone 1 (the material and its operators), a memory step, and
+**State (2026-10-23):** milestone 1 (the material and its operators), a memory step, and
 a performance step in five rounds (section 4):
 
 1. the 3D kernels on a device by lines;
@@ -20,7 +21,9 @@ conditions and dead loads), its deck `equation: hyperelasticity` through `Elasti
 and the Turek-Hron CSM1 and CSM2 decks, which reproduce the benchmark's point-A
 displacements to 1-2e-4 (sections 1-4). Milestone 3 (dynamics): generalized-alpha and
 BDF2 on the nonlinear system, the dynamic deck, and CSM3, whose oscillation matches the
-benchmark's to 0.4-1.7 % at its time step.
+benchmark's to 0.4-1.7 % at its time step. Milestone 4 (2026-10-23): the neo-Hookean
+material and the hyperelastic mesh motion, `mesh_motion.model: neo_hookean`, which turns
+the DFG cylinder to 180 degrees where the linear model inverts at 100 (sections 1-3).
 
 ## 1. What exists
 
@@ -29,6 +32,12 @@ benchmark's to 0.4-1.7 % at its time step.
   `Tangent(F, S, dF) -> dP = dF S + F dS` with `dS = lambda tr(dE) I + 2 mu dE` and
   `dE = sym(F^T dF)`, and `Energy(F) -> W`. Matrices are column-major. A new material is
   a new struct with the same three functions, not new kernels (spec D2, D4).
+  `NeoHookean` (milestone 4) is the compressible neo-Hookean material, W = mu/2 (tr C -
+  dim) - mu ln J + lambda/2 (ln J)^2: P = mu F + (lambda ln J - mu) F^-T and dP = mu dF +
+  lambda tr(F^-1 dF) F^-T + (mu - lambda ln J) F^-T dF^T F^-T, from F alone (every
+  storage applies). Its energy grows without bound as J -> 0; along a uniaxial squeeze
+  SVK's stays below its J = 0 value lambda/8 + mu/4 (section 4).
+  `Hyperelasticity::Options::material` and the deck's `solid.model` pick the material.
   `LinearElastic` is small-strain linear elasticity, `Tangent` only (dP = lambda tr(dF)
   I + mu (dF + dF^T), St. Venant-Kirchhoff's tangent at F = I bit for bit): with it the
   operator is `LinearElasticity`'s stiffness K. It stores no linearization, `Mult` is K u
@@ -103,8 +112,9 @@ benchmark's to 0.4-1.7 % at its time step.
   linear deck's time keys). `ElasticityCase` builds either
   solver and applies the deck's boundary groups to it; `run_case` and
   `incns.run_deck` dispatch both equations. The `solid` section takes the linear keys
-  (material, order, body force, CG, probe) and, for this equation, `model:
-  st_venant_kirchhoff`, `newton_rtol`, `newton_atol`, `newton_dx_rtol`,
+  (material, order, body force, CG, probe) and, for this equation, `model`
+  (`st_venant_kirchhoff`, the default, or `neo_hookean`), `newton_rtol`, `newton_atol`,
+  `newton_dx_rtol`,
   `newton_max_iter`, `load_steps` and `line_search` (docs/deck_reference.md). Plane
   stress, BDF3 and the Jacobi preconditioner are rejected. The summary gains a `newton`
   block; a dynamic run's history CSV a `newton_iterations` column. The linear decks'
@@ -117,6 +127,13 @@ benchmark's to 0.4-1.7 % at its time step.
 - `bench/bench_hyperelastic.cpp` reports, per order and storage: the bytes per vector dof,
   the device memory added, and the residual, linearization and tangent times. MFEM's
   linear `ElasticityIntegrator` in partial assembly is the reference.
+- `src/ale/hyperelastic_motion.{hpp,cpp}`: `HyperelasticMotion` (milestone 4), the mesh
+  motion's `MeshMotionModel` on `Hyperelasticity`. The Jacobian stiffening is per-element
+  factors on lambda and mu (`element_stiffness`), E = 1, nu 0.3 by default; neo-Hookean by
+  default, SVK for comparison (`Options::material`). Each move is a Newton solve from the
+  guess `MeshMotion` extrapolates from the kept states; a checkpoint carries the last
+  displacement. `ale/mesh_motion_factory` builds it, or the linear model, from the deck's
+  `mesh_motion` section ([mesh_motion.md](mesh_motion.md)).
 
 **Changed from the spec.** Section 3 of the spec planned to keep F and S (15 numbers per
 point, the stress symmetric). The default keeps F only (9 numbers): on an H100 it is
@@ -130,11 +147,16 @@ smaller and faster (section 3 below).
   independent SVK `HyperelasticModel`. The tangent is checked against central differences
   of the stress. It also checks frame indifference, zero stress under a rigid rotation, and
   the small-strain limit.
+- **H1b:** the same for `NeoHookean` against an independent neo-Hookean model, and its
+  energy growing without bound along a uniaxial squeeze to J = 1e-6, where SVK's stays
+  below its J = 0 value.
 - **H2:** residual and tangent against MFEM's `HyperelasticNLFIntegrator`, which the test
   runs with its own SVK model (2D Q3 and Q6, 3D Q2; 3D Q6 the residual only), to 1e-12
-  relative.
+  relative. **H2b:** the same for neo-Hookean (2D Q3, 3D Q2, 3D Q6 the residual only) at a
+  smooth displacement (gradient entries up to 0.24): H2's random one folds high-order
+  elements, where ln J is undefined.
 - **H3:** Taylor test of the residual against the tangent, and of the energy against the
-  residual.
+  residual, for both materials.
 - **HD:** applies are bitwise repeatable.
 - **HM:** the three storages give the same tangent to 1e-13 and order their memory as
   expected; borrowed buffers leave results bitwise unchanged.
@@ -174,6 +196,11 @@ The static solver (milestone 2):
   and the history CSV is written.
 - `run_case_csm1` runs `cases/turek_hron_csm1.yaml` through `run_case` (fast tier).
 
+- **H9:** the neo-Hookean mesh motion turns the DFG cylinder (Q3) by 45 degrees in three
+  moves and back, the walls held. The body's nodes lie on the turned circle to 1e-12, det F
+  is in [0.855, 1.146] at 45 degrees (3 Newton iterations there, at most 8 allowed),
+  every node returns to rest to 1e-10, and a checkpoint after the second move restarts
+  bitwise (on a host).
 - **H10:** a dynamic cantilever's state exported after three steps; two more steps, then
   the state imported and the two steps again: the same displacement, velocity and
   reaction (bitwise on a host), generalized-alpha and BDF2.
@@ -194,9 +221,16 @@ The static solver (milestone 2):
   within 5e-4 (relative, each component) of the benchmark's values and converging.
   CSM3 at Q4 on 16 x 2, dt 0.005, to t = 10: point A's mean and amplitude within 2.5 %
   and its frequency within 1 % of the benchmark's at the same dt (section 3).
+- **V3:** the DFG cylinder turned about its centre in 10-degree moves to 180 and back, the
+  walls held, chi = 1, by the linear, SVK and neo-Hookean models (section 3). Neo-Hookean
+  must stay valid (every move converged, det F > 0) to `reach_degrees` 180 and at least as
+  far as the linear model, and return to rest to 1e-10.
 
 Passed on the CPU at np 1, 2 and 4 and on H100s at np 1 and 2 at every step; for the
-current code, jobs 49597065 (CPU) and 49592163 (GPU).
+current code through milestone 3, jobs 49597065 (CPU) and 49592163 (GPU). Milestone 4:
+CPU np 1, 2 and 4, the debug device and the verify tier (jobs 49695435, 49695655 and
+49696320); its GPU suite was still queued when it landed (human: push first, "still run
+the GPU stuff too").
 
 ## 3. Memory and speed
 
@@ -305,6 +339,38 @@ t >= 5, the frequency from the upward crossings of the mean (job 49596583; u x 1
   0.4-0.5 % (frequency) of the benchmark. Numerical damping hardly matters for this mode (rho_inf
   0.8 vs 1: 0.03 %); BDF2 damps the higher modes and lands 0.2 % away.
 - At most 3 Newton iterations per step, about 140 CG iterations per step.
+
+### Mesh motion: the turned cylinder (V3)
+
+The DFG cylinder mesh (`CylinderChannelSpec` defaults, Q3) with the cylinder turned about
+its centre in 10-degree moves to 180 and back, every other boundary held, stiffening
+chi = 1, nu 0.3, np 4 (job 49695356). Minimum det F on the way up; in brackets Newton
+iterations and CG iterations of the move:
+
+| Angle | Linear | SVK | Neo-Hookean |
+|---|---|---|---|
+| 10 | 0.970 | 0.964 (4, 105) | 0.973 (3, 76) |
+| 30 | 0.887 | 0.763 (3, 110) | 0.913 (2, 67) |
+| 40 | 0.825 | 0.374 (4, 247) | 0.875 (2, 78) |
+| 50 | 0.758 | -3.37, not converged | 0.835 (2, 89) |
+| 90 | 0.210 | | 0.646 (3, 208) |
+| 100 | -0.133 | | 0.597 (3, 229) |
+| 120 | -0.935 | | 0.506 (3, 282) |
+| 150 | -2.09 | | 0.412 (3, 392) |
+| 180 | -2.57 | | 0.251 (3, 545) |
+
+- Neo-Hookean converges at every move, up and back (2-5 Newton iterations), and returns
+  to rest to 2e-12. The linear model is valid to 90 and inverts at 100; SVK fails after
+  40 (Newton's 25-iteration cap, det F < 0) and does not recover on the way back.
+- At 180 degrees the neo-Hookean mesh's det F spans 0.25 to 1.64.
+- Neo-Hookean's cost is the Newton solve. CG iterations per correction grow from about 25
+  at 10 degrees to about 180 at 180: the LOR-AMG is the reference configuration's (spec
+  D5), so it fits the tangent less as the mesh turns. The linear model took 24 and 21 CG
+  iterations for the first two moves and none after. The turn's data is (cos theta - 1)
+  (X - c) + sin theta R_90 (X - c), two fixed fields, so the linear solution lies in a
+  two-dimensional space and its projected guess (`basis_size`) is exact from the third
+  move on.
+- SVK's numbers match the parked branch's of 2026-10-22 (0.76 / 0.37 at 30 / 40 degrees).
 
 ## 4. Notes for developers
 
@@ -420,8 +486,8 @@ t >= 5, the frequency from the upward crossings of the mean (job 49596583; u x 1
   is -0.025 (+0.18 at amplitude 0.05), so the continuous problem is ill-posed. Newton
   converged quadratically on 4 x 4 meshes and diverged on finer ones, which resolve the
   unstable short waves (job 49589795; np 1 and np 4 identical). This is the weakness the
-  spec names (section 1) and the reason for neo-Hookean next. Mesh motion with SVK should
-  watch the element Jacobians.
+  spec names (section 1), and on the turned cylinder it stops SVK mesh motion after 40
+  degrees (section 3); neo-Hookean (milestone 4) does not have it.
 
 ## 5. Next
 
@@ -433,23 +499,21 @@ t >= 5, the frequency from the upward crossings of the mean (job 49596583; u x 1
   - Geometry on the fly: **shelved** (human 2026-10-21). The operator's ~93 B/dof are
     under 5 % of the LOR-AMG's estimated 2-3 kB/dof (elasticity.md section 3), so it
     would save under 2 % of the solver's memory, at a cost in speed.
-- **Milestone 4, the hyperelastic mesh motion: parked** (human 2026-10-22: "What is
-  standard in the literature? That's what we should be doing"). An SVK model behind
-  `MeshMotionModel` (kept on a local branch, not on main) did worse than the linear one on
-  the DFG cylinder turned about its centre with the walls held (stiffening chi = 1):
-  min det F 0.76 / 0.37 at 30 / 40 degrees against the linear model's 0.89 / 0.82, and
-  Newton failed from about 45 degrees, where the linear model stays valid to 90 (it
-  inverts at 100). Line search, four load steps per move and 5-degree moves trace the same
-  converged path and fail at the same angle, so it is the material's compression weakness
-  (section 4), not the solver. The literature's standard (Shamanskiy & Simeon, Comput.
-  Mech. 2021, seven techniques on Turek-Hron FSI2): linear elasticity with Jacobian
-  stiffening, what `LinearElasticMotion` is, for moderate motions (it handled 1.6-1.9
-  times FSI2's); biharmonic extension first for large ones; a log-neo-Hookean
-  pseudo-solid for extreme ones (its ln J term keeps elements from inverting). Nobody uses
-  SVK for mesh motion. The Turek-Hron cases need only the linear model.
-- **Later, each needing the human's OK** (spec section 7): neo-Hookean (now motivated by
-  that measurement), follower pressure loads for FSI, the refreshed LOR tangent, a mixed
-  u-p form, an energy-momentum integrator.
+- **Milestone 4, the hyperelastic mesh motion: done with neo-Hookean** (2026-10-23;
+  human: "Oh we want M4", then neo-Hookean of the options offered). It was parked on
+  2026-10-22 (human: "What is standard in the literature? That's what we should be
+  doing") after an SVK model did worse than the linear one on the turned cylinder.
+  Line search, four load steps per move and 5-degree moves traced the same converged path
+  and failed at the same angle, so it is the material's compression weakness (section 4),
+  not the solver. The literature (Shamanskiy & Simeon, Comput. Mech. 2021, seven
+  techniques on Turek-Hron FSI2): linear elasticity with Jacobian stiffening,
+  `LinearElasticMotion`, for moderate motions (it handled 1.6-1.9 times FSI2's; it stays
+  the default); biharmonic extension for large ones; a (log-)neo-Hookean pseudo-solid for
+  extreme ones, its ln J term keeping elements from inverting. That is the model built:
+  it turns the cylinder to 180 degrees (section 3). The Turek-Hron cases need only the
+  linear model.
+- **Later, each needing the human's OK** (spec section 7): follower pressure loads for
+  FSI, the refreshed LOR tangent, a mixed u-p form, an energy-momentum integrator.
 - The fixed reference LOR-AMG took 50-80 CG iterations per Newton correction on the CSM
-  decks (CG rtol 1e-10). Large rotations in mesh motion may need the refreshed LOR
-  tangent (spec D5).
+  decks (CG rtol 1e-10), and in the neo-Hookean mesh motion 25 at 10 degrees to 180 at 180
+  (section 3). The refreshed LOR tangent (spec D5) is the remedy if that cost matters.

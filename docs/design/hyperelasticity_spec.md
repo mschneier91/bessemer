@@ -271,9 +271,11 @@ a new key, never re-blessing existing ones):
 2. **Static solver:** Newton, load steps, the deck, H4-H6 and H8 static; CSM1/CSM2 decks
    and V1, V2 static.
 3. **Dynamics:** H7, H8 dynamic, CSM3 (V2 dynamic).
-4. **Mesh motion:** `HyperelasticMotion` and V3.
+4. **Mesh motion:** `HyperelasticMotion` and V3. Done 2026-10-23 with neo-Hookean, not
+   SVK (changed from D1/D4: SVK failed V3 after 40 degrees; hyperelasticity.md
+   section 5).
 5. **Later, each needing its own OK:**
-   - neo-Hookean (D4);
+   - neo-Hookean (D4): done in milestone 4;
    - follower pressure loads for FSI;
    - the refreshed LOR tangent as a default;
    - a mixed u-p form for nearly incompressible solids;
@@ -293,9 +295,11 @@ review.
 - **The fixed reference preconditioner at large rotations.** The Turek-Hron flag's tip
   moves about 0.066 against a length of 0.35, a rotation of roughly 10-20 degrees (an
   estimate). Mesh motion may rotate much more; V3 measures how far the fixed LOR-AMG
-  holds.
+  holds. Measured (2026-10-23): to 180 degrees, its CG iterations per Newton correction
+  growing about 7x (hyperelasticity.md section 3).
 - **Memory** (an estimate, not measured): the tangent's 15 numbers per point and the
   geometry's 10 add roughly 1.5-2x the linear PA data. The LOR-AMG still dominates
   (elasticity.md section 3), so problem sizes stay close to the linear solver's.
-- **SVK in compression** (section 1): documented, with neo-Hookean as the remedy.
+- **SVK in compression** (section 1): documented, with neo-Hookean as the remedy
+  (milestone 4).
 - **Plane stress:** not supported for SVK (section 1).

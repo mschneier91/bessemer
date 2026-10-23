@@ -32,6 +32,22 @@ roundoff floor (~4.5e-11 on the flag) is above both relative tests; the decks se
 scratch-build failures). Not on a GPU. **Next:** a mesh motion for large rotations (FSI2), the meshes for FSI3's force
 amplitudes, an absolute Newton floor in Hyperelasticity, SVK under the other conditions.
 
+**Hyperelasticity milestone 4: neo-Hookean mesh motion (2026-10-23; human: "Oh we want
+M4", then neo-Hookean of the options offered).** A compressible neo-Hookean material
+(`NeoHookean`, `solid.model: neo_hookean`) behind the hyperelastic kernels, and
+`HyperelasticMotion` with it as `mesh_motion.model: neo_hookean`, for the mesh-motion
+case and the moving-mesh flows (`DeckMeshMotionFactory`). On the DFG cylinder turned about
+its centre with the walls held (V3, np 4): neo-Hookean stays valid to 180 degrees (min
+det F 0.65 at 90, 0.25 at 180; 2-5 Newton iterations per 10-degree move; back at rest to
+2e-12), where the linear model reaches 90 (0.21) and inverts at 100, and St.
+Venant-Kirchhoff fails after 40 ([hyperelasticity.md](hyperelasticity.md) §3). The linear
+model stays the default (the standard for moderate motions; neo-Hookean costs a Newton
+solve per move). FSI decks reach it through `Case` too: the other thread's FSI2, which the
+linear mesh motion folds at t = 8.6, is being rerun with it. CPU np 1/2/4, the debug device
+and the verify tier (jobs 49695435, 49695655, 49696320); the GPU suite was still queued at
+landing (human: "Push into main ... still run the GPU stuff too"). The parked SVK branch
+`hyper-m4` is superseded.
+
 **The GPU suite is green again: diagonals of matrices with empty rows (2026-10-23,
 `1b5e44e`).** MFEM's `HypreParMatrix::GetDiag` and hypre's Jacobi read each row's first
 entry as its diagonal; a boundary or interface mass has empty rows off its faces (a rank
@@ -235,7 +251,8 @@ day): generalized-alpha and BDF2 on the nonlinear system as one Newton solve per
 second order in time on a finite separable motion (H7), the dynamic deck, and
 `cases/turek_hron_csm3.yaml`. CSM3 is within 0.5 % (u_y, frequency) and 1.7 % (u_x mean)
 of the benchmark at its dt 0.005, about as close as the benchmark's own dt dependence
-(2.4 %) allows. **Next:** the hyperelastic mesh motion (milestone 4).
+(2.4 %) allows. **Next:** the hyperelastic mesh motion (milestone 4; done 2026-10-23
+with neo-Hookean, above).
 The landing's GPU suite (job 49592163, np 1 and 2, H100s) passed everything here but
 found three failures in the FSI F3 and ALE stage 3 code merged the same day, which had
 not run on a GPU: `fsi_test` F2 compares a device result read on the host (2e-319, the

@@ -37,8 +37,29 @@ one CG solve; a boundary that returns to its place brings every node back
 exactly, and nothing drifts over a long run. The cost: linear elasticity on
 the reference mesh is accurate for moderate motions and degrades for large
 rotations (a rotation is not strain-free in the linear model). That is the job
-of a hyperelastic model through the same interface (section 2); an incremental
-mode on the current mesh is the other standard remedy, not built.
+of the neo-Hookean model below; an incremental mode on the current mesh is the
+other standard remedy, not built.
+
+**The neo-Hookean model** (`model: neo_hookean`, 2026-10-23). The same
+pseudo-solid on the reference mesh with a compressible neo-Hookean energy,
+
+    W = s_K (mu/2 (tr C - dim) - mu ln J + lambda/2 (ln J)^2),  C = F^T F,
+
+F = I + grad d, the same stiffening s_K, E = 1 and Poisson ratio. It is
+frame-indifferent, so a turned body region costs nothing, and W grows without
+bound as an element is squeezed flat (J -> 0), which keeps elements from
+inverting; it is the linear model at small strain. Each move is one Newton
+solve (`solid/hyperelasticity`, docs/hyperelasticity.md) from the guess the
+kept states extrapolate to the new time, preconditioned by the reference
+LOR-AMG. On the DFG cylinder turned about its centre with the walls held
+(chi = 1, 10-degree moves, test V3) it stays valid to 180 degrees (min det F
+0.65 at 90, 0.25 at 180; 2-5 Newton iterations per move), where the linear
+model inverts at 100 (0.21 at 90). It costs a Newton solve per move, several
+CG solves whose iterations grow with the rotation (25 per correction at 10
+degrees, 180 at 180; hyperelasticity.md section 3), so the linear model stays
+the default for moderate motions, the literature's standard (Shamanskiy and
+Simeon, Comput. Mech. 2021). St. Venant-Kirchhoff, the other hyperelastic
+material, failed after 40 degrees there and is not offered for mesh motion.
 
 **High-order geometry.** The model solves at the order of the mesh's nodal
 space by default, and the displacement is interpolated onto that space at the
@@ -109,8 +130,8 @@ shape the flow needs, and the large ones have room.
   `det_f_min` and `jacobian_ratio_min`, and treat values below about 0.2 as
   a warning (a working rule; its effect on a flow is not measured yet). Large
   motions and rotations (which linear elasticity on the reference mesh treats
-  as strain) need the hyperelastic model, a finer mesh where the deformation
-  lands, or a remesh; none of these is built yet.
+  as strain) need the neo-Hookean model, a finer mesh where the deformation
+  lands, or a remesh. `model: neo_hookean` is built (above); the others are not.
 
 ## 2. Code
 
@@ -119,15 +140,23 @@ shape the flow needs, and the large ones have room.
   mesh at an order MeshMotion gives it, receives fixed and displaced boundary
   attributes (`AddFixed`, `AddDisplacement` with a `VectorCoefficient` of X
   and t), and on `Solve(t)` produces `Displacement()`, a vector H1 field on the
-  reference mesh. A hyperelastic model (St. Venant-Kirchhoff or neo-Hookean,
-  total Lagrangian, Newton) implements the same interface, with Newton inside `Solve`; so would a
-  harmonic or biharmonic extension.
+  reference mesh. The hyperelastic model implements the same interface with
+  Newton inside `Solve`; so would a harmonic or biharmonic extension.
 - `src/ale/linear_elastic_motion.{hpp,cpp}`: `LinearElasticMotion`, the model
   above on `LinearElasticity` (`solid/`), with `Factory(options)` for
   MeshMotion and `StiffeningFactors(mesh, chi)`. `LinearElasticity` gained
   `Options::element_stiffness` (a per-element factor on lambda and mu, carried
   into the LOR preconditioner through the parent element, as the fluid's
   grad-div coefficient is) and `Solve(t)` (a static solve with the data at t).
+- `src/ale/hyperelastic_motion.{hpp,cpp}`: `HyperelasticMotion`, the
+  neo-Hookean model on `Hyperelasticity` (`solid/`), with the stiffening as
+  per-element factors on lambda and mu, `Factory(options)` for MeshMotion, the
+  Newton guess from `Solve(t, guess)`, and the last displacement in a
+  checkpoint. `Options::material` can make it St. Venant-Kirchhoff, for
+  comparison only.
+- `src/ale/mesh_motion_factory.{hpp,cpp}`: `DeckMeshMotionFactory`, the deck's
+  model and its settings as a factory, for `MeshMotionCase` and the moving-mesh
+  flows.
 - `src/ale/mesh_motion.{hpp,cpp}`: `MeshMotion`. Construction copies the mesh
   (the reference, which never moves) and builds the model on the copy.
   `Move(t)` solves, sets the nodes to X + d and calls `Mesh::NodesUpdated()`
@@ -169,7 +198,8 @@ string per component in x, y, z (the reference coordinates) and t, with
 optional named `parameters` (`config/expression`: `+ - * / ^`, sin, cos, tan,
 their inverses and hyperbolic forms, exp, log, sqrt, abs, min, max, pow,
 atan2, pi, e). The `mesh_motion` section picks the model (`linear_elastic`,
-the only one today), its Poisson ratio and stiffening exponent, the order
+the default, or `neo_hookean`), its Poisson ratio and stiffening exponent, the
+order
 (default `discretization.order_u`; a curved geometry keeps its own nodes'
 order), the CG settings, and `steps`: the moves are at t_k = k t_final / steps
 (`time.t_final`), so an expression with t ramps the deformation in and one
@@ -237,7 +267,12 @@ Fast tier, `mesh_motion_test`, np 1/2/4 (pins its own orders):
 rectangle with a ramped parabola, C2 the 3D cube with a sin^2 bump (the
 displaced boundary's nodes at X + g(X, t) to roundoff, the held faces' nodes
 unmoved, det F > 0, the peak node moved by the peak), C3 a constant
-displacement of every boundary is a translation (det F = 1).
+displacement of every boundary is a translation (det F = 1), C4 `model:
+neo_hookean` turns every boundary by 60 degrees in four moves and the mesh
+rotates rigidly (det F = 1, every node at R X to 1e-8), which the linear model
+cannot do. `hyperelasticity_test` H9 (the cylinder turned 45 degrees and back,
+a checkpoint restarting bitwise) and `verify_hyperelasticity_test` V3 (to 180
+degrees, the three models) cover the neo-Hookean model on the DFG mesh.
 `expression_test` E1-E4 pins the expression parser. `run_case_mesh_deform`
 runs `cases/mesh_deform_2d.yaml` end to end.
 
@@ -249,8 +284,8 @@ runs `cases/mesh_deform_2d.yaml` end to end.
 1. The ALE fluid: started 2026-10-21 (IMEX, library only, a full rebuild
    after each move; [ale_fluid.md](ale_fluid.md)); next there the deck
    section, the in-place refresh and the validation.
-2. A hyperelastic mesh-motion model (shares the large-deformation solid of
-   the Turek-Hron step).
+2. A hyperelastic mesh-motion model: done 2026-10-23, neo-Hookean
+   (`model: neo_hookean`, section 1).
 3. Sliding boundaries; an incremental (current-configuration) mode if large
    rotations need it; a warm-started solve (the previous displacement as the
    CG guess, with a tolerance that does not depend on it).
