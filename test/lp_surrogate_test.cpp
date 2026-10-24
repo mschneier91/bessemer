@@ -10,12 +10,17 @@
 //  * folded LOR sub-elements (a moved curved mesh): counted, and L_p then
 //    takes |det J| -- positive diagonal, its V-cycle preconditions CG on it;
 //    without a fold the matrix is the batched LOR one bitwise.
+//  * the same for the velocity LOR (MakeFoldSafeForm on c0 M + nu K +
+//    gamma grad-div): positive diagonal, AMG preconditions CG; without a
+//    fold the fold-safe form's LOR matrix is the plain one bitwise.
 
 #include <gtest/gtest.h>
 
 #include "bc/boundary_conditions.hpp"
 #include "mesh/periodic_box.hpp"
+#include "operators/grad_div_integrator.hpp"
 #include "operators/stokes_operator.hpp"
+#include "precond/lor_folds.hpp"
 #include "precond/lp_surrogate.hpp"
 #include "precond/mass_inverse.hpp"
 #include "precond/mixed_poisson_op.hpp"
@@ -282,3 +287,96 @@ TEST(LpSurrogate, FoldedLorSubElementsStaySpd)
       EXPECT_TRUE(cg.GetConverged());
    }
 }
+
+// The velocity LOR's momentum-like form on the folded mesh of
+// FoldedLorSubElementsStaySpd, through MakeFoldSafeForm: every diagonal entry
+// positive and CG with AMG (systems mode) converges on its LOR matrix.
+// Unfolded, the fold-safe form's LOR matrix is the plain form's, bitwise on
+// a host.
+TEST(LpSurrogate, FoldSafeVelocityLorStaysSpd)
+{
+   for (int fold = 0; fold < 2; ++fold)
+   {
+      BoxSpec s;
+      s.dim = 2;
+      s.num_elems = {2, 2, 0};
+      s.lengths = {1.0, 1.0};
+      s.periodic = {false, false, false};
+      Mesh serial = MakeBoxMesh(s);
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      mesh.SetCurvature(3);
+      if (fold)
+      {
+         GridFunction& x = *mesh.GetNodes();
+         const FiniteElementSpace& nf = *x.FESpace();
+         const double xi = 0.25 * (1.0 - 1.0 / std::sqrt(5.0)); // h = 0.5
+         for (int i = 0; i < nf.GetNDofs(); ++i)
+         {
+            double& px = x(nf.DofToVDof(i, 0));
+            double& py = x(nf.DofToVDof(i, 1));
+            if (std::fabs(px - xi) < 1e-10 && std::fabs(py - xi) < 1e-10)
+            {
+               px = -0.02;
+               py = -0.02;
+            }
+         }
+         mesh.NodesUpdated();
+      }
+      H1_FECollection fec(3, 2);
+      ParFiniteElementSpace vfes(&mesh, &fec, 2);
+      EXPECT_EQ(CountFoldedLorElements(vfes) > 0, fold == 1);
+      ConstantCoefficient c0(10.0), nu(1e-2), gamma(0.1);
+      ParBilinearForm a(&vfes);
+      a.AddDomainIntegrator(new VectorMassIntegrator(c0));
+      a.AddDomainIntegrator(new VectorDiffusionIntegrator(nu));
+      a.AddDomainIntegrator(new incns::GradDivIntegrator(gamma));
+      Array<int> marker(mesh.bdr_attributes.Max()), ess;
+      marker = 1;
+      marker[1] = 0; // one side free
+      vfes.GetEssentialTrueDofs(marker, ess);
+      auto safe = incns::MakeFoldSafeForm(a);
+      ParLORDiscretization plain(a, ess), lsafe(*safe, ess);
+      HypreParMatrix& P = plain.GetAssembledMatrix();
+      HypreParMatrix& S = lsafe.GetAssembledMatrix();
+      Vector dp, ds;
+      P.GetDiag(dp);
+      S.GetDiag(ds);
+      double mins[2] = {dp.Size() ? dp.Min() : 1.0, ds.Size() ? ds.Min() : 1.0};
+      MPI_Allreduce(MPI_IN_PLACE, mins, 2, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+      Vector b(S.Height()), xs(S.Height()), y(S.Height());
+      b.Randomize(11 + Mpi::WorldRank());
+      if (!fold)
+      {
+         S.Mult(b, xs);
+         P.Mult(b, y);
+         double scale[2] = {y.Size() ? y.Normlinf() : 0.0, 0.0};
+         xs -= y;
+         scale[1] = xs.Size() ? xs.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, scale, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         const bool gpu = Device::Allows(Backend::DEVICE_MASK);
+         EXPECT_LE(scale[1], gpu ? 1e-13 * scale[0] : 0.0)
+               << "unfolded: the plain LOR matrix";
+         continue;
+      }
+      EXPECT_GT(mins[1], 0.0) << "|det J|: every diagonal entry positive";
+      for (int i : ess) { b(i) = 0.0; }
+      HypreBoomerAMG amg(S);
+      amg.SetSystemsOptions(2, true);
+      amg.SetPrintLevel(0);
+      CGSolver cg(MPI_COMM_WORLD);
+      cg.SetOperator(S);
+      cg.SetPreconditioner(amg);
+      cg.SetRelTol(1e-10);
+      cg.SetMaxIter(300);
+      xs = 0.0;
+      cg.Mult(b, xs);
+      if (Mpi::Root())
+      {
+         std::cout << "[fold-velocity] min diagonal " << mins[1] << " (plain "
+                   << mins[0] << "); CG " << cg.GetNumIterations()
+                   << " iterations" << std::endl;
+      }
+      EXPECT_TRUE(cg.GetConverged());
+   }
+}
+

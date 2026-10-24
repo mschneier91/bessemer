@@ -2,6 +2,7 @@
 
 #include "post/pressure_mean.hpp"
 #include "precond/hypre_device.hpp"
+#include "precond/lor_folds.hpp"
 #include "util/profiler.hpp"
 
 namespace incns
@@ -281,8 +282,28 @@ void StokesSolver::BuildVelocityPreconditioner()
    }
    else if (want_lor_amg)
    {
+      // Folded LOR sub-elements (a moved curved mesh) would make the LOR
+      // momentum block indefinite: it takes |det J| there
+      // (precond/lor_folds.hpp). The old fold-safe form outlives the old PC.
+      ParBilinearForm* lor_src = &op_.MomentumLORForm();
+      std::unique_ptr<ParBilinearForm> fold_form;
+      const long long folds = CountFoldedLorElements(spaces_.Velocity());
+      if (folds > 0)
+      {
+         fold_form = MakeFoldSafeForm(*lor_src);
+         lor_src = fold_form.get();
+         static bool reported = false;
+         if (!reported && spaces_.Velocity().GetMyRank() == 0)
+         {
+            reported = true;
+            mfem::out << "[incns] velocity LOR-AMG: " << folds
+                      << " LOR sub-elements fold on the moved mesh; the "
+                      "momentum block takes |det J| there (reported once)"
+                      << std::endl;
+         }
+      }
       auto lor = std::make_unique<LORSolver<HypreBoomerAMG>>(
-                    op_.MomentumLORForm(), op_.EssentialTrueDofs());
+                    *lor_src, op_.EssentialTrueDofs());
       lor->GetSolver().SetSystemsOptions(spaces_.Dim(), /*order_bynodes=*/true);
       lor->GetSolver().SetPrintLevel(0);
       lor->GetSolver().iterative_mode = false;
@@ -290,6 +311,7 @@ void StokesSolver::BuildVelocityPreconditioner()
       VerifyHypreAmgOnDevice(lor->GetSolver(),
                              "stokes_solver: the velocity LOR-AMG");
       vel_prec_ = std::move(lor);
+      lor_fold_form_ = std::move(fold_form);
    }
    else if (cc_mode_ && opts_.cc.a_pc == APC::JacobiPCG)
    {

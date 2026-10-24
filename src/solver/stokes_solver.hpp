@@ -480,6 +480,10 @@ private:
    /// Inner preconditioner of an iterative velocity PC (the Jacobi of
    /// JacobiPCG); declared before vel_prec_, which borrows it.
    std::unique_ptr<mfem::Solver> vel_inner_pc_;
+   /// The LOR momentum form with fold-safe integrators, when the velocity
+   /// space's LOR mesh folds (precond/lor_folds.hpp); null otherwise. Declared
+   /// before vel_prec_, whose LOR assembly borrowed its integrators.
+   std::unique_ptr<mfem::ParBilinearForm> lor_fold_form_;
    /// Velocity block preconditioner (Jacobi smoother, Chebyshev, PCG or
    /// LOR-AMG). Declared after op_ so it is destroyed before the momentum
    /// matrix it may reference. Null under the Schur method with JacobiPCG

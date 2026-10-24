@@ -9,6 +9,28 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The velocity LOR-AMG on folded LOR sub-elements (2026-10-24; human: "you can fix the velocity
+block LOR too").** With `solver.a_pc: loramg`, or `solver.preconditioner: loramg` on the mass
+path, the LOR momentum block c0 M + nu K + gamma grad-div has the pressure L_p's exposure on a
+moved mesh. It goes through MFEM's legacy LOR assembly with our integrators.
+- `precond/lor_folds.hpp` holds the fold count (moved from lp_surrogate.hpp) and
+  `FoldSafeIntegrator`. On an element where det J <= 0 at a rule point, it sums the wrapped
+  integrator's one-point contributions times the sign of det J. For the mass (det J), the
+  diffusion (1 / det J) and the grad-div (1 / det J) terms that is exactly |det J|.
+  Elsewhere it is the wrapped integrator unchanged.
+- StokesSolver assembles the velocity LOR through `MakeFoldSafeForm` when the velocity
+  space's LOR mesh folds; otherwise as before.
+
+`lp_surrogate_test` FoldSafeVelocityLorStaysSpd: on the hand-made fold the plain LOR matrix's
+smallest diagonal is -0.079, the fold-safe one's 0.215, and CG with AMG (systems mode)
+converges in 5-7 iterations at np 1/2/4. Unfolded, the matrix is the plain one bitwise.
+FSI2 with `a_pc: loramg` and the AMG rebuilt at every move, t 8.5 -> 8.9: the fold is taken with |det J|, no cuts (H_new2; the old binary's AMG coped with that one fold too). Found on the way: the fold count must not use MFEM's `FormLORVertexCoordinates`. MFEM
+caches quadrature maps by the rule's address and that function's rule is on its stack, so the
+pressure's and the velocity's orders read each other's stale maps (a buffer overrun,
+ale_fluid_test A10). The count builds the vertices on a rule with a fixed address. The
+rotational form's LOR term is not wrapped: the rotational form is refused on moving meshes.
+CPU np 1/2/4 and the debug device (hvel 49765951); fluid-only decks bitwise b5c7030 (hfluidk 49765968 with the old 2D threshold, hfluid3d 49765969).
+
 **The pressure LOR-AMG's strength threshold is 0.25 in 2D too (2026-10-24; human: "you can
 change the default in 2d to .25").** It was 0.1 in 2D (the spec's starting point), 0.25 in 3D.
 0.25 took 1-21 % fewer FGMRES iterations on every 2D deck measured: dfg_2d1 -16 %, dfg_2d3
