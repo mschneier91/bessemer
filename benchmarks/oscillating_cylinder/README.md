@@ -17,24 +17,28 @@ higher harmonics the force does not share; the reference values are the Fourier 
 
 ## Results
 
-Cloud scratch build (MFEM v4.10 from GitHub, apt hypre and Open MPI, not the Spack
-toolchain), CPU, 2026-10-22, branch `claude/project-thread-xnsz2c`. Coefficients over the
-periodic state (the first five periods drift: c_d 2.49, 2.12, 2.10, 2.09, ...).
+Bridges-2 (the Spack toolchain), CPU, main 12e3767 (the pressure LOR-AMG's strength
+threshold 0.25 in 2D), 2026-10-24. Coefficients over the periodic state (the first five
+periods drift: c_d 2.49, 2.12, 2.10, 2.09, ...).
 
 | Run | Elements | Steps | Wall | c_d | c_i |
 |---|---|---|---|---|---|
-| deck, to t = 60, np 4 | 548 | 8,362 | 7.7 min | **2.091** | **1.460** |
+| deck, to t = 60, np 4 | 548 | 8,362 | 5.1 min | **2.091** | **1.460** |
 | per period, periods 6–12 | | | | 2.088 – 2.093 | 1.459 – 1.461 |
-| 4× the elements (`level: 1`), to t = 20, np 4 | 2,192 | 5,669 | 17.8 min | period 4: 2.089 (deck 2.087) | period 4: 1.454 (deck 1.454) |
-| box 40 D × 30 D → 80 D × 60 D, to t = 34.4, np 2 | 732 | | | periods 4–6: 2.086, 2.087, 2.082 (deck 2.087, 2.088, 2.088) | 1.452, 1.456, 1.458 (deck 1.454, 1.458, 1.459) |
-| half the time step (`cfl_target: 0.25`), to t = 35, np 2 | 548 | 9,716 | 38 min | periods 4–7: 2.088, 2.089, 2.090, 2.089 | 1.454, 1.458, 1.459, 1.460 (= the deck's to 4 digits) |
+| 4× the elements (`level: 1`), to t = 20, np 4 | 2,192 | 5,669 | 10.9 min | period 4: 2.089 (deck 2.086) | period 4: 1.454 (deck 1.454) |
+| box 40 D × 30 D → 80 D × 60 D (`n_up`, `n_down` 10, `n_below`, `n_above` 9), to t = 40, np 4 | 732 | 5,562 | 3.5 min | periods 4–8: 2.086, 2.087, 2.082, 2.087, 2.086 (deck 2.086, 2.088, 2.088, 2.093, 2.088) | 1.452, 1.456, 1.457, 1.458, 1.459 (deck 1.454, 1.458, 1.459, 1.460, 1.461) |
+| half the time step (`cfl_target: 0.25`), to t = 35, np 4 | 548 | 9,716 | 5.0 min | periods 4–7: 2.088, 2.089, 2.090, 2.089 | 1.454, 1.458, 1.459, 1.460 (= the deck's to 4 digits) |
+
+The same digits as on the cloud scratch build with the 2D threshold 0.1 (2026-10-22), to
+±0.001 in a few periods; the walls there were 7.7, 17.8 and 38 min (np 2 for the last two
+rows).
 
 - **c_i = 1.460 is converged to about 0.1 %** in mesh, step and domain size here, so its
   0.7 % above Dütsch's 1.45 is the model or the reference, not resolution; the other
   computations Dütsch cites give 1.45 to 1.48. c_d agrees to 0.1 %.
-- The doubled box ran out of the scratch build's hypre at t = 34.4 ("Error during solve",
-  the apt hypre failure that also hits a few fast-tier tests there); its first six
-  periods are in the table.
+- The doubled box ran out of the cloud scratch build's hypre at t = 34.4 ("Error during
+  solve", the apt hypre failure that also hits a few fast-tier tests there); on Bridges-2
+  it runs to t = 40.
 - Not compared yet: Dütsch's velocity profiles at x = −0.6, 0, 0.6, 1.2 D for phases
   180°, 210° and 330° (they need a line probe in the output).
 - Not run on a GPU.

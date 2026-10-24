@@ -9,6 +9,21 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The 2D benchmark READMEs rerun on the 2D threshold 0.25 (2026-10-24; human: "go ahead and do
+the optional item too").** Every 2D result in benchmarks/turek_hron and
+benchmarks/oscillating_cylinder ran again on main 12e3767 on Bridges-2 (the tables were the
+cloud scratch build's at 0.1; runs in bessemer-hyp3/runs/bench_12e3767).
+- CFD1-3, FSI3 and the oscillating cylinder keep their digits: CFD3's periodic values within
+  0.2 % of the drag amplitude; c_d 2.091, c_i 1.460.
+- FSI1 at `level: 1` diverged at t = 0.28. The decks' default flow tolerance (`solver.rtol`
+  10⁻⁶ against `fsi.rtol` 10⁻⁴) fed the flow's error into the IQN-ILS columns: 13.8
+  subiterations per step at the old threshold, 14-19 at the new one, then the divergence.
+  `fsi1.yaml` and `fsi1_svk.yaml` now take `solver.rtol: 1.0e-8`: 5.8 per step early, 2.8 over
+  the run, no cut, the old digits.
+- FSI1's lift is now its mean over [10, 15] (a ±0.2 % wobble at t = 15). The SVK flag's mean
+  is ±0.6 % uncertain: its lift oscillates by ±4 % in its own lightly damped mode.
+- FSI2's five runs go again too; `level: 2` takes about a day.
+
 **The velocity LOR-AMG on folded LOR sub-elements (2026-10-24; human: "you can fix the velocity
 block LOR too").** With `solver.a_pc: loramg`, or `solver.preconditioner: loramg` on the mass
 path, the LOR momentum block c0 M + nu K + gamma grad-div has the pressure L_p's exposure on a

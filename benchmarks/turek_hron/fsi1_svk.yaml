@@ -60,6 +60,10 @@ fsi:
   reuse: 2
   rtol: 1.0e-4
   atol: 1.0e-10
+solver:
+  rtol: 1.0e-8          # well below fsi.rtol: at the default 1e-6 the flow's error
+                        # fed the IQN-ILS columns, 14-19 subiterations per step at
+                        # level 1, which diverged at t 0.28 (README.md, FSI1)
 forces:
   enabled: true
   boundaries: [cylinder, flag]

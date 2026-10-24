@@ -28,21 +28,24 @@ interface (`cases/turek_hron_flag_linear.yaml`; the solid for FSI). `level: 1` d
 
 ## Results
 
-Cloud scratch build (MFEM v4.10 from GitHub, apt hypre and Open MPI, not the Spack
-toolchain), CPU, np 4, 2026-10-22.
+Bridges-2 (the Spack toolchain), CPU, main 12e3767 (the pressure LOR-AMG's strength
+threshold 0.25 in 2D), 2026-10-24.
 
 | Test | Discretization | Elements | Steps | Wall | Drag | Error | Lift | Error |
 |---|---|---|---|---|---|---|---|---|
-| CFD1 | Q4/Q3, IMEX, error control | 314 | 6,783 | 5.3 min | 14.3373 | +0.31 % | 1.12702 | +0.71 % |
-| CFD1 | same, `level: 1` | 1,256 | 13,148 | 40 min | 14.3097 | +0.12 % | 1.12210 | +0.27 % |
-| CFD2 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 20 | 314 | 17,920 | 38 min | 136.791 | +0.07 % | 10.6883 | +1.46 % |
-| CFD3 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 12 | 314 | 20,843 | 26 min | 439.52 ± 5.690 | +0.02 % / +1.3 % | −11.78 ± 431.7 | +1.0 % / −1.4 % |
-| CFD3 | same, `level: 1` | 1,256 | 44,038 | not timed (shared cores, restarted twice) | 439.57 ± 5.713 | +0.03 % / +1.7 % | −12.27 ± 436.5 | −3.2 % / −0.29 % |
+| CFD1 | Q4/Q3, IMEX, error control, np 4 | 314 | 6,395 | 2.7 min | 14.3373 | +0.31 % | 1.12695 | +0.71 % |
+| CFD1 | same, `level: 1`, np 8 | 1,256 | 12,416 | 14.4 min | 14.3097 | +0.12 % | 1.12202 | +0.27 % |
+| CFD2 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 20, np 4 | 314 | 17,920 | 28.5 min | 136.791 | +0.07 % | 10.6883 | +1.46 % |
+| CFD3 | the defaults (Q6/Q5, OIFS at CFL 2), to t = 12, np 4 | 314 | 20,843 | 26.8 min | 439.51 ± 5.702 | +0.01 % / +1.5 % | −11.69 ± 431.7 | +1.7 % / −1.4 % |
+| CFD3 | same, `level: 1`, np 16 | 1,256 | 44,038 | 61.6 min | 439.57 ± 5.710 | +0.03 % / +1.6 % | −12.19 ± 436.7 | −2.5 % / −0.24 % |
 
-CFD3's frequency: 4.439 (+1.0 %); at `level: 1` 4.444 (+1.1 %). Over the last four
-periods instead of the last: drag 439.58 ± 5.753, lift −11.88 ± 431.9, frequency 4.440;
-at `level: 1` drag 439.57 ± 5.728, lift −12.29 ± 436.6. Refinement brings the lift
-amplitude, the quantity that moves most, from −1.4 % to −0.29 %; the drag mean and
+Against the cloud scratch build's table at the 2D threshold 0.1 (2026-10-22): CFD1 and CFD2
+agree to 10⁻⁴, CFD3's periodic values to 0.2 % of the drag amplitude and 0.1 of the lift
+mean (a small difference of large values); the error-controlled CFD1 takes 6 % fewer steps.
+CFD3's frequency: 4.439 (+1.0 %); at `level: 1` 4.444 (+1.1 %). Over the last four periods instead of the last: drag 439.48 ± 5.735, lift
+−11.82 ± 431.9, frequency 4.440; at `level: 1` drag 439.59 ± 5.737, lift −12.23 ± 436.8.
+Refinement brings the lift amplitude, the quantity that moves most, from −1.4 % to −0.24 %;
+the drag mean and
 amplitude, the frequency and the lift mean (a small difference of large values, ±3 % of
 it is ±0.4) stay where they were: what is left there is not this mesh family's spatial error
 (time step, or the reference's own error, not separated).
@@ -66,14 +69,23 @@ coupled with the flag of FSI1 (ρ_s = ρ_f = 1000, ν_s = 0.4, μ_s = 0.5·10⁶
 Dirichlet-Neumann subiterations with IQN-ILS (two steps reused) to 10⁻⁴ at every
 step, the flag solved statically, the **linear** solid (Turek & Hron's is St.
 Venant-Kirchhoff). Reference: drag 14.295, lift 0.7638, tip (point A) displacement
-u_x 2.270·10⁻⁵, u_y 8.209·10⁻⁴. Q4/Q3 fluid, Q4 solid, IMEX, Δt 0.01 to t = 15.
+u_x 2.270·10⁻⁵, u_y 8.209·10⁻⁴. Q4/Q3 fluid, Q4 solid, IMEX, Δt 0.01 to t = 15, the
+flow solver to 10⁻⁸.
 
 | Mesh | Elements (fluid / solid) | Subiterations per step | Wall | Drag | Lift | u_x(A) | u_y(A) |
 |---|---|---|---|---|---|---|---|
-| coarse | 314 / 22 | 4.4 (≤ 40) | 7.3 min | 14.338 (+0.30 %) | 0.7602 (−0.48 %) | 2.418·10⁻⁵ (+6.5 %) | 8.204·10⁻⁴ (−0.06 %) |
-| `level: 1` | 1,256 / 88 | 4.1 (≤ 48) | 32 min | 14.311 (+0.11 %) | 0.7600 (−0.50 %) | 2.390·10⁻⁵ (+5.3 %) | 8.264·10⁻⁴ (+0.67 %) |
+| coarse, np 4 | 314 / 22 | 2.8 (≤ 15) | 4.3 min | 14.338 (+0.30 %) | 0.7595 (−0.56 %) | 2.418·10⁻⁵ (+6.5 %) | 8.203·10⁻⁴ (−0.07 %) |
+| `level: 1`, np 8 | 1,256 / 88 | 2.8 (≤ 14) | 15.0 min | 14.311 (+0.11 %) | 0.7599 (−0.51 %) | 2.390·10⁻⁵ (+5.3 %) | 8.263·10⁻⁴ (+0.66 %) |
 
-Cloud scratch build, CPU, np 4, 2026-10-22. What the errors are:
+Bridges-2, CPU, main 12e3767, 2026-10-24. The lift is its mean over t ∈ [10, 15]: it keeps
+a ±0.0014 wobble, so its value at t = 15 differs by up to 0.2 % (the cloud scratch build's
+table of 2026-10-22, at t = 15: 0.7602 and 0.7600; the other columns are its digits). What
+the errors are:
+
+- **The flow solver must sit well below `fsi.rtol`.** At the default `solver.rtol` 10⁻⁶
+  the flow's error fed the IQN-ILS columns: 13.8 subiterations per step over t ≤ 1 at
+  `level: 1`, and with the 2D pressure LOR-AMG threshold 0.25 (2026-10-24) 14-19, which
+  diverged at t = 0.28. At 10⁻⁸ (the decks since then): 5.8 there, 2.8 over the run, no cut.
 
 - **The march must run past t ≈ 10.** The flag settles slowly after the inflow ramp
   (t ≤ 2): u_y was 4.0 % short at t = 5 (the first version of this deck stopped there,
@@ -94,20 +106,22 @@ Cloud scratch build, CPU, np 4, 2026-10-22. What the errors are:
 
 **With the St. Venant-Kirchhoff solid** (`fsi1_svk.yaml`, `fsi.solid: hyperelasticity`,
 the flag dynamic: generalized-alpha, ρ_∞ 0.5; a static SVK flag does not couple,
-[docs/fsi.md](../../docs/fsi.md) §1), coarse mesh, np 4, 7.1 min, 3-5 subiterations per
-step, forces averaged over t ∈ [10, 15] (the dynamic flag leaves a small ripple on the
-lift):
+[docs/fsi.md](../../docs/fsi.md) §1), coarse mesh, np 4, 6.6 min, 3.0 subiterations per
+step (≤ 8), forces averaged over t ∈ [10, 15]:
 
 | Solid | Drag | Lift | u_x(A) | u_y(A) |
 |---|---|---|---|---|
-| linear (above) | +0.30 % | −0.48 % | +6.5 % | −0.06 % |
-| St. Venant-Kirchhoff | 14.338 (+0.30 %) | 0.7634 (−0.06 %) | 2.315·10⁻⁵ (+2.0 %) | 8.095·10⁻⁴ (−1.4 %) |
+| linear (above) | +0.30 % | −0.56 % | +6.5 % | −0.07 % |
+| St. Venant-Kirchhoff | 14.338 (+0.30 %) | 0.7606 (−0.42 %) | 2.315·10⁻⁵ (+2.0 %) | 8.096·10⁻⁴ (−1.4 %) |
 
-All three changes are the ones estimated above: u_x loses the shortening (the +1.6 %
-left after it, +2.0 % measured), u_y drops by the stress stiffening (of order 1 %,
-−1.3 % measured), and the lift rises with the lower deflection (−430 per metre of u_y:
-+0.6 %, +0.42 % measured). The remaining u_y and u_x errors are the coarse mesh's, not
-separated yet (the `level: 1` SVK run is not done).
+u_x loses the shortening (the +1.6 % left after it, +2.0 % measured) and u_y drops by
+the stress stiffening (of order 1 %, −1.3 % measured), as estimated above. The lift should
+rise with the lower deflection (−430 per metre of u_y: +0.6 %), but the dynamic flag's
+lift oscillates by ±4 % (std 0.032, period 0.32-0.37: the flag's own mode, lightly
+damped), and its mean over [10, 15] moves by up to ±0.6 % between the window's halves: the
++0.14 % measured here (+0.42 % on the cloud build at the default flow tolerance) does not
+resolve it. The remaining u_y and u_x errors are the coarse mesh's, not separated yet (the
+`level: 1` SVK run is not done).
 
 ## FSI3
 
@@ -127,11 +141,12 @@ in mm:
 | u_x(A) | −2.59 ± 2.44 | −2.69 ± 2.53 | amplitude −3.7 % |
 | u_y(A) | 1.42 ± 33.02 | 1.48 ± 34.38 | amplitude −4.0 % |
 | frequency | 5.40 | 5.3 | +2.0 % |
-| drag | 459.1 ± 26.5 | 457.3 ± 22.66 | mean +0.4 %, amplitude +17 % |
-| lift | 2.7 ± 137.0 | 2.22 ± 149.78 | amplitude −8.5 % |
+| drag | 459.0 ± 26.5 | 457.3 ± 22.66 | mean +0.4 %, amplitude +17 % |
+| lift | 3.2 ± 137.1 | 2.22 ± 149.78 | amplitude −8.5 % |
 
-4.5 subiterations per step, 40,000 steps, 5.7 h at np 4 (cloud scratch build, CPU,
-2026-10-23, sharing the cores with other runs part of the time). Not separated yet: the
+4.5 subiterations per step, 40,000 steps, 86 min at np 16 (Bridges-2, CPU, main 12e3767,
+2026-10-24; the cloud scratch build's run of 2026-10-23, 5.7 h at np 4, gave the same digits
+but the lift's 2.7 mean). Not separated yet: the
 drag and lift amplitudes are the largest errors; CFD3 suggests the fluid mesh (refining
 it moved CFD3's lift amplitude by 1.1 %), and neither the mesh nor Δt has been varied
 here.
