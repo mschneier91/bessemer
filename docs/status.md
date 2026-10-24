@@ -32,6 +32,22 @@ roundoff floor (~4.5e-11 on the flag) is above both relative tests; the decks se
 scratch-build failures). Not on a GPU. **Next:** a mesh motion for large rotations (FSI2), the meshes for FSI3's force
 amplitudes, an absolute Newton floor in Hyperelasticity, SVK under the other conditions.
 
+**Adaptive steps for FSI (2026-10-23; phase B; human: "for FSI solves just take the min of
+the solid and fluid timestep").** `time.step_control` for an FSI run:
+- `fixed`;
+- `cfl`, the fluid's CFL step;
+- `error`, the smaller of the fluid's CFL step and the solid's error-controlled step (the
+  flow has no error estimate on a moving mesh).
+
+Under `cut_step` a coupled step whose subiterations, solid or flow solve fail is taken back
+(flow trial, solid state, the accelerator's attempt) and retried at a smaller dt. The flow
+reports its failed solve to the coupling (`SolverFailure::Report`, `Case::TrialStep()` now
+returns whether it converged) instead of aborting. The predictor extrapolates through the
+committed times; fixed-step runs are unchanged. The Robin and support coefficients stay
+those of `time.dt` (convergence parameters, not the solution's). A restart carries the step
+control. `fsi_test` F10-F13 ([fsi.md](fsi.md) §1). CPU np 1/2/4 and the debug device (hpb1
+49729514). Fluid-only decks are bitwise this morning's main b5c7030 (hfluid 49742920).
+
 **Adaptive steps for solid decks (2026-10-23; human: "the structural solver and running it
 through the FSI solver does not have adaptive timestepping that needs to be added", then
 "Full, like the flow"; phase A of two, FSI is phase B).** A dynamic solid deck takes

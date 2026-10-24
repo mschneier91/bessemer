@@ -199,7 +199,9 @@ public:
     *        subiteration): the integrator steps, and nothing is recorded or
     *        written until CommitTrialStep(). UndoTrialStep() takes it back.
     */
-   void TrialStep();
+   /// @return False when its solve failed under SolverFailure::Report: the
+   ///         flow is back at the step's start, with nothing to undo.
+   bool TrialStep();
 
    /// Take back the trial step: the mesh and the march return to before it.
    void UndoTrialStep();

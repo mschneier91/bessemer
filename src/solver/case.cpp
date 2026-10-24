@@ -193,7 +193,9 @@ void Case::BuildIntegrator()
    opts.dt = params_.dt;
    opts.t_final = params_.t_final;
    opts.retry_on_failure =
-      params_.on_solver_failure == SolverFailure::CutStep;
+      params_.on_solver_failure != SolverFailure::Abort;
+   opts.report_failure = params_.on_solver_failure == SolverFailure::Report;
+   opts.external_steps = params_.driver_steps;
    opts.krylov_memory_cap = opts.retry_on_failure;
    opts.retry_factor = params_.retry_factor;
    opts.retry_hold = params_.retry_hold;
@@ -485,7 +487,7 @@ void Case::Step()
    AfterStep(t_prev, MPI_Wtime() - wall0);
 }
 
-void Case::TrialStep()
+bool Case::TrialStep()
 {
    MFEM_VERIFY(!in_trial_, "case: a trial step awaits its verdict");
    EnsureSetup();
@@ -494,7 +496,9 @@ void Case::TrialStep()
    const double wall0 = MPI_Wtime();
    integrator_->Step();
    trial_wall_ = MPI_Wtime() - wall0;
+   if (integrator_->LastStepFailed()) { return false; }
    in_trial_ = true;
+   return true;
 }
 
 void Case::UndoTrialStep()

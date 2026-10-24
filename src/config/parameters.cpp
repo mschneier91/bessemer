@@ -391,7 +391,7 @@ void FillFromDeck(DeckReader& r, Parameters& p)
       {"error", StepControl::Error}
    },
    "How dt is chosen: dt = cfl_target / CFL rate before every step (Navier-Stokes), "
-   "constant, or BDF2/BDF3 error control (IMEX only).");
+   "constant, or BDF2/BDF3 error control (IMEX only). A solid deck: fixed steps (cfl, fixed) or error control on the displacement (docs/elasticity.md). An fsi run's coupled step: the fluid's CFL step (cfl), or the smaller of it and the solid's error-controlled step (error; docs/fsi.md).");
    r.Declare(time, "adaptive", "bool", "unset", "",
              "Older spelling: true = step_control error, false = fixed.");
    if (time.Has("adaptive"))
@@ -1517,9 +1517,10 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
       MFEM_VERIFY(p.convection_treatment != ConvectionTreatment::Oifs,
                   "parameters: OIFS on a moving mesh is not available "
                   "(time.convection: imex, or auto)");
-      MFEM_VERIFY(p.step_control != StepControl::Error,
+      MFEM_VERIFY(p.step_control != StepControl::Error || p.fsi.enabled,
                   "parameters: error-controlled steps on a moving mesh are "
-                  "not available (time.step_control: cfl or fixed)");
+                  "not available (time.step_control: cfl or fixed; an fsi "
+                  "run's error control is its solid's)");
       MFEM_VERIFY(p.convective_form == ConvectiveForm::Convective,
                   "parameters: the rotational form on a moving mesh is not "
                   "available");
@@ -1538,9 +1539,6 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                   p.equation == Equation::NavierStokes,
                   "parameters: fsi couples a flow (equation navier_stokes or "
                   "stokes) with the solid of section solid");
-      MFEM_VERIFY(p.step_control == StepControl::Fixed,
-                  "parameters: fsi takes fixed steps (time.step_control: "
-                  "fixed): the fluid and the solid step together");
       MFEM_VERIFY(f.fluid_density > 0.0 && f.relaxation > 0.0 &&
                   f.relaxation <= 1.0 && f.omega_max > 0.0 && f.rtol > 0.0 &&
                   f.atol >= 0.0 && f.max_iterations >= 1 &&

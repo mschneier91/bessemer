@@ -58,8 +58,12 @@ inline bool IsSolid(Equation e)
 enum class SolverFailure
 {
    Abort,  ///< Stop the run; kdim and max_iter are used as given.
-   CutStep ///< Reject the step, shrink dt, solve again; the FGMRES restart
+   CutStep, ///< Reject the step, shrink dt, solve again; the FGMRES restart
    ///< length is capped to the free GPU memory (the default).
+   /// Not a deck value: a coupled driver (FsiCase) takes the failed step back
+   /// itself; the flow reverts to the step's start and reports it
+   /// (Case::TrialStep()).
+   Report
 };
 
 enum class StepControl
@@ -426,6 +430,9 @@ struct Parameters
    /// CutStep is the case-level default (human 2026-10-13): it also caps the
    /// FGMRES restart length to the free GPU memory (krylov_memory_cap).
    SolverFailure on_solver_failure = SolverFailure::CutStep;
+   /// Not a deck key: a coupled driver (FsiCase) sets every step's size
+   /// (TimeIntegratorOptions::external_steps).
+   bool driver_steps = false;
    double retry_factor = 0.5; ///< dt multiplier after a failed solve.
    int retry_hold = 5;        ///< Accepted steps without dt growth afterwards.
    int retry_max = 8;         ///< Cuts allowed within one step.

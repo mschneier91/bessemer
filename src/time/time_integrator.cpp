@@ -570,8 +570,9 @@ void StokesTimeIntegrator::SetDtCeiling(AdaptiveController::DtCeilingFn ceiling)
 void StokesTimeIntegrator::SetStepSize(double dt)
 {
    MFEM_VERIFY(dt > 0.0, "time_integrator: step size must be positive");
-   MFEM_VERIFY(step_count_ == 0 || opts_.cfl_target > 0.0, "time_integrator: "
-               "a fixed-step march never changes dt after it has started");
+   MFEM_VERIFY(step_count_ == 0 || opts_.cfl_target > 0.0 ||
+               opts_.external_steps, "time_integrator: a fixed-step march never "
+               "changes dt after it has started");
    dt_ = dt;
 }
 
@@ -1375,6 +1376,7 @@ void StokesTimeIntegrator::Step()
    INCNS_PROFILE("time_integrator::step");
    MFEM_VERIFY(!hist_.empty(),
                "time_integrator: call SetInitialVelocity first");
+   last_failed_ = false;
 
    // The first two steps have too little history for the BDF3 estimator, so
    // they run un-adapted at the initial dt (trapezoidal starter, then BDF2).
@@ -1396,6 +1398,11 @@ void StokesTimeIntegrator::Step()
       // Neither returns false unless retry_on_failure (AcceptSolve aborts).
       if (startup ? StepStartup() : StepFixed()) { break; }
       ++rejected_steps_;
+      if (opts_.report_failure)
+      {
+         last_failed_ = true; // back at the step's start (AcceptSolve)
+         return;
+      }
       const double cut = dt_ * opts_.retry_factor;
       MFEM_VERIFY(attempt_ < opts_.retry_max && cut > 0.0 &&
                   cut >= opts_.retry_dt_min, "time_integrator: the implicit "

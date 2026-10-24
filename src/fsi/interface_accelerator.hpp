@@ -28,6 +28,10 @@ public:
    /// A new time step begins (what the accelerator learnt may be kept).
    virtual void NewStep() = 0;
 
+   /// The current step's attempt is abandoned (the coupled step is taken
+   /// again at another dt): forget what it taught, keep the earlier steps'.
+   virtual void DiscardStep() = 0;
+
    /**
     * @param d      The input of this subiteration, d_k.
     * @param dtilde The solid's answer G(d_k).
@@ -75,6 +79,7 @@ public:
    AitkenRelaxation(double omega0, double omega_max, bool aitken, MPI_Comm comm);
 
    void NewStep() override;
+   void DiscardStep() override { has_prev_ = false; }
 
    double Next(const mfem::Vector& d, const mfem::Vector& dtilde,
                mfem::Vector& next) override;
@@ -112,6 +117,7 @@ public:
    IqnIls(double omega0, int reuse, MPI_Comm comm);
 
    void NewStep() override;
+   void DiscardStep() override;
 
    double Next(const mfem::Vector& d, const mfem::Vector& dtilde,
                mfem::Vector& next) override;

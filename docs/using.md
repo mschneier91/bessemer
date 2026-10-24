@@ -146,7 +146,8 @@ stability limit; pass `-dt 0.001`.)
   cylinder, CFL 2 matches IMEX to 1% in 4.2× fewer steps, about 3× less wall time. CFL 4
   loses accuracy on lift amplitudes. Details: [oifs_implementation.md](oifs_implementation.md).
 - **Step control** (a solid deck's: [elasticity.md](elasticity.md) §2, `fixed` or
-  `error`): `cfl` (default; dt follows `cfl_target`), `fixed`, or `error` (IMEX
+  `error`; an FSI run's coupled step: [fsi.md](fsi.md) §1): `cfl` (default; dt
+  follows `cfl_target`), `fixed`, or `error` (IMEX
   only, BDF2/BDF3 error estimate).
 - **Check that the kinetic energy never rises** in a periodic or enclosed flow without
   forcing. At Re 1600 IMEX was unstable at CFL 0.5 and the run carried on without an

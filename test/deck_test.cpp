@@ -158,7 +158,8 @@ TEST(Deck, RotationalFormKeys)
 
    // One file per rank: every rank parses, none races another's write.
    const std::string path =
-      "deck_rotational_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_rotational_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    {
       std::ofstream f(path);
       f << "equation: navier_stokes\n"
@@ -210,7 +211,8 @@ TEST(Deck, RotationSchurKeys)
    EXPECT_EQ(incns::CahouetChabardConfig().a_pc, incns::APC::LORAMG);
 
    const std::string path =
-      "deck_rotschur_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_rotschur_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    {
       std::ofstream f(path);
       f << "equation: navier_stokes\n"
@@ -250,7 +252,8 @@ TEST(Deck, RotationSchurKeys)
 TEST(Deck, OutflowKey)
 {
    const std::string path =
-      "deck_outflow_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_outflow_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    auto load = [&](const std::string & physics)
    {
       {
@@ -274,7 +277,8 @@ TEST(Deck, OutflowKey)
 TEST(Deck, ConvectionKeys)
 {
    const std::string path =
-      "deck_convection_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_convection_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    auto load = [&](const std::string & time_block)
    {
       {
@@ -323,7 +327,8 @@ TEST(Deck, ConvectionKeys)
 TEST(Deck, MaxDofsKey)
 {
    const std::string path =
-      "deck_maxdofs_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_maxdofs_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    auto load = [&](const std::string & block)
    {
       {
@@ -349,7 +354,8 @@ TEST(Deck, MaxDofsKey)
 TEST(Deck, StepControlKeys)
 {
    const std::string path =
-      "deck_step_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_step_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    auto load = [&](const std::string & time_block)
    {
       {
@@ -397,7 +403,8 @@ TEST(Deck, AmrKeys)
    EXPECT_EQ(defaults.cfl_max, 0.0);
 
    const std::string path =
-      "deck_amr_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_amr_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    {
       std::ofstream f(path);
       f << "nondimensionalization:\n  mode: dimensional\n  L_ref: 2.0\n"
@@ -435,7 +442,8 @@ TEST(Deck, ForcesKeys)
    EXPECT_FALSE(defaults.forces.enabled);
 
    const std::string path =
-      "deck_forces_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
+      "deck_forces_np" + std::to_string(Mpi::WorldSize()) +
+      "_rank" + std::to_string(Mpi::WorldRank()) + ".yaml";
    {
       std::ofstream f(path);
       f << "nondimensionalization:\n  mode: dimensional\n  L_ref: 2.0\n"

@@ -8,6 +8,7 @@
 #include "solid/elasticity_case.hpp"
 #include "solid/hyperelasticity.hpp"
 #include "solid/linear_elasticity.hpp"
+#include "solid/step_error.hpp"
 #include "util/profiler.hpp"
 
 #include <algorithm>
@@ -211,8 +212,16 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
 {
    const FsiParameters& f = params_.fsi;
    MFEM_VERIFY(f.enabled, "fsi_case: the deck's fsi section is not enabled");
-   // A failed fluid solve inside the coupling must not change dt.
-   params_.on_solver_failure = SolverFailure::Abort;
+   // The coupled step is this driver's: the flow takes its size
+   // (SetStepSize; fixed steps of its own) and reports a failed solve rather
+   // than cutting its own step, which the solid steps with.
+   control_ = params_.step_control;
+   cut_ = params_.on_solver_failure == SolverFailure::CutStep;
+   on_grid_ = control_ == StepControl::Fixed;
+   params_.step_control = StepControl::Fixed;
+   params_.on_solver_failure = cut_ ? SolverFailure::Report : SolverFailure::Abort;
+   params_.driver_steps = true;
+   dt_ = params_.dt;
    MFEM_VERIFY(params_.geometry == MeshGeometry::CylinderChannel &&
                params_.cylinder_channel.flag_length > 0.0,
                "fsi_case: the solid's mesh is the solid part of the geometry; "
@@ -292,6 +301,12 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
    }
    dynamic_ = params_.solid.analysis == SolidAnalysis::Dynamic;
    if (dynamic_) { solid_->Initialize(); }
+   if (control_ == StepControl::Error && dynamic_)
+   {
+      AdaptiveControllerOptions co = params_.controller;
+      co.lte_order = solid_->StepErrorOrder();
+      controller_ = std::make_unique<AdaptiveController>(co);
+   }
 
    // The interface maps, both in the reference configurations.
    MeshMotion& motion = fluid_->Motion();
@@ -367,6 +382,9 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
                                   static_cast<double>(total_iterations_) /
                                   static_cast<double>(history_.size()));
       s["wall_seconds"].Set(wall_);
+      s["step_control"].Set(control_ == StepControl::Error ? "error" :
+                            control_ == StepControl::Cfl ? "cfl" : "fixed");
+      s["rejected_steps"].Set(rejected_);
       if (!failure_.empty()) { s["failure"].Set(failure_); }
       Json& so = s["solid"];
       so["model"].Set(solid_->Name());
@@ -632,6 +650,19 @@ void FsiCase::Predict(Vector& d) const
       d = 0.0;
       return;
    }
+   if (!on_grid_ && q >= 1)
+   {
+      // Variable steps: the polynomial through the committed levels, at the
+      // coming step's end.
+      std::vector<double> times(committed_times_.begin(),
+                                committed_times_.begin() + q + 1);
+      const std::vector<double> w = ExtrapolationWeights(times,
+                                    fluid_->Time() + step_dt_);
+      d = committed_[0];
+      d *= w[0];
+      for (int j = 1; j <= q; ++j) { d.Add(w[j], committed_[j]); }
+      return;
+   }
    d = committed_[0];
    if (q == 1)
    {
@@ -646,18 +677,116 @@ void FsiCase::Predict(Vector& d) const
    }
 }
 
+double FsiCase::NextStepSize()
+{
+   const double tf = params_.t_final, t = fluid_->Time();
+   if (on_grid_) { return params_.dt; } // the flow's own clock and landing
+   double dt = dt_;
+   if (control_ == StepControl::Fixed && dt_before_cut_ > 0.0 && hold_ == 0)
+   {
+      // After a cut and its hold: back to time.dt by 1.2 per step.
+      dt = std::min(dt_before_cut_, 1.2 * dt_);
+      if (dt >= dt_before_cut_) { dt_before_cut_ = 0.0; }
+   }
+   if (control_ != StepControl::Fixed
+       && params_.equation == Equation::NavierStokes)
+   {
+      // The fluid's step: cfl_target over the committed state's convective
+      // CFL rate; shrink at once, grow by at most 1.2 and only with 5 %
+      // slack, as a flow's (time_integrator ChooseCflStep).
+      const double cur = fluid_->Integrator().CurrentDt();
+      const double rate = fluid_->ConvectiveCflNumber() / cur; // collective
+      const double dt_cfl = rate > 0.0 ? params_.CflTarget() / rate :
+                            std::numeric_limits<double>::infinity();
+      if (dt_cfl < dt_) { dt = dt_cfl; }
+      else if (hold_ == 0 && dt_cfl > dt_ * 1.05) { dt = std::min(dt_cfl, 1.2 * dt_); }
+   }
+   if (control_ == StepControl::Error && solid_dt_ > 0.0)
+   {
+      dt = std::min(dt, solid_dt_); // the smaller of the fluid's and the solid's
+   }
+   if (params_.dt_max > 0.0) { dt = std::min(dt, params_.dt_max); }
+   // Land on t_final: never overshoot, no sliver of a last step.
+   const double rest = tf - t;
+   if (rest <= dt) { dt = rest; }
+   else if (rest < 2.0 * dt) { dt = 0.5 * rest; }
+   return dt;
+}
+
+bool FsiCase::Done() const
+{
+   if (on_grid_) { return fluid_->Done(); }
+   const double tf = params_.t_final;
+   return fluid_->Time() >= tf - 1e-12 * std::max(1.0, std::abs(tf));
+}
+
+bool FsiCase::AcceptSolidError(double dt)
+{
+   if (!controller_ || solid_->StepError() < 0.0) { return true; }
+   const bool ok = controller_->Evaluate(fluid_->Time() - dt, dt,
+                                         solid_->StepError(), solid_->StepNorm());
+   solid_dt_ = controller_->NextDt();
+   return ok;
+}
+
 bool FsiCase::Step()
 {
    INCNS_PROFILE("fsi::step");
-   if (params_.fsi.coupling == FsiCoupling::RobinNeumann ||
-       params_.fsi.coupling == FsiCoupling::RobinRobin)
+   const FsiCoupling cp = params_.fsi.coupling;
+   double dt = NextStepSize();
+   for (int cuts = 0;;)
    {
-      return StepRobinNeumann();
+      step_dt_ = dt;
+      fluid_->Integrator().SetStepSize(dt);
+      const Attempt a = (cp == FsiCoupling::RobinNeumann ||
+                         cp == FsiCoupling::RobinRobin) ? StepRobinNeumann() :
+                        cp == FsiCoupling::NeumannDirichlet ?
+                        StepNeumannDirichlet() : StepDirichletNeumann();
+      if (a == Attempt::Committed)
+      {
+         dt_ = dt;
+         if (hold_ > 0) { --hold_; }
+         return true;
+      }
+      if (a == Attempt::Diverged) { return false; }
+      // Back to the step's start: the flow undid its trial; the solid and the
+      // accelerator's attempt.
+      if (dynamic_) { solid_->RestoreState(); }
+      accel_->DiscardStep();
+      ++rejected_;
+      if (a == Attempt::Rejected)
+      {
+         dt = solid_dt_; // the controller's retry step
+         continue;
+      }
+      const double next = dt * params_.retry_factor;
+      if (!cut_ || cuts >= params_.retry_max || next < params_.retry_dt_min)
+      {
+         if (cut_)
+         {
+            failure_ += " (after " + std::to_string(cuts) + " step cuts)";
+         }
+         return false;
+      }
+      ++cuts;
+      if (Mpi::Root())
+      {
+         mfem::out << "[incns] FSI: " << failure_ << " at t = "
+                   << fluid_->Time() + dt << "; again at dt = " << next << std::endl;
+      }
+      failure_.clear();
+      if (control_ == StepControl::Fixed && dt_before_cut_ == 0.0)
+      {
+         dt_before_cut_ = params_.dt;
+      }
+      on_grid_ = false;
+      hold_ = params_.retry_hold + 1;
+      dt = next;
    }
-   if (params_.fsi.coupling == FsiCoupling::NeumannDirichlet)
-   {
-      return StepNeumannDirichlet();
-   }
+}
+
+FsiCase::Attempt FsiCase::StepDirichletNeumann()
+{
    const FsiParameters& f = params_.fsi;
    const double wall0 = MPI_Wtime();
    MPI_Comm comm = fluid_mesh_.GetComm();
@@ -668,13 +797,17 @@ bool FsiCase::Step()
    Predict(d);
    ParGridFunction solid_d(&mfes);
    if (dynamic_) { solid_->SaveState(); }
-   const double dt = params_.dt;
+   const double dt = step_dt_;
    accel_->NewStep();
    StepRecord rec;
    for (int k = 1; k <= f.max_iterations; ++k)
    {
       dg.SetFromTrueDofs(d);
-      fluid_->TrialStep();
+      if (!fluid_->TrialStep())
+      {
+         failure_ = "the flow's solve did not converge";
+         return Attempt::Failed;
+      }
       UpdateTraction();
       bool solid_ok = true;
       if (dynamic_)
@@ -690,7 +823,7 @@ bool FsiCase::Step()
       {
          failure_ = "the solid's solve did not converge";
          fluid_->UndoTrialStep();
-         return false;
+         return Attempt::Failed;
       }
       SolidInterfaceDisplacement(solid_d);
       solid_d.GetTrueDofs(dt_vec);
@@ -703,14 +836,21 @@ bool FsiCase::Step()
       {
          failure_ = "the interface residual is not finite";
          fluid_->UndoTrialStep();
-         return false;
+         return Attempt::Failed;
       }
       if (rn <= f.rtol * dn + f.atol)
       {
+         if (!AcceptSolidError(dt))
+         {
+            fluid_->UndoTrialStep();
+            return Attempt::Rejected;
+         }
          // The step's record before the flow's commit, whose checkpoint
          // (WriteCheckpointState()) holds it.
          committed_.insert(committed_.begin(), d);
          if (committed_.size() > 3) { committed_.pop_back(); }
+         committed_times_.insert(committed_times_.begin(), fluid_->Time());
+         if (committed_times_.size() > 3) { committed_times_.pop_back(); }
          rec.time = fluid_->Time();
          history_.push_back(rec);
          total_iterations_ += k;
@@ -721,9 +861,9 @@ bool FsiCase::Step()
          if (fluid_->Diverged())
          {
             failure_ = "the flow diverged";
-            return false;
+            return Attempt::Diverged;
          }
-         return true;
+         return Attempt::Committed;
       }
       fluid_->UndoTrialStep();
       Vector next(n);
@@ -739,7 +879,7 @@ bool FsiCase::Step()
    failure_ = "the subiterations did not converge in fsi.max_iterations at t = " +
               std::to_string(fluid_->Time() + dt);
    if (Mpi::Root()) { mfem::out << "[incns] FSI: " << failure_ << std::endl; }
-   return false;
+   return Attempt::Failed;
 }
 
 void FsiCase::PredictLoad(Vector& load) const
@@ -749,6 +889,19 @@ void FsiCase::PredictLoad(Vector& load) const
    if (committed_load_.empty())
    {
       load = 0.0;
+      return;
+   }
+   if (!on_grid_ && q >= 1)
+   {
+      // Variable steps: the polynomial through the committed levels, at the
+      // coming step's end.
+      std::vector<double> times(committed_times_.begin(),
+                                committed_times_.begin() + q + 1);
+      const std::vector<double> w = ExtrapolationWeights(times,
+                                    fluid_->Time() + step_dt_);
+      load = committed_load_[0];
+      load *= w[0];
+      for (int j = 1; j <= q; ++j) { load.Add(w[j], committed_load_[j]); }
       return;
    }
    load = committed_load_[0];
@@ -773,7 +926,7 @@ double FsiCase::SupportStiffness() const
    return params_.fsi.alpha_solid * c0;
 }
 
-bool FsiCase::StepRobinNeumann()
+FsiCase::Attempt FsiCase::StepRobinNeumann()
 {
    // The interface variable is the fluid's traction field tau (kinematic,
    // sigma_f n on the interface): the solid takes -rho_f tau, the mesh
@@ -816,7 +969,7 @@ bool FsiCase::StepRobinNeumann()
    PredictLoad(tau);
    ParGridFunction solid_d(&mfes);
    if (dynamic_) { solid_->SaveState(); }
-   const double dt = params_.dt;
+   const double dt = step_dt_;
    fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get());
    accel_->NewStep();
    StepRecord rec;
@@ -836,7 +989,7 @@ bool FsiCase::StepRobinNeumann()
       if (!solid_ok)
       {
          failure_ = "the solid's solve did not converge";
-         return false;
+         return Attempt::Failed;
       }
       SolidInterfaceDisplacement(solid_d);
       solid_d.GetTrueDofs(d);
@@ -855,7 +1008,11 @@ bool FsiCase::StepRobinNeumann()
          data.Add(kappa, dv);
       }
       robin_tau_->SetFromTrueDofs(data);
-      fluid_->TrialStep();
+      if (!fluid_->TrialStep())
+      {
+         failure_ = "the flow's solve did not converge";
+         return Attempt::Failed;
+      }
       UpdateLoad();
       TractionFromLoad(last_load_, tau_tilde); // on the moved mesh
       if (rr)
@@ -881,14 +1038,21 @@ bool FsiCase::StepRobinNeumann()
       {
          failure_ = "the interface residual is not finite";
          fluid_->UndoTrialStep();
-         return false;
+         return Attempt::Failed;
       }
       if (rn <= f.rtol * tn + f.atol)
       {
+         if (!AcceptSolidError(dt))
+         {
+            fluid_->UndoTrialStep();
+            return Attempt::Rejected;
+         }
          // The step's record before the flow's commit, whose checkpoint
          // (WriteCheckpointState()) holds it.
          committed_.insert(committed_.begin(), d);
          if (committed_.size() > 3) { committed_.pop_back(); }
+         committed_times_.insert(committed_times_.begin(), fluid_->Time());
+         if (committed_times_.size() > 3) { committed_times_.pop_back(); }
          committed_load_.insert(committed_load_.begin(), tau_tilde);
          if (committed_load_.size() > 3) { committed_load_.pop_back(); }
          rec.time = fluid_->Time();
@@ -901,9 +1065,9 @@ bool FsiCase::StepRobinNeumann()
          if (fluid_->Diverged())
          {
             failure_ = "the flow diverged";
-            return false;
+            return Attempt::Diverged;
          }
-         return true;
+         return Attempt::Committed;
       }
       fluid_->UndoTrialStep();
       Vector next(n);
@@ -919,10 +1083,10 @@ bool FsiCase::StepRobinNeumann()
    failure_ = "the subiterations did not converge in fsi.max_iterations at t = " +
               std::to_string(fluid_->Time() + dt);
    if (Mpi::Root()) { mfem::out << "[incns] FSI: " << failure_ << std::endl; }
-   return false;
+   return Attempt::Failed;
 }
 
-bool FsiCase::StepNeumannDirichlet()
+FsiCase::Attempt FsiCase::StepNeumannDirichlet()
 {
    // The interface variable is the displacement d (motion true dofs): the
    // solid with its interface at d gives its reaction, the fluid on the
@@ -949,7 +1113,7 @@ bool FsiCase::StepNeumannDirichlet()
    ParGridFunction dtilde(&mfes), slip(&mfes);
    ParGridFunction uw_ref(ref_vfes_.get());
    if (dynamic_) { solid_->SaveState(); }
-   const double dt = params_.dt;
+   const double dt = step_dt_;
    fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get());
    accel_->NewStep();
    StepRecord rec;
@@ -970,11 +1134,15 @@ bool FsiCase::StepNeumannDirichlet()
       if (!solid_ok)
       {
          failure_ = "the solid's solve did not converge";
-         return false;
+         return Attempt::Failed;
       }
       ReactionTraction(tau);
       robin_tau_->SetFromTrueDofs(tau);
-      fluid_->TrialStep();
+      if (!fluid_->TrialStep())
+      {
+         failure_ = "the flow's solve did not converge";
+         return Attempt::Failed;
+      }
       // u - w at the interface's motion nodes (the reference configuration
       // has the current mesh's layout).
       const double c0 = fluid_->MeshVelocityLead();
@@ -1003,14 +1171,21 @@ bool FsiCase::StepNeumannDirichlet()
       {
          failure_ = "the interface residual is not finite";
          fluid_->UndoTrialStep();
-         return false;
+         return Attempt::Failed;
       }
       if (rn <= f.rtol * dn + f.atol)
       {
+         if (!AcceptSolidError(dt))
+         {
+            fluid_->UndoTrialStep();
+            return Attempt::Rejected;
+         }
          // The step's record before the flow's commit, whose checkpoint
          // (WriteCheckpointState()) holds it.
          committed_.insert(committed_.begin(), d);
          if (committed_.size() > 3) { committed_.pop_back(); }
+         committed_times_.insert(committed_times_.begin(), fluid_->Time());
+         if (committed_times_.size() > 3) { committed_times_.pop_back(); }
          rec.time = fluid_->Time();
          history_.push_back(rec);
          total_iterations_ += k;
@@ -1021,9 +1196,9 @@ bool FsiCase::StepNeumannDirichlet()
          if (fluid_->Diverged())
          {
             failure_ = "the flow diverged";
-            return false;
+            return Attempt::Diverged;
          }
-         return true;
+         return Attempt::Committed;
       }
       fluid_->UndoTrialStep();
       Vector next(n);
@@ -1039,14 +1214,14 @@ bool FsiCase::StepNeumannDirichlet()
    failure_ = "the subiterations did not converge in fsi.max_iterations at t = " +
               std::to_string(fluid_->Time() + dt);
    if (Mpi::Root()) { mfem::out << "[incns] FSI: " << failure_ << std::endl; }
-   return false;
+   return Attempt::Failed;
 }
 
 bool FsiCase::Run()
 {
    INCNS_PROFILE("fsi::run");
    bool ok = true;
-   while (!fluid_->Done())
+   while (!Done())
    {
       if (!Step())
       {
@@ -1134,7 +1309,23 @@ void FsiCase::WriteCheckpointState(const std::string& dir)
          m << (i ? ", " : "") << a.counts[i];
       }
       m << "]\naccelerator_vectors: " << a.vectors.size() << "\n"
-        << "solid_cg_iterations: " << restored_cg_ + solid_->TotalIterations()
+        << "on_grid: " << (on_grid_ ? 1 : 0) << "\ndt: " << dt_
+        << "\ndt_before_cut: " << dt_before_cut_ << "\nhold: " << hold_
+        << "\nrejected_steps: " << rejected_ << "\nsolid_dt: " << solid_dt_
+        << "\ncommitted_times: [";
+      for (std::size_t i = 0; i < committed_times_.size(); ++i)
+      {
+         m << (i ? ", " : "") << committed_times_[i];
+      }
+      m << "]\n";
+      if (controller_)
+      {
+         const AdaptiveController::State cs = controller_->ExportState();
+         m << "controller_next_dt: " << cs.next_dt << "\ncontroller_prev_es: "
+           << cs.prev_es << "\ncontroller_rejections: " << cs.total_rejections
+           << "\n";
+      }
+      m << "solid_cg_iterations: " << restored_cg_ + solid_->TotalIterations()
         << "\nsolid_newton_iterations: "
         << restored_newton_ + solid_->TotalNewtonIterations() << "\n";
       MFEM_VERIFY(m.good(), "fsi_case: writing fsi.yaml failed");
@@ -1201,6 +1392,28 @@ void FsiCase::ReadCheckpointState(const std::string& dir)
    max_iterations_ = m["max_subiterations"].as<int>();
    wall_ = m["wall_seconds"].as<double>();
    restored_cg_ = m["solid_cg_iterations"].as<long long>();
+   if (m["on_grid"]) // absent before the step control: fixed steps on the clock
+   {
+      on_grid_ = m["on_grid"].as<int>() != 0;
+      dt_ = m["dt"].as<double>();
+      dt_before_cut_ = m["dt_before_cut"].as<double>();
+      hold_ = m["hold"].as<int>();
+      rejected_ = m["rejected_steps"].as<long long>();
+      solid_dt_ = m["solid_dt"].as<double>();
+      committed_times_.clear();
+      for (const auto& t : m["committed_times"])
+      {
+         committed_times_.push_back(t.as<double>());
+      }
+   }
+   if (controller_ && m["controller_prev_es"])
+   {
+      AdaptiveController::State cs;
+      cs.next_dt = m["controller_next_dt"].as<double>();
+      cs.prev_es = m["controller_prev_es"].as<double>();
+      cs.total_rejections = m["controller_rejections"].as<int>();
+      controller_->ImportState(cs);
+   }
    restored_newton_ = m["solid_newton_iterations"].as<long long>();
    std::ifstream h(dir + "/fsi_history.bin", std::ios::binary);
    std::int64_t n = 0;

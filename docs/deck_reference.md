@@ -140,7 +140,7 @@ Time integration.
 |---|---|---|---|
 | `time.dt` | real | `0.01` | Step size (fixed steps), or the first step (cfl / error control). |
 | `time.t_final` | real | `1` | End time. |
-| `time.step_control` | cfl \| fixed \| error | `cfl` | How dt is chosen: dt = cfl_target / CFL rate before every step (Navier-Stokes), constant, or BDF2/BDF3 error control (IMEX only). |
+| `time.step_control` | cfl \| fixed \| error | `cfl` | How dt is chosen: dt = cfl_target / CFL rate before every step (Navier-Stokes), constant, or BDF2/BDF3 error control (IMEX only). A solid deck: fixed steps (cfl, fixed) or error control on the displacement (docs/elasticity.md). An fsi run's coupled step: the fluid's CFL step (cfl), or the smaller of it and the solid's error-controlled step (error; docs/fsi.md). |
 | `time.adaptive` | bool | `unset` | Older spelling: true = step_control error, false = fixed. |
 | `time.cfl_target` | real | `-1` | Target CFL number (Nek5000's definition) under step_control cfl. <= 0: 2 under OIFS, 0.5 under IMEX. |
 | `time.cfl_max` | real | `0` | CFL ceiling (0 = off): caps error-controlled dt, aborts fixed steps above it. |

@@ -15,7 +15,8 @@ Built so far (CPU only): the four interface conditions, Dirichlet-Neumann
 (small-strain) solid or the St. Venant-Kirchhoff one (`fsi.solid`, stage F5;
 Dirichlet-Neumann and dynamic only; FSI1-3 in
 benchmarks/turek_hron/README.md), static or dynamic, matching or non-matching
-interfaces by point search, checkpoints and restarts. Not yet: the St.
+interfaces by point search, checkpoints and restarts, adaptive coupled
+steps. Not yet: the St.
 Venant-Kirchhoff solid under the other three conditions, a GPU run.
 
 ## 1. The coupling
@@ -312,9 +313,37 @@ near 1e-5 and the step failed). A static solid (`solid.analysis: static`)
 needs a far larger gap: with no inertia to set against the fluid's added
 mass, the subiteration map amplifies the flow solve's error about 1e5 times
 (`fsi_test` F5: `solver.rtol` 1e-10 left the residual wandering at 1e-5
-against `fsi.rtol` 1e-8; 1e-12 converges in 14-18 subiterations). Time steps are fixed
-(`time.step_control: fixed`); a failed fluid solve inside the coupling stops
-the run instead of cutting the step. **Checkpoints and restarts**
+against `fsi.rtol` 1e-8; 1e-12 converges in 14-18 subiterations).
+
+**Step control** (2026-10-23, `time.step_control`) sets the coupled step:
+- `fixed`: steps of `time.dt`.
+- `cfl`: the fluid's convective CFL step (`cfl_target`; it shrinks at once and
+  grows by at most 1.2 per step, as a flow's).
+- `error`: the smaller of that and the solid's error-controlled step, a PI
+  controller on the solid's local error estimate (`time.atol`, `time.rtol`;
+  [elasticity.md](elasticity.md) §2) whose rejection takes the coupled step
+  back. The flow has no error estimate on a moving mesh, so its share is its
+  CFL step.
+
+`time.dt_max` caps both, and the last step lands on `t_final`. Under
+`time.on_solver_failure: cut_step` (the default) a coupled step whose
+subiterations, solid solve or flow solve fail is taken back and taken again at
+`retry_factor` dt (`retry_max`, `retry_dt_min`). Taking it back undoes the
+flow's trial, the solid's state and the accelerator's columns of the attempt;
+the flow reports its failed solve instead of cutting its own step. Fixed steps
+then hold for `retry_hold` steps and grow back to `time.dt` by 1.2 per step.
+The predictor extrapolates through the committed steps' times; fixed steps
+keep the constant-step formulas until a cut, so their results are unchanged.
+The Robin coefficients and Robin-Robin's support stay those of `time.dt`: they
+set how the subiterations converge, not what they converge to. `fsi_test`:
+- F10: a vetoed flow solve is cut once to dt / 2, and the run lands on
+  `t_final`;
+- F11: CFL control, 14 steps, dt 0.0019-0.0086 at `cfl_target` 0.1;
+- F12: error control, 40 steps at `time.rtol` 1e-2 against 111 at 1e-4;
+- F13: an error-controlled restart is the uninterrupted run, bitwise on a
+  host.
+
+**Checkpoints and restarts**
 (`checkpoint`, `restart`, the same rank count, as a flow's): the flow's
 checkpoint of a committed step also holds the coupling's state, through
 `Case::SetCheckpointHook`. That is the solid's dynamic state (or a static

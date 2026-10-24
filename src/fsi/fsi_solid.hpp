@@ -73,6 +73,13 @@ public:
    virtual HYPRE_BigInt GlobalTrueDofs() const = 0;
    /// @return The displacement order.
    virtual int Order() const = 0;
+   /// @return The last Step()'s local error estimate (StepError(); negative
+   ///         without one).
+   virtual double StepError() const = 0;
+   /// @return The scale of StepError() (StepNorm()).
+   virtual double StepNorm() const = 0;
+   /// @return StepError()'s order in dt.
+   virtual int StepErrorOrder() const = 0;
    /// @return CG iterations since construction.
    virtual long long TotalIterations() const = 0;
    /// @return Newton iterations since construction (0: a linear solid).
@@ -131,6 +138,9 @@ public:
    double MaxDisplacement() const override { return s_->MaxDisplacement(); }
    HYPRE_BigInt GlobalTrueDofs() const override { return s_->GlobalTrueDofs(); }
    int Order() const override { return s_->GetOptions().order; }
+   double StepError() const override { return s_->StepError(); }
+   double StepNorm() const override { return s_->StepNorm(); }
+   int StepErrorOrder() const override { return s_->StepErrorOrder(); }
    long long TotalIterations() const override { return s_->TotalIterations(); }
    long long TotalNewtonIterations() const override { return NewtonOf(*s_); }
    const char* Name() const override { return name_; }

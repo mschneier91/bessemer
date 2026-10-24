@@ -11,6 +11,7 @@
 #include "fsi/fsi_solid.hpp"
 #include "fsi/interface_transfer.hpp"
 #include "solver/case.hpp"
+#include "time/adaptive_controller.hpp"
 
 #include <memory>
 #include <string>
@@ -67,9 +68,28 @@ public:
 
    ~FsiCase();
 
-   /// One coupled step. @return False when the subiterations did not
-   /// converge in fsi.max_iterations or the fluid diverged.
+   /**
+    * @brief One coupled step, of the size the step control gives
+    *        (time.step_control): fixed steps of time.dt; cfl: the fluid's
+    *        convective CFL step (cfl_target, as a flow's); error: the smaller
+    *        of that and the solid's error-controlled step (time.atol,
+    *        time.rtol on its StepError(); the flow has no error estimate on a
+    *        moving mesh); both capped by time.dt_max. A step whose
+    *        subiterations, solid solve or flow solve fail is taken again from
+    *        its start at retry_factor dt under time.on_solver_failure
+    *        cut_step (retry_max, retry_dt_min; fixed steps then hold and grow
+    *        back); one the solid's error control rejects, at its smaller dt.
+    *        The Robin coefficients and Robin-Robin's support stay those of
+    *        time.dt: they steer the subiterations, not the coupled solution.
+    * @return False when a step could not be completed or the fluid diverged.
+    */
    bool Step();
+
+   /// @return Whether the march reached time.t_final.
+   bool Done() const;
+
+   /// @return Coupled step attempts taken again (failed or rejected).
+   long long RejectedSteps() const { return rejected_; }
 
    /// March to time.t_final. @return Whether every step converged.
    bool Run();
@@ -111,6 +131,26 @@ public:
    mfem::Vector InterfaceForce() const { return interface_force_; }
 
 private:
+   /// How one attempt at a coupled step ended.
+   enum class Attempt
+   {
+      Committed, ///< Converged and committed.
+      Diverged,  ///< Committed, but the flow diverged (no retry).
+      Failed,    ///< Subiterations or a solve failed; back at the step's start.
+      Rejected   ///< The solid's error control rejected it; back at the start.
+   };
+
+   /// @return The coming step's size from the step control (collective).
+   double NextStepSize();
+
+   /// @param dt The attempt's step. @return Whether the solid's error
+   ///           control accepts it (always without error control or an
+   ///           estimate); sets its proposal for the next step.
+   bool AcceptSolidError(double dt);
+
+   /// The Dirichlet-Neumann attempt (Step()).
+   Attempt StepDirichletNeumann();
+
    /// @param d The solid's displacement interpolated to the fluid
    ///          interface's nodes (the motion space on the reference mesh).
    void SolidInterfaceDisplacement(mfem::ParGridFunction& d);
@@ -177,15 +217,13 @@ private:
    /// @return Robin-Robin's support stiffness alpha_s c0 on the solid.
    double SupportStiffness() const;
 
-   /// Step() under Robin-Neumann (subiterations on the interface traction)
-   /// and Robin-Robin (on the solid's Robin data).
-   /// @return Whether they converged (else failure_ says why).
-   bool StepRobinNeumann();
+   /// The attempt under Robin-Neumann (subiterations on the interface
+   /// traction) and Robin-Robin (on the solid's Robin data).
+   Attempt StepRobinNeumann();
 
-   /// Step() under Neumann-Dirichlet: subiterations on the interface
+   /// The attempt under Neumann-Dirichlet: subiterations on the interface
    /// displacement.
-   /// @return Whether they converged (else failure_ says why).
-   bool StepNeumannDirichlet();
+   Attempt StepNeumannDirichlet();
 
    /**
     * @brief The solid's interface reaction (Neumann-Dirichlet) as the
@@ -257,6 +295,25 @@ private:
    /// summary's totals cover the whole run).
    long long restored_cg_ = 0;
    long long restored_newton_ = 0; ///< See restored_cg_.
+
+   // The step control (saved in checkpoints).
+   StepControl control_ = StepControl::Fixed; ///< The deck's time.step_control.
+   bool cut_ = false;     ///< time.on_solver_failure cut_step.
+   /// Fixed steps of time.dt that never had a cut: the flow's own clock and
+   /// predictor, as before the step control (results unchanged).
+   bool on_grid_ = true;
+   double step_dt_ = 0.0;  ///< The current attempt's step.
+   double dt_ = 0.0;       ///< The last committed step (the next one's base).
+   double dt_before_cut_ =
+      0.0; ///< Fixed steps after a cut: the step to grow back to.
+   int hold_ = 0;          ///< Committed steps left before dt may grow.
+   long long rejected_ = 0; ///< See RejectedSteps().
+   /// Error control: the solid's proposal for the next step (0: none yet).
+   double solid_dt_ = 0.0;
+   /// Error control's PI controller on the solid's estimate (or null).
+   std::unique_ptr<AdaptiveController> controller_;
+   /// The times of committed_ (and committed_load_), newest first.
+   std::vector<double> committed_times_;
    std::string failure_;             ///< Why a step failed (empty if none).
 };
 

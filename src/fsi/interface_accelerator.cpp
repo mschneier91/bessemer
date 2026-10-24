@@ -136,6 +136,12 @@ double IqnIls::Next(const Vector& d, const Vector& dtilde, Vector& next)
    return std::numeric_limits<double>::quiet_NaN();
 }
 
+void IqnIls::DiscardStep()
+{
+   current_ = Columns_();
+   has_prev_ = false;
+}
+
 InterfaceAccelerator::State IqnIls::ExportState() const
 {
    // At a committed step: the next NewStep() keeps this step's columns as

@@ -69,6 +69,13 @@ struct TimeIntegratorOptions
    /// and max_iter its work, and a hard step costs time instead of the run.
    /// Fixed and CFL-controlled steps; error control has its own rejection.
    bool retry_on_failure = false;
+   /// With retry_on_failure: a failed solve takes the step back to its start
+   /// and Step() returns (LastStepFailed()) instead of cutting dt, for a
+   /// coupled driver that cuts the coupled step itself (FsiCase).
+   bool report_failure = false;
+   /// A coupled driver (FsiCase) sets every step's size with SetStepSize,
+   /// which a fixed-step march otherwise refuses after its start.
+   bool external_steps = false;
    double retry_factor = 0.5; ///< dt multiplier after a failed solve, in (0, 1).
    /// Accepted steps after a rejected one during which dt may not grow (it
    /// may still shrink). Then: the CFL controller's growth, or, with fixed
@@ -352,8 +359,9 @@ public:
    void SetCflRate(CflRateFn rate) { cfl_rate_ = std::move(rate); }
 
    /**
-    * @brief Set the step size of the next step (before the first step, or in
-    *        CFL mode). Fixed-step mode never changes dt on its own.
+    * @brief Set the step size of the next step (before the first step, in
+    *        CFL mode, or with external_steps). Fixed-step mode never changes
+    *        dt on its own.
     * @param dt Step size (> 0).
     */
    void SetStepSize(double dt);
@@ -419,6 +427,10 @@ public:
 
    /// @return Completed (accepted) steps.
    int StepCount() const { return step_count_; }
+
+   /// @return Whether the last Step() failed and was taken back
+   ///         (TimeIntegratorOptions::report_failure).
+   bool LastStepFailed() const { return last_failed_; }
 
    /// @return How many step attempts were rejected for a failed solve
    ///         (TimeIntegratorOptions::retry_on_failure).
@@ -811,6 +823,7 @@ private:
    double dt_before_cut_ = 0.0;
    mfem::Vector p_saved_;     ///< Pressure before the solve (retry only).
    SolveVetoFn solve_veto_;   ///< Test hook (SetSolveVeto).
+   bool last_failed_ = false; ///< See LastStepFailed().
    bool vetoed_ = false;      ///< The last rejection came from the hook.
    int logged_kdim_ = -1;     ///< Restart length last reported by CapKrylovDim.
    int last_iterations_ = 0;  ///< Iterations of the most recent solve.

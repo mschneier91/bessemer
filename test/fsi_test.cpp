@@ -25,7 +25,14 @@
 //     solid and Robin-Neumann (bitwise); the St. Venant-Kirchhoff solid with
 //     the neo-Hookean mesh motion, the solvers refreshed in place (to the
 //     solver tolerance: the restart's AMG hierarchies are built on its own
-//     mesh).
+//     mesh);
+//  F10 a flow solve that fails (vetoed once) is taken again with the coupled
+//     step at retry_factor dt, and the run lands on t_final;
+//  F11 CFL-controlled coupled steps vary with the fluid and land on t_final;
+//  F12 error-controlled ones (the smaller of the fluid's CFL step and the
+//     solid's): a tighter time.rtol takes more steps;
+//  F13 an error-controlled run restarted from a checkpoint is the
+//     uninterrupted one, bitwise on a host (rebuild).
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -607,4 +614,155 @@ TEST(Fsi, F9_RestartMatchesUninterrupted)
                                "  analysis: dynamic\n",
                                "mesh_motion:\n  model: neo_hookean\n", false,
                                1e-10, 1e-6);
+}
+
+namespace
+{
+
+/// A step-controlled deck: Dirichlet-Neumann with IQN-ILS, a dynamic linear
+/// solid, the ramped start, to @p t_final, the time keys @p time.
+std::string ControlledDeck(const std::string& t_final, const std::string& time,
+                           const std::string& extra = "")
+{
+   std::string d = Deck("  acceleration: iqn_ils\n  max_iterations: 300\n",
+                        "  analysis: dynamic\n", Np(), true) + extra;
+   d.replace(d.find("t_final: 1.0"), 12, "t_final: " + t_final);
+   d.replace(d.find("  step_control: fixed\n"), 22, time);
+   return d;
+}
+
+} // namespace
+
+// F10
+TEST(Fsi, F10_CutStepRetriesAFailedFlowSolve)
+{
+   const Parameters p = Parameters::LoadYAMLString(
+                           ControlledDeck("0.02", "  step_control: fixed\n"));
+   auto mesh = incns::MakeCaseMesh(p);
+   FsiCase fsi(*mesh, p);
+   int vetoes = 0;
+   fsi.Fluid().Integrator().SetSolveVeto([&vetoes](int step, int)
+   {
+      if (step == 2 && vetoes == 0)
+      {
+         ++vetoes;
+         return true;
+      }
+      return false;
+   });
+   ASSERT_TRUE(fsi.Run());
+   EXPECT_EQ(vetoes, 1);
+   EXPECT_EQ(fsi.RejectedSteps(), 1);
+   const std::vector<FsiCase::StepRecord>& h = fsi.History();
+   ASSERT_GE(h.size(), 4u);
+   EXPECT_NEAR(h[2].time - h[1].time, 0.0025, 1e-12); // the cut step
+   EXPECT_NEAR(h.back().time, 0.02, 1e-12);
+}
+
+// F11
+TEST(Fsi, F11_CflControlledSteps)
+{
+   const Parameters p = Parameters::LoadYAMLString(
+                           ControlledDeck("0.05", "  step_control: cfl\n  cfl_target: 0.1\n"));
+   auto mesh = incns::MakeCaseMesh(p);
+   FsiCase fsi(*mesh, p);
+   ASSERT_TRUE(fsi.Run());
+   const std::vector<FsiCase::StepRecord>& h = fsi.History();
+   ASSERT_GE(h.size(), 3u);
+   double lo = INFINITY, hi = 0.0;
+   for (std::size_t k = 1; k < h.size(); ++k)
+   {
+      lo = std::min(lo, h[k].time - h[k - 1].time);
+      hi = std::max(hi, h[k].time - h[k - 1].time);
+   }
+   const double cfl = fsi.Fluid().ConvectiveCflNumber();
+   if (Mpi::Root())
+   {
+      std::cout << "[F11] " << h.size() << " steps, dt in [" << lo << ", " << hi
+                << "], the last step's CFL " << cfl << std::endl;
+   }
+   EXPECT_GT(hi, 1.1 * lo);
+   EXPECT_LT(cfl, 0.1 * 1.3);
+   EXPECT_NEAR(h.back().time, 0.05, 1e-12);
+}
+
+// F12
+TEST(Fsi, F12_ErrorControlledSteps)
+{
+   std::size_t steps[2];
+   const char* rtols[2] = {"1.0e-2", "1.0e-4"};
+   for (int i = 0; i < 2; ++i)
+   {
+      const Parameters p = Parameters::LoadYAMLString(
+                              ControlledDeck("0.04", std::string("  step_control: error\n"
+                                             "  cfl_target: 10\n  rtol: ") + rtols[i] +
+                                             "\n  atol: 1.0e-8\n"));
+      auto mesh = incns::MakeCaseMesh(p);
+      FsiCase fsi(*mesh, p);
+      ASSERT_TRUE(fsi.Run()) << rtols[i];
+      steps[i] = fsi.History().size();
+      EXPECT_NEAR(fsi.History().back().time, 0.04, 1e-12) << rtols[i];
+      if (Mpi::Root())
+      {
+         std::cout << "[F12] rtol " << rtols[i] << ": " << steps[i] << " steps, "
+                   << fsi.RejectedSteps() << " rejected" << std::endl;
+      }
+   }
+   EXPECT_GT(steps[1], steps[0]);
+}
+
+// F13
+TEST(Fsi, F13_ErrorControlledRestart)
+{
+   const std::string chk = "fsi_chk_error_np" + std::to_string(Np());
+   const std::string time = "  step_control: error\n  cfl_target: 10\n"
+                            "  rtol: 1.0e-3\n  atol: 1.0e-8\n";
+   const std::string rebuild = "mesh_motion:\n  refresh: rebuild\n";
+   struct Result
+   {
+      Vector u, d;
+      std::vector<FsiCase::StepRecord> steps;
+   };
+   auto run = [&](const std::string & text)
+   {
+      const Parameters p = Parameters::LoadYAMLString(text);
+      auto mesh = incns::MakeCaseMesh(p);
+      FsiCase fsi(*mesh, p);
+      EXPECT_TRUE(fsi.Run());
+      Result r;
+      Case& f = fsi.Fluid();
+      r.u.SetSize(f.Spaces().Velocity().GetTrueVSize());
+      f.Velocity().GetTrueDofs(r.u);
+      fsi.Solid().Displacement().GetTrueDofs(r.d);
+      r.steps = fsi.History();
+      return r;
+   };
+   const Result a = run(ControlledDeck("0.04", time, rebuild));
+   run(ControlledDeck("0.03", time, rebuild + "checkpoint:\n  at_time: 0.015\n"
+                      "  path: " + chk + "\n"));
+   const Result c = run(ControlledDeck("0.04", time, rebuild + "restart: " + chk +
+                                       "\n"));
+   ASSERT_EQ(c.steps.size(), a.steps.size());
+   const double tol = incns_test::ReproTol(0.0, 1e-6);
+   for (std::size_t k = 0; k < a.steps.size(); ++k)
+   {
+      if (tol == 0.0)
+      {
+         EXPECT_EQ(c.steps[k].time, a.steps[k].time) << "step " << k + 1;
+         EXPECT_EQ(c.steps[k].iterations, a.steps[k].iterations) << "step " << k + 1;
+      }
+   }
+   double su = a.u.Normlinf(), sd = a.d.Normlinf();
+   MPI_Allreduce(MPI_IN_PLACE, &su, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   MPI_Allreduce(MPI_IN_PLACE, &sd, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   const double du = MaxDiff(a.u, c.u), dd = MaxDiff(a.d, c.d); // collective
+   EXPECT_LE(du, tol * su);
+   EXPECT_LE(dd, tol * sd);
+   if (Mpi::Root())
+   {
+      std::cout << "[F13] " << a.steps.size() << " steps; |u - u_restart| " << du
+                << ", |d - d_restart| " << dd << std::endl;
+   }
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root()) { std::filesystem::remove_all(chk); }
 }
