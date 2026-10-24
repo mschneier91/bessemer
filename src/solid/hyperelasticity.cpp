@@ -1,6 +1,7 @@
 #include "solid/hyperelasticity.hpp"
 
 #include "solid/element_scaled_coefficient.hpp"
+#include "solid/step_error.hpp"
 
 #include "precond/hypre_device.hpp"
 #include "time/multistep_coeffs.hpp"
@@ -73,6 +74,15 @@ Hyperelasticity::Hyperelasticity(ParMesh& mesh, const Options& opts)
    MFEM_VERIFY(opts_.density > 0.0, "hyperelasticity: density must be > 0");
    MFEM_VERIFY(opts_.rho_inf >= 0.0 && opts_.rho_inf <= 1.0,
                "hyperelasticity: rho_inf must be in [0, 1]");
+   if (opts_.newton_dx_atol < 0.0)
+   {
+      // 1e-12 of the body's size: four orders above where the corrections
+      // stop (about 1e-16 of it), far below what a displacement needs.
+      Vector lo, hi;
+      mesh_.GetBoundingBox(lo, hi); // collective
+      lo -= hi;
+      opts_.newton_dx_atol = 1e-12 * lo.Norml2();
+   }
    const int ne = mesh_.GetNE();
    if (opts_.element_stiffness)
    {
@@ -606,6 +616,8 @@ bool Hyperelasticity::Step(double dt)
    AssembleLoad(t1);
    DirichletValues(t1);
    bool ok = true;
+   step_error_ = -1.0;
+   const MPI_Comm comm = mesh_.GetComm();
 
    if (opts_.scheme == SolidTimeScheme::GeneralizedAlpha)
    {
@@ -635,6 +647,11 @@ bool Hyperelasticity::Step(double dt)
       z_ = x;
       z_ -= w_;
       z_ *= 1.0 / bdt2;
+      // Zienkiewicz-Xie: e = (beta - 1/6) dt^2 (a^{n+1} - a^n).
+      pred_ = z_;
+      pred_ -= a_n_;
+      step_error_ = NewmarkErrorFactor(beta, dt) *
+                    std::sqrt(InnerProduct(comm, pred_, pred_));
       v.Add(dt * (1.0 - ga.gamma), a_n_);
       v.Add(dt * ga.gamma, z_);
       a_n_.Swap(z_);
@@ -686,11 +703,31 @@ bool Hyperelasticity::Step(double dt)
          m_->Mult(sv, mx_);
          step_rhs_ = load_;
          step_rhs_ -= mx_;
+         // The predictor through the three previous levels (x, the spare,
+         // still holds the oldest) for StepError().
+         const bool estimate = steps_ >= 2;
+         if (estimate)
+         {
+            const std::vector<double> w =
+               ExtrapolationWeights({t_hist_[0], t_hist_[1], t_hist_[2]}, t1);
+            pred_ = u_hist_[0]; // sized as the levels (Set() does not resize)
+            pred_ *= w[0];
+            pred_.Add(w[1], u_hist_[1]);
+            pred_.Add(w[2], u_hist_[2]);
+         }
          x = u;
          ok = Newton(c[0] * c[0], 1.0, nullptr, step_rhs_, ess_full_, x);
          UpdateReaction(x, 0.0, 1.0);
          vx.Set(c[0], x);
          vx += su;
+         if (estimate)
+         {
+            pred_ -= x;
+            step_error_ = std::abs(BdfMilneFactor(c, {t1, t_hist_[0], t_hist_[1],
+                                                  t_hist_[2]
+                                                     })) *
+                          std::sqrt(InnerProduct(comm, pred_, pred_));
+         }
       }
       // The new level to the front.
       for (std::size_t i = L - 1; i > 0; --i)
@@ -706,9 +743,12 @@ bool Hyperelasticity::Step(double dt)
    total_linear_ += linear_iterations_;
    time_ = t1;
    ++steps_;
+   step_norm_ = std::sqrt(InnerProduct(comm, u_hist_[0], u_hist_[0]));
    SyncFields();
    return ok;
 }
+
+int Hyperelasticity::StepErrorOrder() const { return 3; }
 
 double Hyperelasticity::KineticEnergy() const
 {

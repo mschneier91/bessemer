@@ -2,6 +2,7 @@
 
 #include "solid/element_scaled_coefficient.hpp"
 #include "solid/hyperelastic_operator.hpp"
+#include "solid/step_error.hpp"
 
 #include "precond/hypre_device.hpp"
 #include "time/multistep_coeffs.hpp"
@@ -677,6 +678,8 @@ bool LinearElasticity::Step(double dt)
    if (!initialized_) { Initialize(time_); }
    const double t1 = time_ + dt;
    bool ok = true;
+   step_error_ = -1.0;
+   const MPI_Comm comm = mesh_.GetComm();
 
    if (opts_.scheme == SolidTimeScheme::GeneralizedAlpha)
    {
@@ -712,6 +715,11 @@ bool LinearElasticity::Step(double dt)
       work2_ = x;
       work2_ -= w;
       work2_ *= 1.0 / bdt2;
+      // Zienkiewicz-Xie: e = (beta - 1/6) dt^2 (a^{n+1} - a^n).
+      pred_ = work2_;
+      pred_ -= a_n_;
+      step_error_ = NewmarkErrorFactor(beta, dt) *
+                    std::sqrt(InnerProduct(comm, pred_, pred_));
       v.Add(dt * (1.0 - ga.gamma), a_n_);
       v.Add(dt * ga.gamma, work2_);
       a_n_.Swap(work2_);
@@ -772,11 +780,32 @@ bool LinearElasticity::Step(double dt)
          op_->Apply(0.0, 1.0, sv, work3_);
          rhs_ = load_;
          rhs_ -= work3_;
+         // The predictor through the q + 1 previous levels (x, the spare,
+         // still holds the oldest) for StepError(), at the full order.
+         const bool estimate = q == opts_.bdf_order && steps_ >= q;
+         if (estimate)
+         {
+            std::vector<double> past(q + 1);
+            for (int j = 0; j <= q; ++j) { past[j] = t_hist_[j]; }
+            const std::vector<double> w = ExtrapolationWeights(past, t1);
+            pred_ = u_hist_[0]; // sized as the levels (Set() does not resize)
+            pred_ *= w[0];
+            for (int j = 1; j <= q; ++j) { pred_.Add(w[j], u_hist_[j]); }
+         }
          x = u;
          ApplyDirichlet(t1, x);
          ok = SolveShifted(c[0] * c[0], rhs_, x);
          vx.Set(c[0], x);
          vx += su;
+         if (estimate)
+         {
+            std::vector<double> mt(q + 2);
+            mt[0] = t1;
+            for (int j = 0; j <= q; ++j) { mt[j + 1] = t_hist_[j]; }
+            pred_ -= x;
+            step_error_ = std::abs(BdfMilneFactor(c, mt)) *
+                          std::sqrt(InnerProduct(comm, pred_, pred_));
+         }
       }
       // The new level to the front.
       for (std::size_t i = L - 1; i > 0; --i)
@@ -790,8 +819,15 @@ bool LinearElasticity::Step(double dt)
    }
    time_ = t1;
    ++steps_;
+   step_norm_ = std::sqrt(InnerProduct(comm, u_hist_[0], u_hist_[0]));
    SyncFields();
    return ok;
+}
+
+int LinearElasticity::StepErrorOrder() const
+{
+   return opts_.scheme == SolidTimeScheme::GeneralizedAlpha ? 3 :
+          opts_.bdf_order + 1;
 }
 
 LinearElasticity::State LinearElasticity::ExportState() const

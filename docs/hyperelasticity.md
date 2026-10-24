@@ -489,9 +489,12 @@ iterations and CG iterations of the move:
   move in FSI2 (2026-10-23) did not converge: the flag at rest gives data near 1e-15,
   where neither test can pass. The residual's floor is absolute (P's O(mu) terms cancel
   at F = I), above `newton_rtol` of so small a reference, and the relative correction has
-  no scale. `newton_dx_atol` (an RMS correction over the true dofs; off by default) ends
-  Newton there; `HyperelasticMotion` sets it to 1e-10 of the domain's size
-  (`position_tol`), far below what node positions need (H9b).
+  no scale. `newton_dx_atol` (an RMS correction over the true dofs) ends Newton there:
+  by default 1e-12 of the mesh's bounding-box diagonal, four orders above where the
+  corrections stop; `HyperelasticMotion` sets 1e-10 (`position_tol`), far below what node
+  positions need (H9b). A deck march from rest with smooth data met it too: its first
+  step's data was 3e-8, and Newton failed there until the default (2026-10-23,
+  `solid_adaptive_test` A1). The CSM and FSI tests pass as before.
 - **SVK loses strong ellipticity in moderate compression.** V1 first used amplitude 0.1:
   J down to 0.69 in 2D (E = 1, nu = 0.3). There the acoustic tensor's least eigenvalue
   is -0.025 (+0.18 at amplitude 0.05), so the continuous problem is ill-posed. Newton

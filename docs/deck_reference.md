@@ -155,8 +155,8 @@ Time integration.
 | `time.oifs_on_the_fly` | bool | `unset` | Older spelling of memory.max_dofs. |
 | `time.order` | int | `0` | BDF order 2 or 3; 0 = auto (3 under OIFS, 2 under IMEX). |
 | `time.ext_order` | int | `2` | Extrapolation order of the explicit/lagged nonlinear term, 2 or 3. |
-| `time.atol` | real | `1e-08` | Error control: absolute tolerance on the velocity error estimate. |
-| `time.rtol` | real | `1e-06` | Error control: relative tolerance on the velocity error estimate. |
+| `time.atol` | real | `1e-08` | Error control: absolute tolerance on the velocity error estimate (a solid deck's: the displacement's). |
+| `time.rtol` | real | `1e-06` | Error control: relative tolerance on the velocity error estimate (a solid deck's: the displacement's). |
 
 ## `memory`
 

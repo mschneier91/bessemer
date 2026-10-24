@@ -286,6 +286,28 @@ bool ElasticityCase::March(SolidSolver& solver)
          max_newton_step_ = m["newton_iterations_max"].as<int>();
       }
       else { restored_cg_max_ = m["cg_iterations_max"].as<int>(); }
+      // The step control where the checkpoint's run left it (keys absent
+      // before the error control: fixed steps on the clock).
+      if (m["on_grid"])
+      {
+         step_.on_grid = m["on_grid"].as<int>() != 0;
+         step_.next_dt = m["next_dt"].as<double>();
+         step_.dt_before_cut = m["dt_before_cut"].as<double>();
+         step_.hold = m["hold"].as<int>();
+         step_.rejected = m["rejected_steps"].as<long long>();
+      }
+      if (m["controller_prev_es"] &&
+          params_.step_control == StepControl::Error)
+      {
+         AdaptiveControllerOptions co = params_.controller;
+         co.lte_order = solver.StepErrorOrder();
+         controller_ = std::make_unique<AdaptiveController>(co);
+         AdaptiveController::State cs;
+         cs.next_dt = m["controller_next_dt"].as<double>();
+         cs.prev_es = m["controller_prev_es"].as<double>();
+         cs.total_rejections = m["controller_rejections"].as<int>();
+         controller_->ImportState(cs);
+      }
    }
 
    std::ofstream history;
@@ -354,10 +376,11 @@ bool ElasticityCase::March(SolidSolver& solver)
       }
    }
 
-   // Steps of time.dt; t_k = min(k dt, t_final), so the clock never drifts
-   // and the last step lands on t_final. A restart continues the count: at
-   // the checkpoint's dt on the same clock (the uninterrupted run's steps),
-   // at another from the checkpoint's time.
+   // Fixed steps of time.dt run on the clock t_k = min(k dt, t_final), so it
+   // never drifts and the last step lands on t_final. A restart continues
+   // the count: at the checkpoint's dt on the same clock (the uninterrupted
+   // run's steps), at another from the checkpoint's time. Error control, and
+   // fixed steps after a cut, go from step to step instead.
    const double dt = params_.dt, tf = params_.t_final;
    const double t0 = solver.Time();
    const bool shifted = restart && !same_dt;
@@ -366,21 +389,116 @@ bool ElasticityCase::March(SolidSolver& solver)
                                         std::ceil((tf - t0) / dt - 1e-9))) :
                        std::max(1LL, static_cast<long long>(
                                    std::ceil(tf / dt - 1e-9)));
+   auto clock = [&](long long k)
+   {
+      return std::min(shifted ? t0 + static_cast<double>(k - k0) * dt :
+                      static_cast<double>(k) * dt, tf);
+   };
+   const bool error_control = params_.step_control == StepControl::Error;
+   const bool cut = params_.on_solver_failure == SolverFailure::CutStep;
+   // A fresh run, or a checkpoint from before the error control (no step
+   // control saved: next_dt 0), starts the step control afresh.
+   if (!restart || step_.next_dt <= 0.0)
+   {
+      step_ = StepControlState();
+      step_.on_grid = !error_control;
+      step_.next_dt = dt;
+   }
+   if (error_control && !controller_)
+   {
+      AdaptiveControllerOptions co = params_.controller;
+      co.lte_order = solver.StepErrorOrder();
+      controller_ = std::make_unique<AdaptiveController>(co);
+   }
+   if (controller_ && params_.dt_max > 0.0)
+   {
+      const double cap = params_.dt_max;
+      controller_->SetDtCeiling([cap](double) { return cap; });
+   }
+   const double eps = 1e-12 * std::max(1.0, tf);
+   auto done = [&](long long k, double t)
+   {
+      return step_.on_grid ? k >= n : t >= tf - eps;
+   };
    const CheckpointParameters& chk = params_.checkpoint;
    bool chk_at_written = chk.at_time > 0.0 && t0 >= chk.at_time;
    bool ok = true;
    double t_prev = t0;
-   for (long long k = k0 + 1; k <= n && ok; ++k)
+   long long k = k0;
+   while (ok && !done(k, t_prev))
    {
-      const double t = std::min(shifted ? t0 + static_cast<double>(k - k0) * dt :
-                                static_cast<double>(k) * dt, tf);
-      ok = solver.Step(t - t_prev);
+      // A step that may be taken again keeps its start.
+      const bool retry = cut || error_control;
+      typename SolidSolver::State start;
+      if (retry) { start = solver.ExportState(); }
+      double t = t_prev;
+      for (int cuts = 0;;)
+      {
+         if (step_.on_grid) { t = clock(k + 1); }
+         else
+         {
+            // No sliver of a last step: a remainder under 1e-6 of the step
+            // joins it.
+            const double h = std::min(step_.next_dt, tf - t_prev);
+            t = tf - (t_prev + h) < 1e-6 * h ? tf : t_prev + h;
+         }
+         const double h = t - t_prev;
+         const bool solved = solver.Step(h);
+         bool accepted = solved;
+         if (solved && controller_ && solver.StepError() >= 0.0)
+         {
+            accepted = controller_->Evaluate(t_prev, h, solver.StepError(),
+                                             solver.StepNorm());
+            step_.next_dt = controller_->NextDt();
+         }
+         if (accepted) { break; }
+         if (!solved && !cut)
+         {
+            ok = false; // the march stops at the failed step, as it always did
+            break;
+         }
+         ++step_.rejected;
+         solver.ImportState(start);
+         if (!solved)
+         {
+            const double next = h * params_.retry_factor;
+            MFEM_VERIFY(cuts < params_.retry_max && next >= params_.retry_dt_min,
+                        "elasticity_case: the step from t = " << t_prev << " did "
+                        "not converge after " << cuts << " cut(s) (dt " << h
+                        << "; time.retry_max " << params_.retry_max
+                        << ", retry_dt_min " << params_.retry_dt_min << ")");
+            ++cuts;
+            if (!error_control && step_.dt_before_cut == 0.0)
+            {
+               step_.dt_before_cut = dt;
+            }
+            step_.on_grid = false;
+            step_.next_dt = next;
+            step_.hold = params_.retry_hold;
+            if (root)
+            {
+               mfem::out << "[incns] solid: the step to t = " << t << " did not "
+                         "converge; again at dt = " << next << std::endl;
+            }
+         }
+      }
+      ++k;
+      // Fixed steps after a cut: hold the cut step, then grow back.
+      if (ok && !error_control && !step_.on_grid && step_.dt_before_cut > 0.0)
+      {
+         if (step_.hold > 0) { --step_.hold; }
+         else
+         {
+            step_.next_dt = std::min(step_.dt_before_cut, 1.2 * step_.next_dt);
+            if (step_.next_dt >= step_.dt_before_cut) { step_.dt_before_cut = 0.0; }
+         }
+      }
       if constexpr(hyper)
       {
          max_newton_step_ = std::max(max_newton_step_, solver.NewtonIterations());
       }
       if (out.history) { log(t - t_prev); }
-      if (pv && (k % std::max(out.interval, 1) == 0 || k == n || !ok))
+      if (pv && (k % std::max(out.interval, 1) == 0 || done(k, t) || !ok))
       {
          pv->SetCycle(static_cast<int>(k));
          pv->SetTime(t);
@@ -414,6 +532,8 @@ bool ElasticityCase::March(SolidSolver& solver)
                    << ", Newton " << restored_newton_ + solver.TotalNewtonIterations()
                    << " iterations (max " << max_newton_step_ << " per step), CG "
                    << restored_cg_ + solver.TotalLinearIterations() << " iterations"
+                   << (step_.rejected ? ", " + std::to_string(step_.rejected) +
+                       " step(s) rejected" : std::string())
                    << (ok ? "" : ", a step did NOT converge") << ", "
                    << solve_seconds_ << " s" << std::endl;
       }
@@ -425,6 +545,8 @@ bool ElasticityCase::March(SolidSolver& solver)
                    << " iterations (max " << std::max(restored_cg_max_,
                          solver.MaxIterations())
                    << " per step)"
+                   << (step_.rejected ? ", " + std::to_string(step_.rejected) +
+                       " step(s) rejected" : std::string())
                    << (ok ? "" : ", a step did NOT converge") << ", "
                    << solve_seconds_ << " s" << std::endl;
       }
@@ -465,6 +587,18 @@ void ElasticityCase::WriteCheckpoint(const std::string& dir,
          m << "cg_iterations_total: " << restored_cg_ + solver.TotalIterations()
            << "\ncg_iterations_max: "
            << std::max(restored_cg_max_, solver.MaxIterations()) << "\n";
+      }
+      m << "on_grid: " << (step_.on_grid ? 1 : 0)
+        << "\nnext_dt: " << step_.next_dt
+        << "\ndt_before_cut: " << step_.dt_before_cut
+        << "\nhold: " << step_.hold
+        << "\nrejected_steps: " << step_.rejected << "\n";
+      if (controller_)
+      {
+         const AdaptiveController::State cs = controller_->ExportState();
+         m << "controller_next_dt: " << cs.next_dt
+           << "\ncontroller_prev_es: " << cs.prev_es
+           << "\ncontroller_rejections: " << cs.total_rejections << "\n";
       }
       MFEM_VERIFY(m.good(), "elasticity_case: writing the checkpoint failed");
    }
@@ -582,6 +716,9 @@ void ElasticityCase::WriteSummary(const std::string& path,
       dy["density"].Set(s.density);
       dy["dt"].Set(params_.dt);
       dy["t_final"].Set(params_.t_final);
+      dy["step_control"].Set(params_.step_control == StepControl::Error ?
+                             "error" : "fixed");
+      dy["rejected_steps"].Set(step_.rejected);
       if (hyper_)
       {
          dy["time"].Set(hyper_->Time());

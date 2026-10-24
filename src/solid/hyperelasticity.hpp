@@ -66,11 +66,13 @@ public:
       /// falling quadratically to ~1e-15, below the residual's floor.
       double newton_dx_rtol = 1e-10;
       /// Newton: a load step also converges when a correction's RMS over the
-      /// true dofs falls below this (0: off). For data near zero (a coupled
-      /// run's first mesh moves) neither other test can pass: the residual's
-      /// floor is absolute (P's O(mu) terms cancel at F = I), above
-      /// newton_rtol of a tiny reference, and the displacement has no scale.
-      double newton_dx_atol = 0.0;
+      /// true dofs falls below this (0: off; negative, the default: 1e-12 of
+      /// the mesh's bounding-box diagonal). For data near zero (a march's
+      /// first steps from rest, a coupled run's first mesh moves) neither
+      /// other test can pass: the residual's floor is absolute (P's O(mu)
+      /// terms cancel at F = I), above newton_rtol of a tiny reference, and
+      /// the displacement has no scale.
+      double newton_dx_atol = -1.0;
       int newton_max_iter = 25;   ///< Newton iterations per load step.
       int load_steps = 1;         ///< Load steps of a Solve().
       bool line_search = false;   ///< Backtracking on the residual norm.
@@ -168,6 +170,20 @@ public:
    double Time() const { return time_; }
    /// @return Steps taken since Initialize().
    int StepCount() const { return steps_; }
+   /**
+    * @return The last Step()'s local error estimate in the displacement (true
+    *         dofs, l2), for error-controlled steps: generalized-alpha's
+    *         Zienkiewicz-Xie estimate, BDF's predictor-corrector difference
+    *         once its order's history exists (solid/step_error.hpp); negative
+    *         without one (the trapezoidal start, BDF's first steps). Computed
+    *         in Step() (collective).
+    */
+   double StepError() const { return step_error_; }
+   /// @return |u^{n+1}| (true dofs, l2) of the last Step(): the error's scale.
+   double StepNorm() const { return step_norm_; }
+   /// @return The order in dt of StepError(): 3 for generalized-alpha and
+   ///         BDF2, 4 for BDF3.
+   int StepErrorOrder() const;
    /// @return The velocity (valid after Initialize()).
    mfem::ParGridFunction& Velocity() { return *v_gf_; }
    /// @return 1/2 v.M v of the current state. Collective.
@@ -376,6 +392,9 @@ private:
    mfem::Vector f_n_;  ///< Load at t_n.
    mfem::Vector step_rhs_; ///< A step's or load step's right-hand side.
    mfem::Vector w_, z_, mx_; ///< Work vectors (predictor, argument, mass apply).
+   mfem::Vector pred_;        ///< StepError()'s work: BDF's predictor, a's change.
+   double step_error_ = -1.0; ///< See StepError().
+   double step_norm_ = 0.0;   ///< See StepNorm().
    std::unique_ptr<mfem::ParGridFunction> v_gf_; ///< Velocity.
    double time_ = 0.0;        ///< Time of the dynamic state.
    int steps_ = 0;            ///< Steps since Initialize().

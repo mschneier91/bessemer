@@ -10,6 +10,7 @@
 #include "config/parameters.hpp"
 #include "solid/hyperelasticity.hpp"
 #include "solid/linear_elasticity.hpp"
+#include "time/adaptive_controller.hpp"
 #include "mfem.hpp"
 
 #include <memory>
@@ -68,6 +69,15 @@ public:
     *        rows of the earlier segment past the checkpoint are superseded
     *        where the time goes back), and the summary counts the whole run.
     *        A static solve has nothing to restart (refused).
+    *        Step control (time.step_control): steps of time.dt (cfl, which a
+    *        solid has none of, is fixed steps too), or error control, a PI
+    *        controller on the solver's local error estimate in the
+    *        displacement (StepError(); time.atol, time.rtol, time.dt_max; the
+    *        first steps without an estimate at time.dt). Under
+    *        time.on_solver_failure cut_step a step whose solve fails is taken
+    *        again from its start at retry_factor dt (at most retry_max times;
+    *        not below retry_dt_min); fixed steps then hold the cut step for
+    *        retry_hold steps and grow back to time.dt by 1.2 per step.
     * @return Whether every CG converged.
     */
    bool Run();
@@ -129,8 +139,21 @@ private:
    /// totals cover the whole run).
    long long restored_cg_ = 0;
    long long restored_newton_ = 0; ///< A restart: the Newton iterations before it.
-   int restored_cg_max_ =
-      0;       ///< A restart: the most CG its in a step before it.
+   /// A restart: the most CG iterations in a step before it.
+   int restored_cg_max_ = 0;
+   /// The dynamic march's step control (saved in its checkpoints).
+   struct StepControlState
+   {
+      bool on_grid = true;   ///< Fixed steps on the clock t_k = k dt (until a cut).
+      double next_dt = 0.0;  ///< The next step off the clock.
+      /// Fixed steps after a cut: the step to grow back to (0: none).
+      double dt_before_cut = 0.0;
+      int hold = 0;          ///< Accepted steps left before a cut step may grow.
+      long long rejected = 0; ///< Rejected attempts (error control, failed solves).
+   };
+   StepControlState step_; ///< See StepControlState.
+   /// The error control's PI controller (null: fixed steps).
+   std::unique_ptr<AdaptiveController> controller_;
 };
 
 } // namespace incns

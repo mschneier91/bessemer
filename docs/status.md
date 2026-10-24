@@ -32,6 +32,21 @@ roundoff floor (~4.5e-11 on the flag) is above both relative tests; the decks se
 scratch-build failures). Not on a GPU. **Next:** a mesh motion for large rotations (FSI2), the meshes for FSI3's force
 amplitudes, an absolute Newton floor in Hyperelasticity, SVK under the other conditions.
 
+**Adaptive steps for solid decks (2026-10-23; human: "the structural solver and running it
+through the FSI solver does not have adaptive timestepping that needs to be added", then
+"Full, like the flow"; phase A of two, FSI is phase B).** A dynamic solid deck takes
+`time.step_control: error`: the flow's PI controller on a local error estimate that costs
+no solve, generalized-alpha's Zienkiewicz-Xie estimate or BDF's predictor-corrector
+difference. `time.on_solver_failure: cut_step` retries a step whose CG or Newton fails at a
+smaller dt. Fixed steps keep their k dt clock until a cut, so existing results are bitwise
+unchanged. A restart carries the controller. The estimates have their order (7.8-8.0 for
+dt^3, 15.7 for BDF3), and tightening rtol 100-fold cuts the error 20-21 times
+([elasticity.md](elasticity.md) §2, `solid_adaptive_test`). Found on the way: hyperelastic
+Newton failed on near-zero data (a march from rest with smooth data), as the mesh motion
+had; every hyperelastic solve now ends Newton on an RMS correction below 1e-12 of the mesh's
+size by default (the CSM and FSI tests pass as before). CPU np 1/2/4 and the debug device
+(job 49717423).
+
 **Restarts of solid and FSI runs (2026-10-23; human: "we need to put in full restart
 capability for structural and FSI solves too").** A dynamic solid deck (`ElasticityCase`,
 both equations) and an FSI run (`FsiCase`) write rolling checkpoints with the `checkpoint`

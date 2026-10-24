@@ -194,6 +194,20 @@ public:
    double Time() const { return time_; }
    /// @return Steps taken since Initialize().
    int StepCount() const { return steps_; }
+   /**
+    * @return The last Step()'s local error estimate in the displacement (true
+    *         dofs, l2), for error-controlled steps: generalized-alpha's
+    *         Zienkiewicz-Xie estimate, BDF's predictor-corrector difference
+    *         once its order's history exists (solid/step_error.hpp); negative
+    *         without one (the trapezoidal start, BDF's first steps). Computed
+    *         in Step() (collective).
+    */
+   double StepError() const { return step_error_; }
+   /// @return |u^{n+1}| (true dofs, l2) of the last Step(): the error's scale.
+   double StepNorm() const { return step_norm_; }
+   /// @return The order in dt of StepError(): 3 for generalized-alpha and
+   ///         BDF2, 4 for BDF3.
+   int StepErrorOrder() const;
    /// @return The velocity (valid after Initialize()).
    mfem::ParGridFunction& Velocity() { return *v_gf_; }
    /// @return 1/2 v.M v of the current state (device). Collective.
@@ -391,6 +405,9 @@ private:
    mfem::Vector work2_;  ///< Work vector.
    mfem::Vector work3_;  ///< Work vector.
    mfem::Vector work4_;  ///< Work vector (Solve with a guess).
+   mfem::Vector pred_;        ///< StepError()'s work: BDF's predictor, a's change.
+   double step_error_ = -1.0; ///< See StepError().
+   double step_norm_ = 0.0;   ///< See StepNorm().
    mfem::Vector ess_vals_; ///< Dirichlet values at the essential true dofs.
    bool track_reaction_ = false; ///< See TrackReaction().
    mfem::Vector reaction_;       ///< See Reaction().

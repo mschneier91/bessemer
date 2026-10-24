@@ -116,6 +116,34 @@ earlier run wrote past the checkpoint are superseded where the time goes
 back, as in a flow's history. The summary's iteration totals cover the whole
 run. A static solve has nothing to restart, and `restart` is refused there.
 
+**Adaptive steps** of a dynamic march, for both equations (2026-10-23).
+`time.step_control: error` puts a PI controller (the flow's
+`AdaptiveController`, `time.atol`, `time.rtol`, `time.dt_max`) on the
+solver's local error estimate in the displacement (`StepError()`,
+solid/step_error.hpp). Neither estimate needs a solve of its own:
+- generalized-alpha: Zienkiewicz and Xie's (beta - 1/6) dt^2 (a^{n+1} - a^n);
+- BDF: the corrector's difference from the predictor through the previous
+  levels, times its variable-step constant (2/11 at constant steps for BDF2).
+
+The first steps without an estimate (BDF's) run at `time.dt`; `cfl` and
+`fixed` are fixed steps (a solid has no CFL number). Under
+`time.on_solver_failure: cut_step` (the default) a step whose CG or Newton
+fails is taken again from its start at `retry_factor` dt, at most `retry_max`
+times and not below `retry_dt_min`. Fixed steps then hold the cut step for
+`retry_hold` steps and grow back to `time.dt` by 1.2 per step; under `abort`
+the march stops there. A restart carries the step control and the
+controller's memory. `solid_adaptive_test`, on H8's cantilever with its tip
+moved by A (1 - cos 2t)^2:
+- A1: halving dt divides the estimate by 7.98 (generalized-alpha), 7.80
+  (BDF2) and 15.7 (BDF3), against 8 and 16, linear and St. Venant-Kirchhoff
+  alike.
+- A2: tightening `time.rtol` from 1e-4 to 1e-6 divides the error against a
+  fine fixed-step run 20-21 times (100^(2/3) is 21.5), in 3.7-4.5 times the
+  steps (generalized-alpha 279 -> 1038, BDF2 158 -> 704).
+- A3: a Newton limited below what dt 0.02 needs is cut once and lands within
+  1.4 % of the full-Newton march.
+- A4: an error-controlled restart is the uninterrupted run, bitwise.
+
 ## 3. Memory per DOF (estimated, not measured)
 
 Per vector DOF, 3D, double precision:

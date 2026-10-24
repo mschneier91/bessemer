@@ -442,9 +442,9 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(time, "ext_order", p.ext_order,
           "Extrapolation order of the explicit/lagged nonlinear term, 2 or 3.");
    r.Read(time, "atol", p.controller.atol,
-          "Error control: absolute tolerance on the velocity error estimate.");
+          "Error control: absolute tolerance on the velocity error estimate (a solid deck's: the displacement's).");
    r.Read(time, "rtol", p.controller.rtol,
-          "Error control: relative tolerance on the velocity error estimate.");
+          "Error control: relative tolerance on the velocity error estimate (a solid deck's: the displacement's).");
 
    const DeckSection mem = r.Section(root, "memory",
                                      "Trading speed for capacity.");
