@@ -9,6 +9,17 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The CFL number on a moving mesh is of u - w (2026-10-23; a fluid bug; human: "if there is
+a bug that impacts the fluid solver that should be fixed!").** `Case::ConvectiveCflNumber()`
+took u on a moving mesh, which fed the progress line, the fixed-step `cfl_max` check, the first
+step's CFL cap and the error mode's ceiling. Only the CFL step control's rate took u - w. Near
+a moving wall the fluid follows it through small cells, so u overstated the convection: FSI2's
+progress line showed 10.75 at the flag tip. FSI's `cfl` control (phase B) steered by it too.
+All now take u - w (`Case::ConvectiveVelocity()`); `ale_fluid_test` A3: a fluid carried by its
+rigidly moved box has CFL 0. Fixed meshes are untouched. The solution of a moving-mesh fluid
+changes only where the first step's cap or the `cfl_max` check acted; the fluid-only decks
+are bitwise this morning's main (hfluid 49745066 and hfluid3d 49745583).
+
 **FSI stage F5: the St. Venant-Kirchhoff solid in the coupling, FSI1-FSI3 (2026-10-23,
 branch `claude/project-thread-xnsz2c`; human: "Ok ya pull down the latest and do F5").**
 `fsi.solid: linear_elasticity | hyperelasticity` (`FsiSolid`, fsi/fsi_solid.hpp: an adapter

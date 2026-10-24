@@ -1108,15 +1108,11 @@ void Case::SetupCfl()
       // state carries its dt) the initial dt is capped to the target too.
       integrator_->SetCflRate([this]()
       {
-         if (!mesh_w_) { return cfl_->Rate(integrator_->Velocity()); }
-         // ALE: the convective velocity is u - w.
-         *relative_u_ = integrator_->Velocity();
-         *relative_u_ -= mesh_w_->Field();
-         return cfl_->Rate(*relative_u_);
+         return cfl_->Rate(ConvectiveVelocity());
       });
       if (integrator_->StepCount() == 0)
       {
-         const double c = cfl_->Rate(integrator_->Velocity());
+         const double c = cfl_->Rate(ConvectiveVelocity());
          RequireFiniteRate(c, integrator_->Time());
          if (c > 0.0 && params_.dt * c > params_.CflTarget())
          {
@@ -1131,7 +1127,7 @@ void Case::SetupCfl()
       // whose CFL number stays within cfl_max for the current velocity.
       integrator_->SetDtCeiling([this](double)
       {
-         const double c = cfl_->Rate(integrator_->Velocity());
+         const double c = cfl_->Rate(ConvectiveVelocity());
          RequireFiniteRate(c, integrator_->Time());
          return c > 0.0 ? params_.cfl_max / c
                 : std::numeric_limits<double>::infinity();
@@ -1148,13 +1144,24 @@ void Case::SetupCfl()
    }
 }
 
+const ParGridFunction& Case::ConvectiveVelocity()
+{
+   if (!mesh_w_) { return integrator_->Velocity(); }
+   *relative_u_ = integrator_->Velocity();
+   *relative_u_ -= mesh_w_->Field();
+   return *relative_u_;
+}
+
 double Case::ConvectiveCflNumber(Vector* where)
 {
    EnsureSetup();
    ConvectiveCfl local(spaces_.Velocity(), rules_);
    const ConvectiveCfl& c = cfl_ ? *cfl_ : local;
-   const double rate = where ? c.RateAndLocation(integrator_->Velocity(), *where)
-                       : c.Rate(integrator_->Velocity());
+   // On a moving mesh the convection is by u - w. u gave a false peak where
+   // the fluid follows a moving wall through small cells (FSI2's flag tip:
+   // 10.75 against about 1, 2026-10-23).
+   const ParGridFunction& u = ConvectiveVelocity();
+   const double rate = where ? c.RateAndLocation(u, *where) : c.Rate(u);
    RequireFiniteRate(rate, integrator_->Time());
    return rate * integrator_->CurrentDt();
 }

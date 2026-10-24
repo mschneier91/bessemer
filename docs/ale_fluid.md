@@ -51,7 +51,9 @@ schemes).
   for this non-conservative form. A conservative form (mass matrices of
   several meshes in the BDF sum) would need the GCL in its own discrete
   version; it is not built.
-- **The CFL number** is taken from u - w.
+- **The CFL number** is taken from u - w: the CFL step control's, the
+  progress line's, the fixed-step `cfl_max` check's, the first step's cap and
+  the error mode's ceiling (until 2026-10-23 all but the first took u).
 
 **Refused with a moving mesh (setup aborts):** OIFS (`time.convection: auto`
 picks IMEX when the mesh moves; an explicit `oifs` is refused), the rotational

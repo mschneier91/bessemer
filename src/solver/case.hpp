@@ -293,8 +293,9 @@ public:
    const std::vector<AdaptStats>& AdaptHistory() const { return adapt_log_; }
 
    /**
-    * @brief The directional convective CFL number of the current velocity at
-    *        the current step size, c * dt (see time/cfl.hpp). Collective.
+    * @brief The directional convective CFL number of the current convective
+    *        velocity (u; on a moving mesh u - w, as the CFL step control's)
+    *        at the current step size, c * dt (see time/cfl.hpp). Collective.
     * @param where Optional output: the centre of the element where the rate
     *              peaks (diagnostics), on every rank.
     * @return The CFL number (0 for a zero velocity).
@@ -379,6 +380,10 @@ private:
    /// integrator steers by (and caps the first step); error mode installs the
    /// cfl_max dt ceiling; fixed-step mode verifies the current dt.
    void SetupCfl();
+
+   /// @return The convective velocity of the current state: u, on a moving
+   ///         mesh u - w (in relative_u_).
+   const mfem::ParGridFunction& ConvectiveVelocity();
 
    /**
     * @brief Append a diagnostics row on the output interval (no-op if

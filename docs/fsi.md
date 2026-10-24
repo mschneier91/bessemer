@@ -338,7 +338,7 @@ The Robin coefficients and Robin-Robin's support stay those of `time.dt`: they
 set how the subiterations converge, not what they converge to. `fsi_test`:
 - F10: a vetoed flow solve is cut once to dt / 2, and the run lands on
   `t_final`;
-- F11: CFL control, 14 steps, dt 0.0019-0.0086 at `cfl_target` 0.1;
+- F11: CFL control (of u - w), 14 steps, dt 0.0019-0.0086 at `cfl_target` 0.1;
 - F12: error control, 40 steps at `time.rtol` 1e-2 against 111 at 1e-4;
 - F13: an error-controlled restart is the uninterrupted run, bitwise on a
   host.

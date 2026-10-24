@@ -9,7 +9,8 @@
 //  A3 a box moved rigidly with no-slip walls (u = w): the fluid moves with
 //     it, u = w uniform and the pressure gradient balances the acceleration;
 //     with a constant velocity u = V exactly, with an oscillation u equals
-//     the discrete mesh velocity w_h;
+//     the discrete mesh velocity w_h; the convective CFL number (of u - w)
+//     vanishes;
 //  A4 a linear Stokes flow on a mesh moved at constant rates (every node
 //     path linear in time, so BDF2 and EXT2 are exact): translated, exact to
 //     the solver tolerance; stretched too, the trapezoidal starter's O(dt^2)
@@ -316,6 +317,9 @@ TEST(AleFluid, A3_RigidBoxCarriesTheFluid)
          }
          EXPECT_LT(MaxDeviation(flow.Velocity(), w), 1e-9)
                << eq << (oscillate ? ", oscillating" : ", constant velocity");
+         // The fluid moves with the mesh: no convection, so the CFL number
+         // (of u - w) is the solver tolerance's, not |u| dt / h.
+         EXPECT_LT(flow.ConvectiveCflNumber(), 1e-6) << eq;
          if (!oscillate)
          {
             EXPECT_LT(PressureSpread(flow.Pressure()), 1e-8) << eq;
