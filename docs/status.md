@@ -4,10 +4,33 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-23)
+## Where development left off (2026-10-24)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**The St. Venant-Kirchhoff solid under every interface condition (2026-10-24; human: "ya
+implement it").** Robin-Neumann, Robin-Robin and Neumann-Dirichlet take `fsi.solid:
+hyperelasticity`; until now they refused it. With it, their interface quantity is the moments,
+which do not depend on the configuration (the total-Lagrangian solid is loaded per reference
+area). The linear solid's paths are unchanged: F6 and F7 print the same digits.
+- Robin-Neumann and Robin-Robin iterate on the moments of the fluid's interface load. The
+  fluid takes them as its boundary load (`SetBoundaryLoad`), the solid as the nominal traction
+  on the reference interface. Robin-Robin's kappa d is moments on the reference interface's
+  mass, the measure of the solid's support. Neumann-Dirichlet hands the fluid the solid's
+  reaction as moments (docs/fsi.md).
+- `fsi_test` F15: each reaches the St. Venant-Kirchhoff solid's own Dirichlet-Neumann steps,
+  the tip to 1e-6 of the displacement: Robin-Robin on F6's stiff flag (4e-9 at `fsi.rtol`
+  1e-10), Robin-Neumann on its ramped start, Neumann-Dirichlet at E 5e4. The comparison now
+  fails loudly when a step is cut.
+- Limits, both from the solid's Newton on the coupling's early iterates (the linear solid
+  takes any iterate). On F6's impulsive start, Robin-Neumann's first IQN-ILS secant step of
+  step 2 throws the load to 2.3 times itself; the Newton fails even at 100 iterations and the
+  step is cut. On F7's soft flag, Dirichlet-Neumann's early iterates throw the flag out 0.3
+  (15 thicknesses). Halving the iterate on a failed solid solve, instead of cutting the step,
+  would address both; not done.
+- Validation (hhc2 49790494): fsi_test F6-F8 and F15 at np 1/2/4; the touched tests at np
+  1/2/4; smoke+fast 97/97 at np 1/2/4; fsi_test on the debug device at np 1/2.
 
 **The 2D benchmark READMEs rerun on the 2D threshold 0.25 (2026-10-24; human: "go ahead and do
 the optional item too").** Every 2D result in benchmarks/turek_hron and

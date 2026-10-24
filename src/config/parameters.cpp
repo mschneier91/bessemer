@@ -1248,8 +1248,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "The solid's model: linear_elasticity (small strain) or hyperelasticity "
    "(large deformation, the material of solid.model; the Turek-Hron "
    "benchmarks' St. Venant-Kirchhoff). hyperelasticity takes the fluid's "
-   "traction per reference area and, so far, coupling dirichlet_neumann "
-   "only.");
+   "load per reference area: the interface's nodal moments, under every "
+   "coupling.");
    r.Read(fsi, "alpha_fluid", fp.alpha_fluid,
           "robin_neumann, robin_robin: the fluid's Robin coefficient (a density times a "
           "velocity, as rho_s H / dt); <= 0: rho_s h / dt face by face, h "
@@ -1552,11 +1552,6 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                   sp.poisson_ratio < 0.5 && sp.density > 0.0,
                   "parameters: bad solid material (youngs_modulus > 0, "
                   "poisson_ratio in (-1, 1/2), density > 0)");
-      MFEM_VERIFY(f.solid != FsiSolidModel::Hyperelasticity ||
-                  f.coupling == FsiCoupling::DirichletNeumann,
-                  "parameters: fsi.solid hyperelasticity couples by "
-                  "dirichlet_neumann only so far (the other conditions pass a "
-                  "traction per current area; docs/fsi.md)");
       MFEM_VERIFY(f.solid != FsiSolidModel::Hyperelasticity ||
                   sp.analysis == SolidAnalysis::Dynamic,
                   "parameters: fsi.solid hyperelasticity needs solid.analysis: "

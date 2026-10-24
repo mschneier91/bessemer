@@ -209,6 +209,10 @@ private:
     */
    void TractionFromLoad(const mfem::Vector& load, mfem::Vector& t);
 
+   /// InterfaceForce() from the fluid's interface load @p load (moments at
+   /// the velocity true dofs). Collective.
+   void InterfaceForceFromLoad(const mfem::Vector& load);
+
    /// @param t The fluid's kinematic traction (velocity true dofs; per
    ///          reference area under Dirichlet-Neumann): the solid's load
    ///          SolidTraction() = -rho_f t. Collective.
@@ -277,6 +281,10 @@ private:
    std::unique_ptr<mfem::ParGridFunction> robin_tau_;
    /// Its coefficient (the time integrator reads it).
    std::unique_ptr<mfem::VectorGridFunctionCoefficient> robin_tau_coeff_;
+   /// The hyperelastic solid under Robin-Neumann, Robin-Robin and
+   /// Neumann-Dirichlet: the fluid's boundary load as moments at the velocity
+   /// true dofs (the time integrator reads it: SetBoundaryLoad()).
+   mfem::Vector robin_load_;
    /// The face-by-face Robin coefficient (kinematic), or null (the constant
    /// Parameters::FsiFluidRobin()).
    std::unique_ptr<mfem::Coefficient> robin_alpha_;

@@ -35,7 +35,10 @@
 //     uninterrupted one, bitwise on a host (rebuild);
 //  F14 after a failed attempt IQN-ILS forgets the kept steps' columns: its
 //     next subiteration relaxes by omega_0 as a fresh one's does (after a
-//     discarded attempt alone it uses them).
+//     discarded attempt alone it uses them);
+//  F15 the St. Venant-Kirchhoff solid under Robin-Neumann, Robin-Robin and
+//     (on a soft flag) Neumann-Dirichlet reaches its Dirichlet-Neumann
+//     coupled steps, as F6/F7 for the linear solid.
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -367,13 +370,18 @@ namespace
  *                  a soft flag far out).
  * @param vel_tol   The velocities' largest difference, relative.
  * @param its       Subiterations in the two steps, Dirichlet-Neumann first.
+ * @param tip_tol   The tips' largest difference, relative to the largest
+ *                  displacement.
+ * @param base      fsi keys of the reference run.
  */
 void CompareWithDirichletNeumann(const std::vector<std::string>& variants,
                                  const std::string& youngs, bool ramp,
                                  double vel_tol, std::vector<long long>& its,
-                                 double tip_tol = 1e-6)
+                                 double tip_tol = 1e-6,
+                                 const std::string& base =
+                                    "  coupling: dirichlet_neumann\n")
 {
-   std::vector<std::string> keys = {"  coupling: dirichlet_neumann\n"};
+   std::vector<std::string> keys = {base};
    keys.insert(keys.end(), variants.begin(), variants.end());
    std::vector<Vector> u(keys.size());
    std::vector<double> tip(keys.size());
@@ -388,6 +396,9 @@ void CompareWithDirichletNeumann(const std::vector<std::string>& variants,
       auto mesh = incns::MakeCaseMesh(p);
       FsiCase fsi(*mesh, p);
       for (int s = 0; s < 2; ++s) { ASSERT_TRUE(fsi.Step()) << keys[v] << s; }
+      // Two full steps: a cut one (a failed solve, retried at a smaller dt)
+      // would compare different times.
+      EXPECT_NEAR(fsi.Fluid().Time(), 0.01, 1e-12) << keys[v] << ": a step was cut";
       long long n = 0;
       for (const FsiCase::StepRecord& r : fsi.History()) { n += r.iterations; }
       its.push_back(n);
@@ -480,6 +491,37 @@ TEST(Fsi, F7_NeumannDirichletMatchesDirichletNeumann)
                                true, 1e-3, its);
    ASSERT_EQ(its.size(), 2u);
    EXPECT_LT(its[1], its[0]);
+}
+
+// F15: the St. Venant-Kirchhoff solid under the other three conditions
+// reaches its own Dirichlet-Neumann coupled steps. Their iterate is the
+// interface load's moments (docs/fsi.md), so at the fixed point the solid sees
+// Dirichlet-Neumann's nominal traction. Robin-Robin on F6's flag; Robin-Neumann
+// on its ramped start (on the impulsive one IQN-ILS's first secant step of the
+// second step throws the load to 2.3 times itself, the solid's Newton fails
+// and the step is cut); Neumann-Dirichlet on a flag of E 5e4 (on F7's 1.4e3
+// Dirichlet-Neumann's early iterates throw the flag out 0.3, 15 thicknesses,
+// and the Newton fails there).
+TEST(Fsi, F15_HyperelasticSolidUnderEveryCoupling)
+{
+   const std::string svk = "  solid: hyperelasticity\n";
+   const std::string base = "  coupling: dirichlet_neumann\n" + svk;
+   std::vector<long long> its;
+   CompareWithDirichletNeumann({"  coupling: robin_robin\n  alpha_solid: 1000\n" + svk},
+                               "1.4e6", false, 1e-6, its, 1e-6, base);
+   ASSERT_EQ(its.size(), 2u);
+   EXPECT_GT(its[1], 0);
+   its.clear();
+   CompareWithDirichletNeumann({"  coupling: robin_neumann\n" + svk}, "1.4e6",
+                               true,
+                               1e-6, its, 1e-6, base);
+   ASSERT_EQ(its.size(), 2u);
+   EXPECT_GT(its[1], 0);
+   its.clear();
+   CompareWithDirichletNeumann({"  coupling: neumann_dirichlet\n" + svk}, "5.0e4",
+                               true, 1e-3, its, 1e-6, base);
+   ASSERT_EQ(its.size(), 2u);
+   EXPECT_GT(its[1], 0);
 }
 
 // F8: the St. Venant-Kirchhoff solid (fsi.solid hyperelasticity, loaded by

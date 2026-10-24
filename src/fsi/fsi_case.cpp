@@ -205,6 +205,47 @@ void InterfaceMassSolve(ParFiniteElementSpace& fes, Array<int>& marker,
                "converge");
 }
 
+/**
+ * @brief y = M_G x on the interface's dofs, M_G the vector boundary mass of
+ *        the faces @p marker selects on @p fes's mesh as it stands: the
+ *        moments of the field @p x (InterfaceMassSolve()'s inverse).
+ *        Collective.
+ * @param fes    Vector H1 space.
+ * @param marker Boundary attribute marker of the interface.
+ * @param x      The field (true dofs; read where @p on is set).
+ * @param on     Per true dof: whether it is an interface unknown.
+ * @param y      Its moments (true dofs; zero off the interface).
+ */
+void InterfaceMassApply(ParFiniteElementSpace& fes, Array<int>& marker,
+                        const Vector& x, const std::vector<char>& on, Vector& y)
+{
+   const int n = fes.GetTrueVSize();
+   ParBilinearForm m(&fes);
+   m.AddBoundaryIntegrator(new VectorMassIntegrator(), marker);
+   m.Assemble();
+   m.Finalize();
+   std::unique_ptr<HypreParMatrix> M(m.ParallelAssemble());
+   Vector xx(n);
+   const double* src = x.HostRead();
+   double* dst = xx.HostWrite();
+   for (int i = 0; i < n; ++i) { dst[i] = on[i] ? src[i] : 0.0; }
+   y.SetSize(n);
+   M->Mult(xx, y);
+   double* yy = y.HostReadWrite();
+   for (int i = 0; i < n; ++i) { if (!on[i]) { yy[i] = 0.0; } }
+}
+
+/// @return Per true dof of @p fes: whether it lies on the faces @p marker
+///         selects.
+std::vector<char> InterfaceDofs(ParFiniteElementSpace& fes, Array<int>& marker)
+{
+   Array<int> iface;
+   fes.GetEssentialTrueDofs(marker, iface);
+   std::vector<char> on(fes.GetTrueVSize(), 0);
+   for (int i : iface) { on[i] = 1; }
+   return on;
+}
+
 } // namespace
 
 FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
@@ -556,16 +597,20 @@ void FsiCase::TractionFromLoad(const Vector& load, Vector& t)
 {
    INCNS_PROFILE("fsi::traction");
    ParFiniteElementSpace& vfes = fluid_->Spaces().Velocity();
+   InterfaceForceFromLoad(load);
+   // The interface's mass on the current mesh: M t = r at the interface
+   // dofs gives the traction field whose moments are the residual's.
+   const std::vector<char> on = InterfaceDofs(vfes, fluid_marker_);
+   InterfaceMassSolve(vfes, fluid_marker_, load, on, t);
+}
+
+void FsiCase::InterfaceForceFromLoad(const Vector& load)
+{
+   ParFiniteElementSpace& vfes = fluid_->Spaces().Velocity();
    const double rho = params_.fsi.fluid_density;
    const int n = vfes.GetTrueVSize();
    MFEM_VERIFY(load.Size() == n, "fsi_case: load size");
-
-   // The interface's mass on the current mesh: M t = r at the interface
-   // dofs gives the traction field whose moments are the residual's.
-   Array<int> iface;
-   vfes.GetEssentialTrueDofs(fluid_marker_, iface);
-   std::vector<char> on(n, 0);
-   for (int i : iface) { on[i] = 1; }
+   const std::vector<char> on = InterfaceDofs(vfes, fluid_marker_);
    const double* ll = load.HostRead();
    const int vdim = vfes.GetVDim();
    const int per = n / vdim;
@@ -578,7 +623,6 @@ void FsiCase::TractionFromLoad(const Vector& load, Vector& t)
    }
    MPI_Allreduce(MPI_IN_PLACE, interface_force_.GetData(), vdim, MPI_DOUBLE,
                  MPI_SUM, vfes.GetComm());
-   InterfaceMassSolve(vfes, fluid_marker_, load, on, t);
 }
 
 void FsiCase::ReactionTraction(Vector& tau)
@@ -947,8 +991,18 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
    // traction tau~, velocity u and mesh velocity w give the next
    // g~ = tau~ - a_s (u - w) - kappa d (a_s = alpha_s / rho_f). a_s = 0 is
    // Robin-Neumann.
+   //
+   // The hyperelastic solid (total Lagrangian, loaded per reference area):
+   // the variable is the moments of tau, the fluid's interface load as
+   // Dirichlet-Neumann's, which do not depend on the configuration. The
+   // fluid takes them as its boundary load (SetBoundaryLoad), the solid the
+   // nominal traction with them on the reference interface. Robin-Robin's
+   // kappa d is moments on the reference interface's mass, as the solid's
+   // support k (u, v) there, so that the two balance at the fixed point;
+   // a_s (u - w), zero there, on the moved interface's.
    const FsiParameters& f = params_.fsi;
    const bool rr = f.coupling == FsiCoupling::RobinRobin;
+   const bool moments = f.solid == FsiSolidModel::Hyperelasticity;
    const double rho = f.fluid_density;
    const double a_s = rr ? f.alpha_solid / rho : 0.0;
    const double kappa = rr ? SupportStiffness() / rho : 0.0;
@@ -966,20 +1020,35 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
          std::make_unique<VectorGridFunctionCoefficient>(robin_tau_.get());
    }
    Vector tau(n), tau_tilde(n), r(n), d(mfes.GetTrueVSize());
-   Vector data(n), dv(n), uw(n);
+   Vector data(n), dv(n), uw(n), mdv(n), muw(n);
    Array<int> iface;
    vfes.GetEssentialTrueDofs(fluid_marker_, iface);
+   std::vector<char> on;
    ParGridFunction dv_ref(ref_vfes_.get());
    PredictLoad(tau);
    ParGridFunction solid_d(&mfes);
    if (dynamic_) { solid_->SaveState(); }
    const double dt = step_dt_;
-   fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get());
+   if (moments)
+   {
+      on = InterfaceDofs(vfes, fluid_marker_);
+      robin_load_.SetSize(n);
+      robin_load_ = 0.0;
+      fluid_->Integrator().SetBoundaryTraction(nullptr);
+      fluid_->Integrator().SetBoundaryLoad(&robin_load_);
+   }
+   else { fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get()); }
    accel_->NewStep();
    StepRecord rec;
    for (int k = 1; k <= f.max_iterations; ++k)
    {
-      LoadSolidTraction(tau);
+      if (moments)
+      {
+         Vector t0;
+         NominalTractionFromLoad(tau, t0);
+         LoadSolidTraction(t0);
+      }
+      else { LoadSolidTraction(tau); }
       bool solid_ok = true;
       if (dynamic_)
       {
@@ -1009,16 +1078,27 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
          const double* a = all.HostRead();
          double* o = dv.HostReadWrite();
          for (int i : iface) { o[i] = a[i]; }
-         data.Add(kappa, dv);
+         if (moments)
+         {
+            InterfaceMassApply(*ref_vfes_, fluid_marker_, dv, on, mdv);
+            data.Add(kappa, mdv);
+         }
+         else { data.Add(kappa, dv); }
       }
-      robin_tau_->SetFromTrueDofs(data);
+      if (moments) { robin_load_ = data; }
+      else { robin_tau_->SetFromTrueDofs(data); }
       if (!fluid_->TrialStep())
       {
          failure_ = "the flow's solve did not converge";
          return Attempt::Failed;
       }
       UpdateLoad();
-      TractionFromLoad(last_load_, tau_tilde); // on the moved mesh
+      if (moments)
+      {
+         InterfaceForceFromLoad(last_load_);
+         tau_tilde = last_load_;
+      }
+      else { TractionFromLoad(last_load_, tau_tilde); } // on the moved mesh
       if (rr)
       {
          ParGridFunction w(&vfes);
@@ -1030,8 +1110,17 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
          const double* a = all.HostRead();
          double* o = uw.HostReadWrite();
          for (int i : iface) { o[i] = a[i]; }
-         tau_tilde.Add(-a_s, uw);
-         tau_tilde.Add(-kappa, dv);
+         if (moments)
+         {
+            InterfaceMassApply(vfes, fluid_marker_, uw, on, muw); // moved mesh
+            tau_tilde.Add(-a_s, muw);
+            tau_tilde.Add(-kappa, mdv);
+         }
+         else
+         {
+            tau_tilde.Add(-a_s, uw);
+            tau_tilde.Add(-kappa, dv);
+         }
       }
       subtract(tau_tilde, tau, r);
       const double rn = std::sqrt(InnerProduct(comm, r, r));
@@ -1098,7 +1187,13 @@ FsiCase::Attempt FsiCase::StepNeumannDirichlet()
    // velocity integrates to, d~ = d + (u - w) / c0 (w = c0 d + the older
    // levels' part, the mesh velocity's BDF), is the next d. At convergence
    // u = w on the interface and the tractions balance.
+   //
+   // The hyperelastic solid: its reaction is nodal forces of the reference
+   // configuration, so the fluid takes their moments as its boundary load
+   // (SetBoundaryLoad: the field ReactionTraction() gives, on the reference
+   // interface's mass), not a traction per current area.
    const FsiParameters& f = params_.fsi;
+   const bool moments = f.solid == FsiSolidModel::Hyperelasticity;
    const double wall0 = MPI_Wtime();
    MPI_Comm comm = fluid_mesh_.GetComm();
    ParGridFunction& dg = *fluid_->InterfaceDisplacement();
@@ -1118,7 +1213,16 @@ FsiCase::Attempt FsiCase::StepNeumannDirichlet()
    ParGridFunction uw_ref(ref_vfes_.get());
    if (dynamic_) { solid_->SaveState(); }
    const double dt = step_dt_;
-   fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get());
+   std::vector<char> on;
+   if (moments)
+   {
+      on = InterfaceDofs(vfes, fluid_marker_);
+      robin_load_.SetSize(vfes.GetTrueVSize());
+      robin_load_ = 0.0;
+      fluid_->Integrator().SetBoundaryTraction(nullptr);
+      fluid_->Integrator().SetBoundaryLoad(&robin_load_);
+   }
+   else { fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get()); }
    accel_->NewStep();
    StepRecord rec;
    for (int k = 1; k <= f.max_iterations; ++k)
@@ -1141,7 +1245,8 @@ FsiCase::Attempt FsiCase::StepNeumannDirichlet()
          return Attempt::Failed;
       }
       ReactionTraction(tau);
-      robin_tau_->SetFromTrueDofs(tau);
+      if (moments) { InterfaceMassApply(*ref_vfes_, fluid_marker_, tau, on, robin_load_); }
+      else { robin_tau_->SetFromTrueDofs(tau); }
       if (!fluid_->TrialStep())
       {
          failure_ = "the flow's solve did not converge";
