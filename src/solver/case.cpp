@@ -348,9 +348,9 @@ void Case::EnsureSetup()
    }
    params_.forces.boundaries.clear();
 
-   // Restart of an adapted run: replay its refinement history on the initial
-   // mesh -- same deterministic operations, same np, so the same mesh,
-   // partition and dof numbering as when the checkpoint was written.
+   // Restart of an adapted run: replay its refinement and coarsening history
+   // on the initial mesh -- same deterministic operations, same np, so the
+   // same mesh, partition and dof numbering as when the checkpoint was written.
    if (!params_.restart_from.empty())
    {
       std::vector<RefinementRecord> recs =
@@ -359,8 +359,7 @@ void Case::EnsureSetup()
                   "holds an adapted mesh; restart it with amr.enabled");
       for (const RefinementRecord& r : recs)
       {
-         MeshAdapter::Refine(mesh_, spaces_, bc_, r.refs, r.nc_limit,
-                             r.rebalance, {});
+         MeshAdapter::Replay(mesh_, spaces_, bc_, r);
       }
       refine_log_ = std::move(recs);
    }
@@ -758,7 +757,8 @@ void Case::InitialRefinement()
       if (st.first_pass.marked == 0) { break; }
       MeshAdapter::Refine(mesh_, spaces_, bc_, refs, a.nc_limit, a.rebalance,
                           {});
-      refine_log_.push_back({refs, a.nc_limit, a.rebalance});
+      refine_log_.push_back(RefinementRecord::Refinements(refs, a.nc_limit,
+                            a.rebalance));
       st.passes = 1;
       st.ne_after = mesh_.GetGlobalNE();
       st.seconds = MPI_Wtime() - t0;
@@ -788,17 +788,27 @@ AdaptStats Case::Adapt(bool force_rebuild)
    st.ne_before = mesh_.GetGlobalNE();
    const RefinementMarker marker(a);
 
-   // First pass marks on the live velocity: if nothing is marked, nothing
-   // is torn down.
+   // First pass marks on the live velocity: if nothing is marked (nor, with
+   // amr.derefine, merged), nothing is torn down.
    Array<Refinement> refs;
+   long long mergeable = 0;
    {
       GradientIndicator ind(spaces_.Velocity(), rules_);
       ind.UseScratch(integrator_->OperatorScratch()); // between steps: idle
       Vector g;
       ind.Compute(integrator_->Velocity(), g);
       marker.Mark(mesh_, g, refs, &st.first_pass);
+      if (a.derefine && st.first_pass.marked == 0)
+      {
+         Vector values;
+         Array<int> gather, merge;
+         const double threshold = marker.DerefinementValues(mesh_, g, values);
+         mergeable = MeshAdapter::SelectDerefinements(mesh_, values, threshold,
+                     a.nc_limit, gather,
+                     merge);
+      }
    }
-   if (st.first_pass.marked == 0 && !force_rebuild)
+   if (st.first_pass.marked == 0 && mergeable == 0 && !force_rebuild)
    {
       st.ne_after = st.ne_before;
       st.seconds = MPI_Wtime() - t0;
@@ -841,12 +851,43 @@ AdaptStats Case::Adapt(bool force_rebuild)
       if (refs.Size() == 0 && pass == 0 && st.first_pass.marked == 0) { break; }
       MeshAdapter::Refine(mesh_, spaces_, bc_, refs, a.nc_limit, a.rebalance,
                           fields);
-      refine_log_.push_back({refs, a.nc_limit, a.rebalance});
+      refine_log_.push_back(RefinementRecord::Refinements(refs, a.nc_limit,
+                            a.rebalance));
       refined = true;
       ++st.passes;
    }
 
-   // Back to true dofs on the (possibly) refined spaces.
+   // Coarsening (amr.derefine), marked on the newest level as the passes
+   // left it: every history level becomes its L2 projection onto the coarse
+   // space (one linear contraction for all levels, so the BDF/EXT differences
+   // stay consistent); the pressure, a warm start, is interpolated.
+   bool merged = false;
+   if (a.derefine)
+   {
+      GradientIndicator ind(spaces_.Velocity(), rules_);
+      Vector g, values;
+      ind.Compute(*hist_gf.front(), g);
+      const double threshold = marker.DerefinementValues(mesh_, g, values);
+      RefinementRecord rec;
+      rec.nc_limit = a.nc_limit;
+      rec.rebalance = a.rebalance;
+      rec.derefine = true;
+      st.merged = MeshAdapter::SelectDerefinements(mesh_, values, threshold,
+                  a.nc_limit, rec.gather,
+                  rec.merge);
+      if (st.merged > 0)
+      {
+         std::vector<ParGridFunction*> hist;
+         for (const auto& gf : hist_gf) { hist.push_back(gf.get()); }
+         merged = MeshAdapter::Derefine(mesh_, spaces_, bc_, rec.gather,
+                                        rec.merge, a.nc_limit, a.rebalance,
+         {&p_gf}, hist);
+         // Recorded even if MFEM merged nothing: the gather moved elements.
+         refine_log_.push_back(std::move(rec));
+      }
+   }
+
+   // Back to true dofs on the (possibly) adapted spaces.
    for (std::size_t j = 0; j < state.u_hist.size(); ++j)
    {
       state.u_hist[j].SetSize(spaces_.Velocity().GetTrueVSize());
@@ -856,7 +897,7 @@ AdaptStats Case::Adapt(bool force_rebuild)
    p_gf.GetTrueDofs(state.pressure);
    hist_gf.clear();
 
-   if (refined && a.project_history)
+   if ((refined || merged) && a.project_history)
    {
       HistoryProjectionOptions po;
       po.cc = params_.cc;
@@ -876,7 +917,7 @@ AdaptStats Case::Adapt(bool force_rebuild)
 
    st.ne_after = mesh_.GetGlobalNE();
    ne_ = st.ne_after;
-   if (st.ne_after != st.ne_before) { ++amr_events_; }
+   if (refined || merged) { ++amr_events_; }
    st.seconds = MPI_Wtime() - t0;
    adapt_log_.push_back(st);
    if (Mpi::Root() && params_.print_level >= 0)
@@ -884,8 +925,10 @@ AdaptStats Case::Adapt(bool force_rebuild)
       mfem::out << "[amr] event at t = " << st.time << " (cycle " << st.cycle
                 << "): marked " << st.first_pass.marked << " (dirs "
                 << st.first_pass.per_dir[0] << "/" << st.first_pass.per_dir[1]
-                << "/" << st.first_pass.per_dir[2] << "), elements "
-                << st.ne_before << " -> " << st.ne_after << ", "
+                << "/" << st.first_pass.per_dir[2] << ")"
+                << (a.derefine ? ", merged " + std::to_string(st.merged) +
+                    " families" : std::string())
+                << ", elements " << st.ne_before << " -> " << st.ne_after << ", "
                 << st.seconds << " s" << std::endl;
    }
    return st;

@@ -69,7 +69,7 @@ closest valid key. **Every key, with its default and allowed values:
 | `time` | `dt`, `t_final`, `order`, `step_control: cfl \| fixed \| error`, `cfl_target`, `cfl_max`, `dt_max`, `ext_order`, `convection: imex \| oifs`, `oifs_cfl`, `atol`, `rtol`, `on_solver_failure: cut_step \| abort`, `retry_factor`, `retry_hold`, `retry_max`, `retry_dt_min` |
 | `solver` | `rtol`, `atol`, `tolerance_reference: initial_residual \| rhs \| step`, `initial_guess: previous \| extrapolate \| project`, `projection_k`, `max_iter`, `kdim`, `schur`, `schur_grad_div`, `a_pc`, `a_pcg_pc`, `preconditioner`, `block_shape`, `n_inner`, `lp_vcycles`, `lp_strong_threshold`, `lp_agg_levels`, `lp_print_level`, `rotation_pc`, `rotation_schur`, ... |
 | `boundary_conditions` | a list of `{select: [xmin, ymax, ...] or attributes, type: no_slip \| outflow \| velocity_dirichlet}` |
-| `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, ... |
+| `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, `derefine`, ... |
 | `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
 | `channel_statistics` | `enabled`, `start_time`, `interval`: plane and time averages for a channel (below) |
 | `output` | `enabled`, `path`, `name`, `interval`, `diagnostics`, `progress`, `history` |

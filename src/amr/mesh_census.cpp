@@ -91,8 +91,7 @@ std::vector<MeshCensus> ReplayMeshCensus(const Parameters& params,
    out.push_back(TakeMeshCensus(*mesh, edges, x0, y0));
    for (const RefinementRecord& r : recs)
    {
-      MeshAdapter::Refine(*mesh, spaces, nullptr, r.refs, r.nc_limit, r.rebalance,
-                          {});
+      MeshAdapter::Replay(*mesh, spaces, nullptr, r);
       out.push_back(TakeMeshCensus(*mesh, edges, x0, y0));
    }
    return out;

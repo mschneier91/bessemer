@@ -774,6 +774,8 @@ PYBIND11_MODULE(_core, m)
    .def_readwrite("nc_limit", &AmrParameters::nc_limit)
    .def_readwrite("rebalance", &AmrParameters::rebalance)
    .def_readwrite("project_history", &AmrParameters::project_history)
+   .def_readwrite("derefine", &AmrParameters::derefine)
+   .def_readwrite("derefine_fraction", &AmrParameters::derefine_fraction)
    .def_readwrite("write_indicator", &AmrParameters::write_indicator);
 
    // Rotation-aware pressure Schur PC (rotational form, CC path).

@@ -67,8 +67,8 @@ and per-step history.
   and 3D, a square cylinder in a large domain, and Gmsh or MFEM mesh files with named
   boundaries; inflow profiles, no-slip, and a directional do-nothing outflow that stays
   stable under backflow.
-- **Adaptive mesh refinement** (refinement only, isotropic or anisotropic, hanging nodes),
-  lift and drag, shedding statistics, channel statistics, checkpoint and restart.
+- **Adaptive mesh refinement** (isotropic or anisotropic refinement, hanging nodes, and
+  optional coarsening with an L2-projected multistep history), lift and drag, shedding statistics, channel statistics, checkpoint and restart.
 
 **Solids** (`equation: linear_elasticity`): small-strain linear elasticity, static or
 dynamic (generalized-alpha or BDF), plane strain or plane stress

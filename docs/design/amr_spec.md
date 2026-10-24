@@ -1,4 +1,4 @@
-# Spec: adaptive mesh refinement (refinement only, isotropic or anisotropic)
+# Spec: adaptive mesh refinement (isotropic or anisotropic; coarsening since 2026-10-24)
 
 > **Status (2026-10-06): IMPLEMENTED** on branch `amr` as sub-sprints AMR.0–AMR.6 (plus
 > AMR.4b for D6), with D1–D8 taken at the proposals in Section 12. Two deviations, both
@@ -9,6 +9,9 @@
 > way (pure-MFEM reproduction in CLAUDE.md). Section 8.3's open items were all verified by
 > the tests (rebalance on 3D anisotropic NC meshes, LimitNCLevel after conflict resolution,
 > restart of periodic adapted runs, the full solve on NC meshes, PBJ near hanging nodes).
+>
+> **2026-10-24:** optional coarsening, `amr.derefine` (human 2026-10-24), is Section 13. The
+> rest of this document is unchanged: "no derefinement" in Sections 0 and 12 is the default.
 
 Target: bessemer `main` at `af37b42`, built against MFEM `develop` at commit `17d1afc3`
 (the desktop environment's installed MFEM; source in spack's cache as
@@ -410,7 +413,7 @@ groups.
 | NC `ParMesh` without a partition uses `InitialPartition` (SFC), not METIS | `mesh/pmesh.cpp:125–134` |
 | Parallel anisotropic hex refinement requires non-conflicting face neighbours; `AnisotropicConflict` checks it | `CHANGELOG:163`, `mesh/pmesh.hpp:848`, `mesh/pncmesh.cpp:1514` |
 | `AnisotropicConflict` returns false for dim < 3 or np = 1 | `mesh/pncmesh.cpp:1517` |
-| Derefinement of 3D anisotropic meshes not implemented (irrelevant here: no derefinement) | `mesh/pncmesh.cpp:2145` |
+| Derefinement of 3D anisotropic meshes not implemented (so `amr.derefine` needs isotropic refinement in 3D, Section 13) | `mesh/pncmesh.cpp:2145` (MFEM 4.10: 2306) |
 | NC partial-assembly diagonal is $\|P^T\| d_L$ | `fem/pbilinearform.cpp:318–325` |
 | `ParPrint` of an NC mesh uses the NC format, which works in parallel | `mesh/pmesh.cpp:6579` |
 | `GetSerialMesh` / print-as-one unsupported for NC meshes (bessemer does not use them) | `mesh/pmesh.cpp:5546` |
@@ -591,3 +594,95 @@ re-blessing. AMR-on runs get their own baselines, per np for AMG.
 
 **Out of scope:** derefinement; p-refinement; goal-oriented or residual estimators; Dörfler
 marking; cost-weighted load balancing; restart at a different np.
+
+---
+
+## 13. Coarsening (`amr.derefine`; human 2026-10-24)
+
+The human kept AMR refinement-only on 2026-10-08: refinement transfers every BDF/EXT history
+level exactly, coarsening has to project them. This section is that projection, as an option
+(`amr.derefine`, off by default; nothing changes without it). Code: `MeshAdapter::
+SelectDerefinements` and `Derefine` (`amr/mesh_adapter.cpp`), `RefinementMarker::
+DerefinementValues`, `Case::Adapt`.
+
+### 13.1 Marking
+
+After an event's refinement passes, on the newest history level as they left it. A family
+(the children of one parent, all leaves) merges when every child has 2 eta_c below
+f times the refinement threshold, f = `amr.derefine_fraction` (default 0.5), the threshold
+being `tolerance` or theta max eta. 2 eta bounds the merged element's indicator: G_{P,d}^2 is
+the volume-weighted mean of its children's (s_d G_{c,d})^2, s_d = 2 in the directions the
+parent was split in and 1 in the others (Section 2.1). So a merged element starts below
+f times the threshold and is not refined at the next event (hysteresis), and a just-refined
+element, whose children have eta near eta_P / 2 >= threshold / 2, is not merged. Merges keep
+`nc_limit` (MFEM's `CheckDerefinementNCLevel`). One event merges one level; later events
+merge further.
+
+### 13.2 Transfer
+
+MFEM's derefinement update interpolates at the coarse element's nodes (nodal
+`GetLocalRestriction`, for H1 and L2 spaces alike). That is exact when the coarse space
+holds the field and otherwise neither conservative nor an L2 contraction (`amr_transfer_test`
+X3: the moments 3e-7 to 8e-6 of the field's norm off). Each velocity history level u_j instead becomes P u_j,
+P = Q_H Pi_H:
+
+1. Pi_H, the L2 projection onto the coarse space (no boundary conditions). The coarse
+   moments (phi_i^H, u_j) are, element by element, the sum over the children c of
+   P_c^T (M_c u_c), P_c the local interpolation from the parent to child c (MFEM's
+   `GetLocalInterpolation` with the derefinement transforms' point matrix). One mass solve
+   (PCG with Jacobi, rtol 1e-12) gives the field. The element masses use MFEM's default
+   rule, 2k plus the Jacobian's order: exact on affine elements, the same rule as the mass
+   solve's on curved ones.
+2. Q_H, with `project_history` (the default), the M-orthogonal projection onto the
+   discretely divergence-free subspace with that level's Dirichlet data (Section 5.4's
+   solve).
+
+The pressure, only a warm start, is interpolated. The sum in step 1 needs every child on its
+parent's rank. The selected families first move to the lowest of their children's ranks
+(`ParMesh::Rebalance(partition)`), the move `ParNCMesh::Derefine` would make anyway. The
+merge then runs as `DerefineByError` on the merge flags, which travel with the elements as a
+piecewise constant.
+
+### 13.3 Why the multistep history survives
+
+- **One linear map for every level.** The BDF/EXT combination of the projected levels is the
+  projection of the fine combination: sum_j alpha_j P u^{n-j} = P (sum_j alpha_j u^{n-j}).
+  The time derivative stays consistent, so no startup ramp is needed. What is added is the
+  spatial error u - P u, which the marking keeps small: families merge only where the coarse
+  mesh resolves the field to the tolerance.
+- **P is a contraction.** Pi_H is L2-orthogonal; Q_H is M-orthogonal onto a subspace. With
+  the exact mass both are orthogonal in the same inner product, so ||P u|| <= ||u||.
+  Every discrete energy built from scalar combinations of the levels, such as the BDF2
+  G-norm (||u^n||^2 + ||2 u^n - u^{n-1}||^2) / 4, is a sum of terms ||sum_j l_j u^{n-j}||^2,
+  each of which P cannot raise. An event adds no energy (`amr_event_test` E7). With the
+  collocated GLL mass (OIFS's default), Pi_H is still the exact L2 projection, and Q_H is a
+  contraction in the GLL norm, which is equivalent to the L2 norm but not equal to it: stable,
+  without the exact inequality.
+- **CFL.** Coarsening only enlarges elements, so the convective limit relaxes (trap 5 cuts
+  the other way).
+
+### 13.4 Restart
+
+A coarsening batch is a `RefinementRecord` with `derefine` set: the gather partition and the
+per-element merge flags, both indexed before the gather. The replay is `Rebalance(gather)`,
+`DerefineByError` on the flags, then the optional rebalance: deterministic, so the mesh,
+partition and numbering come back exactly (`amr_checkpoint_test` C2). In the checkpoint's
+record header, bit 1 of the flags marks a coarsening; older files read as before.
+
+### 13.5 Limits
+
+- 3D anisotropic meshes cannot be coarsened (MFEM: "derefinement of 3D anisotropic meshes
+  not implemented yet"), and the deck check refuses `derefine` with `anisotropic` in 3D.
+  2D anisotropic meshes coarsen.
+- The work is host-side: element loops, plus one mass solve per history level per event.
+  Events are rare.
+
+### 13.6 Tests
+
+`amr_transfer_test` X3 (the L2 projection: moments kept to 1e-14, the norm not raised,
+conforming; 2D/3D, periodic and walled, rebalanced or not) and X4 (refining then merging every
+family gives back the original mesh and field); `amr_marker_test` K6 (the values and the
+threshold); `amr_event_test` E6 (the decaying polynomial MMS exact at every step through
+coarsening events, 2D anisotropic and 3D isotropic) and E7 (decaying TGV: no event raises the
+energy); `amr_checkpoint_test` C2 (restart after coarsening events = the uninterrupted run);
+`deck_test` (the keys).

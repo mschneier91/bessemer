@@ -1,7 +1,7 @@
 /**
  * @file amr_parameters.hpp
- * @brief Settings for refinement-only adaptive mesh refinement (deck section
- *        `amr:`); see docs/design/amr_spec.md.
+ * @brief Settings for adaptive mesh refinement and, optionally, coarsening
+ *        (deck section `amr:`); see docs/design/amr_spec.md.
  */
 #pragma once
 
@@ -20,8 +20,9 @@ enum class AmrThreshold
 };
 
 /**
- * @brief Adaptive mesh refinement settings. Refinement only: elements are never
- *        coarsened, so the mesh grows monotonically (bounded by max_elements).
+ * @brief Adaptive mesh refinement settings. Elements are coarsened only with
+ *        derefine (off by default); without it the mesh grows monotonically
+ *        (bounded by max_elements).
  *
  * The indicator is the directional velocity gradient G_{K,d}: the RMS change of
  * the velocity across element K along its d-th reference direction, and
@@ -66,6 +67,20 @@ struct AmrParameters
    /// projection onto the discretely divergence-free subspace of the refined
    /// mesh (avoids a pressure transient after an event).
    bool project_history = true;
+   /// Also coarsen (human 2026-10-24): at each event, after the refinement
+   /// passes, merge the families of sibling elements whose merged indicator
+   /// would stay below derefine_fraction times the refinement threshold.
+   /// Every velocity history level becomes its L2 projection onto the coarse
+   /// space (then, with project_history, onto its discretely divergence-free
+   /// subspace): one linear contraction for all levels, so the BDF/EXT
+   /// differences stay consistent and the energy does not grow. 3D:
+   /// isotropic refinement only (MFEM does not coarsen anisotropic hexes).
+   bool derefine = false;
+   /// Coarsening hysteresis: merge a family when twice its children's largest
+   /// indicator (a bound on the merged element's) is below this fraction of
+   /// the refinement threshold, so a merged element is not refined again at
+   /// the next event.
+   double derefine_fraction = 0.5;
    /// Also write the indicator and refinement levels as ParaView cell data.
    bool write_indicator = false;
    /// Adaptation events in SIMULATED time: every this many time units

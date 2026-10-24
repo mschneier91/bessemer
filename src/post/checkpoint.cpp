@@ -86,7 +86,9 @@ namespace
 {
 
 // Per-rank refinement history: int64 count, then per record int32 nc_limit,
-// int32 rebalance, int64 n, and n (int32 index, int32 type) pairs.
+// int32 flags (bit 0 rebalance, bit 1 coarsening), int64 n, and n int32
+// pairs: (index, type) per refinement, or (gather rank, merge flag) per local
+// element of a coarsening. Files without bit 1 read as before.
 void WriteRefinements(const std::string& path,
                       const std::vector<RefinementRecord>& recs)
 {
@@ -96,13 +98,28 @@ void WriteRefinements(const std::string& path,
    f.write(reinterpret_cast<const char*>(&nrec), sizeof(nrec));
    for (const RefinementRecord& r : recs)
    {
-      const std::int32_t hdr[2] = {r.nc_limit, r.rebalance ? 1 : 0};
-      const std::int64_t n = r.refs.Size();
+      MFEM_VERIFY(!r.derefine || r.merge.Size() == r.gather.Size(),
+                  "checkpoint: a coarsening record's gather and merge differ "
+                  "in size");
+      const std::int32_t hdr[2] = {r.nc_limit,
+                                   (r.rebalance ? 1 : 0) | (r.derefine ? 2 : 0)
+                                  };
+      const std::int64_t n = r.derefine ? r.gather.Size() : r.refs.Size();
       f.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
       f.write(reinterpret_cast<const char*>(&n), sizeof(n));
-      for (int i = 0; i < r.refs.Size(); ++i)
+      for (int i = 0; i < static_cast<int>(n); ++i)
       {
-         const std::int32_t e[2] = {r.refs[i].index, r.refs[i].GetType()};
+         std::int32_t e[2];
+         if (r.derefine)
+         {
+            e[0] = r.gather[i];
+            e[1] = r.merge[i];
+         }
+         else
+         {
+            e[0] = r.refs[i].index;
+            e[1] = r.refs[i].GetType();
+         }
          f.write(reinterpret_cast<const char*>(e), sizeof(e));
       }
    }
@@ -124,13 +141,24 @@ std::vector<RefinementRecord> ReadRefinementFile(const std::string& path)
       f.read(reinterpret_cast<char*>(hdr), sizeof(hdr));
       f.read(reinterpret_cast<char*>(&n), sizeof(n));
       r.nc_limit = hdr[0];
-      r.rebalance = (hdr[1] != 0);
-      r.refs.SetSize(static_cast<int>(n));
-      for (int i = 0; i < r.refs.Size(); ++i)
+      r.rebalance = (hdr[1] & 1) != 0;
+      r.derefine = (hdr[1] & 2) != 0;
+      if (r.derefine)
+      {
+         r.gather.SetSize(static_cast<int>(n));
+         r.merge.SetSize(static_cast<int>(n));
+      }
+      else { r.refs.SetSize(static_cast<int>(n)); }
+      for (int i = 0; i < static_cast<int>(n); ++i)
       {
          std::int32_t e[2] = {0, 0};
          f.read(reinterpret_cast<char*>(e), sizeof(e));
-         r.refs[i] = Refinement(e[0], static_cast<char>(e[1]));
+         if (r.derefine)
+         {
+            r.gather[i] = e[0];
+            r.merge[i] = e[1];
+         }
+         else { r.refs[i] = Refinement(e[0], static_cast<char>(e[1])); }
       }
    }
    MFEM_VERIFY(f.good(), "checkpoint: short read from " << path);

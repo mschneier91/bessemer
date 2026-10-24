@@ -400,6 +400,8 @@ TEST(Deck, AmrKeys)
 {
    const Parameters defaults = Parameters::LoadYAML(INCNS_TGV_DECK);
    EXPECT_FALSE(defaults.amr.enabled);
+   EXPECT_FALSE(defaults.amr.derefine);
+   EXPECT_DOUBLE_EQ(defaults.amr.derefine_fraction, 0.5);
    EXPECT_EQ(defaults.cfl_max, 0.0);
 
    const std::string path =
@@ -434,6 +436,17 @@ TEST(Deck, AmrKeys)
    EXPECT_FALSE(p.amr.project_history);
    EXPECT_TRUE(p.amr.write_indicator);
    EXPECT_DOUBLE_EQ(p.cfl_max, 0.8);
+
+   // Coarsening (isotropic: 3D anisotropic coarsening is refused).
+   {
+      std::ofstream f(path);
+      f << "amr:\n  enabled: true\n  derefine: true\n"
+        << "  derefine_fraction: 0.3\n";
+   }
+   const Parameters q = Parameters::LoadYAML(path);
+   std::remove(path.c_str());
+   EXPECT_TRUE(q.amr.derefine);
+   EXPECT_DOUBLE_EQ(q.amr.derefine_fraction, 0.3);
 }
 
 TEST(Deck, ForcesKeys)

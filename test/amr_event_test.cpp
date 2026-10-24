@@ -14,7 +14,14 @@
 //  E4 the history projection makes transferred velocity discretely
 //     divergence-free on the refined mesh, changing it only slightly;
 //  E5 initial passes refine on the IC and the march starts from the IC
-//     projected on the final mesh.
+//     projected on the final mesh;
+//  E6 the unsteady polynomial MMS with a decaying amplitude stays exact at
+//     EVERY step through coarsening events (amr.derefine): the coarse space
+//     holds the solution, so its L2 projection is exact -- 2D anisotropic,
+//     3D isotropic;
+//  E7 a coarsening event does not raise the kinetic energy (the L2
+//     projection and the divergence-free projection are contractions):
+//     decaying 2D TGV, Stokes, refined on the initial condition.
 
 #include <gtest/gtest.h>
 
@@ -41,6 +48,10 @@ namespace
 
 double G(double t) { return 1.0 + t + 0.5 * t * t; }
 double Gp(double t) { return 1.0 + t; }
+// E6's amplitude: quadratic (BDF2 stays exact) and decaying, to 0.04 at
+// t = 0.16, so the mesh refined on the initial condition coarsens.
+double Decay(double t) { return (1.0 - 5.0 * t) * (1.0 - 5.0 * t); }
+double DecayRate(double t) { return -10.0 * (1.0 - 5.0 * t); }
 
 void ElevatedRules(int order, const IntegrationRule* irs[])
 {
@@ -49,7 +60,8 @@ void ElevatedRules(int order, const IntegrationRule* irs[])
    irs[Geometry::CUBE] = &IntRules.Get(Geometry::CUBE, order);
 }
 
-// The unsteady polynomial MMS of unsteady_mms_test (2D Q3/Q2, 3D Q2/Q1).
+// The unsteady polynomial MMS of unsteady_mms_test (2D Q3/Q2, 3D Q2/Q1),
+// with the amplitude a(t) (E1: G; E6: Decay).
 struct Mms
 {
    int dim;
@@ -57,51 +69,53 @@ struct Mms
    std::unique_ptr<VectorFunctionCoefficient> u;
    std::unique_ptr<FunctionCoefficient> p;
    std::unique_ptr<VectorFunctionCoefficient> f;
-   explicit Mms(int d) : dim(d), nu(d == 2 ? 0.7 : 1.3)
+   explicit Mms(int d, double (*a)(double) = G,
+                double (*ap)(double) = Gp)
+      : dim(d), nu(d == 2 ? 0.7 : 1.3)
    {
       const double n = nu;
       if (dim == 2)
       {
-         u = std::make_unique<VectorFunctionCoefficient>(2, [](const Vector & x,
+         u = std::make_unique<VectorFunctionCoefficient>(2, [a](const Vector & x,
              double t, Vector & v)
          {
-            v(0) = G(t) * 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
-            v(1) = -G(t) * 3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+            v(0) = a(t) * 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+            v(1) = -a(t) * 3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
          });
-         p = std::make_unique<FunctionCoefficient>([](const Vector & x, double t)
+         p = std::make_unique<FunctionCoefficient>([a](const Vector & x, double t)
          {
-            return G(t) * (x[0] * x[0] + x[1] * x[1] - 2.0 / 3.0);
+            return a(t) * (x[0] * x[0] + x[1] * x[1] - 2.0 / 3.0);
          });
-         f = std::make_unique<VectorFunctionCoefficient>(2, [n](const Vector & x,
+         f = std::make_unique<VectorFunctionCoefficient>(2, [n, a, ap](const Vector & x,
              double t, Vector & v)
          {
             const double us0 = 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
             const double us1 = -3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
             const double lap0 = 18.0 * x[0] * x[1] * x[1] + 6.0 * x[0] * x[0] * x[0];
             const double lap1 = -6.0 * x[1] * x[1] * x[1] - 18.0 * x[0] * x[0] * x[1];
-            v(0) = Gp(t) * us0 + G(t) * (-n * lap0 + 2.0 * x[0]);
-            v(1) = Gp(t) * us1 + G(t) * (-n * lap1 + 2.0 * x[1]);
+            v(0) = ap(t) * us0 + a(t) * (-n * lap0 + 2.0 * x[0]);
+            v(1) = ap(t) * us1 + a(t) * (-n * lap1 + 2.0 * x[1]);
          });
       }
       else
       {
-         u = std::make_unique<VectorFunctionCoefficient>(3, [](const Vector & x,
+         u = std::make_unique<VectorFunctionCoefficient>(3, [a](const Vector & x,
              double t, Vector & v)
          {
-            v(0) = G(t) * x[1] * x[1];
-            v(1) = G(t) * x[2] * x[2];
-            v(2) = G(t) * x[0] * x[0];
+            v(0) = a(t) * x[1] * x[1];
+            v(1) = a(t) * x[2] * x[2];
+            v(2) = a(t) * x[0] * x[0];
          });
-         p = std::make_unique<FunctionCoefficient>([](const Vector & x, double t)
+         p = std::make_unique<FunctionCoefficient>([a](const Vector & x, double t)
          {
-            return G(t) * (x[0] + x[1] + x[2] - 1.5);
+            return a(t) * (x[0] + x[1] + x[2] - 1.5);
          });
-         f = std::make_unique<VectorFunctionCoefficient>(3, [n](const Vector & x,
+         f = std::make_unique<VectorFunctionCoefficient>(3, [n, a, ap](const Vector & x,
              double t, Vector & v)
          {
-            v(0) = Gp(t) * x[1] * x[1] + G(t) * (1.0 - 2.0 * n);
-            v(1) = Gp(t) * x[2] * x[2] + G(t) * (1.0 - 2.0 * n);
-            v(2) = Gp(t) * x[0] * x[0] + G(t) * (1.0 - 2.0 * n);
+            v(0) = ap(t) * x[1] * x[1] + a(t) * (1.0 - 2.0 * n);
+            v(1) = ap(t) * x[2] * x[2] + a(t) * (1.0 - 2.0 * n);
+            v(2) = ap(t) * x[0] * x[0] + a(t) * (1.0 - 2.0 * n);
          });
       }
    }
@@ -386,4 +400,117 @@ TEST(AmrEvent, E5_InitialPassesStartFromTheProjectedIc)
    double d = ref.Normlinf();
    MPI_Allreduce(MPI_IN_PLACE, &d, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
    EXPECT_LE(d, 1e-14);
+}
+
+TEST(AmrEvent, E6_UnsteadyMmsStaysExactThroughCoarsening)
+{
+   for (int dim : {2, 3})
+   {
+      SCOPED_TRACE("dim=" + std::to_string(dim));
+      Mms mms(dim, Decay, DecayRate);
+      Parameters params = MmsParams(dim, false);
+      params.t_final = 0.16;
+      params.amr.initial_passes = 1;
+      params.amr.anisotropic = (dim == 2); // MFEM coarsens 3D isotropic only
+      params.amr.threshold_mode = incns::AmrThreshold::Absolute;
+      params.amr.tolerance = (dim == 2) ? 0.9 : 1.0;
+      params.amr.derefine = true;
+      auto mesh = incns::MakeCaseMesh(params);
+      Case flow(*mesh, params);
+      incns::BoundaryConditions bc(flow.Spaces().Velocity());
+      for (int a = 1; a <= 2 * dim; ++a) { bc.AddVelocityDirichlet(a, *mms.u); }
+      flow.SetBoundaryConditions(bc);
+      flow.SetInitialVelocity(*mms.u);
+      flow.SetForcing(*mms.f);
+
+      const IntegrationRule* irs[Geometry::NumGeom];
+      ElevatedRules(2 * params.order_u + 4, irs);
+      int step = 0;
+      while (!flow.Done())
+      {
+         flow.Step();
+         ++step;
+         mms.u->SetTime(flow.Time());
+         mms.p->SetTime(flow.Time());
+         EXPECT_LE(flow.Velocity().ComputeL2Error(*mms.u, irs), 1e-8)
+               << "step " << step << " t=" << flow.Time();
+         if (step >= 2)
+         {
+            EXPECT_LE(flow.Pressure().ComputeL2Error(*mms.p, irs), 1e-7)
+                  << "step " << step;
+         }
+      }
+      int merging = 0;
+      for (const incns::AdaptStats& s : flow.AdaptHistory())
+      {
+         if (Mpi::Root())
+         {
+            mfem::out << "[e6] dim " << dim << " cycle " << s.cycle
+                      << ": elements " << s.ne_before << " -> " << s.ne_after
+                      << ", merged " << s.merged << std::endl;
+         }
+         if (s.merged > 0) { ++merging; }
+      }
+      EXPECT_GE(merging, 1);
+   }
+}
+
+TEST(AmrEvent, E7_CoarseningDoesNotRaiseTheEnergy)
+{
+   if (amr_test::DebugDeviceSkipsPeriodicNcSolves())
+   {
+      GTEST_SKIP() << "periodic NC solve: MFEM debug-device alias false "
+                   "positive (see amr_test_util.hpp / CLAUDE.md)";
+   }
+   Parameters p;
+   p.equation = incns::Equation::Stokes; // the exact mass: an L2 contraction
+   p.nu = 2.0;
+   p.order_u = 3;
+   p.order_p = 2;
+   p.mesh = amr_test::Box(2, 4, true, 2.0 * M_PI);
+   p.dt = 0.05;
+   p.t_final = 0.5;
+   p.step_control = incns::StepControl::Fixed;
+   p.krylov_rtol = 1e-12;
+   p.amr.enabled = true;
+   p.amr.interval = 0; // events by hand, to measure each
+   p.amr.initial_passes = 1;
+   p.amr.threshold_mode = incns::AmrThreshold::Absolute;
+   p.amr.tolerance = 1.0;
+   p.amr.derefine = true;
+   p.Normalize();
+   auto mesh = incns::MakeCaseMesh(p);
+   Case flow(*mesh, p);
+   VectorFunctionCoefficient u0 = incns::tgv2d::VelocityCoefficient(p.nu);
+   flow.SetInitialVelocity(u0);
+   const IntegrationRule* irs[Geometry::NumGeom];
+   ElevatedRules(2 * p.order_u + 2, irs);
+   Vector zero(2);
+   zero = 0.0;
+   VectorConstantCoefficient z(zero);
+   auto energy = [&]()
+   {
+      const double n = flow.Velocity().ComputeL2Error(z, irs);
+      return 0.5 * n * n;
+   };
+   int steps = 0, merging = 0;
+   while (!flow.Done())
+   {
+      flow.Step();
+      ++steps;
+      if (steps % 2 != 0 || flow.Done()) { continue; }
+      const double e0 = energy();
+      const incns::AdaptStats st = flow.Adapt();
+      const double e1 = energy();
+      if (Mpi::Root())
+      {
+         mfem::out << "[e7] after step " << steps << ": elements "
+                   << st.ne_before << " -> " << st.ne_after << ", merged "
+                   << st.merged << ", energy " << e0 << " -> " << e1
+                   << std::endl;
+      }
+      if (st.merged > 0) { ++merging; }
+      EXPECT_LE(e1, e0 * (1.0 + 1e-12)) << "event after step " << steps;
+   }
+   EXPECT_GE(merging, 1);
 }

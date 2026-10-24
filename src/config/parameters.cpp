@@ -972,7 +972,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    "profiling runs). off: neither.");
 
    const DeckSection amr = r.Section(root, "amr",
-                                     "Adaptive mesh refinement (refinement only).");
+                                     "Adaptive mesh refinement (and, with derefine, "
+                                     "coarsening).");
    r.Read(amr, "enabled", p.amr.enabled,
           "Turn AMR on (the mesh becomes nonconforming).");
    r.Read(amr, "interval", p.amr.interval, "Adapt every N accepted steps.");
@@ -999,6 +1000,14 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Rebalance the partition after refining.");
    r.Read(amr, "project_history", p.amr.project_history,
           "Divergence-free projection of the time history after an event.");
+   r.Read(amr, "derefine", p.amr.derefine,
+          "Also coarsen: after the refinement passes, merge sibling families "
+          "whose merged indicator would stay below derefine_fraction times the "
+          "refinement threshold. Every history level becomes its L2 projection "
+          "onto the coarse space (3D: isotropic refinement only).");
+   r.Read(amr, "derefine_fraction", p.amr.derefine_fraction,
+          "Coarsening hysteresis: merge when twice the children's largest "
+          "indicator is below this fraction of the refinement threshold.");
    r.Read(amr, "write_indicator", p.amr.write_indicator,
           "Write the refinement indicator with the output.");
    r.Read(amr, "every_time", p.amr.every_time,
@@ -1456,6 +1465,10 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(p.output.interval >= 1, "parameters: bad output interval");
    MFEM_VERIFY(p.checkpoint.interval >= 1, "parameters: bad checkpoint interval");
    p.amr.Validate();
+   MFEM_VERIFY(!p.amr.enabled || !p.amr.derefine || !p.amr.anisotropic ||
+               p.mesh.dim == 2, "parameters: amr.derefine in 3D needs isotropic "
+               "refinement (amr.anisotropic: false): MFEM does not coarsen 3D "
+               "anisotropic meshes");
    MFEM_VERIFY(!p.amr.enabled || !p.CollocatedMass() ||
                p.hanging_mass != HangingMass::Lumped || p.amr.nc_limit == 1,
                "parameters: the collocated mass is lumped at hanging nodes "

@@ -581,11 +581,16 @@ by 3× once). A default change needs measured NSE evidence (§2).
 
 ### 5.5 Adaptive mesh refinement (`amr:`; `docs/design/amr_spec.md`; human 2026-10-06)
 
-Refinement only (no derefinement), isotropic or anisotropic, Stokes and both NSE forms. Off
-by default (bitwise unchanged). **Refinement-only is a design decision (human 2026-10-08):**
-under refinement every BDF/EXT history level transfers EXACTLY (the coarse field lies in the
-fine space), so the multistep scheme keeps its order across events; coarsening would have to
-project every level, and single-step schemes are order-bound. Events are step-interval based
+Refinement, isotropic or anisotropic, and coarsening with `amr.derefine`; Stokes and both
+NSE forms. Off by default (bitwise unchanged). Under refinement every BDF/EXT history level
+transfers EXACTLY (the coarse field lies in the fine space), so the multistep scheme keeps
+its order across events. AMR was refinement-only by design until 2026-10-24 (human
+2026-10-08: coarsening has to project every level, and single-step schemes are
+order-bound). **`amr.derefine` (human 2026-10-24) projects every level with ONE linear
+map**: the L2 projection onto the coarse space, then the divergence-free projection
+(amr_spec §13). The BDF/EXT combination of the projected levels is then the projection of
+the fine one, so no ramp is needed. The map is a contraction, so an event cannot raise the
+energy (`amr_event_test` E7). 3D needs isotropic refinement (MFEM). Events are step-interval based
 (`amr.interval`); with CFL-controlled dt a driver triggers `Case::Adapt()` in SIMULATED time
 instead (`apps/square_cylinder -at/-amr-start/-amr-end/-amr-burst`).
 - `MakeCaseMesh` is the only mesh factory. AMR on: `EnsureNCMesh()` BEFORE partitioning and
@@ -598,15 +603,17 @@ instead (`apps/square_cylinder -at/-amr-start/-amr-end/-amr-burst`).
 - **Event = in-memory checkpoint + restart** (`Case::Adapt()`, every `amr.interval`
   accepted steps, never in the startup ramp, before output/checkpoint): export
   `IntegratorState`, destroy integrator/output before the mesh changes, refine/rebalance
-  with EXACT transfer, optional `project_history` (div-free projection of the history,
+  with EXACT transfer, then (`amr.derefine`) merge with the L2 projection, optional `project_history` (div-free projection of the history,
   default on), rebuild, import. `amr.initial_passes` refine on the analytic IC.
-- **Checkpoints of adapted runs replay the refinement log** (`RefinementRecord` per rank)
+- **Checkpoints of adapted runs replay the refinement log** (`RefinementRecord` per rank;
+  a coarsening is its gather partition and merge flags)
   on the initial mesh at the same np — not ParPrint (dof numbering would not match).
   Restart matches the uninterrupted run bitwise at np 1/2/4.
 - Adapted meshes can differ between np = 1 and np > 1 (conflict handling, NC limit):
   cross-np comparisons on adapted meshes are not exact.
 - **Refinement-only + a cap spends the budget early** (DFG 2D-3: θ = 0.3 hit 800 elements by
-  t = 0.5); use a high θ (0.85) so refinement follows the evolving flow.
+  t = 0.5); use a high θ (0.85) so refinement follows the evolving flow, or `amr.derefine`,
+  which gives elements back where the flow has left.
 - **Forces right after an event:** the rebuilt integrator has no step; `Case` caches the
   pre-event force (fixed 2026-10-06; `body_force_test` covers it).
 

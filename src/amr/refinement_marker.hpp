@@ -81,6 +81,23 @@ public:
     */
    static void ElementExtents(mfem::Mesh& mesh, mfem::Vector& h);
 
+   /**
+    * @brief Coarsening values for MeshAdapter::SelectDerefinements
+    *        (collective): 2 eta_K. A merged element's G_{P,d}^2 is the
+    *        volume-weighted mean of its children's (s_d G_{c,d})^2, s_d = 2
+    *        in the directions the parent was split in and 1 in the others,
+    *        so its eta is at most twice its children's largest.
+    * @param mesh   Partitioned mesh.
+    * @param g      Directional indicator, layout g[d + dim * e].
+    * @param values Output: 2 eta_K per local element.
+    * @return The threshold a family's values must all be below:
+    *         derefine_fraction times the refinement threshold (the tolerance,
+    *         or theta times the global max eta), so that a merged element is
+    *         not marked again (hysteresis).
+    */
+   double DerefinementValues(mfem::ParMesh& mesh, const mfem::Vector& g,
+                             mfem::Vector& values) const;
+
 private:
    AmrParameters opts_; ///< Settings.
 };

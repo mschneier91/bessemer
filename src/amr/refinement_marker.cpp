@@ -214,4 +214,29 @@ void RefinementMarker::Mark(ParMesh& mesh, const Vector& g,
    if (stats) { *stats = st; }
 }
 
+double RefinementMarker::DerefinementValues(ParMesh& mesh, const Vector& g,
+      Vector& values) const
+{
+   const int dim = mesh.Dimension(), ne = mesh.GetNE();
+   MFEM_VERIFY(g.Size() == dim * ne, "refinement_marker: indicator size "
+               << g.Size() << " does not match dim * NE = " << dim * ne);
+   const double* G = g.HostRead();
+   values.SetSize(ne);
+   double* v = values.HostWrite();
+   double max_eta = 0.0;
+   for (int e = 0; e < ne; ++e)
+   {
+      double s = 0.0;
+      for (int d = 0; d < dim; ++d) { s += G[d + dim * e] * G[d + dim * e]; }
+      const double eta = std::sqrt(s);
+      v[e] = 2.0 * eta;
+      max_eta = std::max(max_eta, eta);
+   }
+   MPI_Allreduce(MPI_IN_PLACE, &max_eta, 1, MPI_DOUBLE, MPI_MAX,
+                 mesh.GetComm());
+   const double threshold = (opts_.threshold_mode == AmrThreshold::Relative)
+                            ? opts_.theta * max_eta : opts_.tolerance;
+   return opts_.derefine_fraction * threshold;
+}
+
 } // namespace incns

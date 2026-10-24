@@ -7,7 +7,9 @@
 //     indicators and respects the cap;
 //  K4 3D: anisotropic conflicts across faces are resolved (np > 1) and the
 //     refinement then succeeds with nc_limit 1 (valid mesh: exact transfer);
-//  K5 with the real GradientIndicator, u varying in x only -> only X splits.
+//  K5 with the real GradientIndicator, u varying in x only -> only X splits;
+//  K6 coarsening values are 2 eta, against derefine_fraction times the
+//     refinement threshold (absolute and relative).
 
 #include <gtest/gtest.h>
 
@@ -304,4 +306,33 @@ TEST(AmrMarker, K5_IndicatorDrivesDirections)
       EXPECT_EQ(st.per_dir[1], 0);
       EXPECT_EQ(st.per_dir[2], 0);
    }
+}
+
+TEST(AmrMarker, K6_DerefinementValues)
+{
+   auto mesh = amr_test::NcBox(amr_test::Box(2, 4, false));
+   const Vector g = SyntheticG(*mesh, [](const Vector & c, double * G)
+   {
+      G[0] = 3.0 * c(0);
+      G[1] = 4.0 * c(0); // eta = 5 x
+   });
+   AmrParameters a;
+   a.derefine_fraction = 0.4;
+   a.threshold_mode = AmrThreshold::Absolute;
+   a.tolerance = 2.0;
+   Vector v;
+   EXPECT_DOUBLE_EQ(RefinementMarker(a).DerefinementValues(*mesh, g, v),
+                    0.4 * 2.0);
+   ASSERT_EQ(v.Size(), mesh->GetNE());
+   Vector c(2);
+   for (int e = 0; e < mesh->GetNE(); ++e)
+   {
+      mesh->GetElementCenter(e, c);
+      EXPECT_NEAR(v(e), 10.0 * c(0), 1e-13);
+   }
+   // Relative: theta times the global max eta, 5 * 7/8 (the last column).
+   a.threshold_mode = AmrThreshold::Relative;
+   a.theta = 0.5;
+   EXPECT_NEAR(RefinementMarker(a).DerefinementValues(*mesh, g, v),
+               0.4 * 0.5 * 5.0 * 0.875, 1e-13);
 }

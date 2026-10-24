@@ -235,7 +235,7 @@ ParaView output and diagnostics.
 
 ## `amr`
 
-Adaptive mesh refinement (refinement only).
+Adaptive mesh refinement (and, with derefine, coarsening).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -253,6 +253,8 @@ Adaptive mesh refinement (refinement only).
 | `amr.nc_limit` | int | `1` | Maximum hanging-node level difference. |
 | `amr.rebalance` | bool | `true` | Rebalance the partition after refining. |
 | `amr.project_history` | bool | `true` | Divergence-free projection of the time history after an event. |
+| `amr.derefine` | bool | `false` | Also coarsen: after the refinement passes, merge sibling families whose merged indicator would stay below derefine_fraction times the refinement threshold. Every history level becomes its L2 projection onto the coarse space (3D: isotropic refinement only). |
+| `amr.derefine_fraction` | real | `0.5` | Coarsening hysteresis: merge when twice the children's largest indicator is below this fraction of the refinement threshold. |
 | `amr.write_indicator` | bool | `false` | Write the refinement indicator with the output. |
 | `amr.every_time` | real | `0` | Adapt every this many time units instead of every interval steps (0 = step-based); use it with CFL-controlled steps. |
 | `amr.start_time` | real | `0` | Time-based events only from this time on (spin up on the coarse mesh). |

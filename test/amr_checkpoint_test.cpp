@@ -5,7 +5,9 @@
 //  C1 an interrupted run (checkpoint written right after an event, with
 //     rebalancing at np > 1) restarted from its checkpoint matches the
 //     uninterrupted run to ReproTol(1e-13): same step count, same final mesh
-//     size, same velocity. 2D periodic NSE (convective) and 3D walled Stokes.
+//     size, same velocity. 2D periodic NSE (convective) and 3D walled Stokes;
+//  C2 the same with coarsening events (amr.derefine) before the checkpoint:
+//     the restart replays them (gather, merge, rebalance).
 
 #include <gtest/gtest.h>
 
@@ -33,6 +35,7 @@ struct Final
    Vector u;
    int steps = 0;
    long long ne = 0;
+   long long merged = 0; ///< Families merged by this run's events.
 };
 
 using Setup = std::function<void(Case&, incns::BoundaryConditions&)>;
@@ -61,17 +64,19 @@ Final March(const Parameters& p, const Setup& setup, int stop_cycle = -1,
    f.u.SetSize(flow.Spaces().Velocity().GetTrueVSize());
    flow.Velocity().GetTrueDofs(f.u);
    f.ne = mesh->GetGlobalNE();
+   for (const incns::AdaptStats& s : flow.AdaptHistory()) { f.merged += s.merged; }
    return f;
 }
 
 void CheckRestart(const Parameters& p, const Setup& setup, int stop_cycle,
-                  const std::string& tag)
+                  const std::string& tag, bool expect_merge = false)
 {
    const Final ref = March(p, setup);
    // Unique per rank count: ctest runs the np 1/2/4 instances concurrently.
    const std::string dir = "chk_amr_" + tag + "_np" +
                            std::to_string(Mpi::WorldSize());
-   March(p, setup, stop_cycle, dir);
+   const Final cut = March(p, setup, stop_cycle, dir);
+   if (expect_merge) { EXPECT_GT(cut.merged, 0) << "no coarsening before the checkpoint"; }
    Parameters q = p;
    q.restart_from = dir;
    const Final rst = March(q, setup);
@@ -166,4 +171,55 @@ TEST(AmrCheckpoint, C1_RestartOfAdaptedRunMatchesUninterrupted3D)
       c.SetForcing(f);
    }, 2, "3d"); // checkpoint after the cycle-2 event; the restart adapts again
    // at cycle 4
+}
+
+// C2: E6's decaying 2D MMS (amr_event_test): refined on the initial
+// condition, coarsened as it decays; checkpoint after the cycle-6 event.
+TEST(AmrCheckpoint, C2_RestartAfterCoarseningMatchesUninterrupted)
+{
+   Parameters p;
+   p.equation = incns::Equation::Stokes;
+   p.nu = 0.7;
+   p.order_u = 3;
+   p.order_p = 2;
+   p.mesh = amr_test::Box(2, 3, false);
+   p.dt = 0.02;
+   p.t_final = 0.16;
+   p.krylov_rtol = 1e-12;
+   p.max_iter = 5000;
+   p.kdim = 400;
+   p.amr.enabled = true;
+   p.amr.interval = 2;
+   p.amr.initial_passes = 1;
+   p.amr.anisotropic = true;
+   p.amr.threshold_mode = incns::AmrThreshold::Absolute;
+   p.amr.tolerance = 0.9;
+   p.amr.max_elements = 200;
+   p.amr.derefine = true;
+   p.Normalize();
+   auto a = [](double t) { return (1.0 - 5.0 * t) * (1.0 - 5.0 * t); };
+   auto ap = [](double t) { return -10.0 * (1.0 - 5.0 * t); };
+   VectorFunctionCoefficient u_ex(2, [a](const Vector & x, double t, Vector & v)
+   {
+      v(0) = a(t) * 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+      v(1) = -a(t) * 3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+   });
+   const double nu = p.nu;
+   VectorFunctionCoefficient f(2, [a, ap, nu](const Vector & x, double t,
+                               Vector & v)
+   {
+      const double us0 = 3.0 * x[0] * x[0] * x[0] * x[1] * x[1];
+      const double us1 = -3.0 * x[0] * x[0] * x[1] * x[1] * x[1];
+      const double lap0 = 18.0 * x[0] * x[1] * x[1] + 6.0 * x[0] * x[0] * x[0];
+      const double lap1 = -6.0 * x[1] * x[1] * x[1] - 18.0 * x[0] * x[0] * x[1];
+      v(0) = ap(t) * us0 + a(t) * (-nu * lap0 + 2.0 * x[0]);
+      v(1) = ap(t) * us1 + a(t) * (-nu * lap1 + 2.0 * x[1]);
+   });
+   CheckRestart(p, [&u_ex, &f](Case & c, incns::BoundaryConditions & bc)
+   {
+      for (int b = 1; b <= 4; ++b) { bc.AddVelocityDirichlet(b, u_ex); }
+      c.SetBoundaryConditions(bc);
+      c.SetInitialVelocity(u_ex);
+      c.SetForcing(f);
+   }, 6, "2d_coarsen", /*expect_merge=*/true);
 }

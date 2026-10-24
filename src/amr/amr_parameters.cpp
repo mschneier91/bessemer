@@ -22,6 +22,8 @@ void AmrParameters::Validate() const
    MFEM_VERIFY(end_time == 0.0 || end_time >= start_time,
                "amr: end_time must not precede start_time");
    MFEM_VERIFY(first_event_passes >= 1, "amr: first_event_passes must be >= 1");
+   MFEM_VERIFY(derefine_fraction > 0.0 && derefine_fraction < 1.0,
+               "amr: derefine_fraction must lie in (0, 1)");
 }
 
 } // namespace incns

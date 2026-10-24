@@ -43,6 +43,7 @@ struct AdaptStats
    long long ne_before = 0;    ///< Global elements before.
    long long ne_after = 0;     ///< Global elements after.
    int projection_iterations = 0; ///< History-projection outer iterations.
+   long long merged = 0;       ///< Families merged (amr.derefine).
    double seconds = 0.0;       ///< Wall time of the whole event.
    bool rebuilt = false;       ///< The integrator was rebuilt.
 };

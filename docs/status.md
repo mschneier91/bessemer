@@ -9,6 +9,38 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**AMR derefinement (2026-10-24; human: "ya go ahead and implement derefinement").**
+`amr.derefine` is off by default; without it, nothing changes, bitwise. When on, it coarsens at
+each event, after the refinement passes. A family of sibling leaves merges when every child's
+2 eta is below `derefine_fraction` (0.5) times the refinement threshold. 2 eta bounds the
+merged element's indicator, so a merged element is not refined at the next event, and a
+just-refined one is not merged.
+- Every velocity history level becomes its L2 projection onto the coarse space, then the
+  divergence-free projection (`project_history`). The L2 projection sums the children's
+  moments P_cᵀ M_c u_c into the parent, then does one mass solve per level. It is one linear
+  contraction for every level, so the BDF/EXT combination stays consistent (no ramp) and an
+  event cannot raise the energy (design: amr_spec §13). MFEM's own update would interpolate
+  at the coarse nodes: in X3 it misses the moments by 3e-7 to 8e-6 of the field's norm,
+  against 1e-14 for the projection.
+- The selected families first move to the lowest of their children's ranks, so the sum is
+  local. Checkpoints replay coarsenings (bit 1 of the record flags; old files read as
+  before). 3D needs isotropic refinement (MFEM does not coarsen anisotropic hexes); the deck
+  check refuses the combination.
+- Tests at np 1/2/4:
+  - `amr_transfer_test` X3 (moments to 1e-14, the norm not raised; 2D/3D, periodic and
+    walled, rebalanced or not) and X4 (refining then merging everything gives back the
+    original mesh and velocity);
+  - `amr_marker_test` K6;
+  - `amr_event_test` E6 (the decaying polynomial MMS exact at every step through coarsening:
+    2D 21 → 12 elements, 3D 36 → 15 → 8) and E7 (decaying TGV: 64 → 16 elements, energy
+    0.385355 → 0.385353);
+  - `amr_checkpoint_test` C2 (restart after a coarsening = the uninterrupted run);
+  - `deck_test`.
+
+  Validation (hdr 49790402): the AMR tests and deck_test at np 1/2/4; the touched tests
+  (amr_indicator, amr_flow, mesh_census, checkpoint, nc_stokes, body_force) at np 1/2/4;
+  smoke+fast 97/97 at np 1/2/4; the AMR tests on the debug device at np 1/2.
+
 **The St. Venant-Kirchhoff solid under every interface condition (2026-10-24; human: "ya
 implement it").** Robin-Neumann, Robin-Robin and Neumann-Dirichlet take `fsi.solid:
 hyperelasticity`; until now they refused it. With it, their interface quantity is the moments,
@@ -1430,6 +1462,7 @@ untracked in the repo root (do not commit it; copyright).
   refine-only converges to resolving the wake region anyway; bound the startup waste with
   `-amr-start` (spin up on the coarse mesh — spin-up only has to reach the state, not
   accurately) and `-amr-end`; a remesh-and-restart (multistep startup ramp) is the fallback.
+  *Superseded 2026-10-24 by the opt-in `amr.derefine` (the entry at the top).*
 
 **`oifs` (branch; human 2026-10-08 "give a shot at implementing the OIFS stuff", 2026-10-09
 "you should be running everything with BDF3 with the OIFS stuff"; fast-forward merged and
