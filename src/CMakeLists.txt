@@ -68,6 +68,7 @@ add_library(incns STATIC
   post/run_monitor.cpp
   precond/cahouet_chabard.cpp
   precond/hypre_device.cpp
+  precond/lor_folds.cpp
   precond/point_block_jacobi.cpp
   precond/rotational_schur.cpp
   precond/viscous_ratio.cpp
@@ -99,7 +100,9 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # MFEM_SHARED tiles; rotational_convection.cpp -- the lagged-vorticity
 # rotational term's setup/apply/nodal-skew kernels (same tile machinery);
 # point_block_jacobi.cpp -- essential-dof rule, closed-form nodal block
-# inverses and the fused block apply for the velocity point-block Jacobi; kinetic_head.cpp
+# inverses and the fused block apply for the velocity point-block Jacobi;
+# precond/lor_folds.cpp -- the LOR sub-elements' corner Jacobians (the fold
+# count); kinetic_head.cpp
 # -- sum-factorized 1/2|u|^2 at the pressure nodes (rotational static pressure);
 # amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
 # time/cfl.cpp -- the per-element directional convective CFL rate;
@@ -134,6 +137,7 @@ if(USE_CUDA)
                               operators/rotational_convection.cpp
                               operators/subgrid_stress.cpp
                               precond/point_block_jacobi.cpp
+                              precond/lor_folds.cpp
                               post/kinetic_head.cpp
                               post/flow_sums.cpp
                               post/channel_statistics.cpp
