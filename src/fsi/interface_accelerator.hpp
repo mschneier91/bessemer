@@ -32,6 +32,11 @@ public:
    /// again at another dt): forget what it taught, keep the earlier steps'.
    virtual void DiscardStep() = 0;
 
+   /// The abandoned attempt FAILED (its subiterations, solid or flow solve):
+   /// what the earlier steps taught may have misled it, so forget that too
+   /// (after DiscardStep(); a no-op for an accelerator that keeps nothing).
+   virtual void ForgetKept() {}
+
    /**
     * @param d      The input of this subiteration, d_k.
     * @param dtilde The solid's answer G(d_k).
@@ -118,6 +123,8 @@ public:
 
    void NewStep() override;
    void DiscardStep() override;
+   /// The kept steps' columns go: the retry starts its least squares afresh.
+   void ForgetKept() override { past_.clear(); }
 
    double Next(const mfem::Vector& d, const mfem::Vector& dtilde,
                mfem::Vector& next) override;

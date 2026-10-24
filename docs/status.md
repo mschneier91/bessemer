@@ -9,6 +9,18 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The np-1 FSI stall (a loose end, 2026-10-24): the coupling, not the flow.** F9's impulsive
+Dirichlet-Neumann deck (rho_s = rho_f, IQN-ILS `reuse: 2`) failed at np 1 with
+`mesh_motion.refresh: rebuild` at t = 0.03, at every cut. The subiterations stalled at
+|r| / |d~| ~ 1 with iterates up to |d~| = 94 on a 0.35 flag, which folded the mesh. The flow
+solve's failure (||r_0|| 102, later 4e5) was the symptom. `reuse: 0`, Aitken or the flow's
+`initial_guess: previous` all pass with the same steps to 9 digits; roundoff decides whether the
+reused columns mislead. Fix: a failed attempt's retry drops IQN-ILS's kept columns
+(`InterfaceAccelerator::ForgetKept`). The deck then completes with one cut, its last step in two
+halves. `fsi_test` F14: the retry relaxes by omega_0 as a fresh accelerator does. Rejections by
+error control keep the columns, and so do runs without a failure (FSI2 and FSI3 keep
+`reuse: 2`). CPU np 1/2/4 and the debug device (hfgt 49755223).
+
 **FSI2's flow stall: folded LOR sub-elements in the pressure preconditioner (2026-10-24; a
 fluid bug).** The FSI2 refinement runs stopped with the flow's FGMRES at 2000 iterations:
 L0 dt 2.5e-4 at t 8.86, L1 dt 5e-4 at 9.15, L1 dt 2.5e-4 at 9.0. Restarts from t = 8.5

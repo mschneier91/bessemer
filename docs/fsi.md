@@ -330,7 +330,9 @@ against `fsi.rtol` 1e-8; 1e-12 converges in 14-18 subiterations).
 subiterations, solid solve or flow solve fail is taken back and taken again at
 `retry_factor` dt (`retry_max`, `retry_dt_min`). Taking it back undoes the
 flow's trial, the solid's state and the accelerator's columns of the attempt;
-the flow reports its failed solve instead of cutting its own step. Fixed steps
+after a failure the retry also goes without IQN-ILS's columns kept from
+earlier steps (`fsi.reuse`), which can be what misled the attempt. The flow
+reports its failed solve instead of cutting its own step. Fixed steps
 then hold for `retry_hold` steps and grow back to `time.dt` by 1.2 per step.
 The predictor extrapolates through the committed steps' times; fixed steps
 keep the constant-step formulas until a cut, so their results are unchanged.
@@ -341,7 +343,9 @@ set how the subiterations converge, not what they converge to. `fsi_test`:
 - F11: CFL control (of u - w), 14 steps, dt 0.0019-0.0086 at `cfl_target` 0.1;
 - F12: error control, 40 steps at `time.rtol` 1e-2 against 111 at 1e-4;
 - F13: an error-controlled restart is the uninterrupted run, bitwise on a
-  host.
+  host;
+- F14: after a failed attempt IQN-ILS relaxes by omega_0 as a fresh one
+  does.
 
 **Checkpoints and restarts**
 (`checkpoint`, `restart`, the same rank count, as a flow's): the flow's

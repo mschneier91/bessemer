@@ -759,6 +759,10 @@ bool FsiCase::Step()
          dt = solid_dt_; // the controller's retry step
          continue;
       }
+      // A failed attempt: IQN-ILS's columns kept from earlier steps may be
+      // what misled it (an impulsive start's stalled at |r| / |d~| ~ 1 and
+      // folded the mesh, at every cut), so the retry goes without them.
+      accel_->ForgetKept();
       const double next = dt * params_.retry_factor;
       if (!cut_ || cuts >= params_.retry_max || next < params_.retry_dt_min)
       {

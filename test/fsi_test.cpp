@@ -32,7 +32,10 @@
 //  F12 error-controlled ones (the smaller of the fluid's CFL step and the
 //     solid's): a tighter time.rtol takes more steps;
 //  F13 an error-controlled run restarted from a checkpoint is the
-//     uninterrupted one, bitwise on a host (rebuild).
+//     uninterrupted one, bitwise on a host (rebuild);
+//  F14 after a failed attempt IQN-ILS forgets the kept steps' columns: its
+//     next subiteration relaxes by omega_0 as a fresh one's does (after a
+//     discarded attempt alone it uses them).
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -766,3 +769,58 @@ TEST(Fsi, F13_ErrorControlledRestart)
    MPI_Barrier(MPI_COMM_WORLD);
    if (Mpi::Root()) { std::filesystem::remove_all(chk); }
 }
+
+// F14
+TEST(Fsi, F14_FailedAttemptForgetsKeptColumns)
+{
+   const int n = 6;
+   // A contraction, G(d) = d / 2 + 1 (the fixed point 2).
+   auto G = [](const Vector & d, Vector & g)
+   {
+      g = d;
+      g *= 0.5;
+      g += 1.0;
+   };
+   for (int forget = 0; forget < 2; ++forget)
+   {
+      incns::IqnIls acc(0.3, 2, MPI_COMM_WORLD);
+      Vector d(n), g(n), next(n);
+      // Two committed steps of three subiterations: their columns are kept.
+      for (int step = 0; step < 2; ++step)
+      {
+         acc.NewStep();
+         d.Randomize(step + 1);
+         for (int k = 0; k < 3; ++k)
+         {
+            G(d, g);
+            acc.Next(d, g, next);
+            d = next;
+         }
+      }
+      // An attempt abandoned after one subiteration, then its retry's first.
+      acc.NewStep();
+      d = 0.5;
+      G(d, g);
+      acc.Next(d, g, next);
+      acc.DiscardStep();
+      if (forget) { acc.ForgetKept(); }
+      G(d, g);
+      acc.Next(d, g, next);
+      Vector fresh(g); // a fresh accelerator's: d + omega_0 (G(d) - d)
+      fresh -= d;
+      fresh *= 0.3;
+      fresh += d;
+      const double dev = MaxDiff(next, fresh);
+      if (forget)
+      {
+         EXPECT_EQ(acc.Columns(), 0);
+         EXPECT_LT(dev, 1e-14);
+      }
+      else
+      {
+         EXPECT_GT(acc.Columns(), 0);
+         EXPECT_GT(dev, 1e-3);
+      }
+   }
+}
+
