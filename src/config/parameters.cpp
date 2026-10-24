@@ -569,9 +569,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(solver, "n_inner", p.cc.n_inner,
           "Cahouet-Chabard: fixed inner CG iterations on the pressure Poisson block.");
    r.Read(solver, "lp_strong_threshold", p.cc.lp_strong_threshold,
-          "Pressure LOR-AMG: BoomerAMG strength threshold (< 0: 0.25 in 3D, "
-          "0.1 in 2D). On a GPU (PMIS coarsening) 0.5 and 0.6 gave LARGER "
-          "hierarchies than 0.25 (Taylor-Green Q7, 2026-10-16).");
+          "Pressure LOR-AMG: BoomerAMG strength threshold (< 0: 0.25; until "
+          "2026-10-24 0.1 in 2D, which took 1-21 % more iterations). On a GPU "
+          "(PMIS coarsening) 0.5 and 0.6 gave LARGER hierarchies than 0.25 "
+          "(Taylor-Green Q7, 2026-10-16).");
    r.Read(solver, "lp_agg_levels", p.cc.lp_agg_levels,
           "Pressure LOR-AMG: levels of aggressive coarsening (0 = none).");
    r.Read(solver, "lp_print_level", p.cc.lp_print_level,

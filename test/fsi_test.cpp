@@ -294,7 +294,7 @@ TEST(Fsi, F4_CoupledStepsConverge)
    for (const Variant& v : variants)
    {
       const Parameters p = Parameters::LoadYAMLString(
-                              Deck(v.keys + "  max_iterations: 300\n",
+                              Deck(v.keys + "  max_iterations: 300\n  atol: 0.0\n",
                                    "  analysis: dynamic\n", Np()));
       auto mesh = incns::MakeCaseMesh(p);
       FsiCase fsi(*mesh, p);
@@ -303,7 +303,9 @@ TEST(Fsi, F4_CoupledStepsConverge)
       for (const FsiCase::StepRecord& r : fsi.History())
       {
          n += r.iterations;
-         EXPECT_LE(r.residual, 1.01e-8); // rtol, + atol / |d|
+         // |r| <= rtol |d~| (atol 0: an atol over the first steps' small
+         // |d~| would let |r| / |d~| exceed rtol).
+         EXPECT_LE(r.residual, 1e-8 * (1.0 + 1e-12));
       }
       its.push_back(n);
       // The fluid's interface sits where the solid's is.

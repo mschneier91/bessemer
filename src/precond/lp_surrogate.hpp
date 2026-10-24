@@ -345,10 +345,12 @@ public:
       // as triangular solves, ~100x slower (precond/hypre_device.hpp).
       HYPRE_BoomerAMGSetRelaxType(h, SymmetricAmgSmoother());
       HYPRE_BoomerAMGSetNumSweeps(h, 1);
-      // Strength-of-connection starting points per the spec (2D/3D).
+      // Strength of connection 0.25 in 2D and 3D. The spec's 0.1 in 2D took
+      // 1-21 % more FGMRES iterations on every 2D deck measured (dfg_2d1,
+      // dfg_2d3, square_cylinder_re200_oifs, ale_oscillating_cylinder, FSI2;
+      // 2026-10-23).
       HYPRE_BoomerAMGSetStrongThreshold(
-         h, strong_threshold >= 0.0 ? strong_threshold
-         : (mesh.Dimension() == 3 ? 0.25 : 0.1));
+         h, strong_threshold >= 0.0 ? strong_threshold : 0.25);
       if (agg_levels > 0)
       {
          // Aggressive coarsening on the first levels; second-stage

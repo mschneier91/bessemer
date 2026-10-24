@@ -9,6 +9,14 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**The pressure LOR-AMG's strength threshold is 0.25 in 2D too (2026-10-24; human: "you can
+change the default in 2d to .25").** It was 0.1 in 2D (the spec's starting point), 0.25 in 3D.
+0.25 took 1-21 % fewer FGMRES iterations on every 2D deck measured: dfg_2d1 -16 %, dfg_2d3
+-9 %, square_cylinder_re200_oifs -1 %, ale_oscillating_cylinder -15 %, FSI2 level 2 -21 %
+(hthr 49742856, l2speed). 2D results move at the solver tolerance. The 2D numbers in the
+benchmark READMEs were made at 0.1 and are not rerun. 3D is unchanged. `solver.lp_strong_threshold: 0.1`
+restores the old 2D default. fsi_test F4 now sets fsi.atol 0 and checks rtol exactly (atol over the impulsive start's small |d~| let one step's |r| / |d~| pass the old bound). CPU np 1/2/4 and the debug device (hvel 49765951); 3D decks bitwise b5c7030 (hfluid3d 49765969), 2D decks with `lp_strong_threshold: 0.1` bitwise b5c7030 (hfluidk 49765968).
+
 **FSI2 refined: within 1.5 % of Turek & Hron on `level: 1` (2026-10-24; human: "run the finer
 mesh cases to see if we match").** `benchmarks/turek_hron/fsi2.yaml` now takes the
 neo-Hookean mesh motion. Over the last period before t = 15, the amplitudes' errors are:
@@ -60,11 +68,11 @@ sub-elements); the batched L_p's smallest diagonal is -6.8, every diagonal is po
 the fix, and CG with one V-cycle converges in 11-13 iterations at np 1/2/4. Unfolded, the
 matrix is the batched one bitwise. FSI2: from the t 8.5 checkpoint with the AMG rebuilt at every move it reaches t 9.4 without a step cut (G0 49744007), and the refinement runs pass their old stalls without one.
 
-Not covered yet: the velocity LOR (`solver.a_pc: loramg`, `solver.preconditioner: loramg`)
-on a moving mesh has the same exposure. Measured on the way, not changed: the strength
+The velocity LOR (`solver.a_pc: loramg`, `solver.preconditioner: loramg`) had the same
+exposure: covered since, see above. Measured on the way, and made the default since: the strength
 threshold 0.25 in 2D took 1-21 % fewer FGMRES iterations than 0.1 on every 2D deck tried
 (dfg_2d1 -16 %, dfg_2d3 -9 %, square_cylinder_re200_oifs -1 %, ale_oscillating_cylinder -15 %,
-FSI2 L2 -21 %). A default change would move every 2D baseline: the human's call. CPU np 1/2/4 and the debug device (hlor 49743989); fluid-only decks bitwise this morning's main (hfluid 49745066, hfluid3d 49745583).
+FSI2 L2 -21 %). CPU np 1/2/4 and the debug device (hlor 49743989); fluid-only decks bitwise this morning's main (hfluid 49745066, hfluid3d 49745583).
 
 **The CFL number on a moving mesh is of u - w (2026-10-23; a fluid bug; human: "if there is
 a bug that impacts the fluid solver that should be fixed!").** `Case::ConvectiveCflNumber()`

@@ -190,7 +190,7 @@ Linear solver: FGMRES on the monolithic velocity-pressure system with a block pr
 | `solver.preconditioner` | jacobi \| loramg | `jacobi` | Velocity-block preconditioner on the mass Schur path. |
 | `solver.block_shape` | upper \| lower \| diag | `upper` | Block preconditioner shape. |
 | `solver.n_inner` | int | `2` | Cahouet-Chabard: fixed inner CG iterations on the pressure Poisson block. |
-| `solver.lp_strong_threshold` | real | `-1` | Pressure LOR-AMG: BoomerAMG strength threshold (< 0: 0.25 in 3D, 0.1 in 2D). On a GPU (PMIS coarsening) 0.5 and 0.6 gave LARGER hierarchies than 0.25 (Taylor-Green Q7, 2026-10-16). |
+| `solver.lp_strong_threshold` | real | `-1` | Pressure LOR-AMG: BoomerAMG strength threshold (< 0: 0.25; until 2026-10-24 0.1 in 2D, which took 1-21 % more iterations). On a GPU (PMIS coarsening) 0.5 and 0.6 gave LARGER hierarchies than 0.25 (Taylor-Green Q7, 2026-10-16). |
 | `solver.lp_agg_levels` | int | `0` | Pressure LOR-AMG: levels of aggressive coarsening (0 = none). |
 | `solver.lp_print_level` | int | `0` | Pressure LOR-AMG: hypre's setup print level (1 prints the grid and operator complexities). |
 | `solver.lp_vcycles` | int | `1` | Cahouet-Chabard: LOR-AMG V-cycles preconditioning the inner CG. |
