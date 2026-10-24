@@ -9,6 +9,17 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**FSI2 refined: within 1.5 % of Turek & Hron on `level: 1` (2026-10-24; human: "run the finer
+mesh cases to see if we match").** `benchmarks/turek_hron/fsi2.yaml` now takes the
+neo-Hookean mesh motion. Over the last period before t = 15, the amplitudes' errors are:
+- the deck's mesh at Δt 5·10⁻⁴: u_x −8.4 %, u_y −5.8 %, drag −8.1 %, lift −5.7 %;
+- at Δt 2.5·10⁻⁴: the displacements unchanged, drag −4.7 %, lift +2.9 %;
+- `level: 1` at Δt 5·10⁻⁴: u_x −1.1 %, u_y −1.0 %, drag +1.5 %, lift +0.9 %, the means
+  within 1.6 %, frequency 1.927 (Turek & Hron's 2.0 and 3.8 are given to 2 digits).
+
+`level: 1` at Δt 2.5·10⁻⁴ and `level: 2` are running (benchmarks/turek_hron/README.md,
+FSI2). The finer runs needed cb2c4a6: before it they stopped at t = 8.4-9.15.
+
 **The np-1 FSI stall (a loose end, 2026-10-24): the coupling, not the flow.** F9's impulsive
 Dirichlet-Neumann deck (rho_s = rho_f, IQN-ILS `reuse: 2`) failed at np 1 with
 `mesh_motion.refresh: rebuild` at t = 0.03, at every cut. The subiterations stalled at

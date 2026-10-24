@@ -7,9 +7,10 @@
 # the solid stepped by BDF2 like the fluid.
 # The inflow ramps over 2 time units; the oscillation then grows from
 # roundoff, so the run is long. Turek & Hron's values are over the last
-# period, mean +- amplitude from the extremes. NOT REACHED YET: the
-# linear-elastic mesh motion folds the cells by the flag at t = 8.6 (tip at
-# 58 of 81 mm); FSI2 needs a mesh motion for large rotations (README.md).
+# period, mean +- amplitude from the extremes. The mesh motion is neo-Hookean:
+# the linear-elastic one folds the cells by the flag at t = 8.6 (tip at 58 of
+# 81 mm). This coarse mesh's amplitudes are 6-8 % below Turek & Hron's, level 1's
+# within 1.5 % (README.md, FSI2).
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/fsi2.yaml
 #   python3 benchmarks/turek_hron/fsi.py fsi2 fsi2/fsi2_forces.csv fsi2/fsi2_fsi.csv
@@ -42,6 +43,7 @@ boundary_conditions:
   - {select: [flag], type: interface}
   - {select: [outflow], type: outflow}
 mesh_motion:
+  model: neo_hookean    # follows the flag's large rotations (README.md, FSI2)
   stiffening: 1
 solid:
   newton_atol: 1.0e-9    # the SVK residual's roundoff floor at tiny loads

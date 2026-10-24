@@ -151,7 +151,31 @@ oscillation, the same settings as FSI3 at Δt 5·10⁻⁴ to t = 15. Reference: 
 −14.58 ± 12.44, u_y(A) 1.23 ± 80.6 (mm), frequency 2.0 (u_y), drag 208.83 ± 73.75, lift
 0.88 ± 234.2.
 
-**Not reached yet: the fluid mesh folds first.** Coarse mesh, np 4, 2026-10-23: the
+**Reached, and within 1.5 % on `level: 1` (2026-10-24).** With the neo-Hookean mesh
+motion (`mesh_motion.model: neo_hookean`, in the deck), over the last period before
+t = 15 (the oscillation is periodic from t ≈ 11), against Turek & Hron:
+
+| Mesh | Δt | u_x(A) | u_y(A) | Drag | Lift | Frequency (u_y) |
+|---|---|---|---|---|---|---|
+| deck (314 elements), np 8 | 5·10⁻⁴ | −13.15 ± 11.39 (−8.4 %) | 1.25 ± 75.92 (−5.8 %) | 205.1 ± 67.8 (−8.1 %) | 0.95 ± 220.8 (−5.7 %) | 1.924 |
+| deck | 2.5·10⁻⁴ | −13.14 ± 11.39 (−8.5 %) | 1.25 ± 75.92 (−5.8 %) | 206.6 ± 70.3 (−4.7 %) | −0.56 ± 241.1 (+2.9 %) | 1.924 |
+| `level: 1` (1,256), np 32 | 5·10⁻⁴ | −14.34 ± 12.30 (−1.1 %) | 1.25 ± 79.80 (−1.0 %) | 211.3 ± 74.8 (+1.5 %) | −1.17 ± 236.2 (+0.9 %) | 1.927 |
+
+The percentages are the amplitudes' errors. On the coarse mesh the displacements do not
+move with Δt (to 4 digits), and one refinement brings them within about 1 %. The forces'
+amplitudes do move with Δt there, from the coarse mesh's force ripple. Turek & Hron give the
+frequencies to two digits (2.0 for u_y; 3.8 = 2 × 1.9 for u_x and the drag); ours are
+1.924-1.927 and 3.85. Over the last three periods instead of the last, the displacements
+agree to 4 digits and the forces' amplitudes to 0.4-2.2 %.
+
+The deck's run is M4's (4924cec, t = 0 to 15). The two finer runs continue their own runs
+from a checkpoint at t = 8.5 on cb2c4a6's solver. Before cb2c4a6 they stopped at
+t = 8.4-9.15 with a stalled flow solve, from folded LOR sub-elements in the pressure
+preconditioner near the tip ([docs/status.md](../../docs/status.md)). cb2c4a6 changes
+nothing before the first fold (t ≈ 8.56). `level: 1` at Δt 2.5·10⁻⁴ and `level: 2` (5,024
+elements, np 64) run from t = 0 and are not in yet.
+
+The linear-elastic mesh motion does not reach it. Coarse mesh, np 4, 2026-10-23: the
 oscillation grows from rest at about 3 subiterations per step (the coupling is not the
 limit), but at t = 8.6, with the tip's u_y at 58 mm of the reference 81 mm and still
 growing, the linear-elastic mesh motion (`mesh_motion.stiffening: 1`) inverted the cells
@@ -159,7 +183,6 @@ next to the flag (min det F −0.72) and the run stopped. With stiffening 4 it r
 t = 8.86 (u_y 61 mm, u_x −17 mm) before the flow solve failed. Bending the flag boundary
 alone in a `mesh_motion` deck (a cantilever shape in y, no tip rotation or shortening),
 the coarse mesh survives tip deflections of 48 / 48 / 80 / 90 mm at stiffening 1 / 2 /
-3 / 4; the real motion, which also shortens and rotates the tip, is harder. FSI2 needs a
-mesh motion that follows large rotations (the hyperelastic mesh motion, or an
-incremental update), not a coupling change.
+3 / 4; the real motion, which also shortens and rotates the tip, is harder. FSI2 needed
+a mesh motion that follows large rotations: the neo-Hookean one above.
 
