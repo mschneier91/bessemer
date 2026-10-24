@@ -15,8 +15,8 @@ Built so far (CPU only): the four interface conditions, Dirichlet-Neumann
 (small-strain) solid or the St. Venant-Kirchhoff one (`fsi.solid`, stage F5;
 Dirichlet-Neumann and dynamic only; FSI1-3 in
 benchmarks/turek_hron/README.md), static or dynamic, matching or non-matching
-interfaces by point search. Not yet: the St. Venant-Kirchhoff solid under the
-other three conditions, restarts, a GPU run.
+interfaces by point search, checkpoints and restarts. Not yet: the St.
+Venant-Kirchhoff solid under the other three conditions, a GPU run.
 
 ## 1. The coupling
 
@@ -314,8 +314,21 @@ mass, the subiteration map amplifies the flow solve's error about 1e5 times
 (`fsi_test` F5: `solver.rtol` 1e-10 left the residual wandering at 1e-5
 against `fsi.rtol` 1e-8; 1e-12 converges in 14-18 subiterations). Time steps are fixed
 (`time.step_control: fixed`); a failed fluid solve inside the coupling stops
-the run instead of cutting the step. Restarts are refused (the solid's state
-is not checkpointed yet). The run writes `<name>_fsi.csv` (per step: time,
+the run instead of cutting the step. **Checkpoints and restarts**
+(`checkpoint`, `restart`, the same rank count, as a flow's): the flow's
+checkpoint of a committed step also holds the coupling's state, through
+`Case::SetCheckpointHook`. That is the solid's dynamic state (or a static
+solid's displacement, `fsi_solid.*`), the last three committed interface
+displacements and Robin tractions the predictor extrapolates from, IQN-ILS's
+kept columns, the step records and the totals (`fsi.yaml`,
+`fsi_history.bin`). A restart continues the march and appends to
+`<name>_fsi.csv`; on a host it repeats the uninterrupted run bit for bit with
+`mesh_motion.refresh: rebuild`, and with the default `in_place` to the solver
+tolerance, since the restart builds its AMG hierarchies on its own mesh (as a
+flow's, `ale_fluid_test` A9). `fsi_test` F9 checks both: Dirichlet-Neumann
+with IQN-ILS keeping two steps' columns, a static solid and Robin-Neumann
+bitwise, the St. Venant-Kirchhoff solid with the neo-Hookean mesh motion in
+place to 2e-9 to 3e-9 of the velocity and the displacement at np 2 (one step a subiteration apart). The run writes `<name>_fsi.csv` (per step: time,
 subiterations, final residual, the last relaxation factor, the force on the
 interface, the probe's displacement) and a `fsi` section in the summary;
 the reference keys `displacement_x` and `displacement_y` compare the probe's

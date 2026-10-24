@@ -236,7 +236,8 @@ and the subgrid dissipation. Details and when it is worth it: [les.md](les.md).
 - **Forces:** `forces.enabled` with the body's attributes gives lift and drag coefficients
   (John's volume-integral method) in `<path>/<name>_forces.csv`.
 - **Checkpoints:** `checkpoint.enabled`; restart with `restart: <dir>` at the same rank
-  count.
+  count. Flow, solid (a dynamic march) and FSI decks alike
+  ([elasticity.md](elasticity.md) §2, [fsi.md](fsi.md) §1).
 - **Where an AMR run refined:** `apps/mesh_census -d <deck> -c <checkpoint>` rebuilds the
   mesh from a checkpoint pass by pass and counts elements per streamwise band (for
   checking an `amr.end_time` freeze).

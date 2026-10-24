@@ -177,6 +177,16 @@ public:
    /// @param hook The summary hook (SummaryHook; FsiCase's coupling section).
    void SetSummaryHook(SummaryHook hook) { summary_hook_ = std::move(hook); }
 
+   /// A driver's own part of a checkpoint (FsiCase: the solid and the
+   /// coupling), written into its directory after the flow's state.
+   using CheckpointHook = std::function<void(const std::string& dir)>;
+   /// @param hook Called by WriteCheckpoint() with the directory, on every
+   ///             rank (collective).
+   void SetCheckpointHook(CheckpointHook hook)
+   {
+      checkpoint_hook_ = std::move(hook);
+   }
+
    /// After a march driven from outside Run() (Step()s, trial steps):
    /// flush the history and write what Run() writes at its end.
    void FinishRun();
@@ -437,6 +447,7 @@ private:
    void AfterStep(double t_prev, double step_wall);
    bool warned_scaling_ = false; ///< One-shot bad-U_ref drift warning issued.
    SummaryHook summary_hook_; ///< See SetSummaryHook().
+   CheckpointHook checkpoint_hook_; ///< See SetCheckpointHook().
    mfem::Coefficient* robin_alpha_ = nullptr; ///< See SetRobinCoefficient().
    double robin_alpha_max_ = 0.0; ///< See SetRobinCoefficient().
    bool memory_hint_done_ = false; ///< memory.max_dofs considered (once).

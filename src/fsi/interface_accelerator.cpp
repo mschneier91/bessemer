@@ -136,6 +136,47 @@ double IqnIls::Next(const Vector& d, const Vector& dtilde, Vector& next)
    return std::numeric_limits<double>::quiet_NaN();
 }
 
+InterfaceAccelerator::State IqnIls::ExportState() const
+{
+   // At a committed step: the next NewStep() keeps this step's columns as
+   // the uninterrupted run's does.
+   State s;
+   auto add = [&s](const Columns_ & c)
+   {
+      s.counts.push_back(static_cast<int>(c.v.size()));
+      for (const Vector& v : c.v) { s.vectors.push_back(v); }
+      for (const Vector& w : c.w) { s.vectors.push_back(w); }
+   };
+   add(current_);
+   for (const Columns_& c : past_) { add(c); }
+   return s;
+}
+
+void IqnIls::ImportState(const State& s)
+{
+   MFEM_VERIFY(!s.counts.empty(), "fsi: the checkpoint's accelerator state is "
+               "not IQN-ILS's");
+   std::size_t i = 0;
+   auto take = [&](Columns_ & c, int m)
+   {
+      c = Columns_();
+      MFEM_VERIFY(i + 2 * static_cast<std::size_t>(m) <= s.vectors.size(),
+                  "fsi: the accelerator state's vectors do not match its counts");
+      for (int j = 0; j < m; ++j) { c.v.push_back(s.vectors[i++]); }
+      for (int j = 0; j < m; ++j) { c.w.push_back(s.vectors[i++]); }
+   };
+   take(current_, s.counts[0]);
+   past_.clear();
+   for (std::size_t k = 1; k < s.counts.size(); ++k)
+   {
+      past_.emplace_back();
+      take(past_.back(), s.counts[k]);
+   }
+   MFEM_VERIFY(i == s.vectors.size(), "fsi: the accelerator state's vectors do "
+               "not match its counts");
+   has_prev_ = false;
+}
+
 std::unique_ptr<InterfaceAccelerator> MakeInterfaceAccelerator(
    const FsiParameters& f, MPI_Comm comm)
 {

@@ -119,6 +119,22 @@ private:
    ///          probe); rank 0 writes.
    void LogStep(const StepRecord& r);
 
+   /**
+    * @brief The coupling's part of a checkpoint (Case::SetCheckpointHook, in
+    *        the flow's Case::WriteCheckpoint() of the committed step): the
+    *        solid's state (`fsi_solid.*`), the committed interface values
+    *        Predict() and PredictLoad() extrapolate from, the accelerator's
+    *        columns, the step records and the totals (`fsi.yaml`,
+    *        `fsi_history.bin`). Collective.
+    * @param dir Checkpoint directory.
+    */
+   void WriteCheckpointState(const std::string& dir);
+
+   /// Restore WriteCheckpointState()'s part after the flow and its mesh
+   /// motion restored theirs (Case's constructor). Collective.
+   /// @param dir Checkpoint directory (`restart`).
+   void ReadCheckpointState(const std::string& dir);
+
    /// @param d The predicted interface displacement (true dofs of the
    ///          motion space).
    void Predict(mfem::Vector& d) const;
@@ -237,6 +253,10 @@ private:
    int max_iterations_ = 0;          ///< Most subiterations in a step.
    double wall_ = 0.0;               ///< Wall time of the march.
    bool log_started_ = false;        ///< Coupling log header written.
+   /// A restart: the solid's CG and Newton iterations before it (the
+   /// summary's totals cover the whole run).
+   long long restored_cg_ = 0;
+   long long restored_newton_ = 0; ///< See restored_cg_.
    std::string failure_;             ///< Why a step failed (empty if none).
 };
 

@@ -1062,6 +1062,7 @@ void Case::WriteCheckpoint(const std::string& dir)
       channel_stats_->Save(dir + "/channel_statistics.txt");
       WriteChannelProfiles(ChannelProfilesPath());
    }
+   if (checkpoint_hook_) { checkpoint_hook_(dir); }
 }
 
 std::string Case::ChannelProfilesPath() const

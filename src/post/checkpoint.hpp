@@ -77,6 +77,27 @@ public:
     * @param integrator Target integrator (built over the regenerated mesh).
     */
    static void Read(const std::string& dir, StokesTimeIntegrator& integrator);
+
+   /// @return `<dir>/<base>.r<rank>.bin`, a checkpoint's per-rank file (the
+   ///         solid's and the coupling's states use the format too).
+   static std::string RankFile(const std::string& dir, const std::string& base,
+                               int rank);
+   /**
+    * @brief Write @p v to @p path: an int64 size, then the doubles (bitwise;
+    *        from the host copy, current on a device too).
+    * @param path File.
+    * @param v    Vector.
+    */
+   static void WriteVector(const std::string& path, const mfem::Vector& v);
+   /**
+    * @brief Read a WriteVector() file into @p v (device-aware, the host copy
+    *        valid).
+    * @param path          File.
+    * @param expected_size The size this rank expects (the partition check).
+    * @param v             Vector.
+    */
+   static void ReadVector(const std::string& path, int expected_size,
+                          mfem::Vector& v);
 };
 
 } // namespace incns

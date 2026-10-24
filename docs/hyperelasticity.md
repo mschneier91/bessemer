@@ -115,7 +115,9 @@ the DFG cylinder to 180 degrees where the linear model inverts at 100 (sections 
   (material, order, body force, CG, probe) and, for this equation, `model`
   (`st_venant_kirchhoff`, the default, or `neo_hookean`), `newton_rtol`, `newton_atol`,
   `newton_dx_rtol`,
-  `newton_max_iter`, `load_steps` and `line_search` (docs/deck_reference.md). Plane
+  `newton_max_iter`, `load_steps` and `line_search` (docs/deck_reference.md).
+  Checkpoints and restarts of a dynamic run work as the linear deck's (elasticity.md
+  section 2). Plane
   stress, BDF3 and the Jacobi preconditioner are rejected. The summary gains a `newton`
   block; a dynamic run's history CSV a `newton_iterations` column. The linear decks'
   results, the dynamic one's history included, are bitwise unchanged (np 1, 2 and 4).

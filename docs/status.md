@@ -32,6 +32,24 @@ roundoff floor (~4.5e-11 on the flag) is above both relative tests; the decks se
 scratch-build failures). Not on a GPU. **Next:** a mesh motion for large rotations (FSI2), the meshes for FSI3's force
 amplitudes, an absolute Newton floor in Hyperelasticity, SVK under the other conditions.
 
+**Restarts of solid and FSI runs (2026-10-23; human: "we need to put in full restart
+capability for structural and FSI solves too").** A dynamic solid deck (`ElasticityCase`,
+both equations) and an FSI run (`FsiCase`) write rolling checkpoints with the `checkpoint`
+keys and continue one with `restart`, as a flow does (same rank count). The solid's state
+(`solid/solid_checkpoint`), FSI's committed interface values, IQN-ILS's columns and the step
+records travel in the flow's checkpoint through `Case::SetCheckpointHook`. The deck check
+that refused FSI restarts is gone. On a host a restart repeats the uninterrupted run bit for
+bit:
+- the solid decks (`solid_restart_test`: linear and both hyperelastic materials,
+  generalized-alpha and BDF);
+- FSI with `mesh_motion.refresh: rebuild` (`fsi_test` F9: Dirichlet-Neumann with IQN-ILS
+  reuse 2, a static solid, Robin-Neumann).
+
+With the default in-place refresh it matches to 2e-9 to 3e-9 of the velocity and the displacement at np 2 (one step a subiteration apart); the restart builds its AMG on its own
+mesh, as in `ale_fluid_test` A9. This touches the FSI thread's `fsi_case`, `fsi_solid` and
+`interface_accelerator`: a step's record now goes in before the flow's commit. CPU np 1/2/4
+and the debug device (jobs 49715277, 49715554, 49716969).
+
 **Hyperelasticity milestone 4: neo-Hookean mesh motion (2026-10-23; human: "Oh we want
 M4", then neo-Hookean of the options offered).** A compressible neo-Hookean material
 (`NeoHookean`, `solid.model: neo_hookean`) behind the hyperelastic kernels, and

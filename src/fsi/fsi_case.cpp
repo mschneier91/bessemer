@@ -3,6 +3,7 @@
 #include "bc/boundary_names.hpp"
 #include "config/initial_conditions.hpp"
 #include "mesh/case_mesh.hpp"
+#include "post/checkpoint.hpp"
 #include "precond/hypre_device.hpp"
 #include "solid/elasticity_case.hpp"
 #include "solid/hyperelasticity.hpp"
@@ -11,10 +12,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+
+#include <yaml-cpp/yaml.h>
 
 namespace incns
 {
@@ -320,6 +324,14 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
       BuildRobinCoefficient();
    }
 
+   // The coupling's state travels in the flow's checkpoint and comes back
+   // with a restart (the flow and its mesh motion restored theirs above).
+   fluid_->SetCheckpointHook([this](const std::string & dir)
+   {
+      WriteCheckpointState(dir);
+   });
+   if (!params_.restart_from.empty()) { ReadCheckpointState(params_.restart_from); }
+
    fluid_->SetSummaryHook([this](Json & j,
                                  std::vector<std::pair<std::string, double>>& got)
    {
@@ -362,11 +374,9 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
       so["order"].Set(solid_->Order());
       so["elements"].Set(static_cast<long long>(solid_mesh_->GetGlobalNE()));
       so["dofs"].Set(static_cast<long long>(solid_->GlobalTrueDofs()));
-      so["cg_iterations"].Set(solid_->TotalIterations());
-      if (solid_->TotalNewtonIterations() > 0)
-      {
-         so["newton_iterations"].Set(solid_->TotalNewtonIterations());
-      }
+      so["cg_iterations"].Set(restored_cg_ + solid_->TotalIterations());
+      const long long newton = restored_newton_ + solid_->TotalNewtonIterations();
+      if (newton > 0) { so["newton_iterations"].Set(newton); }
       so["max_displacement"].Set(solid_->MaxDisplacement());
       for (int c = 0; c < interface_force_.Size(); ++c)
       {
@@ -697,15 +707,17 @@ bool FsiCase::Step()
       }
       if (rn <= f.rtol * dn + f.atol)
       {
-         fluid_->CommitTrialStep();
+         // The step's record before the flow's commit, whose checkpoint
+         // (WriteCheckpointState()) holds it.
          committed_.insert(committed_.begin(), d);
          if (committed_.size() > 3) { committed_.pop_back(); }
          rec.time = fluid_->Time();
          history_.push_back(rec);
          total_iterations_ += k;
          max_iterations_ = std::max(max_iterations_, k);
-         wall_ += MPI_Wtime() - wall0;
          LogStep(rec);
+         fluid_->CommitTrialStep();
+         wall_ += MPI_Wtime() - wall0;
          if (fluid_->Diverged())
          {
             failure_ = "the flow diverged";
@@ -873,7 +885,8 @@ bool FsiCase::StepRobinNeumann()
       }
       if (rn <= f.rtol * tn + f.atol)
       {
-         fluid_->CommitTrialStep();
+         // The step's record before the flow's commit, whose checkpoint
+         // (WriteCheckpointState()) holds it.
          committed_.insert(committed_.begin(), d);
          if (committed_.size() > 3) { committed_.pop_back(); }
          committed_load_.insert(committed_load_.begin(), tau_tilde);
@@ -882,8 +895,9 @@ bool FsiCase::StepRobinNeumann()
          history_.push_back(rec);
          total_iterations_ += k;
          max_iterations_ = std::max(max_iterations_, k);
-         wall_ += MPI_Wtime() - wall0;
          LogStep(rec);
+         fluid_->CommitTrialStep();
+         wall_ += MPI_Wtime() - wall0;
          if (fluid_->Diverged())
          {
             failure_ = "the flow diverged";
@@ -993,15 +1007,17 @@ bool FsiCase::StepNeumannDirichlet()
       }
       if (rn <= f.rtol * dn + f.atol)
       {
-         fluid_->CommitTrialStep();
+         // The step's record before the flow's commit, whose checkpoint
+         // (WriteCheckpointState()) holds it.
          committed_.insert(committed_.begin(), d);
          if (committed_.size() > 3) { committed_.pop_back(); }
          rec.time = fluid_->Time();
          history_.push_back(rec);
          total_iterations_ += k;
          max_iterations_ = std::max(max_iterations_, k);
-         wall_ += MPI_Wtime() - wall0;
          LogStep(rec);
+         fluid_->CommitTrialStep();
+         wall_ += MPI_Wtime() - wall0;
          if (fluid_->Diverged())
          {
             failure_ = "the flow diverged";
@@ -1072,6 +1088,141 @@ void FsiCase::LogStep(const StepRecord& r)
        << interface_force_(0) << "," << interface_force_(1);
    if (probe) { out << "," << u(0) << "," << u(1); }
    out << "\n";
+}
+
+void FsiCase::WriteCheckpointState(const std::string& dir)
+{
+   INCNS_PROFILE("fsi::checkpoint");
+   const MPI_Comm comm = fluid_mesh_.GetComm();
+   const int rank = fluid_mesh_.GetMyRank();
+   auto file = [&](const std::string & base)
+   {
+      return Checkpoint::RankFile(dir, base, rank);
+   };
+   solid_->WriteState(dir, "fsi_solid");
+   for (std::size_t i = 0; i < committed_.size(); ++i)
+   {
+      Checkpoint::WriteVector(file("fsi_committed" + std::to_string(i)),
+                              committed_[i]);
+   }
+   for (std::size_t i = 0; i < committed_load_.size(); ++i)
+   {
+      Checkpoint::WriteVector(file("fsi_committed_load" + std::to_string(i)),
+                              committed_load_[i]);
+   }
+   const InterfaceAccelerator::State a = accel_->ExportState();
+   for (std::size_t i = 0; i < a.vectors.size(); ++i)
+   {
+      Checkpoint::WriteVector(file("fsi_accelerator" + std::to_string(i)),
+                              a.vectors[i]);
+   }
+   if (rank == 0)
+   {
+      std::ofstream m(dir + "/fsi.yaml");
+      MFEM_VERIFY(m.good(), "fsi_case: cannot write " << dir << "/fsi.yaml");
+      m << std::setprecision(17)
+        << "# incns FSI coupling state (same-np restart contract)\n"
+        << "steps: " << history_.size() << "\n"
+        << "subiterations: " << total_iterations_ << "\n"
+        << "max_subiterations: " << max_iterations_ << "\n"
+        << "wall_seconds: " << wall_ << "\n"
+        << "committed: " << committed_.size() << "\n"
+        << "committed_load: " << committed_load_.size() << "\n"
+        << "accelerator_counts: [";
+      for (std::size_t i = 0; i < a.counts.size(); ++i)
+      {
+         m << (i ? ", " : "") << a.counts[i];
+      }
+      m << "]\naccelerator_vectors: " << a.vectors.size() << "\n"
+        << "solid_cg_iterations: " << restored_cg_ + solid_->TotalIterations()
+        << "\nsolid_newton_iterations: "
+        << restored_newton_ + solid_->TotalNewtonIterations() << "\n";
+      MFEM_VERIFY(m.good(), "fsi_case: writing fsi.yaml failed");
+      // The step records: time, subiterations, residual, omega per step.
+      std::ofstream h(dir + "/fsi_history.bin", std::ios::binary);
+      const std::int64_t n = static_cast<std::int64_t>(history_.size());
+      h.write(reinterpret_cast<const char*>(&n), sizeof(n));
+      for (const StepRecord& r : history_)
+      {
+         const double row[4] = {r.time, static_cast<double>(r.iterations),
+                                r.residual, r.omega
+                               };
+         h.write(reinterpret_cast<const char*>(row), sizeof(row));
+      }
+      MFEM_VERIFY(h.good(), "fsi_case: writing fsi_history.bin failed");
+   }
+   MPI_Barrier(comm); // the checkpoint is complete on return, on every rank
+}
+
+void FsiCase::ReadCheckpointState(const std::string& dir)
+{
+   MFEM_VERIFY(std::filesystem::exists(dir + "/fsi.yaml"), "fsi_case: " << dir
+               << " holds no FSI coupling state (a flow's checkpoint?)");
+   const YAML::Node m = YAML::LoadFile(dir + "/fsi.yaml");
+   const std::size_t steps = m["steps"].as<std::size_t>();
+   MFEM_VERIFY(steps == static_cast<std::size_t>(fluid_->Integrator().StepCount()),
+               "fsi_case: the checkpoint's coupling is at step " << steps
+               << ", its flow at step " << fluid_->Integrator().StepCount());
+   const int rank = fluid_mesh_.GetMyRank();
+   auto file = [&](const std::string & base)
+   {
+      return Checkpoint::RankFile(dir, base, rank);
+   };
+   solid_->ReadState(dir, "fsi_solid");
+   const int nd = fluid_->InterfaceDisplacement()->ParFESpace()->GetTrueVSize();
+   const int nv = fluid_->Spaces().Velocity().GetTrueVSize();
+   committed_.resize(m["committed"].as<std::size_t>());
+   for (std::size_t i = 0; i < committed_.size(); ++i)
+   {
+      Checkpoint::ReadVector(file("fsi_committed" + std::to_string(i)), nd,
+                             committed_[i]);
+   }
+   committed_load_.resize(m["committed_load"].as<std::size_t>());
+   for (std::size_t i = 0; i < committed_load_.size(); ++i)
+   {
+      Checkpoint::ReadVector(file("fsi_committed_load" + std::to_string(i)), nv,
+                             committed_load_[i]);
+   }
+   // The accelerator's vectors are the iterate's: the traction under the
+   // Robin couplings, the displacement otherwise.
+   const FsiCoupling cp = params_.fsi.coupling;
+   const int ni = (cp == FsiCoupling::RobinNeumann ||
+                   cp == FsiCoupling::RobinRobin) ? nv : nd;
+   InterfaceAccelerator::State a;
+   for (const auto& c : m["accelerator_counts"]) { a.counts.push_back(c.as<int>()); }
+   a.vectors.resize(m["accelerator_vectors"].as<std::size_t>());
+   for (std::size_t i = 0; i < a.vectors.size(); ++i)
+   {
+      Checkpoint::ReadVector(file("fsi_accelerator" + std::to_string(i)), ni,
+                             a.vectors[i]);
+   }
+   accel_->ImportState(a);
+   total_iterations_ = m["subiterations"].as<long long>();
+   max_iterations_ = m["max_subiterations"].as<int>();
+   wall_ = m["wall_seconds"].as<double>();
+   restored_cg_ = m["solid_cg_iterations"].as<long long>();
+   restored_newton_ = m["solid_newton_iterations"].as<long long>();
+   std::ifstream h(dir + "/fsi_history.bin", std::ios::binary);
+   std::int64_t n = 0;
+   h.read(reinterpret_cast<char*>(&n), sizeof(n));
+   MFEM_VERIFY(h.good() && static_cast<std::size_t>(n) == steps,
+               "fsi_case: " << dir << "/fsi_history.bin does not hold the "
+               "checkpoint's steps");
+   history_.resize(static_cast<std::size_t>(n));
+   for (StepRecord& r : history_)
+   {
+      double row[4] = {0.0, 0.0, 0.0, 0.0};
+      h.read(reinterpret_cast<char*>(row), sizeof(row));
+      r.time = row[0];
+      r.iterations = static_cast<int>(row[1]);
+      r.residual = row[2];
+      r.omega = row[3];
+   }
+   MFEM_VERIFY(h.good(), "fsi_case: short read from " << dir
+               << "/fsi_history.bin");
+   // The coupling log continues (as the flow's history, appended).
+   log_started_ = std::filesystem::exists(params_.output.path + "/" +
+                                          params_.output.name + "_fsi.csv");
 }
 
 void FsiCase::WriteSummary(const std::string& path, const std::string& status)

@@ -3,6 +3,7 @@
 #include "bc/boundary_names.hpp"
 #include "bc/deck_boundary.hpp"
 #include "config/expression.hpp"
+#include "solid/solid_checkpoint.hpp"
 #include "util/json.hpp"
 #include "util/profiler.hpp"
 
@@ -11,8 +12,11 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <type_traits>
+
+#include <yaml-cpp/yaml.h>
 
 namespace incns
 {
@@ -230,7 +234,13 @@ Vector ElasticityCase::ProbeDisplacement()
 
 bool ElasticityCase::Run()
 {
-   if (params_.solid.analysis == SolidAnalysis::Static) { return Solve(); }
+   if (params_.solid.analysis == SolidAnalysis::Static)
+   {
+      MFEM_VERIFY(params_.restart_from.empty(), "elasticity_case: a restart "
+                  "continues a dynamic march (solid.analysis: dynamic); a "
+                  "static solve has no state to continue");
+      return Solve();
+   }
    return hyper_ ? March(*hyper_) : March(*solver_);
 }
 
@@ -249,6 +259,34 @@ bool ElasticityCase::March(SolidSolver& solver)
       std::filesystem::create_directories(out.path);
    }
    solver.Initialize(0.0);
+   // A restart: the state of the checkpoint's step, its iteration totals.
+   const bool restart = !params_.restart_from.empty();
+   long long k0 = 0;
+   bool same_dt = true;
+   if (restart)
+   {
+      const std::string& dir = params_.restart_from;
+      MFEM_VERIFY(std::filesystem::exists(dir + "/solid_case.yaml"),
+                  "elasticity_case: " << dir << " holds no solid march "
+                  "checkpoint");
+      const YAML::Node m = YAML::LoadFile(dir + "/solid_case.yaml");
+      const std::string eq = hyper ? "hyperelasticity" : "linear_elasticity";
+      MFEM_VERIFY(m["equation"].as<std::string>() == eq, "elasticity_case: the "
+                  "checkpoint is of equation " << m["equation"].as<std::string>()
+                  << ", the deck's " << eq);
+      ReadSolidState(dir, "solid", solver);
+      k0 = m["step"].as<long long>();
+      MFEM_VERIFY(k0 == solver.StepCount(), "elasticity_case: the checkpoint's "
+                  "step and its solid state disagree");
+      same_dt = m["dt"].as<double>() == params_.dt;
+      restored_cg_ = m["cg_iterations_total"].as<long long>();
+      if constexpr(hyper)
+      {
+         restored_newton_ = m["newton_iterations_total"].as<long long>();
+         max_newton_step_ = m["newton_iterations_max"].as<int>();
+      }
+      else { restored_cg_max_ = m["cg_iterations_max"].as<int>(); }
+   }
 
    std::ofstream history;
    const char* names[3] = {"x", "y", "z"};
@@ -272,11 +310,17 @@ bool ElasticityCase::March(SolidSolver& solver)
       }
       history << "\n";
    };
+   // A restart continues the history (as a flow's, post/run_monitor.cpp).
+   const std::string history_path = out.path + "/" + out.name + "_history.csv";
+   const bool append = restart && root && std::ifstream(history_path).good();
    if (out.history && root)
    {
-      history.open(out.path + "/" + out.name + "_history.csv");
+      history.open(history_path, append ? std::ios::app : std::ios::trunc);
       MFEM_VERIFY(history.good(), "elasticity_case: cannot write the history");
       history.precision(12);
+   }
+   if (out.history && root && !append)
+   {
       history << (hyper ? "step,t,dt,cg_iterations,newton_iterations,"
                   "kinetic_energy,strain_energy,total_energy" :
                   "step,t,dt,cg_iterations,kinetic_energy,strain_energy,"
@@ -287,7 +331,7 @@ bool ElasticityCase::March(SolidSolver& solver)
       }
       history << "\n";
    }
-   if (out.history) { log(0.0); }
+   if (out.history && !restart) { log(0.0); }
 
    std::unique_ptr<ParaViewDataCollection> pv;
    if (out.enabled)
@@ -300,21 +344,36 @@ bool ElasticityCase::March(SolidSolver& solver)
       pv->SetDataFormat(VTKFormat::BINARY);
       pv->RegisterField("displacement", &solver.Displacement());
       pv->RegisterField("velocity", &solver.Velocity());
-      pv->SetCycle(0);
-      pv->SetTime(0.0);
-      pv->Save();
+      // A restart keeps the collection's entries before its next save.
+      pv->UseRestartMode(restart);
+      if (!restart)
+      {
+         pv->SetCycle(0);
+         pv->SetTime(0.0);
+         pv->Save();
+      }
    }
 
    // Steps of time.dt; t_k = min(k dt, t_final), so the clock never drifts
-   // and the last step lands on t_final.
+   // and the last step lands on t_final. A restart continues the count: at
+   // the checkpoint's dt on the same clock (the uninterrupted run's steps),
+   // at another from the checkpoint's time.
    const double dt = params_.dt, tf = params_.t_final;
-   const long long n = std::max(1LL, static_cast<long long>(
+   const double t0 = solver.Time();
+   const bool shifted = restart && !same_dt;
+   const long long n = shifted ?
+                       k0 + std::max(0LL, static_cast<long long>(
+                                        std::ceil((tf - t0) / dt - 1e-9))) :
+                       std::max(1LL, static_cast<long long>(
                                    std::ceil(tf / dt - 1e-9)));
+   const CheckpointParameters& chk = params_.checkpoint;
+   bool chk_at_written = chk.at_time > 0.0 && t0 >= chk.at_time;
    bool ok = true;
-   double t_prev = 0.0;
-   for (long long k = 1; k <= n && ok; ++k)
+   double t_prev = t0;
+   for (long long k = k0 + 1; k <= n && ok; ++k)
    {
-      const double t = std::min(static_cast<double>(k) * dt, tf);
+      const double t = std::min(shifted ? t0 + static_cast<double>(k - k0) * dt :
+                                static_cast<double>(k) * dt, tf);
       ok = solver.Step(t - t_prev);
       if constexpr(hyper)
       {
@@ -327,6 +386,20 @@ bool ElasticityCase::March(SolidSolver& solver)
          pv->SetTime(t);
          pv->Save();
       }
+      if (ok && chk.enabled && k % std::max(chk.interval, 1) == 0)
+      {
+         WriteCheckpoint(chk.path, solver, k);
+      }
+      if (ok && chk.at_time > 0.0 && !chk_at_written && t >= chk.at_time)
+      {
+         chk_at_written = true;
+         WriteCheckpoint(chk.path, solver, k);
+         if (root)
+         {
+            mfem::out << "[incns] checkpoint written at t = " << t << " to "
+                      << chk.path << std::endl;
+         }
+      }
       t_prev = t;
    }
    solve_seconds_ = MPI_Wtime() - wall0;
@@ -338,9 +411,9 @@ bool ElasticityCase::March(SolidSolver& solver)
       {
          std::cout << "hyperelasticity: " << solver.GlobalTrueDofs() << " dofs, "
                    << solver.StepCount() << " steps to t = " << solver.Time()
-                   << ", Newton " << solver.TotalNewtonIterations()
+                   << ", Newton " << restored_newton_ + solver.TotalNewtonIterations()
                    << " iterations (max " << max_newton_step_ << " per step), CG "
-                   << solver.TotalLinearIterations() << " iterations"
+                   << restored_cg_ + solver.TotalLinearIterations() << " iterations"
                    << (ok ? "" : ", a step did NOT converge") << ", "
                    << solve_seconds_ << " s" << std::endl;
       }
@@ -348,13 +421,54 @@ bool ElasticityCase::March(SolidSolver& solver)
       {
          std::cout << "elasticity: " << solver.GlobalTrueDofs() << " dofs, "
                    << solver.StepCount() << " steps to t = " << solver.Time()
-                   << ", CG " << solver.TotalIterations() << " iterations (max "
-                   << solver.MaxIterations() << " per step)"
+                   << ", CG " << restored_cg_ + solver.TotalIterations()
+                   << " iterations (max " << std::max(restored_cg_max_,
+                         solver.MaxIterations())
+                   << " per step)"
                    << (ok ? "" : ", a step did NOT converge") << ", "
                    << solve_seconds_ << " s" << std::endl;
       }
    }
    return ok;
+}
+
+template <class SolidSolver>
+void ElasticityCase::WriteCheckpoint(const std::string& dir,
+                                     SolidSolver& solver, long long step)
+{
+   constexpr bool hyper = std::is_same<SolidSolver, Hyperelasticity>::value;
+   INCNS_PROFILE("solid::checkpoint");
+   const MPI_Comm comm = mesh_.GetComm();
+   if (Mpi::Root()) { std::filesystem::create_directories(dir); }
+   MPI_Barrier(comm); // the directory exists before any rank writes
+   WriteSolidState(dir, "solid", solver);
+   if (Mpi::Root())
+   {
+      std::ofstream m(dir + "/solid_case.yaml");
+      MFEM_VERIFY(m.good(), "elasticity_case: cannot write the checkpoint's "
+                  "metadata in " << dir);
+      m << std::setprecision(17)
+        << "# incns solid march checkpoint (same-np restart contract)\n"
+        << "equation: " << (hyper ? "hyperelasticity" : "linear_elasticity")
+        << "\nstep: " << step << "\ntime: " << solver.Time()
+        << "\ndt: " << params_.dt << "\n";
+      if constexpr(hyper)
+      {
+         m << "cg_iterations_total: "
+           << restored_cg_ + solver.TotalLinearIterations()
+           << "\nnewton_iterations_total: "
+           << restored_newton_ + solver.TotalNewtonIterations()
+           << "\nnewton_iterations_max: " << max_newton_step_ << "\n";
+      }
+      else
+      {
+         m << "cg_iterations_total: " << restored_cg_ + solver.TotalIterations()
+           << "\ncg_iterations_max: "
+           << std::max(restored_cg_max_, solver.MaxIterations()) << "\n";
+      }
+      MFEM_VERIFY(m.good(), "elasticity_case: writing the checkpoint failed");
+   }
+   MPI_Barrier(comm); // the checkpoint is complete on return, on every rank
 }
 
 void ElasticityCase::WriteSummary(const std::string& path,
@@ -472,16 +586,19 @@ void ElasticityCase::WriteSummary(const std::string& path,
       {
          dy["time"].Set(hyper_->Time());
          dy["steps"].Set(hyper_->StepCount());
-         dy["cg_iterations_total"].Set(hyper_->TotalLinearIterations());
-         dy["newton_iterations_total"].Set(hyper_->TotalNewtonIterations());
+         dy["cg_iterations_total"].Set(restored_cg_ +
+                                       hyper_->TotalLinearIterations());
+         dy["newton_iterations_total"].Set(restored_newton_ +
+                                           hyper_->TotalNewtonIterations());
          dy["newton_iterations_max"].Set(max_newton_step_);
       }
       else
       {
          dy["time"].Set(solver_->Time());
          dy["steps"].Set(solver_->StepCount());
-         dy["cg_iterations_total"].Set(solver_->TotalIterations());
-         dy["cg_iterations_max"].Set(solver_->MaxIterations());
+         dy["cg_iterations_total"].Set(restored_cg_ + solver_->TotalIterations());
+         dy["cg_iterations_max"].Set(std::max(restored_cg_max_,
+                                              solver_->MaxIterations()));
       }
    }
 

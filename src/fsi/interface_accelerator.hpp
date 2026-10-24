@@ -36,6 +36,23 @@ public:
     */
    virtual double Next(const mfem::Vector& d, const mfem::Vector& dtilde,
                        mfem::Vector& next) = 0;
+
+   /// What the accelerator carries from step to step, for a checkpoint: the
+   /// sizes of its parts and their vectors (true dofs), in the method's
+   /// layout. NewStep() rebuilds everything else.
+   struct State
+   {
+      std::vector<int> counts;           ///< The parts' sizes.
+      std::vector<mfem::Vector> vectors; ///< Their vectors, in order.
+   };
+   /// @return The state a restart needs (relaxation carries none).
+   virtual State ExportState() const { return State(); }
+   /// @param s A state from ExportState() of the same method.
+   virtual void ImportState(const State& s)
+   {
+      MFEM_VERIFY(s.counts.empty() && s.vectors.empty(), "fsi: the "
+                  "checkpoint's accelerator state is not this method's");
+   }
 };
 
 /**
@@ -101,6 +118,11 @@ public:
 
    /// @return The columns in the last least-squares problem.
    int Columns() const { return columns_; }
+
+   /// This step's columns and the kept steps', newest first (counts: the
+   /// columns of each; vectors: each step's V, then its W).
+   State ExportState() const override;
+   void ImportState(const State& s) override;
 
 private:
    /// One step's columns, newest first.

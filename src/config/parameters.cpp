@@ -1538,8 +1538,6 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
                   p.equation == Equation::NavierStokes,
                   "parameters: fsi couples a flow (equation navier_stokes or "
                   "stokes) with the solid of section solid");
-      MFEM_VERIFY(p.restart_from.empty(), "parameters: an fsi run cannot restart "
-                  "yet (the solid's state is not checkpointed)");
       MFEM_VERIFY(p.step_control == StepControl::Fixed,
                   "parameters: fsi takes fixed steps (time.step_control: "
                   "fixed): the fluid and the solid step together");

@@ -102,6 +102,20 @@ displacement when `solid.probe` is set). `output.history: true` writes
 `<path>/<name>_history.csv`: step, t, dt, CG iterations, kinetic, strain and
 total energy, and the probe's displacement, one row per step.
 
+**Checkpoints and restarts** of a dynamic march, for both equations (linear
+and `hyperelasticity`). `checkpoint.enabled` writes a rolling checkpoint
+every `checkpoint.interval` steps, and once at `checkpoint.at_time`, into
+`checkpoint.path`. It holds the solver's state (`solid.*`: the displacement
+and velocity levels, the generalized-alpha acceleration, the loads) and
+`solid_case.yaml` (the step, dt and the iteration totals). `restart: <dir>`
+at the same rank count continues from it. The steps after it are the
+uninterrupted run's, bit for bit on a host (`solid_restart_test`: both
+equations, generalized-alpha and BDF); with another `time.dt` the march goes
+on from the checkpoint's time. The history CSV is appended to: rows the
+earlier run wrote past the checkpoint are superseded where the time goes
+back, as in a flow's history. The summary's iteration totals cover the whole
+run. A static solve has nothing to restart, and `restart` is refused there.
+
 ## 3. Memory per DOF (estimated, not measured)
 
 Per vector DOF, 3D, double precision:

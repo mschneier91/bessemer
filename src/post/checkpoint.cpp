@@ -27,7 +27,7 @@ std::string BinPath(const std::string& dir, const std::string& base, int rank)
 
 // Raw binary vector dump: int64 size, then the doubles. Bitwise-exact, and the
 // size prefix doubles as the per-rank partition check on read.
-void WriteVector(const std::string& path, const Vector& v)
+void WriteVectorFile(const std::string& path, const Vector& v)
 {
    std::ofstream f(path, std::ios::binary);
    MFEM_VERIFY(f.good(), "checkpoint: cannot open " << path << " for writing");
@@ -41,7 +41,7 @@ void WriteVector(const std::string& path, const Vector& v)
    MFEM_VERIFY(f.good(), "checkpoint: write failed for " << path);
 }
 
-void ReadVector(const std::string& path, int expected_size, Vector& v)
+void ReadVectorFile(const std::string& path, int expected_size, Vector& v)
 {
    std::ifstream f(path, std::ios::binary);
    MFEM_VERIFY(f.good(), "checkpoint: cannot open " << path
@@ -63,6 +63,24 @@ void ReadVector(const std::string& path, int expected_size, Vector& v)
 }
 
 } // namespace
+
+std::string Checkpoint::RankFile(const std::string& dir,
+                                 const std::string& base,
+                                 int rank)
+{
+   return BinPath(dir, base, rank);
+}
+
+void Checkpoint::WriteVector(const std::string& path, const Vector& v)
+{
+   WriteVectorFile(path, v);
+}
+
+void Checkpoint::ReadVector(const std::string& path, int expected_size,
+                            Vector& v)
+{
+   ReadVectorFile(path, expected_size, v);
+}
 
 namespace
 {

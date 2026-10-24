@@ -17,7 +17,15 @@
 //     steps, with u = w on the interface at convergence;
 //  F7 so does Neumann-Dirichlet (on a soft flag);
 //  F8 the St. Venant-Kirchhoff solid reaches the linear one's coupled steps
-//     at small strain.
+//     at small strain;
+//  F9 a restart from a checkpoint after step 3 matches the uninterrupted run
+//     over 6 steps (the flow, the solid, the subiterations): Dirichlet-Neumann
+//     with IQN-ILS keeping two steps' columns, a linear dynamic solid and the
+//     flow's solvers rebuilt after every move (bitwise on a host); a static
+//     solid and Robin-Neumann (bitwise); the St. Venant-Kirchhoff solid with
+//     the neo-Hookean mesh motion, the solvers refreshed in place (to the
+//     solver tolerance: the restart's AMG hierarchies are built on its own
+//     mesh).
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -32,6 +40,8 @@
 #include "mfem.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <sstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -474,4 +484,127 @@ TEST(Fsi, F8_HyperelasticSolidMatchesTheLinearOneAtSmallStrain)
                                "1.4e7", true, 1e-3, its, 1e-4);
    ASSERT_EQ(its.size(), 2u);
    EXPECT_GT(its[1], 0);
+}
+
+namespace
+{
+
+/// F9's comparison for one deck: 6 steps against 4 with a checkpoint every
+/// 3, restarted from step 3.
+void RestartMatchesUninterrupted(const std::string& name,
+                                 const std::string& fsi_extra,
+                                 const std::string& solid_extra,
+                                 const std::string& extra, bool ramp,
+                                 double solver_rtol, double tol)
+{
+   const std::string chk = "fsi_chk_" + name + "_np" + std::to_string(Np());
+   auto deck = [&](const char* t_final, const std::string & more)
+   {
+      std::string d = Deck(fsi_extra + "  max_iterations: 300\n", solid_extra,
+                           Np(), ramp) + extra + more;
+      d.replace(d.find("t_final: 1.0"), 12, std::string("t_final: ") + t_final);
+      if (solver_rtol != 1e-10)
+      {
+         std::ostringstream r;
+         r << "rtol: " << solver_rtol;
+         d.replace(d.find("rtol: 1.0e-10"), 13, r.str());
+      }
+      return d;
+   };
+   struct Result
+   {
+      Vector u, d;
+      std::vector<FsiCase::StepRecord> steps;
+   };
+   auto run = [&](const std::string & text, bool more)
+   {
+      if (Mpi::Root())
+      {
+         std::cout << "[F9] " << name << ": " << (text.find("restart:") !=
+                   std::string::npos ? "restarted" : more ? "uninterrupted" :
+                   "to the checkpoint") << std::endl;
+      }
+      const Parameters p = Parameters::LoadYAMLString(text);
+      auto mesh = incns::MakeCaseMesh(p);
+      FsiCase fsi(*mesh, p);
+      EXPECT_TRUE(fsi.Run()) << name;
+      Result r;
+      if (more)
+      {
+         Case& f = fsi.Fluid();
+         r.u.SetSize(f.Spaces().Velocity().GetTrueVSize());
+         f.Velocity().GetTrueDofs(r.u);
+         fsi.Solid().Displacement().GetTrueDofs(r.d);
+         r.steps = fsi.History();
+      }
+      return r;
+   };
+   const Result a = run(deck("0.03", ""), true);
+   run(deck("0.02", "checkpoint:\n  enabled: true\n  interval: 3\n  path: " +
+            chk + "\n"), false);
+   const Result c = run(deck("0.03", "restart: " + chk + "\n"), true);
+   ASSERT_EQ(a.steps.size(), 6u) << name;
+   ASSERT_EQ(c.steps.size(), 6u) << name;
+   double su = a.u.Normlinf(), sd = a.d.Normlinf();
+   MPI_Allreduce(MPI_IN_PLACE, &su, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   MPI_Allreduce(MPI_IN_PLACE, &sd, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   EXPECT_GT(sd, 0.0) << name;
+   const double eu = MaxDiff(a.u, c.u), ed = MaxDiff(a.d, c.d);
+   EXPECT_LE(eu, tol * su) << name;
+   EXPECT_LE(ed, tol * sd) << name;
+   for (std::size_t k = 0; k < 6; ++k)
+   {
+      EXPECT_EQ(c.steps[k].time, a.steps[k].time) << name << " step " << k + 1;
+      if (tol == 0.0)
+      {
+         EXPECT_EQ(c.steps[k].iterations, a.steps[k].iterations)
+               << name << " step " << k + 1;
+         EXPECT_EQ(c.steps[k].residual, a.steps[k].residual)
+               << name << " step " << k + 1;
+      }
+   }
+   if (Mpi::Root())
+   {
+      std::cout << "[F9] " << name << ": |u - u_restart| / |u| " << eu / su
+                << ", |d - d_restart| / |d| " << ed / sd << ", subiterations";
+      for (std::size_t k = 3; k < 6; ++k)
+      {
+         std::cout << " " << a.steps[k].iterations << "/" << c.steps[k].iterations;
+      }
+      std::cout << std::endl;
+   }
+   MPI_Barrier(MPI_COMM_WORLD);
+   if (Mpi::Root()) { std::filesystem::remove_all(chk); }
+}
+
+} // namespace
+
+// F9
+TEST(Fsi, F9_RestartMatchesUninterrupted)
+{
+   // Bitwise on a host; hypre's GPU AMG is not run-to-run reproducible, and
+   // the subiterations amplify it.
+   const double exact = incns_test::ReproTol(0.0, 1e-6);
+   // On the ramped start: at np 1 the impulsive one's flow solve stalls at
+   // step 6 with the solvers rebuilt after every move (2000 iterations), in
+   // the uninterrupted run too.
+   RestartMatchesUninterrupted("dn_iqn_reuse2",
+                               "  acceleration: iqn_ils\n  reuse: 2\n",
+                               "  analysis: dynamic\n",
+                               "mesh_motion:\n  refresh: rebuild\n", true,
+                               1e-10, exact);
+   RestartMatchesUninterrupted("dn_static", "  acceleration: iqn_ils\n",
+                               "  analysis: static\n",
+                               "mesh_motion:\n  refresh: rebuild\n", true,
+                               1e-12, exact);
+   RestartMatchesUninterrupted("rn", "  coupling: robin_neumann\n",
+                               "  analysis: dynamic\n",
+                               "mesh_motion:\n  refresh: rebuild\n", false,
+                               1e-10, exact);
+   RestartMatchesUninterrupted("svk_neo_hookean_in_place",
+                               "  acceleration: iqn_ils\n"
+                               "  solid: hyperelasticity\n",
+                               "  analysis: dynamic\n",
+                               "mesh_motion:\n  model: neo_hookean\n", false,
+                               1e-10, 1e-6);
 }

@@ -6,9 +6,11 @@
  */
 #pragma once
 
+#include "solid/solid_checkpoint.hpp"
 #include "mfem.hpp"
 
 #include <memory>
+#include <string>
 
 namespace incns
 {
@@ -50,6 +52,12 @@ public:
    virtual void SaveState() = 0;
    /// Return to the state of the last SaveState().
    virtual void RestoreState() = 0;
+   /// Write the state into a checkpoint directory as `<name>.*`
+   /// (solid/solid_checkpoint). Collective.
+   virtual void WriteState(const std::string& dir, const std::string& name) = 0;
+   /// Restore a state WriteState() wrote (after Initialize() when dynamic).
+   /// Collective.
+   virtual void ReadState(const std::string& dir, const std::string& name) = 0;
 
    /// @return The displacement space (vector H1, by nodes).
    virtual mfem::ParFiniteElementSpace& Space() = 0;
@@ -106,6 +114,14 @@ public:
    bool Solve() override { return s_->Solve(); }
    void SaveState() override { saved_ = s_->ExportState(); }
    void RestoreState() override { s_->ImportState(saved_); }
+   void WriteState(const std::string& dir, const std::string& name) override
+   {
+      WriteSolidState(dir, name, *s_);
+   }
+   void ReadState(const std::string& dir, const std::string& name) override
+   {
+      ReadSolidState(dir, name, *s_);
+   }
    mfem::ParFiniteElementSpace& Space() override { return s_->Space(); }
    mfem::ParGridFunction& Displacement() override { return s_->Displacement(); }
    bool DisplacementAt(const mfem::Vector& x, mfem::Vector& u) const override

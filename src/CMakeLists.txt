@@ -75,6 +75,7 @@ add_library(incns STATIC
   solid/hyperelastic_operator.cpp
   solid/hyperelasticity.cpp
   solid/elasticity_case.cpp
+  solid/solid_checkpoint.cpp
   ale/linear_elastic_motion.cpp
   ale/hyperelastic_motion.cpp
   ale/mesh_motion_factory.cpp

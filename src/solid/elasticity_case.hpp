@@ -61,7 +61,13 @@ public:
     *        one shortened), with `<path>/<name>_history.csv` when
     *        output.history (t, energies, the probe's displacement) and
     *        ParaView output every output.interval steps when output.enabled.
-    *        Collective.
+    *        Collective. The march writes rolling checkpoints (section
+    *        checkpoint: every interval steps, once at at_time) and continues
+    *        one with `restart` (the same rank count): the steps after it are
+    *        the uninterrupted run's, the history CSV continues (appended;
+    *        rows of the earlier segment past the checkpoint are superseded
+    *        where the time goes back), and the summary counts the whole run.
+    *        A static solve has nothing to restart (refused).
     * @return Whether every CG converged.
     */
    bool Run();
@@ -96,6 +102,12 @@ private:
    /// Hyperelasticity).
    template <class SolidSolver>
    bool March(SolidSolver& solver);
+   /// Write the march's rolling checkpoint into @p dir after step @p step:
+   /// the solver's state (solid/solid_checkpoint) and `solid_case.yaml` (the
+   /// step, dt and the iteration totals). Collective.
+   template <class SolidSolver>
+   void WriteCheckpoint(const std::string& dir, SolidSolver& solver,
+                        long long step);
    /// @return The probe's displacement (zero if absent). Collective.
    mfem::Vector ProbeDisplacement();
    /// @return The displacement order in effect.
@@ -113,6 +125,12 @@ private:
    bool solved_ = false;        ///< Whether Solve() or a march ran.
    bool converged_ = true;      ///< Whether every solve converged.
    int max_newton_step_ = 0;    ///< Hyperelastic march: most Newton its per step.
+   /// A restart: the CG iterations of the run before it (the summary's
+   /// totals cover the whole run).
+   long long restored_cg_ = 0;
+   long long restored_newton_ = 0; ///< A restart: the Newton iterations before it.
+   int restored_cg_max_ =
+      0;       ///< A restart: the most CG its in a step before it.
 };
 
 } // namespace incns
