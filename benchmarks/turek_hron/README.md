@@ -151,7 +151,8 @@ oscillation, the same settings as FSI3 at Δt 5·10⁻⁴ to t = 15. Reference: 
 −14.58 ± 12.44, u_y(A) 1.23 ± 80.6 (mm), frequency 2.0 (u_y), drag 208.83 ± 73.75, lift
 0.88 ± 234.2.
 
-**Reached, and within 1.5 % on `level: 1` (2026-10-24).** With the neo-Hookean mesh
+**Reached; on `level: 1` the displacements within about 1 %, the drag within 0.2 % and the
+lift 3 % low once the force ripple is taken out (2026-10-24).** With the neo-Hookean mesh
 motion (`mesh_motion.model: neo_hookean`, in the deck), over the last period before
 t = 15 (the oscillation is periodic from t ≈ 11), against Turek & Hron:
 
@@ -160,20 +161,36 @@ t = 15 (the oscillation is periodic from t ≈ 11), against Turek & Hron:
 | deck (314 elements), np 8 | 5·10⁻⁴ | −13.15 ± 11.39 (−8.4 %) | 1.25 ± 75.92 (−5.8 %) | 205.1 ± 67.8 (−8.1 %) | 0.95 ± 220.8 (−5.7 %) | 1.924 |
 | deck | 2.5·10⁻⁴ | −13.14 ± 11.39 (−8.5 %) | 1.25 ± 75.92 (−5.8 %) | 206.6 ± 70.3 (−4.7 %) | −0.56 ± 241.1 (+2.9 %) | 1.924 |
 | `level: 1` (1,256), np 32 | 5·10⁻⁴ | −14.34 ± 12.30 (−1.1 %) | 1.25 ± 79.80 (−1.0 %) | 211.3 ± 74.8 (+1.5 %) | −1.17 ± 236.2 (+0.9 %) | 1.927 |
+| `level: 1` | 2.5·10⁻⁴ | −14.34 ± 12.30 (−1.2 %) | 1.25 ± 79.80 (−1.0 %) | 211.6 ± 77.2 (+4.7 %) | −1.93 ± 254.1 (+8.5 %) | 1.927 |
 
-The percentages are the amplitudes' errors. On the coarse mesh the displacements do not
-move with Δt (to 4 digits), and one refinement brings them within about 1 %. The forces'
-amplitudes do move with Δt there, from the coarse mesh's force ripple. Turek & Hron give the
-frequencies to two digits (2.0 for u_y; 3.8 = 2 × 1.9 for u_x and the drag); ours are
-1.924-1.927 and 3.85. Over the last three periods instead of the last, the displacements
-agree to 4 digits and the forces' amplitudes to 0.4-2.2 %.
+The percentages are the amplitudes' errors. The displacements do not move with Δt (to 4
+digits) and one refinement brings them within about 1 %. Turek & Hron give the frequencies
+to two digits (2.0 for u_y; 3.8 = 2 × 1.9 for u_x and the drag); ours are 1.924-1.927 and
+3.85.
 
-The deck's run is M4's (4924cec, t = 0 to 15). The two finer runs continue their own runs
-from a checkpoint at t = 8.5 on cb2c4a6's solver. Before cb2c4a6 they stopped at
-t = 8.4-9.15 with a stalled flow solve, from folded LOR sub-elements in the pressure
-preconditioner near the tip ([docs/status.md](../../docs/status.md)). cb2c4a6 changes
-nothing before the first fold (t ≈ 8.56). `level: 1` at Δt 2.5·10⁻⁴ and `level: 2` (5,024
-elements, np 64) run from t = 0 and are not in yet.
+**The forces' amplitudes above carry a step-to-step ripple.** It comes from the coupling's
+residual error: its RMS doubles when Δt halves (lift 4.3 → 8.9 on the deck's mesh, 4.6 → 8.2 on
+`level: 1`), and the max − min amplitude picks up its peaks. The displacements carry none.
+Smoothed by a moving average over ±0.005 (10-20 steps; it takes 0.08 % off u_y's
+amplitude), the force amplitudes do not move with Δt (`fsi.py ... --smooth 0.005`):
+
+| Mesh | Drag, Δt 5·10⁻⁴ / 2.5·10⁻⁴ | Lift, Δt 5·10⁻⁴ / 2.5·10⁻⁴ |
+|---|---|---|
+| deck | −10.0 % / −9.8 % | −10.7 % / −10.5 % |
+| `level: 1` | −0.2 % / 0.0 % | −3.3 % / −3.0 % |
+
+So on `level: 1` the drag amplitude is Turek & Hron's and the lift's is 3 % low; the raw
++0.9 % above was the ripple's peaks. A tighter `fsi.rtol` would shrink the ripple (more
+subiterations); not tried.
+
+The deck's run is M4's (4924cec, t = 0 to 15). The deck's mesh at Δt 2.5·10⁻⁴ and
+`level: 1` at 5·10⁻⁴ continue their own runs from a checkpoint at t = 8.5, and `level: 1` at
+2.5·10⁻⁴ runs from t = 0, all on cb2c4a6's solver (the pressure LOR-AMG's 2D threshold
+still 0.1). Before cb2c4a6 they stopped at t = 8.4-9.15 with a stalled flow solve, from folded
+LOR sub-elements in the pressure preconditioner near the tip
+([docs/status.md](../../docs/status.md)); cb2c4a6 changes nothing before the first fold
+(t ≈ 8.56). `level: 2` (5,024 elements, np 64) is not in yet. All five run again from t = 0
+on 12e3767 (the threshold 0.25), with the other 2D results here.
 
 The linear-elastic mesh motion does not reach it. Coarse mesh, np 4, 2026-10-23: the
 oscillation grows from rest at about 3 subiterations per step (the coupling is not the

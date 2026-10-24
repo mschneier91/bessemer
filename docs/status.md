@@ -39,16 +39,23 @@ change the default in 2d to .25").** It was 0.1 in 2D (the spec's starting point
 benchmark READMEs were made at 0.1 and are not rerun. 3D is unchanged. `solver.lp_strong_threshold: 0.1`
 restores the old 2D default. fsi_test F4 now sets fsi.atol 0 and checks rtol exactly (atol over the impulsive start's small |d~| let one step's |r| / |d~| pass the old bound). CPU np 1/2/4 and the debug device (hvel 49765951); 3D decks bitwise b5c7030 (hfluid3d 49765969), 2D decks with `lp_strong_threshold: 0.1` bitwise b5c7030 (hfluidk 49765968).
 
-**FSI2 refined: within 1.5 % of Turek & Hron on `level: 1` (2026-10-24; human: "run the finer
-mesh cases to see if we match").** `benchmarks/turek_hron/fsi2.yaml` now takes the
-neo-Hookean mesh motion. Over the last period before t = 15, the amplitudes' errors are:
-- the deck's mesh at Δt 5·10⁻⁴: u_x −8.4 %, u_y −5.8 %, drag −8.1 %, lift −5.7 %;
-- at Δt 2.5·10⁻⁴: the displacements unchanged, drag −4.7 %, lift +2.9 %;
-- `level: 1` at Δt 5·10⁻⁴: u_x −1.1 %, u_y −1.0 %, drag +1.5 %, lift +0.9 %, the means
-  within 1.6 %, frequency 1.927 (Turek & Hron's 2.0 and 3.8 are given to 2 digits).
+**FSI2 refined: on `level: 1` the displacements within about 1 % of Turek & Hron, the drag
+within 0.2 % and the lift 3 % low (2026-10-24; human: "run the finer mesh cases to see if we
+match").** `benchmarks/turek_hron/fsi2.yaml` now takes the neo-Hookean mesh motion. Over the
+last period before t = 15, the amplitudes' errors:
+- the deck's mesh: u_x −8.4 %, u_y −5.8 % at both Δt 5·10⁻⁴ and 2.5·10⁻⁴;
+- `level: 1`: u_x −1.1 / −1.2 %, u_y −1.0 % at both; the means within 1.6 %; frequency
+  1.927 (Turek & Hron's 2.0 and 3.8 are given to 2 digits).
 
-`level: 1` at Δt 2.5·10⁻⁴ and `level: 2` are running (benchmarks/turek_hron/README.md,
-FSI2). The finer runs needed cb2c4a6: before it they stopped at t = 8.4-9.15.
+The forces carry a step-to-step ripple from the coupling's residual (its RMS doubles when Δt
+halves), so their raw max − min amplitudes move with Δt (level 1 lift +0.9 % → +8.5 %).
+Smoothed over ±0.005 (`fsi.py --smooth`) they do not:
+- the deck's mesh: drag −10.0 / −9.8 %, lift −10.7 / −10.5 %;
+- `level: 1`: drag −0.2 / 0.0 %, lift −3.3 / −3.0 %.
+
+`level: 2` is running (benchmarks/turek_hron/README.md, FSI2). The finer runs needed cb2c4a6:
+before it they stopped at t = 8.4-9.15. All of it runs again on 12e3767 (the 2D threshold
+0.25) with the other 2D README results.
 
 **The np-1 FSI stall (a loose end, 2026-10-24): the coupling, not the flow.** F9's impulsive
 Dirichlet-Neumann deck (rho_s = rho_f, IQN-ILS `reuse: 2`) failed at np 1 with

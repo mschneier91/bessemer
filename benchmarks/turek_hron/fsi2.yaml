@@ -9,8 +9,8 @@
 # roundoff, so the run is long. Turek & Hron's values are over the last
 # period, mean +- amplitude from the extremes. The mesh motion is neo-Hookean:
 # the linear-elastic one folds the cells by the flag at t = 8.6 (tip at 58 of
-# 81 mm). This coarse mesh's amplitudes are 6-8 % below Turek & Hron's, level 1's
-# within 1.5 % (README.md, FSI2).
+# 81 mm). This coarse mesh's displacement amplitudes are 6-8 % below Turek &
+# Hron's, level 1's about 1 % (README.md, FSI2).
 #
 #   mpirun -np 4 build/cpu/apps/run_case benchmarks/turek_hron/fsi2.yaml
 #   python3 benchmarks/turek_hron/fsi.py fsi2 fsi2/fsi2_forces.csv fsi2/fsi2_fsi.csv
