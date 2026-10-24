@@ -109,11 +109,14 @@ long long CountFoldedLorElements(mfem::ParFiniteElementSpace& fes)
                   // The edges through vertex (a, b, c) along xi, eta, zeta.
                   double u[3], v[3], w[3];
                   const int x0 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix, iy + b, iz + c);
-                  const int x1 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + 1, iy + b, iz + c);
+                  const int x1 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + 1, iy + b,
+                                 iz + c);
                   const int y0 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + a, iy, iz + c);
-                  const int y1 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + a, iy + 1, iz + c);
+                  const int y1 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + a, iy + 1,
+                                 iz + c);
                   const int z0 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + a, iy + b, iz);
-                  const int z1 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + a, iy + b, iz + 1);
+                  const int z1 = lor_fold_kernels::LorVertex(sdim, n1, nv, e, ix + a, iy + b,
+                                 iz + 1);
                   for (int d = 0; d < 3; ++d)
                   {
                      u[d] = X[x1 + d] - X[x0 + d];
