@@ -7,6 +7,9 @@
 //    converges to 1e-8 in a bounded iteration count on both the singular
 //    (enclosed, projected RHS + Ortho wrap) and nonsingular (outflow) paths
 //    -- an early end-to-end check of the whole inner stack of the CC PC.
+//  * folded LOR sub-elements (a moved curved mesh): counted, and L_p then
+//    takes |det J| -- positive diagonal, its V-cycle preconditions CG on it;
+//    without a fold the matrix is the batched LOR one bitwise.
 
 #include <gtest/gtest.h>
 
@@ -28,6 +31,7 @@
 using namespace mfem;
 using incns::BoundaryConditions;
 using incns::BoxSpec;
+using incns::CountFoldedLorElements;
 using incns::ConstantPressureProjector;
 using incns::LpBC;
 using incns::LpSurrogate;
@@ -181,5 +185,100 @@ TEST(LpSurrogate, PreconditionsInnerCg)
       r -= rhs;
       if (sc.singular) { proj.Project(r); }
       EXPECT_LE(Norm(r), 1e-6 * Norm(rhs));
+   }
+}
+
+// A folded LOR sub-element: on a curved Q3 mesh (2 x 2, the pressure space's
+// GLL nodes are the mesh nodes) the corner element's first interior node is
+// pushed past the element's corner, so the corner sub-element folds. The
+// surrogate counts it and assembles with |det J|: every diagonal entry is
+// positive and CG with one V-cycle solves L_p x = b. Unfolded, nothing is
+// counted and the matrix is the batched LOR assembly's, bitwise.
+TEST(LpSurrogate, FoldedLorSubElementsStaySpd)
+{
+   for (int fold = 0; fold < 2; ++fold)
+   {
+      BoxSpec s;
+      s.dim = 2;
+      s.num_elems = {2, 2, 0};
+      s.lengths = {1.0, 1.0};
+      s.periodic = {false, false, false};
+      Mesh serial = MakeBoxMesh(s);
+      ParMesh mesh(MPI_COMM_WORLD, serial);
+      mesh.SetCurvature(3);
+      if (fold)
+      {
+         GridFunction& x = *mesh.GetNodes();
+         const FiniteElementSpace& nf = *x.FESpace();
+         const double xi = 0.25 * (1.0 - 1.0 / std::sqrt(5.0)); // h = 0.5
+         int moved = 0;
+         for (int i = 0; i < nf.GetNDofs(); ++i)
+         {
+            double& px = x(nf.DofToVDof(i, 0));
+            double& py = x(nf.DofToVDof(i, 1));
+            if (std::fabs(px - xi) < 1e-10 && std::fabs(py - xi) < 1e-10)
+            {
+               px = -0.02;
+               py = -0.02;
+               ++moved;
+            }
+         }
+         MPI_Allreduce(MPI_IN_PLACE, &moved, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+         ASSERT_EQ(moved, 1);
+         mesh.NodesUpdated();
+      }
+      H1_FECollection fec(3, 2);
+      ParFiniteElementSpace pfes(&mesh, &fec);
+      Array<int> outflow;
+      outflow.Append(2);
+      LpSurrogate lp(pfes, outflow, false);
+      const HypreParMatrix& A = lp.Matrix();
+      // The batched LOR assembly's matrix (the path without folds).
+      ParBilinearForm f(&pfes);
+      f.AddDomainIntegrator(new DiffusionIntegrator);
+      ParLORDiscretization lor(f, lp.EssentialTrueDofs());
+      HypreParMatrix& B = lor.GetAssembledMatrix();
+      Vector da, db;
+      A.GetDiag(da);
+      B.GetDiag(db);
+      double min_a = da.Size() ? da.Min() : 1.0, min_b = db.Size() ? db.Min() : 1.0;
+      MPI_Allreduce(MPI_IN_PLACE, &min_a, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &min_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+      EXPECT_EQ(CountFoldedLorElements(pfes), lp.FoldedLorElements());
+      Vector b(A.Height()), xs(A.Height()), y(A.Height());
+      b.Randomize(7 + Mpi::WorldRank());
+      if (!fold)
+      {
+         EXPECT_EQ(lp.FoldedLorElements(), 0);
+         A.Mult(b, xs);
+         B.Mult(b, y);
+         double scale[2] = {y.Size() ? y.Normlinf() : 0.0, 0.0};
+         xs -= y;
+         scale[1] = xs.Size() ? xs.Normlinf() : 0.0;
+         MPI_Allreduce(MPI_IN_PLACE, scale, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+         // Bitwise on a host; on a GPU the batched assembly orders each row's
+         // entries by atomics, which moves the products' roundoff.
+         const bool gpu = Device::Allows(Backend::DEVICE_MASK);
+         EXPECT_LE(scale[1], gpu ? 1e-13 * scale[0] : 0.0)
+               << "unfolded: the batched LOR matrix";
+         continue;
+      }
+      EXPECT_GT(lp.FoldedLorElements(), 0);
+      EXPECT_GT(min_a, 0.0) << "|det J|: every diagonal entry positive";
+      for (int i : lp.EssentialTrueDofs()) { b(i) = 0.0; }
+      CGSolver cg(MPI_COMM_WORLD);
+      cg.SetOperator(A);
+      cg.SetPreconditioner(lp);
+      cg.SetRelTol(1e-10);
+      cg.SetMaxIter(200);
+      xs = 0.0;
+      cg.Mult(b, xs);
+      if (Mpi::Root())
+      {
+         std::cout << "[fold] " << lp.FoldedLorElements() << " folded; min diagonal "
+                   << min_a << " (batched " << min_b << "); CG "
+                   << cg.GetNumIterations() << " iterations" << std::endl;
+      }
+      EXPECT_TRUE(cg.GetConverged());
    }
 }

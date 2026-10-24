@@ -16,7 +16,10 @@
 #include "precond/nullspace.hpp"
 #include "util/profiler.hpp"
 #include "mfem.hpp"
+#include "mfem/fem/lor/lor_batched.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 
@@ -31,6 +34,153 @@ enum class LpBC
    DirichletOnAttrs ///< Homogeneous Dirichlet on a caller-given attribute list.
 };
 
+/// Index of LOR vertex (i, j, k) of element e in the batched LOR vertex
+/// coordinates (byVDIM: sdim x n1^dim x ne, lexicographic, x fastest).
+MFEM_HOST_DEVICE inline int LorVertex(int sdim, int n1, int nv, int e, int i,
+                                      int j, int k)
+{
+   return sdim * (nv * e + i + n1 * (j + n1 * k));
+}
+
+/**
+ * @brief The number of LOR sub-elements, over all ranks, of @p fes's
+ *        GLL-node refinement whose Q1 map has a non-positive Jacobian at a
+ *        vertex. The batched LOR assembly integrates there, so such a
+ *        sub-element gives a negative (semi)definite element matrix.
+ *
+ * A moved curved mesh can fold sub-elements that its high-order elements
+ * survive: FSI2's flag tip (2026-10-23), where L_p's diagonal went
+ * non-positive and the V-cycles stopped preconditioning. Collective. 0 for
+ * spaces the check does not cover (non-tensor elements, DG, a surface).
+ */
+inline long long CountFoldedLorElements(mfem::ParFiniteElementSpace& fes)
+{
+   mfem::ParMesh& mesh = *fes.GetParMesh();
+   const int dim = mesh.Dimension();
+   int covered = (mfem::UsesTensorBasis(fes) && !fes.IsDGSpace() &&
+                  mesh.SpaceDimension() == dim && (dim == 2 || dim == 3))
+                 ? 1 : 0;
+   MPI_Allreduce(MPI_IN_PLACE, &covered, 1, MPI_INT, MPI_MIN, fes.GetComm());
+   if (!covered) { return 0; }
+   mfem::Vector x_vert;
+   mfem::BatchedLORAssembly::FormLORVertexCoordinates(fes, x_vert);
+   const int p = fes.GetMaxElementOrder(), n1 = p + 1;
+   const int nv = dim == 2 ? n1 * n1 : n1 * n1 * n1;
+   const int nsub = dim == 2 ? p * p : p * p * p;
+   const int ne = fes.GetNE(), sdim = dim;
+   mfem::Vector folded(ne * nsub);
+   folded.UseDevice(true);
+   const double* X = x_vert.Read();
+   double* F = folded.Write();
+   if (dim == 2)
+   {
+      mfem::forall(ne * nsub, [ = ] MFEM_HOST_DEVICE(int t)
+      {
+         const int e = t / nsub, s = t % nsub, ix = s % p, iy = s / p;
+         double fold = 0.0;
+         for (int b = 0; b < 2; ++b)
+         {
+            for (int a = 0; a < 2; ++a)
+            {
+               // The edges through vertex (a, b) along xi and eta.
+               const int x0 = LorVertex(sdim, n1, nv, e, ix, iy + b, 0);
+               const int x1 = LorVertex(sdim, n1, nv, e, ix + 1, iy + b, 0);
+               const int y0 = LorVertex(sdim, n1, nv, e, ix + a, iy, 0);
+               const int y1 = LorVertex(sdim, n1, nv, e, ix + a, iy + 1, 0);
+               const double det = (X[x1] - X[x0]) * (X[y1 + 1] - X[y0 + 1]) -
+                                  (X[x1 + 1] - X[x0 + 1]) * (X[y1] - X[y0]);
+               if (!(det > 0.0)) { fold = 1.0; }
+            }
+         }
+         F[t] = fold;
+      });
+   }
+   else
+   {
+      mfem::forall(ne * nsub, [ = ] MFEM_HOST_DEVICE(int t)
+      {
+         const int e = t / nsub, s = t % nsub;
+         const int ix = s % p, iy = (s / p) % p, iz = s / (p * p);
+         double fold = 0.0;
+         for (int c = 0; c < 2; ++c)
+         {
+            for (int b = 0; b < 2; ++b)
+            {
+               for (int a = 0; a < 2; ++a)
+               {
+                  // The edges through vertex (a, b, c) along xi, eta, zeta.
+                  double u[3], v[3], w[3];
+                  const int x0 = LorVertex(sdim, n1, nv, e, ix, iy + b, iz + c);
+                  const int x1 = LorVertex(sdim, n1, nv, e, ix + 1, iy + b, iz + c);
+                  const int y0 = LorVertex(sdim, n1, nv, e, ix + a, iy, iz + c);
+                  const int y1 = LorVertex(sdim, n1, nv, e, ix + a, iy + 1, iz + c);
+                  const int z0 = LorVertex(sdim, n1, nv, e, ix + a, iy + b, iz);
+                  const int z1 = LorVertex(sdim, n1, nv, e, ix + a, iy + b, iz + 1);
+                  for (int d = 0; d < 3; ++d)
+                  {
+                     u[d] = X[x1 + d] - X[x0 + d];
+                     v[d] = X[y1 + d] - X[y0 + d];
+                     w[d] = X[z1 + d] - X[z0 + d];
+                  }
+                  const double det = u[0] * (v[1] * w[2] - v[2] * w[1]) -
+                                     u[1] * (v[0] * w[2] - v[2] * w[0]) +
+                                     u[2] * (v[0] * w[1] - v[1] * w[0]);
+                  if (!(det > 0.0)) { fold = 1.0; }
+               }
+            }
+         }
+         F[t] = fold;
+      });
+   }
+   long long n = static_cast<long long>(folded.Sum() + 0.5);
+   MPI_Allreduce(MPI_IN_PLACE, &n, 1, MPI_LONG_LONG, MPI_SUM, fes.GetComm());
+   return n;
+}
+
+/**
+ * @brief The Laplacian's element matrix with |det J| as the volume: on a
+ *        folded element it stays positive semidefinite (MFEM's
+ *        DiffusionIntegrator divides by the signed det J). For LpSurrogate's
+ *        legacy LOR assembly, which sets the vertex rule as IntRule; |det J|
+ *        is floored at 1e-6 of the element's largest (a degenerate vertex).
+ */
+class AbsDetDiffusionIntegrator : public mfem::BilinearFormIntegrator
+{
+public:
+   void AssembleElementMatrix(const mfem::FiniteElement& el,
+                              mfem::ElementTransformation& T,
+                              mfem::DenseMatrix& elmat) override
+   {
+      const int nd = el.GetDof(), dim = el.GetDim();
+      dshape_.SetSize(nd, dim);
+      gshape_.SetSize(nd, dim);
+      elmat.SetSize(nd);
+      elmat = 0.0;
+      const mfem::IntegrationRule& ir =
+         IntRule ? *IntRule : mfem::IntRules.Get(el.GetGeomType(), 2 * el.GetOrder());
+      double dmax = 0.0;
+      for (int q = 0; q < ir.GetNPoints(); ++q)
+      {
+         T.SetIntPoint(&ir.IntPoint(q));
+         dmax = std::max(dmax, std::fabs(T.Jacobian().Det()));
+      }
+      if (!(dmax > 0.0)) { return; }
+      for (int q = 0; q < ir.GetNPoints(); ++q)
+      {
+         const mfem::IntegrationPoint& ip = ir.IntPoint(q);
+         el.CalcDShape(ip, dshape_);
+         T.SetIntPoint(&ip);
+         const double det = std::max(std::fabs(T.Jacobian().Det()), 1e-6 * dmax);
+         mfem::Mult(dshape_, T.AdjugateJacobian(), gshape_);
+         mfem::AddMult_a_AAt(ip.weight / det, gshape_, elmat);
+      }
+   }
+
+private:
+   mfem::DenseMatrix dshape_,
+        gshape_; ///< Shape gradients (reference, physical * det).
+};
+
 /**
  * @brief Fixed V-cycle(s) of BoomerAMG on the low-order-refined pressure
  *        Laplacian -- a fixed, SYMMETRIC linear operator (CG-legal).
@@ -42,6 +192,10 @@ enum class LpBC
  * batched-assembly scratch (27 doubles per element dof) are freed once the
  * matrix is assembled, where mfem::LORSolver would keep them for its lifetime.
  * L_p does not depend on dt or nu, so it is never reassembled.
+ *
+ * On a moved mesh whose LOR sub-elements fold (CountFoldedLorElements), L_p
+ * is assembled instead with |det J| (AbsDetDiffusionIntegrator, MFEM's legacy
+ * LOR path), so it stays SPD; without folds the batched path is unchanged.
  *
  * CG legality of the inner solve demands a symmetric application, so the
  * relaxation is SET explicitly (l1 hybrid symmetric Gauss-Seidel on a host,
@@ -141,11 +295,37 @@ public:
       form_.AddDomainIntegrator(new mfem::DiffusionIntegrator);
       {
          INCNS_PROFILE("lp::lor_assemble");
-         auto lor =
-            std::make_unique<mfem::ParLORDiscretization>(form_, ess_tdofs);
+         // Folded LOR sub-elements made L_p indefinite (non-positive
+         // diagonals) and the V-cycles diverge: FSI2's flow solve stalled
+         // at 2e-5 of its start at every dt down to 1e-7 (2026-10-23).
+         folded_ = CountFoldedLorElements(pfes);
+         mfem::ParBilinearForm abs_form(&pfes); // outlives lor's use of it
+         auto lor = std::make_unique<mfem::ParLORDiscretization>(pfes);
+         if (folded_ > 0)
+         {
+            abs_form.AddDomainIntegrator(new AbsDetDiffusionIntegrator);
+            lor->AssembleSystem(abs_form, ess_tdofs);
+            static bool reported = false;
+            if (!reported && pfes.GetMyRank() == 0)
+            {
+               reported = true;
+               mfem::out << "[incns] pressure LOR-AMG: " << folded_
+                         << " LOR sub-elements fold on the moved mesh; L_p "
+                         "takes |det J| there (reported once)" << std::endl;
+            }
+         }
+         else { lor->AssembleSystem(form_, ess_tdofs); }
          mfem::OperatorHandle& a = lor->GetAssembledSystem();
-         a.SetOperatorOwner(false); // the matrix outlives the discretization
-         A_.reset(a.As<mfem::HypreParMatrix>());
+         if (folded_ > 0)
+         {
+            // The legacy assembly's matrix belongs to its form: a copy.
+            A_ = std::make_unique<mfem::HypreParMatrix>(*a.As<mfem::HypreParMatrix>());
+         }
+         else
+         {
+            a.SetOperatorOwner(false); // the matrix outlives the discretization
+            A_.reset(a.As<mfem::HypreParMatrix>());
+         }
          {
             INCNS_PROFILE("lp::lor_release");
             lor.reset();
@@ -212,6 +392,13 @@ public:
    /// @return True if the application is Ortho-wrapped (singular operator).
    bool Singular() const { return singular_; }
 
+   /// @return The folded LOR sub-elements found at construction (all ranks;
+   ///         > 0: L_p was assembled with |det J|).
+   long long FoldedLorElements() const { return folded_; }
+
+   /// @return The assembled LOR L_p.
+   const mfem::HypreParMatrix& Matrix() const { return *A_; }
+
    /// @return The Dirichlet (essential) true dofs of L_p -- the outflow
    ///         pressure dofs under LpBC::Auto; empty when all-Neumann.
    const mfem::Array<int>& EssentialTrueDofs() const { return ess_tdofs_; }
@@ -225,6 +412,7 @@ private:
    std::unique_ptr<mfem::HypreBoomerAMG> amg_;
    mutable DeviceOrthoSolver ortho_; ///< Constant-mode wrap (singular only).
    bool singular_ = false;           ///< Ortho-wrapped?
+   long long folded_ = 0;            ///< Folded LOR sub-elements (all ranks).
 };
 
 } // namespace incns

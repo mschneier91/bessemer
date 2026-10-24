@@ -9,6 +9,40 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**FSI2's flow stall: folded LOR sub-elements in the pressure preconditioner (2026-10-24; a
+fluid bug).** The FSI2 refinement runs stopped with the flow's FGMRES at 2000 iterations:
+L0 dt 2.5e-4 at t 8.86, L1 dt 5e-4 at 9.15, L1 dt 2.5e-4 at 9.0. Restarts from t = 8.5
+ruled out:
+- stale preconditioners (rebuilding the AMG at every move failed sooner, at 8.634);
+- the solver tolerance, the velocity block, the initial guess, the block shape and the
+  quadrature;
+- the step: phase B's `cut_step` cut down to dt 1e-7 and failed at the same t.
+
+A diagnostic build found the cause. Near the flag tip, 1-4 sub-elements of the pressure's LOR
+mesh fold: their Q1 map has a corner det J <= 0, down to -0.44 of the element's largest. The
+high-order elements are fine. The batched LOR assembly divides by the signed det J, so L_p's
+diagonal went non-positive; the matrix was indefinite and the V-cycles diverged (two V-cycles
+failed sooner). The strength threshold 0.25 (the 2D default is 0.1) got past 8.634 and 9.15
+but failed at 9.12: not a fix.
+
+Fix (precond/lp_surrogate.hpp):
+- `CountFoldedLorElements` counts the folds on the device, from the batched assembly's own
+  LOR vertex coordinates.
+- If there are any, L_p is assembled with |det J| (`AbsDetDiffusionIntegrator`, MFEM's legacy
+  LOR path, the matrix copied out of its form), which keeps it SPD.
+- Meshes without folds take the batched path unchanged.
+
+`lp_surrogate_test` FoldedLorSubElementsStaySpd: a fold made by hand is counted (3
+sub-elements); the batched L_p's smallest diagonal is -6.8, every diagonal is positive with
+the fix, and CG with one V-cycle converges in 11-13 iterations at np 1/2/4. Unfolded, the
+matrix is the batched one bitwise. FSI2: from the t 8.5 checkpoint with the AMG rebuilt at every move it reaches t 9.4 without a step cut (G0 49744007), and the refinement runs pass their old stalls without one.
+
+Not covered yet: the velocity LOR (`solver.a_pc: loramg`, `solver.preconditioner: loramg`)
+on a moving mesh has the same exposure. Measured on the way, not changed: the strength
+threshold 0.25 in 2D took 1-21 % fewer FGMRES iterations than 0.1 on every 2D deck tried
+(dfg_2d1 -16 %, dfg_2d3 -9 %, square_cylinder_re200_oifs -1 %, ale_oscillating_cylinder -15 %,
+FSI2 L2 -21 %). A default change would move every 2D baseline: the human's call. CPU np 1/2/4 and the debug device (hlor 49743989); fluid-only decks bitwise this morning's main (hfluid 49745066, hfluid3d 49745583).
+
 **The CFL number on a moving mesh is of u - w (2026-10-23; a fluid bug; human: "if there is
 a bug that impacts the fluid solver that should be fixed!").** `Case::ConvectiveCflNumber()`
 took u on a moving mesh, which fed the progress line, the fixed-step `cfl_max` check, the first
