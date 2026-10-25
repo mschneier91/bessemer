@@ -20,8 +20,11 @@ input: nothing to backtrack to; seeding the backtracking with the last committed
 tried and changes nothing), neo-Hookean inverts on the second, and more Newton iterations,
 the line search or a small first relaxation only move the failure to the flow. Robin-Neumann
 and Neumann-Dirichlet stay near the solution and agree (36 and 29 subiterations in two
-steps). docs/fsi.md §1 has the numbers; `fsi_test` F17 pins both (cloud scratch build, CPU,
-np 1/2/4). No code change.
+steps). docs/fsi.md §1 has the numbers; `fsi_test` F17 checks both, and that
+Dirichlet-Neumann still reaches t = 0.01 through cut steps (7 steps; cloud scratch build,
+CPU, np 1/2/4). No code change. Open: under Neumann-Dirichlet there, SVK and the linear
+solid's velocities differ by 7e-3 of the largest near the flag's root, not at the corner
+node alone (docs/fsi.md §1).
 
 **FSI2 verified; FSI2 and FSI3 against FEAT's refined results (2026-10-24; human: "call it
 verified").** benchmarks/turek_hron/README.md now has the five FSI2 runs on 12e3767, with

@@ -40,8 +40,8 @@
 //     (on a soft flag) Neumann-Dirichlet reaches its Dirichlet-Neumann
 //     coupled steps, as F6/F7 for the linear solid;
 //  F17 on that soft flag the St. Venant-Kirchhoff solid under Robin-Neumann
-//     reaches Neumann-Dirichlet's coupled steps, and under Dirichlet-Neumann
-//     its first attempt fails on subiteration 1 (the limit in docs/fsi.md).
+//     reaches Neumann-Dirichlet's coupled steps, and Dirichlet-Neumann (the
+//     limit in docs/fsi.md) reaches t_final through cut steps.
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -615,8 +615,9 @@ TEST(Fsi, F16_FailedSolidSolveBacktracks)
 // follows any iterate and IQN-ILS converges (F7); the St. Venant-Kirchhoff
 // one does not, and backtracking cannot help: the first failure is on the
 // predictor's zero input, the solid alone under the flow's load with the flag
-// held. Robin-Neumann's and Neumann-Dirichlet's iterates stay near the
-// solution: two whole steps, the same coupled solution.
+// held, so its steps are cut. Robin-Neumann's and Neumann-Dirichlet's
+// iterates stay near the solution: two whole steps, the same coupled
+// solution. Dirichlet-Neumann is checked only to reach the end.
 TEST(Fsi, F17_SoftFlagHyperelasticTakesRobinNeumannOrNeumannDirichlet)
 {
    const std::string svk = "  solid: hyperelasticity\n";
@@ -626,20 +627,28 @@ TEST(Fsi, F17_SoftFlagHyperelasticTakesRobinNeumannOrNeumannDirichlet)
                                "  coupling: neumann_dirichlet\n" + svk);
    ASSERT_EQ(its.size(), 2u);
    EXPECT_GT(its[1], 0);
-   // The limit itself: Dirichlet-Neumann's first attempt fails on its first
-   // subiteration, with nothing to backtrack to (no cuts: abort).
+   // Dirichlet-Neumann still reaches the end, through cut steps (its first
+   // attempt fails on subiteration 1: docs/fsi.md section 1).
    std::string deck = Deck("  coupling: dirichlet_neumann\n" + svk +
                            "  max_iterations: 300\n", "  analysis: dynamic\n",
-                           Np(), true) + "";
+                           Np(), true);
    deck.replace(deck.find("youngs_modulus: 1.4e6"), 21, "youngs_modulus: 1.4e3");
-   deck.replace(deck.find("  convection: imex\n"), 19,
-                "  convection: imex\n  on_solver_failure: abort\n");
+   deck.replace(deck.find("t_final: 1.0"), 12, "t_final: 0.01");
    const Parameters p = Parameters::LoadYAMLString(deck);
    auto mesh = incns::MakeCaseMesh(p);
    FsiCase fsi(*mesh, p);
-   EXPECT_FALSE(fsi.Step());
-   EXPECT_EQ(fsi.Backtracks(), 0);
-   EXPECT_EQ(fsi.History().size(), 0u);
+   int steps = 0;
+   while (!fsi.Done() && steps < 50)
+   {
+      ASSERT_TRUE(fsi.Step()) << "step " << steps;
+      ++steps;
+   }
+   EXPECT_NEAR(fsi.Fluid().Time(), 0.01, 1e-12);
+   if (Mpi::Root())
+   {
+      std::cout << "[fsi] F17: Dirichlet-Neumann " << steps << " steps, "
+                << fsi.RejectedSteps() << " attempts taken again" << std::endl;
+   }
 }
 
 // F8: the St. Venant-Kirchhoff solid (fsi.solid hyperelasticity, loaded by

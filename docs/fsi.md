@@ -141,10 +141,20 @@ solve are unchanged.
   Robin-Neumann (36 subiterations in two steps) and Neumann-Dirichlet (29)
   keep their iterates near the solution and reach the same coupled steps
   (`fsi_test` F17: the velocity to 1e-3, the probe to 1e-6 of the
-  displacement; the same F17 pins Dirichlet-Neumann's failure). The amplification,
+  displacement). Dirichlet-Neumann still reaches the end, through cut steps: F17
+  runs it to t = 0.01 in 7 steps, 2 attempts taken again. The amplification,
   not the material, decides: in doubt, the linear solid's second subiteration
   over its input on the deck's first step measures it. At E 5e4 (amplification 11)
   Dirichlet-Neumann with St. Venant-Kirchhoff works (F15).
+
+  Open: under Neumann-Dirichlet on that flag the St. Venant-Kirchhoff and the
+  linear solid's velocities differ by 7.3e-3 of the largest velocity after two
+  steps, while the tips agree to 1e-3. It is not the clamped corner node alone
+  (F7's 5e-4 between conditions): the difference peaks within 0.005 of the
+  flag's root on the cylinder and falls off with the distance from it, 1.9e-3
+  beyond 0.02, 1.0e-3 beyond 0.04, 2.3e-4 beyond 0.16; 13 % of the velocity dofs
+  agree to 1e-6. Where the strain is largest the two materials differ most, which
+  may be all it is; not established.
 
 `FsiSolid` (fsi/fsi_solid.hpp) is the common interface: an adapter over
 either class, whose methods have the same names.
@@ -461,8 +471,8 @@ Robin-Neumann, Robin-Robin and Neumann-Dirichlet reaches its own
 Dirichlet-Neumann steps (the tip to 1e-6 of the displacement); F16 a failed
 solid solve backtracks (`fsi.backtracks`) instead of cutting the step; F17 on
 the soft flag the St. Venant-Kirchhoff solid under Robin-Neumann reaches
-Neumann-Dirichlet's steps, and Dirichlet-Neumann's first attempt fails (the
-limit above). `robin_test` R1-R3
+Neumann-Dirichlet's steps, and Dirichlet-Neumann reaches t = 0.01 through cut
+steps (the limit above). `robin_test` R1-R3
 covers the fluid's Robin condition alone. The deck end to end:
 `run_case_fsi_flag` ([cases/fsi_flag.yaml](../cases/fsi_flag.yaml), ten
 dynamic steps, 9-12 subiterations each with IQN-ILS, 5 s at np 2).
