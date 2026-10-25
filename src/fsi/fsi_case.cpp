@@ -426,6 +426,7 @@ FsiCase::FsiCase(ParMesh& fluid_mesh, const Parameters& params)
       s["step_control"].Set(control_ == StepControl::Error ? "error" :
                             control_ == StepControl::Cfl ? "cfl" : "fixed");
       s["rejected_steps"].Set(rejected_);
+      if (backtracks_ > 0) { s["backtracks"].Set(backtracks_); }
       if (!failure_.empty()) { s["failure"].Set(failure_); }
       Json& so = s["solid"];
       so["model"].Set(solid_->Name());
@@ -848,6 +849,9 @@ FsiCase::Attempt FsiCase::StepDirichletNeumann()
    const double dt = step_dt_;
    accel_->NewStep();
    StepRecord rec;
+   Vector good;            // the last input whose subiteration completed
+   bool have_good = false;
+   int tries = 0;          // this subiteration's backtracks (fsi.backtracks)
    for (int k = 1; k <= f.max_iterations; ++k)
    {
       dg.SetFromTrueDofs(d);
@@ -869,10 +873,12 @@ FsiCase::Attempt FsiCase::StepDirichletNeumann()
       }
       if (!solid_ok)
       {
-         failure_ = "the solid's solve did not converge";
          fluid_->UndoTrialStep();
+         if (Backtrack(d, have_good ? &good : nullptr, tries, k)) { --k; continue; }
+         failure_ = "the solid's solve did not converge";
          return Attempt::Failed;
       }
+      tries = 0;
       SolidInterfaceDisplacement(solid_d);
       solid_d.GetTrueDofs(dt_vec);
       subtract(dt_vec, d, r);
@@ -914,6 +920,8 @@ FsiCase::Attempt FsiCase::StepDirichletNeumann()
          return Attempt::Committed;
       }
       fluid_->UndoTrialStep();
+      good = d;
+      have_good = true;
       Vector next(n);
       rec.omega = accel_->Next(d, dt_vec, next);
       if (f.print_level > 0 && Mpi::Root())
@@ -928,6 +936,24 @@ FsiCase::Attempt FsiCase::StepDirichletNeumann()
               std::to_string(fluid_->Time() + dt);
    if (Mpi::Root()) { mfem::out << "[incns] FSI: " << failure_ << std::endl; }
    return Attempt::Failed;
+}
+
+bool FsiCase::Backtrack(Vector& x, const Vector* good, int& tries, int k)
+{
+   if (!good || tries >= params_.fsi.backtracks) { return false; }
+   ++tries;
+   ++backtracks_;
+   x *= 0.5;
+   x.Add(0.5, *good);
+   accel_->Shrink(0.5);
+   if (Mpi::Root())
+   {
+      mfem::out << "[incns] FSI: the solid's solve did not converge at t = "
+                << fluid_->Time() + step_dt_ << ", subiteration " << k
+                << "; its input halved toward the last completed one (" << tries
+                << " of " << params_.fsi.backtracks << ")" << std::endl;
+   }
+   return true;
 }
 
 void FsiCase::PredictLoad(Vector& load) const
@@ -1040,6 +1066,9 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
    else { fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get()); }
    accel_->NewStep();
    StepRecord rec;
+   Vector good;            // the last input whose subiteration completed
+   bool have_good = false;
+   int tries = 0;          // this subiteration's backtracks (fsi.backtracks)
    for (int k = 1; k <= f.max_iterations; ++k)
    {
       if (moments)
@@ -1061,9 +1090,11 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
       }
       if (!solid_ok)
       {
+         if (Backtrack(tau, have_good ? &good : nullptr, tries, k)) { --k; continue; }
          failure_ = "the solid's solve did not converge";
          return Attempt::Failed;
       }
+      tries = 0;
       SolidInterfaceDisplacement(solid_d);
       solid_d.GetTrueDofs(d);
       dg.SetFromTrueDofs(d);
@@ -1163,6 +1194,8 @@ FsiCase::Attempt FsiCase::StepRobinNeumann()
          return Attempt::Committed;
       }
       fluid_->UndoTrialStep();
+      good = tau;
+      have_good = true;
       Vector next(n);
       rec.omega = accel_->Next(tau, tau_tilde, next);
       if (f.print_level > 0 && Mpi::Root())
@@ -1225,6 +1258,9 @@ FsiCase::Attempt FsiCase::StepNeumannDirichlet()
    else { fluid_->Integrator().SetBoundaryTraction(robin_tau_coeff_.get()); }
    accel_->NewStep();
    StepRecord rec;
+   Vector good;            // the last input whose subiteration completed
+   bool have_good = false;
+   int tries = 0;          // this subiteration's backtracks (fsi.backtracks)
    for (int k = 1; k <= f.max_iterations; ++k)
    {
       dg.SetFromTrueDofs(d);
@@ -1241,9 +1277,11 @@ FsiCase::Attempt FsiCase::StepNeumannDirichlet()
       }
       if (!solid_ok)
       {
+         if (Backtrack(d, have_good ? &good : nullptr, tries, k)) { --k; continue; }
          failure_ = "the solid's solve did not converge";
          return Attempt::Failed;
       }
+      tries = 0;
       ReactionTraction(tau);
       if (moments) { InterfaceMassApply(*ref_vfes_, fluid_marker_, tau, on, robin_load_); }
       else { robin_tau_->SetFromTrueDofs(tau); }
@@ -1310,6 +1348,8 @@ FsiCase::Attempt FsiCase::StepNeumannDirichlet()
          return Attempt::Committed;
       }
       fluid_->UndoTrialStep();
+      good = d;
+      have_good = true;
       Vector next(n);
       rec.omega = accel_->Next(d, dt_vec, next);
       if (f.print_level > 0 && Mpi::Root())
@@ -1420,7 +1460,8 @@ void FsiCase::WriteCheckpointState(const std::string& dir)
       m << "]\naccelerator_vectors: " << a.vectors.size() << "\n"
         << "on_grid: " << (on_grid_ ? 1 : 0) << "\ndt: " << dt_
         << "\ndt_before_cut: " << dt_before_cut_ << "\nhold: " << hold_
-        << "\nrejected_steps: " << rejected_ << "\nsolid_dt: " << solid_dt_
+        << "\nrejected_steps: " << rejected_ << "\nbacktracks: " << backtracks_
+        << "\nsolid_dt: " << solid_dt_
         << "\ncommitted_times: [";
       for (std::size_t i = 0; i < committed_times_.size(); ++i)
       {
@@ -1508,6 +1549,7 @@ void FsiCase::ReadCheckpointState(const std::string& dir)
       dt_before_cut_ = m["dt_before_cut"].as<double>();
       hold_ = m["hold"].as<int>();
       rejected_ = m["rejected_steps"].as<long long>();
+      if (m["backtracks"]) { backtracks_ = m["backtracks"].as<long long>(); }
       solid_dt_ = m["solid_dt"].as<double>();
       committed_times_.clear();
       for (const auto& t : m["committed_times"])

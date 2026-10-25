@@ -91,6 +91,10 @@ public:
    /// @return Coupled step attempts taken again (failed or rejected).
    long long RejectedSteps() const { return rejected_; }
 
+   /// @return Failed solid solves taken again with a halved input
+   ///         (fsi.backtracks).
+   long long Backtracks() const { return backtracks_; }
+
    /// March to time.t_final. @return Whether every step converged.
    bool Run();
 
@@ -316,6 +320,19 @@ private:
       0.0; ///< Fixed steps after a cut: the step to grow back to.
    int hold_ = 0;          ///< Committed steps left before dt may grow.
    long long rejected_ = 0; ///< See RejectedSteps().
+   long long backtracks_ = 0; ///< See Backtracks().
+
+   /**
+    * @brief After a failed solid solve: move the subiteration's input @p x
+    *        halfway back toward @p good, the last input whose subiteration
+    *        completed, and tell the accelerator.
+    * @param x     The input (moved in place).
+    * @param good  The last completed input, or null (none in this attempt).
+    * @param tries This subiteration's backtracks so far (incremented).
+    * @param k     The subiteration (for the message).
+    * @return Whether to evaluate @p x again (false: the attempt fails).
+    */
+   bool Backtrack(mfem::Vector& x, const mfem::Vector* good, int& tries, int k);
    /// Error control: the solid's proposal for the next step (0: none yet).
    double solid_dt_ = 0.0;
    /// Error control's PI controller on the solid's estimate (or null).

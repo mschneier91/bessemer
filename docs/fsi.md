@@ -91,21 +91,28 @@ which do not depend on the configuration:
 Dirichlet-Neumann coupled steps, the tip to 1e-6 of the displacement (as F6
 and F7 for the linear one): Robin-Robin on F6's stiff flag, Robin-Neumann on
 its ramped start, Neumann-Dirichlet on a flag of E 5e4 (the probe to 2e-9).
-The limits are the solid's Newton on the coupling's early iterates (the linear
-solid takes any iterate, so it does not see them):
+The solid's Newton can fail on the coupling's early iterates, where the
+linear solid takes any iterate. **`fsi.backtracks`** (default 4; 2026-10-24,
+human: "Ya fix this please"): a failed solid solve on a subiteration after the
+first halves the subiteration's input toward the last one whose subiteration
+completed, at most that many times, before the attempt fails and the step is
+cut. IQN-ILS needs nothing, since its columns are the pairs actually evaluated;
+Aitken's last factor is halved with the input. Runs without a failed solid
+solve are unchanged.
 - Robin-Neumann on F6's impulsive start: IQN-ILS's first secant step of the
-  second step throws the load to 2.3 times itself, the Newton fails (even with
-  100 iterations) and the step is cut. Robin-Robin's support carries the same
-  start. At `fsi.rtol` 1e-10 its tip matches Dirichlet-Neumann's to 4e-9 of
-  the displacement.
-- Dirichlet-Neumann on F7's soft flag (E 1.4e3): its early iterates throw the
-  flag out 0.3 (15 thicknesses), the Newton fails and the step is cut.
-  Neumann-Dirichlet, the condition for soft solids, does not.
+  second step throws the load to 2.3 times itself, and the Newton fails there
+  even with 100 iterations. One backtrack carries it: two whole steps, 32
+  subiterations in the second instead of a cut step (`fsi_test` F16). Its
+  fixed point at `fsi.rtol` 1e-8 lies within 1.1e-6 of the displacement of
+  Dirichlet-Neumann's. At 1e-10 the deeper subiterations fail the Newton again
+  after two backtracks, and the step is cut. Robin-Robin's support carries the
+  same start without a backtrack (its tip to 4e-9 at 1e-10).
+- Dirichlet-Neumann on F7's soft flag (E 1.4e3): the Newton fails on the first
+  subiteration, with no completed input to go back to, and the step is cut.
+  Neumann-Dirichlet, the condition for soft solids, does not fail there.
 
-Not done: on a failed solid solve, halving the accelerated iterate toward the
-last one instead of cutting the step. `FsiSolid` (fsi/fsi_solid.hpp) is the
-common interface: an adapter over either class, whose methods have the same
-names.
+`FsiSolid` (fsi/fsi_solid.hpp) is the common interface: an adapter over
+either class, whose methods have the same names.
 
 **The St. Venant-Kirchhoff solid must be dynamic** (`solid.analysis:
 dynamic`; a static one is refused at setup, test
@@ -416,7 +423,8 @@ Neumann-Dirichlet on a soft flag, in fewer subiterations; F8 the St.
 Venant-Kirchhoff solid reaches the linear one's steps at small strain (the
 tip to 1e-4 of the displacement); F15 the St. Venant-Kirchhoff solid under
 Robin-Neumann, Robin-Robin and Neumann-Dirichlet reaches its own
-Dirichlet-Neumann steps (the tip to 1e-6 of the displacement). `robin_test` R1-R3
+Dirichlet-Neumann steps (the tip to 1e-6 of the displacement); F16 a failed
+solid solve backtracks (`fsi.backtracks`) instead of cutting the step. `robin_test` R1-R3
 covers the fluid's Robin condition alone. The deck end to end:
 `run_case_fsi_flag` ([cases/fsi_flag.yaml](../cases/fsi_flag.yaml), ten
 dynamic steps, 9-12 subiterations each with IQN-ILS, 5 s at np 2).

@@ -524,6 +524,47 @@ TEST(Fsi, F15_HyperelasticSolidUnderEveryCoupling)
    EXPECT_GT(its[1], 0);
 }
 
+// F16: a failed solid solve halves the subiteration's input toward the last
+// completed one (fsi.backtracks, default 4) before the attempt fails.
+// Robin-Neumann with the St. Venant-Kirchhoff solid on F6's impulsive start:
+// IQN-ILS's first secant step of the second step throws the load to 2.3
+// times itself and the solid's Newton fails there. With backtracks 0 that
+// step is cut (the behaviour before 2026-10-24); with the default both steps
+// are whole and reach Dirichlet-Neumann's: to 3e-6, the velocity and the tip
+// (of the displacement). Robin-Neumann's slow mode leaves its fixed point at
+// fsi.rtol 1e-8 up to 1.1e-6 of the displacement from Dirichlet-Neumann's
+// (np 1/2/4: 4.6e-7, 8.1e-7, 1.1e-6; the velocity 1.04e-6); at 1e-10 the
+// deeper subiterations fail the Newton again.
+TEST(Fsi, F16_FailedSolidSolveBacktracks)
+{
+   const std::string svk = "  solid: hyperelasticity\n";
+   auto run = [&](const std::string & extra, long long & backtracks)
+   {
+      const std::string deck = Deck("  coupling: robin_neumann\n" + svk +
+                                    "  max_iterations: 300\n" + extra,
+                                    "  analysis: dynamic\n", Np(), false);
+      const Parameters p = Parameters::LoadYAMLString(deck);
+      auto mesh = incns::MakeCaseMesh(p);
+      FsiCase fsi(*mesh, p);
+      for (int s = 0; s < 2; ++s) { EXPECT_TRUE(fsi.Step()) << s; }
+      backtracks = fsi.Backtracks();
+      return fsi.Fluid().Time();
+   };
+   long long none = -1, some = -1;
+   EXPECT_LT(run("  backtracks: 0\n", none), 0.01 - 1e-12) << "no cut step";
+   EXPECT_EQ(none, 0);
+   EXPECT_NEAR(run("", some), 0.01, 1e-12);
+   EXPECT_GT(some, 0);
+   if (Mpi::Root())
+   {
+      mfem::out << "[fsi] F16: " << some << " backtracks" << std::endl;
+   }
+   std::vector<long long> its;
+   CompareWithDirichletNeumann({"  coupling: robin_neumann\n" + svk}, "1.4e6",
+                               false, 3e-6, its, 3e-6,
+                               "  coupling: dirichlet_neumann\n" + svk);
+}
+
 // F8: the St. Venant-Kirchhoff solid (fsi.solid hyperelasticity, loaded by
 // the traction per reference area) reaches the linear solid's coupled steps
 // where the strains are small. On the ramped start the flows differ at second

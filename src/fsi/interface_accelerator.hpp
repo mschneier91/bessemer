@@ -37,6 +37,12 @@ public:
    /// (after DiscardStep(); a no-op for an accelerator that keeps nothing).
    virtual void ForgetKept() {}
 
+   /// The input the last Next() proposed was moved back toward that call's
+   /// input d: next = d + s (next - d) (FsiCase's backtrack after a failed
+   /// solid solve). IQN-ILS needs nothing, its columns being the pairs
+   /// actually evaluated; a relaxation scales its last factor.
+   virtual void Shrink(double /*s*/) {}
+
    /**
     * @param d      The input of this subiteration, d_k.
     * @param dtilde The solid's answer G(d_k).
@@ -85,6 +91,8 @@ public:
 
    void NewStep() override;
    void DiscardStep() override { has_prev_ = false; }
+   /// The last factor was effectively s omega (Aitken's next one uses it).
+   void Shrink(double s) override { omega_ *= s; }
 
    double Next(const mfem::Vector& d, const mfem::Vector& dtilde,
                mfem::Vector& next) override;

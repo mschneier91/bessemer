@@ -368,6 +368,7 @@ Fluid-structure interaction (docs/fsi.md): the flow of this deck, whose boundary
 | `fsi.rtol` | real | `1e-06` | Subiterations stop when \|r\| <= rtol \|d\| + atol, r the change of the interface displacement d in a subiteration. |
 | `fsi.atol` | real | `1e-12` | Absolute part of the stopping test. |
 | `fsi.max_iterations` | int | `50` | Subiterations per step; a step that does not converge in them stops the run. |
+| `fsi.backtracks` | int | `4` | A failed solid solve halves the subiteration's input toward the last one whose subiteration completed, at most this many times, before the attempt fails (0: at once). An accelerated input can throw the load far out, and a nonlinear solid's Newton fail on it. |
 | `fsi.predictor` | int | `2` | The first subiteration's interface displacement: 0 the last step's, 1 or 2 its linear or quadratic extrapolation. |
 
 ## `mesh_motion`

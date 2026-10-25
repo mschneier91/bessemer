@@ -98,6 +98,10 @@ struct FsiParameters
    ///< displacement residual, d: the displacement).
    double atol = 1e-12; ///< Absolute part of the stopping test.
    int max_iterations = 50; ///< Subiterations per step before giving up.
+   /// A failed solid solve on a subiteration after the first halves its
+   /// input toward the last one whose subiteration completed, at most this
+   /// many times, before the attempt fails (0: at once).
+   int backtracks = 4;
    /// 1: print every subiteration's residual on rank 0; 0: nothing.
    int print_level = 0;
    /// IQN-ILS: earlier steps whose columns are kept.

@@ -9,6 +9,20 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**Backtracking after a failed solid solve (2026-10-24; human: "Ya fix this please").**
+`fsi.backtracks` (default 4): a failed solid solve on a subiteration after the first halves
+its input toward the last one whose subiteration completed, at most four times, before the
+attempt fails and the step is cut. It works under every condition and with either
+accelerator: IQN-ILS needs nothing, and Aitken's last factor is halved with the input. Runs
+without a failed solid solve are unchanged.
+- Robin-Neumann with the St. Venant-Kirchhoff solid on F6's impulsive start: one backtrack
+  at step 2 carries it, 32 subiterations instead of a cut step. `fsi_test` F16 checks the cut
+  without backtracking, the whole steps with it, and Dirichlet-Neumann's solution to 3e-6.
+  The Robin-Neumann fixed point at `fsi.rtol` 1e-8 is up to 1.1e-6 of the displacement away;
+  at 1e-10 the Newton fails again after two backtracks.
+- Not helped: Dirichlet-Neumann on a very soft flag (E 1.4e3) fails on the first
+  subiteration, with nothing to go back to. Neumann-Dirichlet is the condition there.
+
 **AMR derefinement (2026-10-24; human: "ya go ahead and implement derefinement").**
 `amr.derefine` is off by default; without it, nothing changes, bitwise. When on, it coarsens at
 each event, after the refinement passes. A family of sibling leaves merges when every child's

@@ -1297,6 +1297,11 @@ void FillFromDeck(DeckReader& r, Parameters& p)
    r.Read(fsi, "max_iterations", fp.max_iterations,
           "Subiterations per step; a step that does not converge in them "
           "stops the run.");
+   r.Read(fsi, "backtracks", fp.backtracks,
+          "A failed solid solve halves the subiteration's input toward the "
+          "last one whose subiteration completed, at most this many times, "
+          "before the attempt fails (0: at once). An accelerated input can "
+          "throw the load far out, and a nonlinear solid's Newton fail on it.");
    r.Read(fsi, "predictor", fp.predictor,
           "The first subiteration's interface displacement: 0 the last "
           "step's, 1 or 2 its linear or quadratic extrapolation.");
@@ -1556,10 +1561,12 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
       MFEM_VERIFY(f.fluid_density > 0.0 && f.relaxation > 0.0 &&
                   f.relaxation <= 1.0 && f.omega_max > 0.0 && f.rtol > 0.0 &&
                   f.atol >= 0.0 && f.max_iterations >= 1 &&
-                  f.predictor >= 0 && f.predictor <= 2 && f.reuse >= 0,
+                  f.predictor >= 0 && f.predictor <= 2 && f.reuse >= 0 &&
+                  f.backtracks >= 0,
                   "parameters: bad fsi settings (fluid_density > 0, "
                   "relaxation in (0, 1], omega_max > 0, rtol > 0, atol >= 0, "
-                  "max_iterations >= 1, predictor 0-2, reuse >= 0)");
+                  "max_iterations >= 1, predictor 0-2, reuse >= 0, "
+                  "backtracks >= 0)");
       const ElasticityParameters& sp = p.solid;
       MFEM_VERIFY(sp.youngs_modulus > 0.0 && sp.poisson_ratio > -1.0 &&
                   sp.poisson_ratio < 0.5 && sp.density > 0.0,
