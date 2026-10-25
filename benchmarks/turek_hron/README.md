@@ -144,6 +144,21 @@ in mm:
 | drag | 459.0 ± 26.5 | 457.3 ± 22.66 | mean +0.4 %, amplitude +17 % |
 | lift | 3.2 ± 137.1 | 2.22 ± 149.78 | amplitude −8.5 % |
 
+Against FEAT's refined FSI3 ([FEAT's FSI benchmark pages](https://wwwold.mathematik.tu-dortmund.de/~featflow/en/benchmarks/cfdbenchmarking/fsi_benchmark/fsi_tests/fsi_fsi_tests.html), level 4: 304,128 unknowns,
+Δt 5·10⁻⁴):
+
+| | FEAT level 4 | coarse mesh, amplitude error |
+|---|---|---|
+| u_x(A) | −2.86 ± 2.70 | −9.6 % |
+| u_y(A) | 1.45 ± 34.90 | −5.4 % |
+| drag | 460.2 ± 27.47 | −3.5 % |
+| lift | 2.37 ± 153.75 | −10.8 % |
+| frequency | 5.46 | −1.1 % |
+
+This is FSI2's coarse-mesh pattern. The +17 % drag amplitude above is mostly the 2006
+reference itself, whose drag amplitude, 22.66, is 18 % below FEAT's finest. The mesh and Δt
+study is running (2026-10-24).
+
 4.5 subiterations per step, 40,000 steps, 86 min at np 16 (Bridges-2, CPU, main 12e3767,
 2026-10-24; the cloud scratch build's run of 2026-10-23, 5.7 h at np 4, gave the same digits
 but the lift's 2.7 mean). Not separated yet: the
@@ -166,46 +181,68 @@ oscillation, the same settings as FSI3 at Δt 5·10⁻⁴ to t = 15. Reference: 
 −14.58 ± 12.44, u_y(A) 1.23 ± 80.6 (mm), frequency 2.0 (u_y), drag 208.83 ± 73.75, lift
 0.88 ± 234.2.
 
-**Reached; on `level: 1` the displacements within about 1 %, the drag within 0.2 % and the
-lift 3 % low once the force ripple is taken out (2026-10-24).** With the neo-Hookean mesh
-motion (`mesh_motion.model: neo_hookean`, in the deck), over the last period before
-t = 15 (the oscillation is periodic from t ≈ 11), against Turek & Hron:
+**Verified (2026-10-24): `level: 2` agrees with the finest published results to under 1 %.**
+With the neo-Hookean mesh motion (`mesh_motion.model: neo_hookean`, in the deck), every run
+from t = 0 on main 12e3767 (the pressure LOR-AMG's 2D threshold 0.25), on Bridges-2's
+CPUs. Mean ± amplitude over the last three periods of u_y (`python3 fsi.py fsi2
+fsi2/fsi2_forces.csv fsi2/fsi2_fsi.csv --periods 3 --smooth 0.005`). In parentheses, the
+amplitudes' errors against Turek & Hron's 2006 values above:
 
-| Mesh | Δt | u_x(A) | u_y(A) | Drag | Lift | Frequency (u_y) |
-|---|---|---|---|---|---|---|
-| deck (314 elements), np 8 | 5·10⁻⁴ | −13.15 ± 11.39 (−8.4 %) | 1.25 ± 75.92 (−5.8 %) | 205.1 ± 67.8 (−8.1 %) | 0.95 ± 220.8 (−5.7 %) | 1.924 |
-| deck | 2.5·10⁻⁴ | −13.14 ± 11.39 (−8.5 %) | 1.25 ± 75.92 (−5.8 %) | 206.6 ± 70.3 (−4.7 %) | −0.56 ± 241.1 (+2.9 %) | 1.924 |
-| `level: 1` (1,256), np 32 | 5·10⁻⁴ | −14.34 ± 12.30 (−1.1 %) | 1.25 ± 79.80 (−1.0 %) | 211.3 ± 74.8 (+1.5 %) | −1.17 ± 236.2 (+0.9 %) | 1.927 |
-| `level: 1` | 2.5·10⁻⁴ | −14.34 ± 12.30 (−1.2 %) | 1.25 ± 79.80 (−1.0 %) | 211.6 ± 77.2 (+4.7 %) | −1.93 ± 254.1 (+8.5 %) | 1.927 |
+| Mesh | Δt | u_x(A) | u_y(A) | Frequency (u_y) |
+|---|---|---|---|---|
+| deck (314 elements), np 8 | 5·10⁻⁴ | −13.15 ± 11.39 (−8.4 %) | 1.25 ± 75.92 (−5.8 %) | 1.924 |
+| deck | 2.5·10⁻⁴ | −13.14 ± 11.39 (−8.5 %) | 1.25 ± 75.92 (−5.8 %) | 1.924 |
+| `level: 1` (1,256), np 32 | 5·10⁻⁴ | −14.34 ± 12.30 (−1.1 %) | 1.25 ± 79.80 (−1.0 %) | 1.927 |
+| `level: 1` | 2.5·10⁻⁴ | −14.34 ± 12.30 (−1.2 %) | 1.25 ± 79.80 (−1.0 %) | 1.927 |
+| `level: 2` (5,024), np 64 | 2.5·10⁻⁴ | −14.99 ± 12.80 (+2.9 %) | 1.26 ± 81.85 (+1.5 %) | 1.928 |
 
-The percentages are the amplitudes' errors. The displacements do not move with Δt (to 4
-digits) and one refinement brings them within about 1 %. Turek & Hron give the frequencies
-to two digits (2.0 for u_y; 3.8 = 2 × 1.9 for u_x and the drag); ours are 1.924-1.927 and
-3.85.
+The displacements do not move with Δt (to 4 digits). They do move with the mesh, and so do
+Turek & Hron's own: the 2006 values are not converged. FEAT's refinement of FSI2 ([FEAT's FSI benchmark pages](https://wwwold.mathematik.tu-dortmund.de/~featflow/en/benchmarks/cfdbenchmarking/fsi_benchmark/fsi_tests/fsi_fsi_tests.html),
+Δt 5·10⁻⁴, the same quantities):
 
-**The forces' amplitudes above carry a step-to-step ripple.** It comes from the coupling's
-residual error: its RMS doubles when Δt halves (lift 4.3 → 8.9 on the deck's mesh, 4.6 → 8.2 on
-`level: 1`), and the max − min amplitude picks up its peaks. The displacements carry none.
-Smoothed by a moving average over ±0.005 (10-20 steps; it takes 0.08 % off u_y's
-amplitude), the force amplitudes do not move with Δt (`fsi.py ... --smooth 0.005`):
+| FEAT level (Q2/P1 unknowns) | u_x(A) | u_y(A) | Drag | Lift |
+|---|---|---|---|---|
+| 2 (19,488) | −14.01 ± 12.04 | 1.28 ± 79.2 | 210.14 ± 72.86 | 0.49 ± 228.7 |
+| 3 (76,672) | −14.48 ± 12.45 | 1.24 ± 80.7 | 213.05 ± 75.74 | 0.84 ± 234.8 |
+| 4 (304,128) | −14.85 ± 12.70 | 1.30 ± 81.6 | 215.06 ± 77.65 | 0.61 ± 237.8 |
 
-| Mesh | Drag, Δt 5·10⁻⁴ / 2.5·10⁻⁴ | Lift, Δt 5·10⁻⁴ / 2.5·10⁻⁴ |
-|---|---|---|
-| deck | −10.0 % / −9.8 % | −10.7 % / −10.5 % |
-| `level: 1` | −0.2 % / 0.0 % | −3.3 % / −3.0 % |
+Our `level: 2` is Q4/Q3 with 162,720 velocity and 45,948 pressure unknowns, plus 11,682
+solid. Against FEAT's level 4:
+- u_x amplitude +0.8 %, u_y +0.3 %;
+- drag (smoothed, below) mean −0.1 % and amplitude +0.3 %;
+- lift amplitude 0.0 %.
 
-So on `level: 1` the drag amplitude is Turek & Hron's and the lift's is 3 % low; the raw
-+0.9 % above was the ripple's peaks. A tighter `fsi.rtol` would shrink the ripple (more
-subiterations); not tried.
+Our `level: 1` sits around FEAT's levels 2-3. The frequencies are 1.93 and 3.86 in both.
 
-The deck's run is M4's (4924cec, t = 0 to 15). The deck's mesh at Δt 2.5·10⁻⁴ and
-`level: 1` at 5·10⁻⁴ continue their own runs from a checkpoint at t = 8.5, and `level: 1` at
-2.5·10⁻⁴ runs from t = 0, all on cb2c4a6's solver (the pressure LOR-AMG's 2D threshold
-still 0.1). Before cb2c4a6 they stopped at t = 8.4-9.15 with a stalled flow solve, from folded
-LOR sub-elements in the pressure preconditioner near the tip
-([docs/status.md](../../docs/status.md)); cb2c4a6 changes nothing before the first fold
-(t ≈ 8.56). `level: 2` (5,024 elements, np 64) is not in yet. All five run again from t = 0
-on 12e3767 (the threshold 0.25), with the other 2D results here.
+**The forces carry a step-to-step ripple.** It comes from the coupling's residual error:
+its RMS doubles when Δt halves, and the max − min amplitude picks up its peaks. On `level: 1`,
+for instance, the raw drag amplitude is +2.7 % at Δt 5·10⁻⁴ and +8.9 % at 2.5·10⁻⁴. The
+displacements carry none. Smoothed by a moving average over ±0.005 (10-20 steps; it takes
+0.08 % off u_y's amplitude), the force amplitudes do not move with Δt. In parentheses, the
+errors against the 2006 values:
+
+| Mesh | Δt | Drag | Lift |
+|---|---|---|---|
+| deck | 5·10⁻⁴ | 204.1 ± 66.4 (−9.9 %) | 1.0 ± 209.3 (−10.6 %) |
+| deck | 2.5·10⁻⁴ | 204.2 ± 66.5 (−9.8 %) | 1.0 ± 209.9 (−10.4 %) |
+| `level: 1` | 5·10⁻⁴ | 210.9 ± 73.7 (0.0 %) | 0.7 ± 226.7 (−3.2 %) |
+| `level: 1` | 2.5·10⁻⁴ | 210.9 ± 73.8 (+0.1 %) | 0.5 ± 227.2 (−3.0 %) |
+| `level: 2` | 2.5·10⁻⁴ | 214.8 ± 77.8 (+5.6 %) | 0.7 ± 237.7 (+1.5 %) |
+
+A tighter `fsi.rtol` would shrink the ripple, at the cost of more subiterations; not tried.
+
+`level: 2` stopped at t = 12.77 (the CPU budget; human 2026-10-24: verified as is), so its
+window is t = 11.1-12.6.
+- Its displacement amplitudes had been steady to 0.3 % since t ≈ 9. `level: 1`'s window
+  ending at t = 12.6 matches its final one to 0.2 %.
+- Its smoothed force amplitudes still moved by about 2 % from window to window: the lift's
+  was +5.7, +4.0, +1.5 % (against 2006) over t = 9.0-10.6, 10.0-11.6, 11.1-12.6. So take
+  `level: 2`'s force amplitudes to about ±2 %.
+
+Before cb2c4a6 (2026-10-23) these runs stopped at t = 8.4-9.15 with a stalled flow solve. The
+cause was folded LOR sub-elements in the pressure preconditioner near the tip
+([docs/status.md](../../docs/status.md)). The runs are in bessemer-hyp3/runs/bench_12e3767 on
+Bridges-2.
 
 The linear-elastic mesh motion does not reach it. Coarse mesh, np 4, 2026-10-23: the
 oscillation grows from rest at about 3 subiterations per step (the coupling is not the

@@ -9,6 +9,20 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**FSI2 verified; FSI2 and FSI3 against FEAT's refined results (2026-10-24; human: "call it
+verified").** benchmarks/turek_hron/README.md now has the five FSI2 runs on 12e3767, with
+`level: 2` stopped at t = 12.77 for the CPU budget. Turek & Hron's 2006 values are not
+converged; FEAT's own refinement of the benchmark (levels 2-4, up to 304,128 Q2/P1 unknowns)
+moves FSI2's u_y amplitude 79.2 → 80.7 → 81.6 mm.
+- Our `level: 2` (Q4/Q3, about 209k fluid unknowns) against FEAT's level 4: displacement
+  amplitudes +0.8 / +0.3 %, drag mean −0.1 % and amplitude +0.3 %, lift amplitude 0.0 %
+  (the force amplitudes to about ±2 %: still moving between windows).
+- FSI3's coarse mesh against FEAT's level 4: amplitudes −9.6 / −5.4 % (u_x, u_y), −3.5 %
+  (drag), −10.8 % (lift), frequency −1.1 %, FSI2's coarse-mesh pattern. Its "+17 % drag
+  amplitude" was mostly the 2006 reference's (18 % below FEAT's finest).
+- FSI3's mesh and Δt study is running: level 0 at Δt 1.25·10⁻⁴, level 1 at 2.5·10⁻⁴ and
+  1.25·10⁻⁴.
+
 **Backtracking after a failed solid solve (2026-10-24; human: "Ya fix this please").**
 `fsi.backtracks` (default 4): a failed solid solve on a subiteration after the first halves
 its input toward the last one whose subiteration completed, at most four times, before the
