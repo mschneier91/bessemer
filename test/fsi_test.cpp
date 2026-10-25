@@ -38,7 +38,10 @@
 //     discarded attempt alone it uses them);
 //  F15 the St. Venant-Kirchhoff solid under Robin-Neumann, Robin-Robin and
 //     (on a soft flag) Neumann-Dirichlet reaches its Dirichlet-Neumann
-//     coupled steps, as F6/F7 for the linear solid.
+//     coupled steps, as F6/F7 for the linear solid;
+//  F17 on that soft flag the St. Venant-Kirchhoff solid under Robin-Neumann
+//     reaches Neumann-Dirichlet's coupled steps, and Dirichlet-Neumann (the
+//     limit in docs/fsi.md) reaches t_final through cut steps.
 // These are unit tests: they pin their own small orders and tolerances.
 
 #include <gtest/gtest.h>
@@ -602,6 +605,52 @@ TEST(Fsi, F16_FailedSolidSolveBacktracks)
                                "  coupling: dirichlet_neumann\n" + svk);
 }
 
+// F17: on F7's soft flag (E 1.4e3) the St. Venant-Kirchhoff solid takes
+// Robin-Neumann or Neumann-Dirichlet, not Dirichlet-Neumann (docs/fsi.md §1).
+// There Dirichlet-Neumann's interface map amplifies a change of its input
+// ~200 times (the fluid's added mass against the soft solid's inertia; ~11
+// at E 5e4, ~1.3 at 1.4e6): from rest its first subiteration throws the flag
+// out 0.02, a thickness and 140 times the coupled step's displacement, and
+// the next asks for 2 (the linear solid) or 0.32 (SVK). The linear solid
+// follows any iterate and IQN-ILS converges (F7); the St. Venant-Kirchhoff
+// one does not, and backtracking cannot help: the first failure is on the
+// predictor's zero input, the solid alone under the flow's load with the flag
+// held, so its steps are cut. Robin-Neumann's and Neumann-Dirichlet's
+// iterates stay near the solution: two whole steps, the same coupled
+// solution. Dirichlet-Neumann is checked only to reach the end.
+TEST(Fsi, F17_SoftFlagHyperelasticTakesRobinNeumannOrNeumannDirichlet)
+{
+   const std::string svk = "  solid: hyperelasticity\n";
+   std::vector<long long> its;
+   CompareWithDirichletNeumann({"  coupling: robin_neumann\n" + svk}, "1.4e3",
+                               true, 1e-3, its, 1e-6,
+                               "  coupling: neumann_dirichlet\n" + svk);
+   ASSERT_EQ(its.size(), 2u);
+   EXPECT_GT(its[1], 0);
+   // Dirichlet-Neumann still reaches the end, through cut steps (its first
+   // attempt fails on subiteration 1: docs/fsi.md section 1).
+   std::string deck = Deck("  coupling: dirichlet_neumann\n" + svk +
+                           "  max_iterations: 300\n", "  analysis: dynamic\n",
+                           Np(), true);
+   deck.replace(deck.find("youngs_modulus: 1.4e6"), 21, "youngs_modulus: 1.4e3");
+   deck.replace(deck.find("t_final: 1.0"), 12, "t_final: 0.01");
+   const Parameters p = Parameters::LoadYAMLString(deck);
+   auto mesh = incns::MakeCaseMesh(p);
+   FsiCase fsi(*mesh, p);
+   int steps = 0;
+   while (!fsi.Done() && steps < 50)
+   {
+      ASSERT_TRUE(fsi.Step()) << "step " << steps;
+      ++steps;
+   }
+   EXPECT_NEAR(fsi.Fluid().Time(), 0.01, 1e-12);
+   if (Mpi::Root())
+   {
+      std::cout << "[fsi] F17: Dirichlet-Neumann " << steps << " steps, "
+                << fsi.RejectedSteps() << " attempts taken again" << std::endl;
+   }
+}
+
 // F8: the St. Venant-Kirchhoff solid (fsi.solid hyperelasticity, loaded by
 // the traction per reference area) reaches the linear solid's coupled steps
 // where the strains are small. On the ramped start the flows differ at second
@@ -945,4 +994,6 @@ TEST(Fsi, F14_FailedAttemptForgetsKeptColumns)
       }
    }
 }
+
+
 

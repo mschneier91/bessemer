@@ -112,9 +112,49 @@ solve are unchanged.
   slow mode; Robin-Robin is the condition for this start. At 1e-10 the deeper subiterations fail the Newton again
   after two backtracks, and the step is cut. Robin-Robin's support carries the
   same start without a backtrack (its tip to 4e-9 at 1e-10).
-- Dirichlet-Neumann on F7's soft flag (E 1.4e3): the Newton fails on the first
-  subiteration, with no completed input to go back to, and the step is cut.
-  Neumann-Dirichlet, the condition for soft solids, does not fail there.
+- **Dirichlet-Neumann with a very soft hyperelastic solid: not supported; use
+  Robin-Neumann or Neumann-Dirichlet** (2026-10-25). On F7's soft flag (E 1.4e3,
+  rho_s = rho_f, dt 0.005) Dirichlet-Neumann's interface map amplifies a
+  change of its input about 200 times: the fluid's added mass against a solid
+  whose step is all inertia (the linear solid's second subiteration over its
+  input, from rest: 203 at E 1.4e3, 11 at 5e4, 1.3 at 1.4e6). Its iterates are
+  then far from the solution: from rest the first, the solid under the flow's
+  load with the flag held, throws the flag out 0.02 (a thickness, 140 times
+  the coupled step's 1.5e-4), the second asks for 2 with the linear solid and
+  0.32 with St. Venant-Kirchhoff. The linear solid takes any iterate and
+  IQN-ILS converges (F7: 124 subiterations in two steps against
+  Neumann-Dirichlet's 29). The nonlinear solids do not:
+  - St. Venant-Kirchhoff's Newton fails on the first subiteration of the first
+    step: from 136 the residual climbs to 5e6 at iteration 11 and comes down
+    by halves, 0.2 after the 25 allowed (28 iterations converge). Its input is the predictor's zero, so there is nothing to
+    backtrack to, and seeding the backtracking with the last committed input
+    (tried) leaves it unchanged. The cut step at dt 0.0025 then wanders for
+    126 subiterations at |r| / |d~| ~ 1 until the flow's solve fails;
+    `solid.newton_max_iter: 50` gets past step 1 and fails in the flow the same
+    way at step 2. `solid.line_search` stalls at 0.33.
+  - Neo-Hookean converges the first subiteration in 4 Newton iterations but
+    inverts elements on the second (NaN), through all four backtracks.
+  - A small first relaxation (`fsi.relaxation` 0.05, 0.02) does not help: an
+    input of 2-5 % of the first iterate still throws the flag out 0.03-0.5,
+    and the steps are cut as before.
+
+  Robin-Neumann (36 subiterations in two steps) and Neumann-Dirichlet (29)
+  keep their iterates near the solution and reach the same coupled steps
+  (`fsi_test` F17: the velocity to 1e-3, the probe to 1e-6 of the
+  displacement). Dirichlet-Neumann still reaches the end, through cut steps: F17
+  runs it to t = 0.01 in 7 steps, 2 attempts taken again. The amplification,
+  not the material, decides: in doubt, the linear solid's second subiteration
+  over its input on the deck's first step measures it. At E 5e4 (amplification 11)
+  Dirichlet-Neumann with St. Venant-Kirchhoff works (F15).
+
+  Open: under Neumann-Dirichlet on that flag the St. Venant-Kirchhoff and the
+  linear solid's velocities differ by 7.3e-3 of the largest velocity after two
+  steps, while the tips agree to 1e-3. It is not the clamped corner node alone
+  (F7's 5e-4 between conditions): the difference peaks within 0.005 of the
+  flag's root on the cylinder and falls off with the distance from it, 1.9e-3
+  beyond 0.02, 1.0e-3 beyond 0.04, 2.3e-4 beyond 0.16; 13 % of the velocity dofs
+  agree to 1e-6. Where the strain is largest the two materials differ most, which
+  may be all it is; not established.
 
 `FsiSolid` (fsi/fsi_solid.hpp) is the common interface: an adapter over
 either class, whose methods have the same names.
@@ -429,7 +469,10 @@ Venant-Kirchhoff solid reaches the linear one's steps at small strain (the
 tip to 1e-4 of the displacement); F15 the St. Venant-Kirchhoff solid under
 Robin-Neumann, Robin-Robin and Neumann-Dirichlet reaches its own
 Dirichlet-Neumann steps (the tip to 1e-6 of the displacement); F16 a failed
-solid solve backtracks (`fsi.backtracks`) instead of cutting the step. `robin_test` R1-R3
+solid solve backtracks (`fsi.backtracks`) instead of cutting the step; F17 on
+the soft flag the St. Venant-Kirchhoff solid under Robin-Neumann reaches
+Neumann-Dirichlet's steps, and Dirichlet-Neumann reaches t = 0.01 through cut
+steps (the limit above). `robin_test` R1-R3
 covers the fluid's Robin condition alone. The deck end to end:
 `run_case_fsi_flag` ([cases/fsi_flag.yaml](../cases/fsi_flag.yaml), ten
 dynamic steps, 9-12 subiterations each with IQN-ILS, 5 s at np 2).
