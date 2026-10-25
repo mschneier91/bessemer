@@ -4,10 +4,24 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-24)
+## Where development left off (2026-10-25)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Dirichlet-Neumann with a very soft hyperelastic solid is a documented limit (2026-10-25;
+human: "can you deal with this").** On F7's soft flag (E 1.4e3, rho_s = rho_f) the
+St. Venant-Kirchhoff solid under Dirichlet-Neumann cuts its steps. Cause: the coupling, not
+the predictor. Dirichlet-Neumann's interface map amplifies a change of its input ~200 times
+there (the linear solid's second subiteration over its input: 203 at E 1.4e3, 11 at 5e4, 1.3
+at 1.4e6), so its iterates are 100-10,000 times the coupled step's displacement. The linear
+solid follows them and IQN-ILS converges; SVK's Newton fails on the first subiteration (zero
+input: nothing to backtrack to; seeding the backtracking with the last committed input was
+tried and changes nothing), neo-Hookean inverts on the second, and more Newton iterations,
+the line search or a small first relaxation only move the failure to the flow. Robin-Neumann
+and Neumann-Dirichlet stay near the solution and agree (36 and 29 subiterations in two
+steps). docs/fsi.md §1 has the numbers; `fsi_test` F17 pins both (cloud scratch build, CPU,
+np 1/2/4). No code change.
 
 **FSI2 verified; FSI2 and FSI3 against FEAT's refined results (2026-10-24; human: "call it
 verified").** benchmarks/turek_hron/README.md now has the five FSI2 runs on 12e3767, with
@@ -42,7 +56,7 @@ without a failed solid solve are unchanged.
   The Robin-Neumann fixed point at `fsi.rtol` 1e-8 is up to 1.1e-6 of the displacement away;
   at 1e-10 the Newton fails again after two backtracks.
 - Not helped: Dirichlet-Neumann on a very soft flag (E 1.4e3) fails on the first
-  subiteration, with nothing to go back to. Neumann-Dirichlet is the condition there.
+  subiteration, with nothing to go back to: a documented limit since (above).
 
 **AMR derefinement (2026-10-24; human: "ya go ahead and implement derefinement").**
 `amr.derefine` is off by default; without it, nothing changes, bitwise. When on, it coarsens at
