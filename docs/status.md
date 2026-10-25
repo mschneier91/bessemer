@@ -20,8 +20,12 @@ moves FSI2's u_y amplitude 79.2 → 80.7 → 81.6 mm.
 - FSI3's coarse mesh against FEAT's level 4: amplitudes −9.6 / −5.4 % (u_x, u_y), −3.5 %
   (drag), −10.8 % (lift), frequency −1.1 %, FSI2's coarse-mesh pattern. Its "+17 % drag
   amplitude" was mostly the 2006 reference's (18 % below FEAT's finest).
-- FSI3's mesh and Δt study is running: level 0 at Δt 1.25·10⁻⁴, level 1 at 2.5·10⁻⁴ and
-  1.25·10⁻⁴.
+- FSI3's `level: 1` (Δt 1.25·10⁻⁴: 2.5·10⁻⁴ would sit at CFL 0.94, where the deck's mesh
+  diverges at 5·10⁻⁴; human: "do whatever you recommend") sits at FEAT's level 3. Its
+  amplitudes against FEAT's levels 3 / 4: displacements −4.4 / −7.2 % (u_x) and −2.3 / −3.8 %
+  (u_y), drag −3.5 / −6.4 %, lift −3.9 / −5.8 %; frequency +0.3 %. From the deck's mesh every
+  amplitude but the drag's moved toward FEAT's finest, as FSI2 did. `level: 2` not run
+  (about 8× `level: 1`'s 7.1 h at np 32).
 
 **Backtracking after a failed solid solve (2026-10-24; human: "Ya fix this please").**
 `fsi.backtracks` (default 4): a failed solid solve on a subiteration after the first halves

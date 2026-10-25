@@ -129,42 +129,56 @@ The flag in a self-sustained oscillation (`fsi3.yaml`): Ū = 2 (Re 200), ρ_s = 
 1000 (the strongest added mass), μ_s = 2·10⁶, ν_s = 0.4, the St. Venant-Kirchhoff
 solid (`fsi.solid: hyperelasticity`, plane strain) stepped by BDF2 like the fluid,
 Dirichlet-Neumann with IQN-ILS (two steps reused) to `fsi.rtol` 10⁻⁶, the flow solver to
-10⁻⁹. Q4/Q3 fluid on the coarse mesh (314 elements), Q4 solid (8 × 2), IMEX, Δt
-2.5·10⁻⁴ (IMEX's convective limit here: 5·10⁻⁴ diverges) to t = 10. The oscillation
-grows from rest, overshoots at t ≈ 4 and is periodic from t ≈ 7; the last period
-equals the mean of the last three to 2·10⁻⁴. Mean ± amplitude over the last period
-(`python3 fsi.py fsi3 fsi3/fsi3_forces.csv fsi3/fsi3_fsi.csv`), displacements of point A
-in mm:
+10⁻⁹. Q4/Q3 fluid, Q4 solid, IMEX, to t = 10, both runs from t = 0 on main 12e3767
+(Bridges-2, CPU):
+- the deck's mesh (314 fluid elements, solid 8 × 2) at Δt 2.5·10⁻⁴;
+- `level: 1` (1,256; 16 × 4) at Δt 1.25·10⁻⁴.
 
-| | bessemer | Turek & Hron | error |
+IMEX's convective limit sets Δt. On the deck's mesh, 5·10⁻⁴ diverges (2.5·10⁻⁴ peaks at CFL
+0.47 by the cylinder), so `level: 1`, with half the element size there, takes half the step.
+The oscillation grows from rest, overshoots at t ≈ 4 and is periodic from t ≈ 7: `level: 1`'s
+three-period windows ending at t = 8, 9 and 10 agree to 10⁻⁴.
+
+Mean ± amplitude over the last three periods of u_y (`python3 fsi.py fsi3
+fsi3/fsi3_forces.csv fsi3/fsi3_fsi.csv --periods 3 --smooth 0.00125`). The smoothing over
+±0.00125 removes the forces' step-to-step ripple and takes 0.1 % off a 10.9 Hz amplitude;
+FSI2's ±0.005 would take 2 % here. Displacements of point A in mm; in parentheses, the
+amplitudes' errors against Turek & Hron's 2006 values:
+
+| | deck (np 16) | `level: 1` (np 32) | Turek & Hron 2006 |
 |---|---|---|---|
-| u_x(A) | −2.59 ± 2.44 | −2.69 ± 2.53 | amplitude −3.7 % |
-| u_y(A) | 1.42 ± 33.02 | 1.48 ± 34.38 | amplitude −4.0 % |
-| frequency | 5.40 | 5.3 | +2.0 % |
-| drag | 459.0 ± 26.5 | 457.3 ± 22.66 | mean +0.4 %, amplitude +17 % |
-| lift | 3.2 ± 137.1 | 2.22 ± 149.78 | amplitude −8.5 % |
+| u_x(A) | −2.59 ± 2.43 (−3.9 %) | −2.66 ± 2.50 (−1.0 %) | −2.69 ± 2.53 |
+| u_y(A) | 1.42 ± 33.00 (−4.0 %) | 1.45 ± 33.57 (−2.4 %) | 1.48 ± 34.38 |
+| frequency (u_y) | 5.40 | 5.47 | 5.3 |
+| drag | 459.3 ± 26.07 (+15 %) | 458.9 ± 25.70 (+13 %) | 457.3 ± 22.66 |
+| lift | 2.7 ± 134.9 (−10.0 %) | 2.3 ± 144.8 (−3.3 %) | 2.22 ± 149.78 |
 
-Against FEAT's refined FSI3 ([FEAT's FSI benchmark pages](https://wwwold.mathematik.tu-dortmund.de/~featflow/en/benchmarks/cfdbenchmarking/fsi_benchmark/fsi_tests/fsi_fsi_tests.html), level 4: 304,128 unknowns,
-Δt 5·10⁻⁴):
+The 2006 values are coarse, as in FSI2. FEAT's own refinement ([FEAT's FSI benchmark pages](https://wwwold.mathematik.tu-dortmund.de/~featflow/en/benchmarks/cfdbenchmarking/fsi_benchmark/fsi_tests/fsi_fsi_tests.html), Δt 5·10⁻⁴):
 
-| | FEAT level 4 | coarse mesh, amplitude error |
-|---|---|---|
-| u_x(A) | −2.86 ± 2.70 | −9.6 % |
-| u_y(A) | 1.45 ± 34.90 | −5.4 % |
-| drag | 460.2 ± 27.47 | −3.5 % |
-| lift | 2.37 ± 153.75 | −10.8 % |
-| frequency | 5.46 | −1.1 % |
+| FEAT level (Q2/P1 unknowns) | u_x(A) | u_y(A) | Drag | Lift | Frequency |
+|---|---|---|---|---|---|
+| 2 (19,488) | −3.02 ± 2.85 | 1.42 ± 35.63 | 458.7 ± 28.78 | 2.23 ± 146.02 | 5.37 |
+| 3 (76,672) | −2.78 ± 2.62 | 1.44 ± 34.35 | 459.1 ± 26.62 | 2.39 ± 150.68 | 5.46 |
+| 4 (304,128) | −2.86 ± 2.70 | 1.45 ± 34.90 | 460.2 ± 27.47 | 2.37 ± 153.75 | 5.46 |
 
-This is FSI2's coarse-mesh pattern. The +17 % drag amplitude above is mostly the 2006
-reference itself, whose drag amplitude, 22.66, is 18 % below FEAT's finest. The mesh and Δt
-study is running (2026-10-24).
+Their amplitudes are not monotone in the level (u_x 2.85, 2.62, 2.70). Their drag amplitude
+is 26.6-28.8 at every level, so the 2006 value (22.66) is the outlier, which is what the
++13-15 % above reflects.
 
-4.5 subiterations per step, 40,000 steps, 86 min at np 16 (Bridges-2, CPU, main 12e3767,
-2026-10-24; the cloud scratch build's run of 2026-10-23, 5.7 h at np 4, gave the same digits
-but the lift's 2.7 mean). Not separated yet: the
-drag and lift amplitudes are the largest errors; CFD3 suggests the fluid mesh (refining
-it moved CFD3's lift amplitude by 1.1 %), and neither the mesh nor Δt has been varied
-here.
+Against FEAT's levels 3 and 4, `level: 1`'s amplitudes are:
+- u_x −4.4 / −7.2 %, u_y −2.3 / −3.8 %;
+- drag −3.5 / −6.4 % (the mean −0.3 %), lift −3.9 / −5.8 %;
+- the frequency +0.3 %.
+
+From the deck's mesh to `level: 1` the amplitudes moved toward FEAT's finest: u_x +3.0 %, u_y
++1.7 %, lift +7.4 %. The drag's moved −1.4 %. `level: 1` sits at FEAT's level 3, as FSI2's
+`level: 1` sat at their levels 2-3 before `level: 2` reached their level 4 to under 1 %.
+`level: 2` (5,024 elements, Δt 6.25·10⁻⁵ by the same CFL argument, about 8× `level: 1`'s
+cost: an estimate) is not run.
+
+Cost: the deck's mesh took 4.5 subiterations per step, 40,000 steps, 86 min at np 16;
+`level: 1` took 5.1 per step, 80,000 steps, 7.1 h at np 32. The cloud scratch build's run of
+2026-10-23 (the deck's mesh, 5.7 h at np 4) gave the same digits but the lift's 2.7 mean.
 
 Two settings matter, both found on this case (docs/fsi.md §1): with the solid on
 generalized-alpha at ρ_∞ = 1 and `fsi.rtol` 10⁻⁴ the forces carried a step-to-step
