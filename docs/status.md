@@ -31,7 +31,10 @@ accelerator: IQN-ILS needs nothing, and Aitken's last factor is halved with the 
 without a failed solid solve are unchanged.
 - Robin-Neumann with the St. Venant-Kirchhoff solid on F6's impulsive start: one backtrack
   at step 2 carries it, 32 subiterations instead of a cut step. `fsi_test` F16 checks the cut
-  without backtracking, the whole steps with it, and Dirichlet-Neumann's solution to 3e-6.
+  without backtracking, the whole steps with it, and Dirichlet-Neumann's solution to 3e-6, on
+  CPUs. On a GPU the case is chaotic: one H100 took one backtrack and two whole steps, then the
+  same deck wandered 300 subiterations and was cut (hgland2 49795122). So F16 checks the
+  accelerators' backtrack arithmetic exactly on every backend and the flag case on CPUs only.
   The Robin-Neumann fixed point at `fsi.rtol` 1e-8 is up to 1.1e-6 of the displacement away;
   at 1e-10 the Newton fails again after two backtracks.
 - Not helped: Dirichlet-Neumann on a very soft flag (E 1.4e3) fails on the first

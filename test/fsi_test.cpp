@@ -535,8 +535,45 @@ TEST(Fsi, F15_HyperelasticSolidUnderEveryCoupling)
 // fsi.rtol 1e-8 up to 1.1e-6 of the displacement from Dirichlet-Neumann's
 // (np 1/2/4: 4.6e-7, 8.1e-7, 1.1e-6; the velocity 1.04e-6); at 1e-10 the
 // deeper subiterations fail the Newton again.
+//
+// First, exactly and on every backend: after a backtrack the accelerators
+// still take the secant step of the pairs actually evaluated, so on a linear
+// map G(d) = g d + c both land on its fixed point c / (1 - g) (Aitken through
+// Shrink(); IQN-ILS needs nothing). The flag case runs on CPUs only: it sits
+// at the edge of Robin-Neumann's convergence, and on a GPU the roundoff of
+// two runs of the same deck sends them down different subiteration paths
+// (2026-10-24, one H100: one backtrack and two whole steps, then the same
+// deck wandering for 300 subiterations and cut; two H100s: the solid failing
+// on step 2's first subiteration, with nothing to go back to).
 TEST(Fsi, F16_FailedSolidSolveBacktracks)
 {
+   {
+      const double g = 0.5, c = 1.0; // the fixed point: 2
+      incns::AitkenRelaxation aitken(0.5, 10.0, true, MPI_COMM_WORLD);
+      incns::IqnIls iqn(0.5, 0, MPI_COMM_WORLD);
+      incns::InterfaceAccelerator* accs[2] = {&aitken, &iqn};
+      for (incns::InterfaceAccelerator* acc : accs)
+      {
+         acc->NewStep();
+         Vector d(1), dt(1), next(1);
+         d = 0.0;
+         dt = c;
+         acc->Next(d, dt, next); // the first input, relaxed: 0.5
+         // The solid "fails" on it: halved toward the completed input 0.
+         next *= 0.5;
+         next.Add(0.5, d);
+         acc->Shrink(0.5);
+         d = next;
+         dt = g * d(0) + c;
+         acc->Next(d, dt, next);
+         EXPECT_NEAR(next(0), c / (1.0 - g), 1e-12)
+               << (acc == &aitken ? "Aitken" : "IQN-ILS");
+      }
+   }
+   if (mfem::Device::Allows(mfem::Backend::CUDA_MASK | mfem::Backend::HIP_MASK))
+   {
+      GTEST_SKIP() << "the flag case is chaotic on a GPU (see above): CPUs only";
+   }
    const std::string svk = "  solid: hyperelasticity\n";
    auto run = [&](const std::string & extra, long long & backtracks)
    {

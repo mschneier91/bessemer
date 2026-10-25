@@ -102,9 +102,14 @@ solve are unchanged.
 - Robin-Neumann on F6's impulsive start: IQN-ILS's first secant step of the
   second step throws the load to 2.3 times itself, and the Newton fails there
   even with 100 iterations. One backtrack carries it: two whole steps, 32
-  subiterations in the second instead of a cut step (`fsi_test` F16). Its
-  fixed point at `fsi.rtol` 1e-8 lies within 1.1e-6 of the displacement of
-  Dirichlet-Neumann's. At 1e-10 the deeper subiterations fail the Newton again
+  subiterations in the second instead of a cut step (`fsi_test` F16, on
+  CPUs). Its fixed point at `fsi.rtol` 1e-8 lies within 1.1e-6 of the
+  displacement of Dirichlet-Neumann's. The case sits at the edge of
+  Robin-Neumann's convergence: on a GPU, the roundoff of two runs of the same
+  deck sends them down different subiteration paths. On one H100, one run took
+  one backtrack and two whole steps; the next wandered for 300 subiterations
+  and was cut. Backtracking is a safeguard there, not a cure for Robin-Neumann's
+  slow mode; Robin-Robin is the condition for this start. At 1e-10 the deeper subiterations fail the Newton again
   after two backtracks, and the step is cut. Robin-Robin's support carries the
   same start without a backtrack (its tip to 4e-9 at 1e-10).
 - Dirichlet-Neumann on F7's soft flag (E 1.4e3): the Newton fails on the first
