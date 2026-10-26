@@ -184,6 +184,46 @@ Cluster rules still apply: ask the human
 before any batch job or GPU use (AGENTS.md rule 3). Follow the site's policy on building
 on login nodes.
 
+### An A100 cluster (checked 2026-10-25)
+
+The plan is to move from Bridges-2's H100s (`psc_gpu`) to an A100 cluster. This is what changes, checked
+against the code on 2026-10-25. Bridges-2's own A100 (GPU-dev, `a001`) refuses jobs from this
+allocation under every QOS, so none of it has run on an A100 yet.
+
+**The architecture is one number.** Put `cuda_arch=80` on mfem, hypre, libceed and ucx in the new
+`spack.yaml`. `scripts/env.sh` reads it into `INCNS_CUDA_ARCH`, which sets `CMAKE_CUDA_ARCHITECTURES`
+for our kernels.
+- Nothing in `src/` uses H100-only features: no thread-block clusters, TMA or wgmma.
+- Two kernels opt into more than 48 KB of dynamic shared memory. Both stay under the A100's 163 KB
+  per block: the fused momentum apply needs at most 93 KB (Q8 at 9 points), and the hyperelastic
+  by-lines kernels 81 KB (N = 8, 18 stacks; orders 1-7 are compiled).
+
+**The rest of `spack.yaml` is site-specific.** The compiler external (Bridges-2's `b2gpu` GCC build),
+`cuda`, `slurm`, and OpenMPI against the site's UCX (or the site's CUDA-aware MPI, as an external) all
+change. Keep:
+- MFEM v4.10 with mfem/mfem#5464 from a local tree (`scripts/mfem_source.sh`, the `develop:`
+  section);
+- hypre's `ldflags="-ldl"` on RHEL 8;
+- `target=` the oldest ISA among the nodes that build and run.
+
+If the compute nodes are offline, mirror the sources and pip wheels first ([bridges2.md](bridges2.md),
+Step 1).
+
+**GPU-aware MPI** is on when MPI is CUDA-aware. `src/util/device.cpp` leaves UCX's `cuda_ipc`
+transport out unless the job sets `UCX_TLS`. That was change 42, which saves 1-2.5 GB per GPU near
+capacity ([gpu_memory.md](../gpu_memory.md)). Measure the trade again on the new interconnect.
+
+**Memory and speed.** The Taylor-Green defaults take about 1.95 kB per velocity dof
+([using.md](../using.md)). An 80 GB A100 holds about what an 80 GB H100 does, a 40 GB one about half.
+`memory.max_dofs` trades 6-7 % of the speed for about 90 B per dof at orders 6-7. The throughput and
+scaling figures ([throughput.md](../throughput.md), [multi_gpu.md](../multi_gpu.md)) are H100
+measurements: the A100 has about half the memory bandwidth, so measure again.
+
+**Validation.** Run the GPU suite at np 1 and 2, one GPU per rank:
+`INCNS_DEVICE=cuda ctest -L "smoke|fast" -R "_np1$" -E "^(nse_mms_test|tgv_nse_test)_np" --timeout 3600`,
+then `_np2$`. The two excluded tests time out on GPUs. `fsi_test` takes about 32 minutes on one H100
+and will take longer on an A100. Then run the CPU tiers at np 1, 2 and 4.
+
 ## Updating a machine's environment
 
 To add a package that `stack.yaml` gained, change a variant, or move a pin:
