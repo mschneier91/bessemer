@@ -4,10 +4,51 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-25)
+## Where development left off (2026-10-27)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**Flow statistics landed; NOT YET TESTED ON A GPU (2026-10-27; human: "push to main and note
+that this still needs to be tested").** Asked for for the FDA nozzle ("just the stuff that goes
+into the core"; the nozzle case is a separate thread). Deck section `flow_statistics`, off by
+default: running mean velocity, pressure and Reynolds stresses at every node
+(`src/post/flow_statistics`, kernel `src/post/running_moments.cpp`), CSV sample sets (lines,
+azimuthally averaged radial profiles, wall bins of pressure and wall shear;
+`src/post/flow_sampling`), a first-half / second-half comparison in the summary, restarts,
+ParaView fields, and `benchmarks/flow_stats.py` for the analysis. docs/using.md §5 and
+docs/capabilities.md describe it; docs/capabilities.md is now the one-page map of what bessemer
+can do (AGENTS.md table and rule 8).
+- Validated on CPUs only (Bridges-2 RM, hfs1 49908725, 2026-10-26): smoke+fast at np 1/2/4
+  (98/98 each); `flow_statistics_test` F1-F6 at np 1/2/4; MFEM's debug device (catches missing
+  host/device copies) at np 1/2 on `flow_statistics_test`, `channel_statistics_test` and
+  `checkpoint_test`. After that run, F6 in `test/flow_statistics_test.cpp` was restructured
+  for astyle and two headers' doc comments were edited: neither has been compiled or
+  astyle-checked since. GPU jobs sat a day in the H100 queue before Bridges-2's move (outage
+  from 2026-11-09) and were cancelled.
+- **To do on the next GPU machine (fix whatever fails there):**
+  1. CUDA build (`running_moments.cpp` is the one new nvcc file), then at np 1 and 2, one GPU
+     per rank: `flow_statistics_test`, `channel_statistics_test`, `deck_test`,
+     `checkpoint_test`. Also `flow_statistics_test` on CPUs at np 1/2/4 (F6 is uncompiled).
+  2. astyle on the changed files; `docs/deck_reference.md` regenerated and unchanged.
+  3. The per-step cost (not measured; estimate: one pass over the velocity and pressure nodes
+     per sample, and four extra fields, three on the velocity space and one on the pressure
+     space). `benchmarks/tgv_re1600/tgv_re1600_n21.yaml` on one GPU with `dt: 0.02`,
+     `step_control: fixed`, `t_final: 0.3`, `output.profile: sync`, no diagnostics or
+     checkpoint: once as is and once with
+     ```yaml
+     flow_statistics:
+       enabled: true
+       lines:
+         - {name: diag, from: [0.1, 0.1, 0.1], to: [6.1, 6.1, 6.1], points: 201}
+       profiles:
+         - {name: axis, origin: [3.141592653589793, 3.141592653589793, 0.0], axis: [0, 0, 1],
+            stations: [1.0, 2.0, 3.0, 4.0, 5.0], radius: 2.5, points: 26, azimuths: 16}
+     ```
+     Compare `solve_seconds` per step and the profile rows `case::flow_statistics`,
+     `case::flow_sampling_setup` and `case::flow_statistics_write`; put the numbers in
+     docs/capabilities.md (Flow statistics) and here, and drop "not yet tested on a GPU" from
+     both.
 
 **Dirichlet-Neumann with a very soft hyperelastic solid is a documented limit (2026-10-25;
 human: "can you deal with this").** On F7's soft flag (E 1.4e3, rho_s = rho_f) the

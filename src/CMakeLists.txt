@@ -64,6 +64,9 @@ add_library(incns STATIC
   post/diagnostics.cpp
   post/flow_sums.cpp
   post/channel_statistics.cpp
+  post/running_moments.cpp
+  post/flow_statistics.cpp
+  post/flow_sampling.cpp
   post/force_statistics.cpp
   post/run_monitor.cpp
   precond/cahouet_chabard.cpp
@@ -107,6 +110,7 @@ target_link_libraries(incns PUBLIC incns_mfem)
 # amr/gradient_indicator.cpp -- the per-element AMR indicator reduction;
 # time/cfl.cpp -- the per-element directional convective CFL rate;
 # post/channel_statistics.cpp -- the plane averages' per-element line sums;
+# post/running_moments.cpp -- the flow statistics' per-node running moments;
 # precond/rotational_schur.cpp -- the rotating-Darcy tensor at the quadrature
 # points and the rotation-number statistics; operators/subgrid_stress.cpp --
 # the LES subgrid stress at the quadrature points and its contraction with
@@ -141,6 +145,7 @@ if(USE_CUDA)
                               post/kinetic_head.cpp
                               post/flow_sums.cpp
                               post/channel_statistics.cpp
+                              post/running_moments.cpp
                               amr/gradient_indicator.cpp
                               time/cfl.cpp
                               time/oifs.cpp

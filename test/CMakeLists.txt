@@ -214,6 +214,7 @@ incns_add_mpi_test(robin_test robin_test.cpp)
 incns_add_mpi_test(run_monitor_test run_monitor_test.cpp)
 incns_add_mpi_test(deck_boundary_test deck_boundary_test.cpp)
 incns_add_mpi_test(channel_statistics_test channel_statistics_test.cpp)
+incns_add_mpi_test(flow_statistics_test flow_statistics_test.cpp)
 incns_add_mpi_test(mesh_census_test mesh_census_test.cpp)
 incns_add_mpi_test(benchmark_setup_test benchmark_setup_test.cpp
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -230,6 +231,11 @@ foreach(_bench tgv_re1600 channel dfg_3d)
     PASS_REGULAR_EXPRESSION "selftest.*ok" FAIL_REGULAR_EXPRESSION "FAILED"
     SKIP_RETURN_CODE 77)
 endforeach()
+# The flow statistics analysis script on synthetic CSVs (no reference data).
+add_test(NAME flow_stats_script
+  COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/flow_stats.py --selftest)
+set_tests_properties(flow_stats_script PROPERTIES LABELS "fast"
+  PASS_REGULAR_EXPRESSION "selftest.*ok" FAIL_REGULAR_EXPRESSION "FAILED")
 incns_add_mpi_test(deck_test deck_test.cpp
   INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml"
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

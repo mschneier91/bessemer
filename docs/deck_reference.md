@@ -132,6 +132,20 @@ Channel statistics (walls normal to y, x and z homogeneous; a box mesh without r
 | `channel_statistics.start_time` | real | `0` | Average over t >= start_time (skip the transient). |
 | `channel_statistics.interval` | int | `1` | Sample every this many steps. |
 
+## `flow_statistics`
+
+Running time averages at every velocity and pressure node, on any fixed mesh: the mean velocity and pressure and the Reynolds stresses, one pass over the nodes per sample. Written with the ParaView output, sampled on lines, azimuthally averaged radial profiles and wall bins into <path>/<name>_stats_<set>.csv at the end and at every checkpoint (with _half1 / _half2 files once the window's midpoint has passed), compared half against half in the run summary, and carried through checkpoints (docs/using.md section 5).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `flow_statistics.enabled` | bool | `false` | Collect them. |
+| `flow_statistics.start_time` | real | `0` | Average over t >= start_time (skip the transient). |
+| `flow_statistics.interval` | int | `1` | Sample every this many steps. |
+| `flow_statistics.fields` | bool | `true` | Write mean_velocity, mean_pressure, reynolds_normal (u'u', v'v', w'w') and reynolds_shear (u'v', u'w', v'w'; 2D: u'v', 0) with the ParaView output (output.enabled). |
+| `flow_statistics.lines` | list | `[]` | Sample lines, each {name, from: [x, y(, z)], to: [...], points: N (default 101)}: N evenly spaced points, both ends included. CSV columns: the arc length s, the point, the mean velocity u, v(, w) and pressure p, the Reynolds stresses R_ij = <u_i' u_j'> and the mean flow's viscous stress tau_ij = nu (dU_i/dx_j + dU_j/dx_i), Cartesian; NaN at points outside the mesh. |
+| `flow_statistics.profiles` | list | `[]` | Radial profiles (3D), each {name, origin: [x, y, z] on the axis, axis: [ax, ay, az], stations: [axial coordinates from origin], radius, points: N radii from 0 to radius (default 21), azimuths: K angles averaged over (default 8)}. CSV columns per station and radius: n (angles inside the mesh), then the mean velocity, pressure, Reynolds and viscous stresses in cylindrical components (a axial, r radial, t azimuthal) averaged over the angles. |
+| `flow_statistics.walls` | list | `[]` | Wall bins, each {name, boundaries: [names], origin, axis, from, to, bins: N (default 100)}: area averages of the mean pressure and the wall shear stress (the mean flow's tangential viscous traction; wss_axial along the axis's direction on the wall, in 3D wss_cross across it) over N equal bins of the axial coordinate (x - origin) . axis / \|axis\| in [from, to]. Wall points facing along the axis (a step) are skipped. |
+
 ## `time`
 
 Time integration.

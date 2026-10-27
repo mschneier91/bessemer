@@ -8,6 +8,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cctype>
 #include <cmath>
 #include <set>
 #include <stdexcept>
@@ -17,6 +18,150 @@ namespace incns
 
 namespace
 {
+// The flow_statistics section: its scalar keys and the three set lists, whose
+// entries' keys are checked here (as boundary_conditions' are).
+void ReadFlowStatistics(DeckReader& r, const DeckSection& root, Parameters& p)
+{
+   FlowStatisticsParameters& fs = p.flow_statistics;
+   const DeckSection s = r.Section(root, "flow_statistics",
+                                   "Running time averages at every velocity and "
+                                   "pressure node, on any fixed mesh: the mean "
+                                   "velocity and pressure and the Reynolds "
+                                   "stresses, one pass over the nodes per sample. "
+                                   "Written with the ParaView output, sampled on "
+                                   "lines, azimuthally averaged radial profiles "
+                                   "and wall bins into <path>/<name>_stats_<set>"
+                                   ".csv at the end and at every checkpoint (with "
+                                   "_half1 / _half2 files once the window's "
+                                   "midpoint has passed), compared half against "
+                                   "half in the run summary, and carried through "
+                                   "checkpoints (docs/using.md section 5).");
+   r.Read(s, "enabled", fs.enabled, "Collect them.");
+   r.Read(s, "start_time", fs.start_time,
+          "Average over t >= start_time (skip the transient).");
+   r.Read(s, "interval", fs.interval, "Sample every this many steps.");
+   r.Read(s, "fields", fs.fields,
+          "Write mean_velocity, mean_pressure, reynolds_normal (u'u', v'v', "
+          "w'w') and reynolds_shear (u'v', u'w', v'w'; 2D: u'v', 0) with the "
+          "ParaView output (output.enabled).");
+   r.Declare(s, "lines", "list", "[]", "",
+             "Sample lines, each {name, from: [x, y(, z)], to: [...], points: N "
+             "(default 101)}: N evenly spaced points, both ends included. CSV "
+             "columns: the arc length s, the point, the mean velocity u, v(, w) "
+             "and pressure p, the Reynolds stresses R_ij = <u_i' u_j'> and the "
+             "mean flow's viscous stress tau_ij = nu (dU_i/dx_j + dU_j/dx_i), "
+             "Cartesian; NaN at points outside the mesh.");
+   r.Declare(s, "profiles", "list", "[]", "",
+             "Radial profiles (3D), each {name, origin: [x, y, z] on the axis, "
+             "axis: [ax, ay, az], stations: [axial coordinates from origin], "
+             "radius, points: N radii from 0 to radius (default 21), azimuths: "
+             "K angles averaged over (default 8)}. CSV columns per station and "
+             "radius: n (angles inside the mesh), then the mean velocity, "
+             "pressure, Reynolds and viscous stresses in cylindrical components "
+             "(a axial, r radial, t azimuthal) averaged over the angles.");
+   r.Declare(s, "walls", "list", "[]", "",
+             "Wall bins, each {name, boundaries: [names], origin, axis, from, to, "
+             "bins: N (default 100)}: area averages of the mean pressure and the "
+             "wall shear stress (the mean flow's tangential viscous traction; "
+             "wss_axial along the axis's direction on the wall, in 3D wss_cross "
+             "across it) over N equal bins of the axial coordinate "
+             "(x - origin) . axis / |axis| in [from, to]. Wall points facing "
+             "along the axis (a step) are skipped.");
+
+   const int dim = p.mesh.dim;
+   auto entries = [&](const char* key, const std::set<std::string>& keys)
+   {
+      std::vector<YAML::Node> out;
+      if (!s.Has(key)) { return out; }
+      const YAML::Node list = s.Get(key);
+      MFEM_VERIFY(list.IsSequence(), "parameters: 'flow_statistics." << key
+                  << "' must be a sequence");
+      std::string allowed;
+      for (const std::string& k : keys) { allowed += (allowed.empty() ? "" : ", ") + k; }
+      for (const auto& e : list)
+      {
+         MFEM_VERIFY(e.IsMap(), "parameters: a flow_statistics." << key
+                     << " entry must be a map");
+         for (const auto& kv : e)
+         {
+            const std::string k = kv.first.as<std::string>();
+            MFEM_VERIFY(keys.count(k), "parameters: unknown flow_statistics."
+                        << key << " key '" << k << "' (" << allowed << ")");
+         }
+         MFEM_VERIFY(e["name"], "parameters: every flow_statistics." << key
+                     << " entry needs a name");
+         out.push_back(e);
+      }
+      return out;
+   };
+   auto point = [](const YAML::Node & e, const char* key, int n)
+   {
+      MFEM_VERIFY(e[key] && e[key].IsSequence() &&
+                  static_cast<int>(e[key].size()) == n,
+                  "parameters: flow_statistics entry '"
+                  << e["name"].as<std::string>() << "' needs " << key << " with "
+                  << n << " coordinates");
+      std::array<double, 3> x = {0.0, 0.0, 0.0};
+      for (int d = 0; d < n; ++d) { x[d] = e[key][d].as<double>(); }
+      return x;
+   };
+   auto number = [](const YAML::Node & e, const char* key)
+   {
+      MFEM_VERIFY(e[key], "parameters: flow_statistics entry '"
+                  << e["name"].as<std::string>() << "' needs " << key);
+      return e[key].as<double>();
+   };
+   for (const YAML::Node& e : entries("lines", {"name", "from", "to", "points"}))
+   {
+      StatisticsLine l;
+      l.name = e["name"].as<std::string>();
+      l.from = point(e, "from", dim);
+      l.to = point(e, "to", dim);
+      if (e["points"]) { l.points = e["points"].as<int>(); }
+      fs.lines.push_back(l);
+   }
+   const std::set<std::string> profile_keys =
+   {
+      "name", "origin", "axis", "stations", "radius", "points", "azimuths"
+   };
+   for (const YAML::Node& e : entries("profiles", profile_keys))
+   {
+      StatisticsProfiles pr;
+      pr.name = e["name"].as<std::string>();
+      pr.origin = point(e, "origin", 3);
+      pr.axis = point(e, "axis", 3);
+      MFEM_VERIFY(e["stations"] && e["stations"].IsSequence(), "parameters: "
+                  "flow_statistics profile '" << pr.name << "' needs stations");
+      pr.stations = e["stations"].as<std::vector<double>>();
+      pr.radius = number(e, "radius");
+      if (e["points"]) { pr.points = e["points"].as<int>(); }
+      if (e["azimuths"]) { pr.azimuths = e["azimuths"].as<int>(); }
+      fs.profiles.push_back(pr);
+   }
+   const std::set<std::string> wall_keys =
+   {
+      "name", "boundaries", "origin", "axis", "from", "to", "bins"
+   };
+   for (const YAML::Node& e : entries("walls", wall_keys))
+   {
+      StatisticsWall w;
+      w.name = e["name"].as<std::string>();
+      MFEM_VERIFY(e["boundaries"], "parameters: flow_statistics wall '" << w.name
+                  << "' needs boundaries");
+      if (e["boundaries"].IsSequence())
+      {
+         w.boundaries = e["boundaries"].as<std::vector<std::string>>();
+      }
+      else { w.boundaries = {e["boundaries"].as<std::string>()}; }
+      w.origin = point(e, "origin", dim);
+      w.axis = point(e, "axis", dim);
+      w.from = number(e, "from");
+      w.to = number(e, "to");
+      if (e["bins"]) { w.bins = e["bins"].as<int>(); }
+      fs.walls.push_back(w);
+   }
+}
+
 // Every deck key is declared here, whether or not the deck sets it, so the
 // same code reads a deck and -- run on an empty deck -- produces the deck
 // reference (Parameters::DeckSchema). Descriptions are one line each.
@@ -380,6 +525,8 @@ void FillFromDeck(DeckReader& r, Parameters& p)
           "Average over t >= start_time (skip the transient).");
    r.Read(chs, "interval", p.channel_statistics.interval,
           "Sample every this many steps.");
+
+   ReadFlowStatistics(r, root, p);
 
    const DeckSection time = r.Section(root, "time", "Time integration.");
    r.Read(time, "dt", p.dt,
@@ -1500,6 +1647,59 @@ Parameters FromYAML(const YAML::Node& root, const std::string& where)
    MFEM_VERIFY(!p.channel_statistics.enabled || !p.amr.enabled,
                "parameters: channel_statistics needs a fixed mesh (amr off): "
                "every node height must span the whole x-z plane");
+   {
+      const FlowStatisticsParameters& fs = p.flow_statistics;
+      MFEM_VERIFY(fs.interval >= 1 && fs.start_time >= 0.0,
+                  "parameters: flow_statistics needs interval >= 1 and "
+                  "start_time >= 0");
+      MFEM_VERIFY(!fs.enabled || (!p.amr.enabled && !p.fsi.enabled),
+                  "parameters: flow_statistics needs a fixed mesh (amr off, no "
+                  "fsi): the averages are kept per node");
+      MFEM_VERIFY(!fs.enabled || p.equation == Equation::NavierStokes ||
+                  p.equation == Equation::Stokes,
+                  "parameters: flow_statistics is for a flow (equation "
+                  "navier_stokes or stokes)");
+      std::set<std::string> names;
+      auto check_name = [&names](const std::string & n)
+      {
+         bool ok = !n.empty();
+         for (char c : n) { ok = ok && (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-'); }
+         MFEM_VERIFY(ok, "parameters: flow_statistics set name '" << n
+                     << "' must be letters, digits, _ or - (it names a file)");
+         MFEM_VERIFY(names.insert(n).second, "parameters: flow_statistics set "
+                     "name '" << n << "' is used twice");
+      };
+      auto norm = [](const std::array<double, 3>& a)
+      {
+         return std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+      };
+      for (const StatisticsLine& l : fs.lines)
+      {
+         check_name(l.name);
+         const std::array<double, 3> d = {l.to[0] - l.from[0], l.to[1] - l.from[1],
+                                          l.to[2] - l.from[2]
+                                         };
+         MFEM_VERIFY(l.points >= 2 && norm(d) > 0.0, "parameters: flow_statistics "
+                     "line '" << l.name << "' needs points >= 2 and from != to");
+      }
+      for (const StatisticsProfiles& s : fs.profiles)
+      {
+         check_name(s.name);
+         MFEM_VERIFY(p.mesh.dim == 3, "parameters: flow_statistics profiles are "
+                     "for 3D (use lines in 2D)");
+         MFEM_VERIFY(norm(s.axis) > 0.0 && s.radius > 0.0 && s.points >= 2 &&
+                     s.azimuths >= 1 && !s.stations.empty(),
+                     "parameters: flow_statistics profile '" << s.name << "' needs "
+                     "an axis, radius > 0, points >= 2, azimuths >= 1 and stations");
+      }
+      for (const StatisticsWall& w : fs.walls)
+      {
+         check_name(w.name);
+         MFEM_VERIFY(!w.boundaries.empty() && norm(w.axis) > 0.0 && w.to > w.from &&
+                     w.bins >= 1, "parameters: flow_statistics wall '" << w.name
+                     << "' needs boundaries, an axis, to > from and bins >= 1");
+      }
+   }
    // A solid takes the solid boundary types, a flow the flow ones, a mesh
    // motion fixed and displacement.
    const bool solid = IsSolid(p.equation);
@@ -1698,6 +1898,27 @@ void Parameters::Normalize()
          f *= nondim.L_ref / (nondim.U_ref * nondim.U_ref);
       }
       channel_statistics.start_time *= U_over_L;
+      flow_statistics.start_time *= U_over_L;
+      for (StatisticsLine& l : flow_statistics.lines)
+      {
+         for (int d = 0; d < 3; ++d)
+         {
+            l.from[d] /= nondim.L_ref;
+            l.to[d] /= nondim.L_ref;
+         }
+      }
+      for (StatisticsProfiles& s : flow_statistics.profiles)
+      {
+         for (double& c : s.origin) { c /= nondim.L_ref; }
+         for (double& c : s.stations) { c /= nondim.L_ref; }
+         s.radius /= nondim.L_ref;
+      }
+      for (StatisticsWall& w : flow_statistics.walls)
+      {
+         for (double& c : w.origin) { c /= nondim.L_ref; }
+         w.from /= nondim.L_ref;
+         w.to /= nondim.L_ref;
+      }
       // Times, lengths and velocities of the scheduling, boundary and probe
       // settings.
       amr.every_time *= U_over_L;

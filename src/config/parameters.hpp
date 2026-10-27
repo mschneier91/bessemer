@@ -15,6 +15,7 @@
 #include "operators/convection.hpp" // ConvectiveForm
 #include "operators/grad_div_scale.hpp"
 #include "post/body_force.hpp"
+#include "post/flow_statistics_parameters.hpp"
 #include "precond/cahouet_chabard.hpp"
 #include "precond/rotational_schur.hpp"
 #include "fsi/fsi_parameters.hpp"
@@ -575,6 +576,9 @@ struct Parameters
    ForcingParameters forcing;
    /// Channel statistics (deck section `channel_statistics`).
    ChannelStatisticsParameters channel_statistics;
+   /// Running flow statistics and their sample sets (deck section
+   /// `flow_statistics`).
+   FlowStatisticsParameters flow_statistics;
    /// Point probes reported in the run summary.
    ProbeParameters probes;
    /// Reference values the run summary compares against.

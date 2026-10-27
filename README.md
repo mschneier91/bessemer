@@ -1,8 +1,8 @@
 # bessemer
 
 A high-order finite element solver for the **incompressible Navier–Stokes equations** (and
-unsteady Stokes), with linear elastic solids and mesh motion as the first steps toward
-fluid-structure interaction, built on [MFEM](https://mfem.org) and running on CPUs and GPUs.
+unsteady Stokes), with linear and hyperelastic solids, moving meshes and fluid-structure
+interaction, built on [MFEM](https://mfem.org) and running on CPUs and GPUs.
 
 **bessemer is used through a coding agent.** You describe the flow you want; an agent
 (Claude Code, Codex, Cursor or similar) running in this checkout sets up the machine,
@@ -31,7 +31,7 @@ seconds.
 | "Set this up on my machine and check that it works." | Builds the Spack environment and bessemer, then runs a smoke case |
 | "Simulate flow past a cylinder in a channel at Re 100. What's the Strouhal number?" | Writes a deck from the closest example, tells you the expected run time, runs it, and reads the shedding statistics from the run summary |
 | "Run a lid-driven cavity at Re 1000 to steady state; I want to look at the flow." | Writes the deck with ParaView output, runs it, and tells you which file to open |
-| "Can bessemer do a backward-facing step? A heated cavity?" | Answers from the docs and the deck reference, and says plainly when something isn't supported yet |
+| "Can bessemer do a backward-facing step? A heated cavity?" | Answers from [docs/capabilities.md](docs/capabilities.md) and the deck reference, and says plainly when something isn't supported yet |
 | "Where did development leave off?" | Reads [docs/status.md](docs/status.md) and summarizes the open items |
 
 **What the agent asks you first:** using more than 4 MPI ranks, a 3D mesh larger than 32³,
@@ -44,6 +44,9 @@ The agent reports from that file, not from the log. Runs can also write ParaView
 and per-step history.
 
 ## What it solves
+
+The full list, with the validated benchmark results and the limits:
+[docs/capabilities.md](docs/capabilities.md). In short:
 
 **Incompressible flow** (`equation: navier_stokes` or `stokes`)
 
@@ -68,21 +71,25 @@ and per-step history.
   boundaries; inflow profiles, no-slip, and a directional do-nothing outflow that stays
   stable under backflow.
 - **Adaptive mesh refinement** (isotropic or anisotropic refinement, hanging nodes, and
-  optional coarsening with an L2-projected multistep history), lift and drag, shedding statistics, channel statistics, checkpoint and restart.
+  optional coarsening with an L2-projected multistep history), lift and drag, shedding
+  statistics, checkpoint and restart.
+- **Flow statistics:** running mean velocity, pressure and Reynolds stresses, sampled on
+  lines, azimuthally averaged radial profiles and wall bins (wall pressure and shear
+  stress), with a check that the averages have converged; channel plane averages.
 
 **Solids** (`equation: linear_elasticity`): small-strain linear elasticity, static or
 dynamic (generalized-alpha or BDF), plane strain or plane stress
 ([docs/elasticity.md](docs/elasticity.md)). `equation: hyperelasticity`: large
-deformation (St. Venant-Kirchhoff), static, Newton with load steps; Turek-Hron CSM1/CSM2
-decks ([docs/hyperelasticity.md](docs/hyperelasticity.md)).
+deformation (St. Venant-Kirchhoff or neo-Hookean), static or dynamic, Newton with load
+steps; Turek-Hron CSM1-3 decks ([docs/hyperelasticity.md](docs/hyperelasticity.md)).
 
 **Moving meshes and fluid-structure interaction:** a pseudo-solid mesh deformation with
 Jacobian stiffening (`equation: mesh_motion`, [docs/mesh_motion.md](docs/mesh_motion.md)),
 the ALE fluid on a mesh moved by prescribed boundary motion
-([docs/ale_fluid.md](docs/ale_fluid.md)), and the flow coupled with the linear solid by
-partitioned subiterations in every step, with Aitken or IQN-ILS acceleration (section `fsi`,
-[docs/fsi.md](docs/fsi.md)). The Robin interface conditions and a hyperelastic solid
-([docs/design/hyperelasticity_spec.md](docs/design/hyperelasticity_spec.md)) come next.
+([docs/ale_fluid.md](docs/ale_fluid.md)), and the flow coupled with the linear or the
+hyperelastic solid by partitioned subiterations in every step (section `fsi`,
+[docs/fsi.md](docs/fsi.md)): Dirichlet-Neumann, Robin-Neumann, Neumann-Dirichlet or
+Robin-Robin, with Aitken or IQN-ILS acceleration; Turek-Hron FSI1-3 decks.
 
 **Running it:** MPI-parallel on CPUs and NVIDIA GPUs (CUDA). Cases are YAML decks, Python
 scripts (module `incns`: `run_deck`, `Parameters.from_dict`, or step a `Case` yourself) or

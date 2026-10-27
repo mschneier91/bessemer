@@ -306,6 +306,13 @@ void Case::BuildOutput(bool restart)
       output_->RegisterExtra("amr_eta", amr_eta_.get());
       output_->RegisterExtra("amr_level", amr_level_.get());
    }
+   if (flow_stats_ && params_.flow_statistics.fields)
+   {
+      output_->RegisterExtra("mean_velocity", &flow_stats_->MeanVelocity());
+      output_->RegisterExtra("mean_pressure", &flow_stats_->MeanPressure());
+      output_->RegisterExtra("reynolds_normal", &flow_stats_->NormalStress());
+      output_->RegisterExtra("reynolds_shear", &flow_stats_->ShearStress());
+   }
 }
 
 void Case::EnsureSetup()
@@ -431,6 +438,7 @@ void Case::EnsureSetup()
          channel_stats_->Sample(integrator_->Velocity(), integrator_->Time());
       }
    }
+   if (params_.flow_statistics.enabled) { SetupFlowStatistics(); }
 
    {
       INCNS_PROFILE("case::cfl_setup");
@@ -524,6 +532,11 @@ void Case::AfterStep(double t_prev, double step_wall)
    if (channel_stats_ && cycle_ % params_.channel_statistics.interval == 0)
    {
       channel_stats_->Sample(integrator_->Velocity(), integrator_->Time());
+   }
+   if (flow_stats_ && cycle_ % params_.flow_statistics.interval == 0)
+   {
+      INCNS_PROFILE("case::flow_statistics");
+      SampleFlowStatistics();
    }
    // Forces and the rotation log use the step's own solver: log them before
    // an event rebuilds the integrator.
@@ -652,6 +665,7 @@ void Case::FinishRun()
    EnsureSetup();
    monitor_->FlushHistory();
    WriteChannelProfiles(ChannelProfilesPath());
+   WriteFlowStatistics();
    if (monitor_->Diverged() && Mpi::Root())
    {
       mfem::out << "[incns] DIVERGED: " << monitor_->DivergenceReason() << std::endl;
@@ -1109,6 +1123,14 @@ void Case::WriteCheckpoint(const std::string& dir)
       channel_stats_->Save(dir + "/channel_statistics.txt");
       WriteChannelProfiles(ChannelProfilesPath());
    }
+   if (flow_stats_)
+   {
+      // The averages and the half-window split travel with the checkpoint;
+      // the sample sets so far are written alongside.
+      flow_stats_->Save(dir);
+      flow_sampler_->Save(dir);
+      WriteFlowStatistics();
+   }
    if (checkpoint_hook_) { checkpoint_hook_(dir); }
 }
 
@@ -1126,6 +1148,70 @@ void Case::WriteChannelProfiles(const std::string& path) const
       if (out.has_parent_path()) { std::filesystem::create_directories(out.parent_path()); }
    }
    channel_stats_->WriteCsv(path);
+}
+
+void Case::SetupFlowStatistics()
+{
+   MFEM_VERIFY(!motion_, "case: flow_statistics needs a fixed mesh: the "
+               "averages are kept per node, and this case moves its mesh");
+   FlowStatisticsParameters& fs = params_.flow_statistics;
+   for (StatisticsWall& w : fs.walls)
+   {
+      w.attributes.clear();
+      for (const std::string& name : w.boundaries)
+      {
+         w.attributes.push_back(NamedBoundaryAttribute(params_, mesh_, name));
+      }
+   }
+   flow_stats_ = std::make_unique<FlowStatistics>(
+                    spaces_.Velocity(), spaces_.Pressure(), fs.start_time);
+   {
+      INCNS_PROFILE("case::flow_sampling_setup");
+      flow_sampler_ = std::make_unique<FlowSampler>(
+                         mesh_, fs, params_.nu, params_.order_u);
+   }
+   if (Mpi::Root() && flow_sampler_->PointsNotFound() > 0)
+   {
+      mfem::out << "[incns] flow_statistics: " << flow_sampler_->PointsNotFound()
+                << " sample point(s) lie outside the mesh (NaN in the CSV)"
+                << std::endl;
+   }
+   // Restored with a restart (the averages continue), otherwise starting
+   // with the initial state.
+   if (!params_.restart_from.empty() &&
+       FlowStatistics::Saved(params_.restart_from))
+   {
+      flow_stats_->Load(params_.restart_from);
+      flow_sampler_->Load(params_.restart_from);
+   }
+   else if (params_.restart_from.empty())
+   {
+      SampleFlowStatistics();
+   }
+}
+
+void Case::SampleFlowStatistics()
+{
+   if (!flow_stats_->Sample(integrator_->Velocity(), integrator_->Pressure(),
+                            integrator_->Time())) { return; }
+   // The half-window split: at the first sample past the middle of the
+   // window from the first sample to t_final.
+   const double t0 = flow_stats_->FirstTime();
+   if (!flow_sampler_->HasSplit() && flow_stats_->Samples() > 1 &&
+       flow_stats_->LastTime() >= t0 + 0.5 * (params_.t_final - t0))
+   {
+      flow_sampler_->Snapshot(*flow_stats_);
+   }
+}
+
+void Case::WriteFlowStatistics() const
+{
+   if (!flow_stats_ || flow_stats_->Samples() == 0) { return; }
+   INCNS_PROFILE("case::flow_statistics_write");
+   if (Mpi::Root()) { std::filesystem::create_directories(params_.output.path); }
+   const SampleValues v = flow_sampler_->Evaluate(*flow_stats_);
+   flow_sampler_->WriteCsv(v, *flow_stats_, params_.output.path + "/" +
+                           params_.output.name + "_stats");
 }
 
 void Case::SetupCfl()
@@ -1473,6 +1559,34 @@ void Case::WriteSummary(const std::string& path, const std::string& status)
       ch["u_bulk"].Set(cs.BulkVelocity());
       ch["profiles"].Set(ChannelProfilesPath());
       got.push_back({"re_tau", cs.ReTau()});
+   }
+   if (flow_stats_ && flow_stats_->Samples() > 0)
+   {
+      const FlowStatistics& fs = *flow_stats_;
+      Json& st = j["flow_statistics"];
+      st["samples"].Set(static_cast<long long>(fs.Samples()));
+      st["averaging_time"].Set(fs.AveragingTime());
+      st["window_start"].Set(fs.FirstTime());
+      st["window_end"].Set(fs.LastTime());
+      st["files"].Set(params_.output.path + "/" + params_.output.name +
+                      "_stats_<set>.csv");
+      INCNS_PROFILE("case::flow_statistics_summary");
+      const SampleValues v = flow_sampler_->Evaluate(fs); // collective
+      const std::vector<HalfWindowDifference> diff =
+         flow_sampler_->Compare(v, fs.AveragingTime());
+      if (flow_sampler_->HasSplit())
+      {
+         Json& sp = st["split"];
+         sp["time"].Set(flow_sampler_->SplitTime());
+         sp["first_averaging_time"].Set(flow_sampler_->SplitWeight());
+         sp["second_averaging_time"].Set(fs.AveragingTime() -
+                                         flow_sampler_->SplitWeight());
+      }
+      // max |first half - second half| / scale per set and quantity.
+      for (const HalfWindowDifference& d : diff)
+      {
+         st["half_window_difference"][d.set][d.group].Set(d.relative);
+      }
    }
    if (params_.probes.pressure_difference.size() == 2)
    {

@@ -23,9 +23,10 @@ may not be CFD specialists; match their vocabulary.
   reference errors when the deck has reference values. Say what the run doesn't establish:
   one resolution is not a mesh-converged answer, and `status: diverged` means no answer.
 - **Missing features:** if the request needs something bessemer can't do (a geometry it
-  can't mesh, a boundary condition or equation it lacks), say so plainly and offer the
-  developer path ([docs/developing.md](docs/developing.md)). Never edit `src/` just to run
-  a case (rule 5).
+  can't mesh, a boundary condition or equation it lacks;
+  [docs/capabilities.md](docs/capabilities.md) lists what it does and its limits), say so
+  plainly and offer the developer path ([docs/developing.md](docs/developing.md)). Never
+  edit `src/` just to run a case (rule 5).
 - **Keep their runs out of the repo:** user decks and output go under `runs/`
   (git-ignored) unless they name another place.
 - **Setting up their machine:** run `scripts/setup.sh --plan` and show them the plan (what
@@ -39,6 +40,7 @@ may not be CFD specialists; match their vocabulary.
 
 | Task | Read |
 |---|---|
+| What bessemer can and can't do: features, validated results, limits | [docs/capabilities.md](docs/capabilities.md) |
 | Run a standard benchmark (Taylor–Green, channel, DFG 3D) | [benchmarks/README.md](benchmarks/README.md) |
 | Run a simulation: an example deck, a new deck, a Python case | [docs/using.md](docs/using.md); every deck key: [docs/deck_reference.md](docs/deck_reference.md) |
 | Install or build on a machine; how the Spack environments work | Run `scripts/setup.sh --plan` first: it says what this machine needs and names the procedure to follow. Background: [docs/install/spack.md](docs/install/spack.md); machines with their own page: [environments/README.md](environments/README.md) |
@@ -78,7 +80,9 @@ may not be CFD specialists; match their vocabulary.
 8. **After development work** (changes to `src/`, `test/`, `apps/`, the scripts or the
    docs), update "Where development left off" at the top of
    [docs/status.md](docs/status.md) before you stop: what landed, what's in flight,
-   what's next. It is how the next agent (or human) picks up. Running cases or setting
+   what's next. When a capability, a limit or a validated result changed, update
+   [docs/capabilities.md](docs/capabilities.md) in the same change. It is how the next
+   agent (or human) picks up. Running cases or setting
    up a machine for a user is not development work: leave `docs/status.md` alone then.
    Installing an environment may rewrite its `spack.lock` and `spack.yaml.sha256`;
    leave those uncommitted unless the human asks.

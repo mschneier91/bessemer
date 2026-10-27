@@ -72,6 +72,7 @@ closest valid key. **Every key, with its default and allowed values:
 | `amr` | `enabled`, `interval`, `theta` or `tolerance`, `anisotropic`, `min_size`, `max_elements`, `derefine`, ... |
 | `forces` | `enabled`, `attributes` or `boundaries`, `reference_velocity`, `reference_area`, `interval`, `statistics` |
 | `channel_statistics` | `enabled`, `start_time`, `interval`: plane and time averages for a channel (below) |
+| `flow_statistics` | `enabled`, `start_time`, `interval`, `fields`, `lines`, `profiles`, `walls`: running averages on any fixed mesh, sampled to CSV (below) |
 | `output` | `enabled`, `path`, `name`, `interval`, `diagnostics`, `progress`, `history` |
 | `checkpoint` | `enabled`, `path`, `interval` |
 | `nondimensionalization` | dimensionless (default) or dimensional reference scales |
@@ -235,6 +236,61 @@ and the subgrid dissipation. Details and when it is worth it: [les.md](les.md).
     wall units), written at the end of the run and at every checkpoint.
   - **Restarts:** the averages travel with the checkpoint, so a restarted run continues
     them exactly.
+- **Flow statistics:** `flow_statistics.enabled`, on any fixed mesh (no AMR, mesh motion
+  or FSI).
+  - **What:** running time averages from `start_time` on at every velocity and pressure
+    node: the mean velocity and pressure and the Reynolds stresses ⟨u_i′u_j′⟩. A sample
+    (every `interval` steps) is one pass over the nodes: nothing is reduced or
+    communicated, the solution does not change, and the averages take about three
+    velocity fields and one pressure field of memory. Everything else is computed from
+    them only when written.
+  - **Fields:** with `output.enabled` (and `fields: true`, the default) the ParaView
+    collection carries `mean_velocity`, `mean_pressure`, `reynolds_normal` (u′u′, v′v′,
+    w′w′) and `reynolds_shear` (u′v′, u′w′, v′w′; in 2D u′v′, 0).
+  - **Sample sets:** written at the end of the run and at every checkpoint to
+    `<path>/<name>_stats_<set>.csv`.
+    - `lines`: `points` points from `from` to `to`. Columns: s, the point, u, v, w, p,
+      R_ij and the mean flow's viscous stress τ_ij = ν(∂U_i/∂x_j + ∂U_j/∂x_i), Cartesian.
+    - `profiles` (3D): radii 0 to `radius` at the axial `stations` along `axis` through
+      `origin`, averaged over `azimuths` angles. The same quantities in cylindrical
+      components (a axial, r radial, t azimuthal); `n` counts the angles inside the mesh.
+    - `walls`: area averages over `bins` axial bins of the named `boundaries`: the mean
+      pressure and the wall shear stress, the mean flow's tangential viscous traction.
+      `wss_axial` is signed along the axis (negative under backflow), and in 3D
+      `wss_cross` runs across it. Each wall quadrature point goes to the bin of its
+      axial coordinate: bins whose edges lie on element edges are exact area averages,
+      narrower or misaligned bins approximate ones.
+    - Points outside the mesh are NaN.
+  - **Converged yet?** The averaging window runs from the first sample to `time.t_final`.
+    At the first sample past its middle the sets' values are kept. From then on the
+    summary's `flow_statistics.half_window_difference` gives, per set and quantity
+    (velocity, pressure, reynolds_stress, viscous_stress; wss for walls), max |first half
+    − second half| over the set's scale. The `_half1` / `_half2` CSVs hold the two halves.
+  - **Restarts:** the averages and the split travel with the checkpoint. A restart keeps
+    the checkpoint's split even if `t_final` changed.
+  - **Units:** lengths and velocities are the run's; pressure and stresses are per unit
+    density.
+  - **Analysis:** `benchmarks/flow_stats.py` works on the CSVs:
+    - `normalize`: a reference velocity and length, the axial origin, the pressure
+      relative to a value or to another set at a point, (p − p_ref)/(½U²) and stresses
+      over ½U² (or times ρ for dimensional values);
+    - `centerline`: jet-breakdown indicators along a line;
+    - `wall`: separation and reattachment points from the sign of `wss_axial`;
+    - `halves`: the summary's convergence table.
+
+  ```yaml
+  flow_statistics:
+    enabled: true
+    start_time: 0.5
+    lines:
+      - {name: centerline, from: [0, 0, -0.1], to: [0, 0, 0.2], points: 301}
+    profiles:
+      - {name: radial, origin: [0, 0, 0], axis: [0, 0, 1], stations: [0.0, 0.01, 0.02],
+         radius: 0.0059, points: 31, azimuths: 16}
+    walls:
+      - {name: wall, boundaries: [wall], origin: [0, 0, 0], axis: [0, 0, 1],
+         from: -0.1, to: 0.2, bins: 300}
+  ```
 - **Forces:** `forces.enabled` with the body's attributes gives lift and drag coefficients
   (John's volume-integral method) in `<path>/<name>_forces.csv`.
 - **Checkpoints:** `checkpoint.enabled`; restart with `restart: <dir>` at the same rank

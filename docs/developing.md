@@ -142,6 +142,11 @@ src/
                run_monitor (progress lines, history CSV, divergence; owned by Case),
                channel_statistics (plane + time averages at node heights, tau_w, u_tau,
                Re_tau; Save/Load exact through checkpoints; owned by Case)
+               flow_statistics (running nodal mean u, p and Reynolds stresses on any
+               fixed mesh; Save/Load exact) + running_moments (its per-node update,
+               nvcc) + flow_sampling (lines, azimuthal profiles, wall bins from the
+               averages at output time, gslib once at setup; the half-window
+               comparison); owned by Case
   quadrature/  rule_book (OWNS all rules; order + 1D family per operator)
   bc/          boundary_conditions (Dirichlet/no-slip/outflow per attribute; null-space detection),
                boundary_names (box faces / geometry names -> attributes), deck_boundary
@@ -888,6 +893,11 @@ if it shows in a profile). `summary.json` gets a `subgrid` section (max/mean ν_
   operator = `ElasticityIntegrator(λ = 0, μ = ν_t)` to 1e-12, S3 dissipation =
   ⟨y, u⟩ ≥ 0, S4 explicit constant ν_t → implicit ν + ν_t at order 2, S5 sigma through
   `Case`),
+  `flow_statistics_test` (F1 the running moments exact at every node over uneven
+  samples, F2 Save/Load bitwise, F3 lines and azimuthal profiles exact, Cartesian and
+  cylindrical, F4 wall bins: area, pressure, wall shear stress, the 3D cross component, a
+  step skipped, F5 the half-window split exact, F6 in a run: the solution unchanged, a
+  restart continues, summary and CSVs),
   `linear_elasticity_test` (PA = assembled, quadratic exact at Q2, the
   Timoshenko cantilever exact at Q3, energy identity), `elastodynamics_test`
   (time orders of every scheme, energy, the bar mode, a dynamic deck) and the

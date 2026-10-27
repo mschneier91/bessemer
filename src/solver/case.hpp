@@ -16,6 +16,8 @@
 #include "post/diagnostics.hpp"
 #include "post/body_force.hpp"
 #include "post/channel_statistics.hpp"
+#include "post/flow_sampling.hpp"
+#include "post/flow_statistics.hpp"
 #include "post/output.hpp"
 #include "quadrature/rule_book.hpp"
 #include "spaces/mixed_spaces.hpp"
@@ -263,6 +265,19 @@ public:
    ///         checkpoint write the channel profiles.
    std::string ChannelProfilesPath() const;
 
+   /// @return The running flow statistics (deck flow_statistics), or null.
+   const FlowStatistics* FlowStats() const { return flow_stats_.get(); }
+   /// @return Their sample sets (deck flow_statistics), or null.
+   const FlowSampler* FlowSamples() const { return flow_sampler_.get(); }
+
+   /**
+    * @brief Write the flow statistics' sample sets (FlowSampler::WriteCsv)
+    *        as <output.path>/<output.name>_stats_<set>.csv. No-op without
+    *        flow statistics or before their first sample. Collective; rank 0
+    *        writes.
+    */
+   void WriteFlowStatistics() const;
+
    /// @return The pressure field.
    mfem::ParGridFunction& Pressure();
 
@@ -338,6 +353,14 @@ public:
 private:
    /// Build the integrator/output on first use (BCs must be final by then).
    void EnsureSetup();
+
+   /// Build the flow statistics and their sample sets (deck
+   /// flow_statistics), restored with a restart. Collective.
+   void SetupFlowStatistics();
+
+   /// Take a flow statistics sample at the current state, and the
+   /// half-window split once the window's midpoint has passed. Collective.
+   void SampleFlowStatistics();
 
    /**
     * @brief Time-based AMR (amr.every_time): run the event if the step just
@@ -515,6 +538,10 @@ private:
    std::unique_ptr<mfem::VectorConstantCoefficient> deck_forcing_;
    /// Plane and time averages (deck channel_statistics), when enabled.
    std::unique_ptr<ChannelStatistics> channel_stats_;
+   /// Running nodal averages (deck flow_statistics), when enabled.
+   std::unique_ptr<FlowStatistics> flow_stats_;
+   /// Their sample sets and half-window split, when flow_stats_ exists.
+   std::unique_ptr<FlowSampler> flow_sampler_;
 };
 
 } // namespace incns
