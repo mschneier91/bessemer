@@ -23,13 +23,13 @@ can do (AGENTS.md table and rule 8).
   (98/98 each); `flow_statistics_test` F1-F6 at np 1/2/4; MFEM's debug device (catches missing
   host/device copies) at np 1/2 on `flow_statistics_test`, `channel_statistics_test` and
   `checkpoint_test`. After that run, F6 in `test/flow_statistics_test.cpp` was restructured
-  for astyle and two headers' doc comments were edited: neither has been compiled or
-  astyle-checked since. GPU jobs sat a day in the H100 queue before Bridges-2's move (outage
+  for astyle and two headers' doc comments were edited; `flow_statistics_test` rebuilt from
+  the final files passes at np 1/2/4 on CPUs (2026-10-27), but astyle was not rerun. GPU jobs sat a day in the H100 queue before Bridges-2's move (outage
   from 2026-11-09) and were cancelled.
 - **To do on the next GPU machine (fix whatever fails there):**
   1. CUDA build (`running_moments.cpp` is the one new nvcc file), then at np 1 and 2, one GPU
      per rank: `flow_statistics_test`, `channel_statistics_test`, `deck_test`,
-     `checkpoint_test`. Also `flow_statistics_test` on CPUs at np 1/2/4 (F6 is uncompiled).
+     `checkpoint_test`.
   2. astyle on the changed files; `docs/deck_reference.md` regenerated and unchanged.
   3. The per-step cost (not measured; estimate: one pass over the velocity and pressure nodes
      per sample, and four extra fields, three on the velocity space and one on the pressure
