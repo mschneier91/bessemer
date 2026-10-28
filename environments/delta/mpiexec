@@ -1,0 +1,10 @@
+# environments/delta/mpiexec -- the MPI launcher (scripts/env.sh). Cray MPICH
+# has no mpirun: ranks start through Slurm, with srun inside an allocation and
+# Delta's default PMIx plugin (pmi2 starts N one-rank jobs instead).
+#   --overlap        CTest's concurrent steps share the job's cores and GPU
+#                    (without it a second step waits for the first)
+#   -c 1             one core per rank, whatever --cpus-per-task the job set
+#   --cpu-bind=none  concurrent steps do not pin to the same cores
+# Checked 2026-10-27 on gpua086 with a Cray MPICH hello at -n 2 and 4, and two
+# steps at once, both seeing the job's A100.
+srun --overlap -c 1 --cpu-bind=none

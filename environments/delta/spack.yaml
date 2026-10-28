@@ -1,0 +1,121 @@
+# environments/delta/spack.yaml -- NCSA Delta A100 nodes (gpuA100x4: AMD EPYC
+# 7763, 4 x A100 40 GB, Slingshot 11, RHEL 9.6): the stack with CUDA
+# (cuda_arch=80). Written 2026-10-27 from psc_gpu (human: "build it with spack
+# ... on the cheapest A100"); not yet committed.
+# - MPI is the site's Cray MPICH (human 2026-10-27), the MPI HPE supports on
+#   Slingshot; Open MPI over UCX does not run on its cxi NICs. It launches with
+#   srun (no mpirun). +wrappers: dependents compile through its mpicc/mpicxx
+#   (MPICH_CC etc. point them at Spack's compiler wrappers).
+# - CUDA 13.2 because Cray MPICH's GPU transport library (gtl/lib/
+#   libmpi_gtl_cuda.so) links libcudart.so.13; one CUDA runtime per process.
+# - The H200 nodes (gpuH200x8) are sm_90: a second environment with
+#   cuda_arch=90, otherwise the same.
+spack:
+  specs:
+    # MUMPS (human 2026-10-09): MFEM's +mumps (MFEM_USE_MUMPS; pulls MUMPS and
+    # ScaLAPACK). No OpenMP in MUMPS: one MPI rank per core here, and OpenMP
+    # threads per rank would oversubscribe. METIS/ParMETIS orderings.
+    # MFEM v4.10 (2026-09-01) with mfem/mfem#5464 as a local patch (human
+    # 2026-10-15): v4.10 contains PR #5297, whose ParMesh::AnisotropicConflict
+    # segfaults on nonconforming 3D hex meshes at np >= 2 (mfem/mfem#5602);
+    # #5464 (unmerged) fixes it. Built from the source tree in the develop
+    # section below (scripts/mfem_source.sh). Drop the patch once #5464 is in
+    # a release.
+    - mfem@develop
+      +cuda cuda_arch=80 +gslib+lapack+libceed+mpi+mumps+shared+suite-sparse
+      ^gslib@1.0.9 cflags="-fPIC"
+      ^mumps+metis+parmetis~openmp
+      ^hypre+cuda cuda_arch=80
+      ^libceed+cuda cuda_arch=80
+      ^suite-sparse~cuda
+
+    - cmake
+    - ninja
+
+    - googletest
+    - astyle
+    - yaml-cpp
+
+    # Python interface: our own pybind11 bindings over the incns Case surface
+    # (PyMFEM is never used). numba lags Python releases, so the interpreter
+    # is pinned to a numba-supported version. numba comes from pip's wheel
+    # (as on Bridges-2, docs/install/bridges2.md Step 4): Spack's py-numba
+    # builds LLVM, the longest part of the install.
+    - python@3.12
+    - py-pybind11
+    - py-numpy
+    - py-pip
+
+  # The MFEM source: a clone at tag v4.10 with #5464's own diff committed on a
+  # local branch v4.10-pr5464 (scripts/mfem_source.sh).
+  develop:
+    mfem:
+      spec: mfem@develop
+      path: /projects/bjdd/mhs13c/mfem-src/mfem-4.10
+
+  packages:
+    all:
+      require:
+      - target=x86_64_v3
+      providers:
+        mpi: [cray-mpich]
+    # Spack v1.x: compilers are dependencies. Do NOT put "%gcc" under
+    # all:require (breaks externals like slurm). Use language virtuals:
+    c:
+      require:
+      - gcc@14.2.1
+    cxx:
+      require:
+      - gcc@14.2.1
+    fortran:
+      require:
+      - gcc@14.2.1
+    # The site's GCC (module gcc-native/14, Red Hat's gcc-toolset-14), the
+    # compiler Cray MPICH's gnu build is meant for.
+    gcc:
+      externals:
+      - spec: gcc@14.2.1 languages:='c,c++,fortran'
+        prefix: /opt/rh/gcc-toolset-14/root/usr
+        extra_attributes:
+          compilers:
+            c: /opt/rh/gcc-toolset-14/root/usr/bin/gcc
+            cxx: /opt/rh/gcc-toolset-14/root/usr/bin/g++
+            fortran: /opt/rh/gcc-toolset-14/root/usr/bin/gfortran
+      buildable: false
+    mpi:
+      buildable: false
+    cray-mpich:
+      buildable: false
+      externals:
+      - spec: cray-mpich@9.1.0+wrappers+cuda
+        prefix: /opt/cray/pe/mpich/9.1.0/ofi/gnu/11.2
+    cray-pmi:
+      buildable: false
+      externals:
+      - spec: cray-pmi@6.1.17
+        prefix: /opt/cray/pe/pmi/6.1.17
+    libfabric:
+      buildable: false
+      externals:
+      - spec: libfabric@2.3.1
+        prefix: /opt/cray/libfabric/2.3.1
+    # The standalone toolkit, not the HPC SDK's cuda/13.2 (module cudatoolkit):
+    # the SDK keeps cuBLAS/cuSPARSE in a separate math_libs tree, so libceed,
+    # hypre and MFEM failed to link -lcublas against that prefix. Same nvcc
+    # (V13.2.78), present on the login and compute nodes.
+    cuda:
+      buildable: false
+      externals:
+      - spec: cuda@13.2.78
+        prefix: /opt/nvidia/cuda-13.2
+    slurm:
+      buildable: false
+      externals:
+      - spec: slurm@25.11.8
+        prefix: /usr
+
+  concretizer:
+    unify: when_possible
+    reuse: true
+
+  view: true

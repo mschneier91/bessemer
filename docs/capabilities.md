@@ -420,13 +420,15 @@ work, and the benchmark READMEs under [../benchmarks](../benchmarks) the validat
   per write of the sample sets, and 148 MiB of device memory, 9 numbers per velocity node and 1
   per pressure node ([status.md](status.md)).
 - **Restarts:** same MPI rank count.
-- **GPUs:** NVIDIA/CUDA only, built for one architecture at a time (currently sm_90,
-  H100).
+- **GPUs:** NVIDIA/CUDA only, built for one architecture at a time: sm_90 (H100,
+  Bridges-2) or sm_80 (A100 40 GB, NCSA Delta; [install/delta.md](install/delta.md)).
   - In bessemer, an A100 needs only `cuda_arch=80`. Nothing uses H100-only features, and
     the custom kernels' shared memory (at most about 93 KB per block) fits the A100's 163
     KB.
-  - The dependency stack (MFEM, hypre, libCEED, UCX) must be rebuilt for sm_80, and the
-    MPI transport settings rechecked on the new network.
   - The memory and speed figures were measured on 80 GB H100s.
+  - Delta's stack is CUDA 13.2 with hypre 3.2 (CUDA 13 needs hypre 3; hypre 3's CUDA builds
+    allocate through Umpire). There hypre runs cuSPARSE's SpMV kernels, not its own:
+    coarsening (`amr.derefine`) at np 2 went wrong with hypre's own kernels, cause not
+    found ([status.md](status.md)).
 - **Meshes from files:** Gmsh is not in the toolchain; the sphere benchmark still needs
   a hex mesh.

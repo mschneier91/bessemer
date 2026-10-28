@@ -19,6 +19,7 @@ environments/
     hosts               optional: hostname patterns of the machines that use it
     INSTALL             optional: the document it installs by, instead of setup.sh
     preset              optional: its build preset, when that isn't cpu
+    mpiexec             optional: its MPI launcher, when that isn't mpirun
   .machine          which environment this checkout uses (untracked, one line)
 scripts/
   setup.sh          sets a machine up: shows a plan, then does it with --yes
@@ -171,7 +172,11 @@ interconnect and the scheduler.
 2. Add the site's packages to `environments/<cluster>/spack.yaml` under `packages:`, as
    externals with `buildable: false`: the MPI (or build OpenMPI against the site's UCX and
    Slurm, as `psc_gpu` does), `slurm`, and `cuda` for GPUs. Then add the GPU variants to
-   the specs (`+cuda cuda_arch=<sm>` on mfem, hypre, libceed).
+   the specs (`+cuda cuda_arch=<sm>` on mfem, hypre, libceed). If the MPI has no
+   `mpirun` (Cray MPICH starts its ranks through Slurm), name the launcher in
+   `environments/<cluster>/mpiexec`, e.g. `srun --overlap -c 1 --cpu-bind=none`; CTest and
+   the doctor run it with `-n <ranks>`. `delta` is the worked example
+   ([delta.md](delta.md)).
 3. `scripts/setup.sh --yes --name <cluster>`, inside an allocation. On a login node
    (a batch scheduler on `PATH`, no job around the shell) `--yes` refuses unless you add
    `--on-login-node`, for sites that allow building there.

@@ -46,6 +46,75 @@ can do (AGENTS.md table and rule 8).
 - Not run: the fixed F6 at np 4 (CI's CPU fast tier runs it), and on a GPU the slow and verify
   tiers (the feature is off by default and self-contained).
 
+**NCSA Delta, the move from Bridges-2 (2026-10-27/28, branch `delta`, not merged; human:
+"build it with spack ... on the cheapest A100", "will absolutely need multi-GPU runs").**
+Production moves to Delta (A100 40 GB now, its H200s later; the ACCESS comparison and the
+reasons are in the session, not here). docs/install/delta.md is the page.
+- `environments/delta`: the site's GCC 14.2.1, **Cray MPICH 9.1.0** as an external (human's
+  choice; Slingshot 11 runs no UCX), CUDA 13.2 (Cray's GTL links `libcudart.so.13`),
+  `cuda_arch=80`, numba from pip. Resolved on the login node (92 packages); installed by
+  `install.sbatch` (job 23241743).
+- **The launcher is configurable:** Cray MPICH has no `mpirun`. An environment may name its
+  launcher in `environments/<name>/mpiexec`; `env.sh` exports `INCNS_MPIEXEC` (default
+  `mpirun`), and CTest (`INCNS_MPIEXEC` in the top-level CMakeLists, used by test/ and
+  python/) and the doctor run it with `-n <ranks>` (was `-np`; Open MPI's mpirun takes
+  both). Delta's: `srun --overlap -c 1 --cpu-bind=none`, checked with a Cray MPICH hello
+  (PMIx; `--mpi=pmi2` does not work). `env.sh` accepts a `cray-mpich` external's prefix.
+- **GPU-aware Cray MPICH:** CMake links `libmpi_gtl_cuda` when the compiler wrapper is
+  Cray MPICH (defines `INCNS_MPI_GTL`); `ConfigureMpiTransport` sets
+  `MPICH_GPU_SUPPORT_ENABLED=1` unless the job sets it; `MpiTakesCudaPointers` asks MPICH 4's
+  `MPIX_GPU_query_support`. `ConfigureMpiTransport` also makes each rank's GPU current
+  before `MPI_Init`: the GTL records the device there, and a rank that moved afterwards lost
+  CUDA IPC ("not using the same device it did during gtl_init", job 23251132).
+- **Tested on A100s** (CUDA backend, one GPU per rank) with cuSPARSE's SpMV, the default
+  below (jobs 23275289, 23276507): the fast tier at np 2, all 97 (93 together; the four
+  long ones apart: `solid_adaptive_test` 421 s, `oifs_convection_test` 144 s,
+  `ale_fluid_test` 93 s, and `fsi_test` 2267 s, with hypre's kernels, job 23274156); at
+  np 1, all 97 (`fsi_test` 815 s alone, job 23277317; sharing one GPU with the others it
+  ran past the 1500 s timeout). At np 2 `fsi_test` is longer than ctest's default 1500 s:
+  give it `--timeout 3300`. astyle 3.4.11 clean. Not run on Delta: the CPU fast tier (CI
+  runs it), np 4 (four GPUs), the slow and verify tiers, Doxygen (not installed there).
+- **CUDA IPC stays on** (human 2026-10-27, after the GTL device fix): Taylor-Green 32³ Q6 at
+  np 2 on two A100s solved in 8.46 s with Cray's CUDA IPC, 20.66 s with
+  `MPICH_GPU_IPC_ENABLED=0` (job 23261041); no "gtl_init" warning. Memory not measured
+  (docs/install/delta.md).
+- **hypre 3.2, not 2.33** (human 2026-10-27 asked for 2.33: impossible, Spack allows no
+  hypre 2 with CUDA 13 and Cray MPICH 9.1's GTL needs CUDA 13; hypre 3's CUDA builds also
+  require Umpire). Two bugs found with it, both on GPUs at np 2 only:
+  - **Coarsening (`amr.derefine`) with hypre's own SpMV kernels** (`amr_transfer_test` X4,
+    never run on a GPU before): on a walled 2D box, rebalanced, the coarsening round right
+    after `Rebalance(gather)` moved 2 elements gave one node shared by both ranks the
+    coordinates (0.75, 0.0) instead of (0.75, 1.0) inside `DerefineByError`; two elements
+    inverted. Wrong in all 14 plain runs with hypre's kernels, right in all 9 with cuSPARSE's
+    (jobs 23273228, 23274156, 23275289); the host backend is right. Not found: the cause.
+    Ruled out: stale host/device copies of the nodes, MPI (GPU-aware and host-staged alike),
+    hypre's `rownnz` caches (correct), the kernel's arithmetic (both kernels give the same
+    product on the matrices involved, output pre-filled with junk), uninitialized device
+    memory (compute-sanitizer initcheck clean, but Umpire's pooled memory is invisible to
+    it). The failure is history-dependent: extra matrix-vector products between the
+    rounds, or `CUDA_LAUNCH_BLOCKING=1` (1 of 2), make it pass. A standalone MFEM program of
+    the same sequence (runs/mfem_repro on Delta; bessemer's partition and spaces as
+    options) never reproduced it. **Fix (workaround): with hypre >= 3, hypre runs cuSPARSE's
+    SpMV** (`ConfigureHypreSpMV`; hypre 2 keeps its own kernels, change 43);
+    `INCNS_HYPRE_SPMV_VENDOR=0` restores them. Cost on Taylor-Green 32³ Q6 at np 2: 8.90 s
+    against 8.61 s for 23 steps (+3 %; on H100s with hypre 2.33 hypre's kernels halved the
+    V-cycle). All six AMR tests pass at np 2 with it.
+  - **MFEM 4.10's `HypreParMatrix::AbsMult` segfaults** on a rank with a `rownnz` cache
+    (`AbsMultTranspose` works); `hanging_prolongation_test` HP1 at np 2 hung on it. HP1 now
+    takes |P| x as |P^T|^T x. No production path calls `AbsMult`. Cause: hypre 3 builds the
+    CSR `rownnz` cache on the device (2.33 skipped it there) and MFEM's `HostRead()` does not
+    move it, so the host loop reads a device pointer; runs/mfem_repro's absmult_gpu shows it
+    and that skipping the cache fixes it. Already reported upstream (mfem/mfem#5595, fix in
+    mfem/mfem#5610, both open on 2026-10-28); human 2026-10-27: nothing to do until it
+    merges, then move to MFEM's develop (keeping #5464).
+  - `INCNS_HYPRE_POOL` does nothing here (Umpire, not hypre's pool); hypre's device memory
+    near capacity is not measured on Delta.
+- `subgrid_test` S4 failed once at np 2 (OIFS at dt 0.005: 2.75e-6 against 1.40e-6, ratio
+  2.07 < 3) while other GPU runs shared the two A100s (job 23273228); it passed 4 of 4 runs
+  alone, with either SpMV (job 23274156). Not explained; watch it.
+- **Next:** an H200 environment (`cuda_arch=90`); a 4-GPU and a two-node scaling run; the
+  coarsening bug's cause (the cuSPARSE default is a workaround); hypre's memory on Delta.
+
 **Dirichlet-Neumann with a very soft hyperelastic solid is a documented limit (2026-10-25;
 human: "can you deal with this").** On F7's soft flag (E 1.4e3, rho_s = rho_f) the
 St. Venant-Kirchhoff solid under Dirichlet-Neumann cuts its steps. Cause: the coupling, not
