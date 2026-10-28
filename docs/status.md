@@ -4,7 +4,7 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-27)
+## Where development left off (2026-10-28)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
@@ -46,7 +46,7 @@ can do (AGENTS.md table and rule 8).
 - Not run: the fixed F6 at np 4 (CI's CPU fast tier runs it), and on a GPU the slow and verify
   tiers (the feature is off by default and self-contained).
 
-**NCSA Delta, the move from Bridges-2 (2026-10-27/28, branch `delta`, not merged; human:
+**NCSA Delta, the move from Bridges-2 (2026-10-27/28, branch `delta`, merged to main 2026-10-28; human:
 "build it with spack ... on the cheapest A100", "will absolutely need multi-GPU runs").**
 Production moves to Delta (A100 40 GB now, its H200s later; the ACCESS comparison and the
 reasons are in the session, not here). docs/install/delta.md is the page.
