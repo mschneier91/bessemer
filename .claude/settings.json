@@ -2,12 +2,13 @@
   "permissions": {
     "deny": [
       "Bash(rm -rf:*)",
-      "Bash(git push:*)",
       "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
       "Bash(spack uninstall:*)",
       "Bash(sudo:*)"
     ],
     "ask": [
+      "Bash(git push:*)",
       "Bash(sbatch:*)",
       "Bash(srun:*)",
       "Bash(salloc:*)",
