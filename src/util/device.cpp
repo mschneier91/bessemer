@@ -167,13 +167,21 @@ void ConfigureGpuAwareMpi(const std::string& backend)
 }
 
 /**
- * @brief hypre's own SpMV kernels instead of cuSPARSE's.
+ * @brief Which SpMV kernels hypre runs on a GPU: its own or cuSPARSE's.
  *
- * The pressure LOR-AMG's SpMVs (a diagonal and an off-diagonal block per
- * level at more than one rank): at np 2 on two H100s cuSPARSE took 6.7 ms per
- * V-cycle on Taylor-Green Q6 and 17.0 ms on the curved cylinder, hypre's
- * kernels 3.5 and 3.4 ms; one rank unchanged, 4.4 ms (job 49408885). Before
- * the first hypre object; INCNS_HYPRE_SPMV_VENDOR=1 restores cuSPARSE.
+ * hypre 2.x uses its own. The pressure LOR-AMG's SpMVs (a diagonal and an
+ * off-diagonal block per level at more than one rank): at np 2 on two H100s
+ * (hypre 2.33) cuSPARSE took 6.7 ms per V-cycle on Taylor-Green Q6 and 17.0 ms
+ * on the curved cylinder, hypre's kernels 3.5 and 3.4 ms; one rank unchanged,
+ * 4.4 ms (job 49408885).
+ *
+ * hypre 3.x uses cuSPARSE's. With hypre 3.2 (CUDA 13.2, allocations through
+ * Umpire) on two A100s, coarsening at np 2 (amr_transfer_test X4) gave one
+ * mesh node a wrong coordinate in every plain run with hypre's kernels (14 of
+ * 14) and in none with cuSPARSE's (9 of 9; jobs 23273228, 23274156,
+ * 23275289). With extra matrix-vector products in between, it passed: the
+ * cause is not found. INCNS_HYPRE_SPMV_VENDOR=0|1 chooses either way. Before
+ * the first hypre object.
  */
 void ConfigureHypreSpMV(const std::string& backend)
 {
@@ -183,7 +191,11 @@ void ConfigureHypreSpMV(const std::string& backend)
    {
       return;
    }
+#if MFEM_HYPRE_VERSION >= 30000
+   int vendor = 1;
+#else
    int vendor = 0;
+#endif
    if (const char* env = std::getenv("INCNS_HYPRE_SPMV_VENDOR"))
    {
       MFEM_VERIFY((env[0] == '0' || env[0] == '1') && env[1] == '\0',
