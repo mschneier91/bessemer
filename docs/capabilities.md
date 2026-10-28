@@ -9,8 +9,8 @@ capability, a limit or a validated result updates this page in the same change
 ([AGENTS.md](../AGENTS.md) rule 8).
 
 **As of** 2026-10-27: everything on `main`, validated on CPUs at 1, 2 and 4 ranks and on
-H100s at 1 and 2, except the flow statistics: CPUs only so far (their GPU tests and cost are
-still to run, [status.md](status.md)).
+H100s at 1 and 2; the flow statistics, which landed after Bridges-2 went down, on A100s at 1
+and 2 instead ([status.md](status.md)).
 
 Details live elsewhere: [deck_reference.md](deck_reference.md) has every input key (it is
 generated from the code), [using.md](using.md) how to run cases and read their outputs,
@@ -415,8 +415,10 @@ work, and the benchmark READMEs under [../benchmarks](../benchmarks) the validat
   kept per node. Radial profiles are 3D only (lines in 2D). A wall bin is an exact area
   average only when its edges lie on element edges. Sample points outside the discrete
   mesh are NaN. No inflow profile for pipes yet (the parabolic profile is a rectangular
-  duct's in 3D). Not yet tested on a GPU, and the per-step cost is not yet measured
-  ([status.md](status.md)).
+  duct's in 3D). Cost, measured on one A100 (Taylor-Green Q6, 6.0M velocity DOFs, one line and
+  five profile stations): 4.2 ms per step (2.3 % of the 0.185 s step), 0.07 s of setup, 0.15 s
+  per write of the sample sets, and 148 MiB of device memory, 9 numbers per velocity node and 1
+  per pressure node ([status.md](status.md)).
 - **Restarts:** same MPI rank count.
 - **GPUs:** NVIDIA/CUDA only, built for one architecture at a time (currently sm_90,
   H100).

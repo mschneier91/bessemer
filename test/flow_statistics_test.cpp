@@ -598,9 +598,11 @@ incns::Parameters ChannelDeck(const std::string& out, int steps,
       "height: 1.0}\n"
       "  - {select: [xmax], type: outflow}\n"
       "  - {select: [ymin, ymax], type: no_slip}\n"
-      // See channel_statistics_test S5: a tight rtol keeps a GPU's
-      // run-to-run floor small; on a host the runs are bitwise.
-      "solver:\n  rtol: 1.0e-10\n"
+      // On a GPU two runs of a case agree only to the solver tolerance
+      // (repro_tolerance.hpp): at rtol 1e-10 the restarted run's averages
+      // were 1.2e-9 off the uninterrupted run's (two A100s, 2026-10-27), at
+      // 1e-12 1.2e-11. On a host the runs are bitwise at any rtol.
+      "solver:\n  rtol: 1.0e-12\n"
       "output:\n  path: " + out + "\n  name: fs\n" + output_keys + extra;
    return incns::Parameters::LoadYAMLString(deck);
 }
@@ -637,14 +639,23 @@ RunResult RunChannel(const incns::Parameters& p, const std::string& summary)
    return r;
 }
 
-void ExpectClose(const Vector& a, const Vector& b, double tol, const char* what)
+double MaxAbs(const Vector& a)
+{
+   const double* x = a.HostRead();
+   double m = 0.0;
+   for (int i = 0; i < a.Size(); ++i) { m = std::max(m, std::abs(x[i])); }
+   MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   return m;
+}
+
+// a = b to tol * scale; scale 0: the largest |a|.
+void ExpectClose(const Vector& a, const Vector& b, double tol, const char* what,
+                 double scale = 0.0)
 {
    ASSERT_EQ(a.Size(), b.Size()) << what;
    const double* x = a.HostRead();
    const double* y = b.HostRead();
-   double scale = 0.0;
-   for (int i = 0; i < a.Size(); ++i) { scale = std::max(scale, std::abs(x[i])); }
-   MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+   if (scale == 0.0) { scale = MaxAbs(a); }
    for (int i = 0; i < a.Size(); ++i)
    {
       ASSERT_NEAR(x[i], y[i], tol * scale) << what << " " << i;
@@ -675,9 +686,17 @@ TEST(FlowStatistics, F6_InARun)
    const RunResult restarted = RunChannel(ChannelDeck(base + "/b", 6, resume), "");
    EXPECT_EQ(restarted.samples, ref.samples);
    const double rtol = incns_test::ReproTol(1e-13);
+   ExpectClose(restarted.u, ref.u, rtol, "velocity after the restart");
    ExpectClose(restarted.mean_u, ref.mean_u, rtol, "mean velocity");
-   ExpectClose(restarted.normal, ref.normal, rtol, "normal stresses");
-   ExpectClose(restarted.shear, ref.shear, rtol, "shear stresses");
+   // A second moment differs by about 2 |u| du when u differs by du: on a GPU
+   // the stresses are compared on the velocity's scale squared (as in
+   // channel_statistics_test S5). The shear stresses' own scale is 6e-4 here.
+   // On a host the runs are bitwise and each is compared on its own scale.
+   const double u_scale = MaxAbs(ref.mean_u);
+   const double stress_scale = incns_test::OnRealGpu() ? u_scale * u_scale : 0.0;
+   ExpectClose(restarted.normal, ref.normal, rtol, "normal stresses",
+               stress_scale);
+   ExpectClose(restarted.shear, ref.shear, rtol, "shear stresses", stress_scale);
 
    MPI_Barrier(MPI_COMM_WORLD);
    const YAML::Node sum = YAML::LoadFile(base + "/ref_summary.json");

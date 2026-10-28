@@ -9,46 +9,42 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**Flow statistics landed; NOT YET TESTED ON A GPU (2026-10-27; human: "push to main and note
-that this still needs to be tested").** Asked for for the FDA nozzle ("just the stuff that goes
-into the core"; the nozzle case is a separate thread). Deck section `flow_statistics`, off by
-default: running mean velocity, pressure and Reynolds stresses at every node
-(`src/post/flow_statistics`, kernel `src/post/running_moments.cpp`), CSV sample sets (lines,
-azimuthally averaged radial profiles, wall bins of pressure and wall shear;
+**Flow statistics landed and tested on A100s (2026-10-27; human: "push to main and note that
+this still needs to be tested", then the GPU checks on NCSA Delta).** Asked for for the FDA
+nozzle ("just the stuff that goes into the core"; the nozzle case is a separate thread). Deck
+section `flow_statistics`, off by default: running mean velocity, pressure and Reynolds
+stresses at every node (`src/post/flow_statistics`, kernel `src/post/running_moments.cpp`), CSV
+sample sets (lines, azimuthally averaged radial profiles, wall bins of pressure and wall shear;
 `src/post/flow_sampling`), a first-half / second-half comparison in the summary, restarts,
 ParaView fields, and `benchmarks/flow_stats.py` for the analysis. docs/using.md §5 and
 docs/capabilities.md describe it; docs/capabilities.md is now the one-page map of what bessemer
 can do (AGENTS.md table and rule 8).
-- Validated on CPUs only (Bridges-2 RM, hfs1 49908725, 2026-10-26): smoke+fast at np 1/2/4
-  (98/98 each); `flow_statistics_test` F1-F6 at np 1/2/4; MFEM's debug device (catches missing
-  host/device copies) at np 1/2 on `flow_statistics_test`, `channel_statistics_test` and
-  `checkpoint_test`. After that run, F6 in `test/flow_statistics_test.cpp` was restructured
-  for astyle and two headers' doc comments were edited; `flow_statistics_test` rebuilt from
-  the final files passes at np 1/2/4 on CPUs (2026-10-27), but astyle was not rerun. GPU jobs sat a day in the H100 queue before Bridges-2's move (outage
-  from 2026-11-09) and were cancelled.
-- **To do on the next GPU machine (fix whatever fails there):**
-  1. CUDA build (`running_moments.cpp` is the one new nvcc file), then at np 1 and 2, one GPU
-     per rank: `flow_statistics_test`, `channel_statistics_test`, `deck_test`,
-     `checkpoint_test`.
-  2. astyle on the changed files; `docs/deck_reference.md` regenerated and unchanged.
-  3. The per-step cost (not measured; estimate: one pass over the velocity and pressure nodes
-     per sample, and four extra fields, three on the velocity space and one on the pressure
-     space). `benchmarks/tgv_re1600/tgv_re1600_n21.yaml` on one GPU with `dt: 0.02`,
-     `step_control: fixed`, `t_final: 0.3`, `output.profile: sync`, no diagnostics or
-     checkpoint: once as is and once with
-     ```yaml
-     flow_statistics:
-       enabled: true
-       lines:
-         - {name: diag, from: [0.1, 0.1, 0.1], to: [6.1, 6.1, 6.1], points: 201}
-       profiles:
-         - {name: axis, origin: [3.141592653589793, 3.141592653589793, 0.0], axis: [0, 0, 1],
-            stations: [1.0, 2.0, 3.0, 4.0, 5.0], radius: 2.5, points: 26, azimuths: 16}
-     ```
-     Compare `solve_seconds` per step and the profile rows `case::flow_statistics`,
-     `case::flow_sampling_setup` and `case::flow_statistics_write`; put the numbers in
-     docs/capabilities.md (Flow statistics) and here, and drop "not yet tested on a GPU" from
-     both.
+- CPUs (Bridges-2 RM, hfs1 49908725, 2026-10-26): smoke+fast at np 1/2/4 (98/98 each);
+  `flow_statistics_test` F1-F6 at np 1/2/4; MFEM's debug device at np 1/2 on
+  `flow_statistics_test`, `channel_statistics_test` and `checkpoint_test`.
+- GPUs (NCSA Delta, two A100 40 GB, one per rank, job 23261041, 2026-10-27; the CUDA build of
+  the `delta` branch, whose flow statistics code is main's): `channel_statistics_test`,
+  `deck_test` and `checkpoint_test` pass at np 1 and 2; `run_case --deck-reference` matches
+  `docs/deck_reference.md`; astyle 3.4.11 clean. `flow_statistics_test` F1-F5 passed and F6
+  failed: on a GPU the restarted run's averages were 1.2e-9 (mean velocity) off the
+  uninterrupted run's against the test's 1e-9, and every difference scaled with the solver
+  tolerance (1.2e-11 at rtol 1e-12; the final velocity 1.6e-10 and 1.4e-12): the GPU's
+  run-to-run floor (test/repro_tolerance.hpp), not the statistics. F6 now solves to rtol 1e-12
+  and, on a GPU only, compares the Reynolds stresses on the velocity's scale squared (as
+  `channel_statistics_test` S5 does; the shear stresses' own scale is 6e-4 there), and checks
+  the restarted velocity too; host runs keep their bitwise bound. With that, all six pass at
+  np 1 and 2 on the A100s and on the host backend. No change to `src/`.
+- Cost, one A100, `benchmarks/tgv_re1600/tgv_re1600_n21.yaml` (Q6, 6.0M velocity DOFs) with
+  dt 0.02 fixed, t_final 0.3 (15 steps), `output.profile: sync`, no diagnostics or checkpoint,
+  with and without one line (201 points) and one profile set (5 stations x 26 points x 16
+  azimuths): `solve_seconds` per step 0.1849 without, 0.1772 with (the difference is
+  run-to-run noise: the "with" run happened to step faster). Profile rows of the "with" run:
+  `case::flow_statistics` 15 calls, 0.0623 s (4.2 ms per step, 2.3 % of a step);
+  `case::flow_sampling_setup` 0.067 s once; `case::flow_statistics_write` 0.148 s once (at the
+  end); `case::flow_statistics_summary` 0.117 s for its two calls. Device memory +148 MiB after
+  setup and at the peak (9 numbers per velocity node, 1 per pressure node: 146 MiB).
+- Not run: the fixed F6 at np 4 (CI's CPU fast tier runs it), and on a GPU the slow and verify
+  tiers (the feature is off by default and self-contained).
 
 **Dirichlet-Neumann with a very soft hyperelastic solid is a documented limit (2026-10-25;
 human: "can you deal with this").** On F7's soft flag (E 1.4e3, rho_s = rho_f) the

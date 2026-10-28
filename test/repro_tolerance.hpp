@@ -36,11 +36,17 @@ namespace incns_test
  *                 FSI steps) differ at that tolerance instead.
  * @return @p host_tol on host backends; @p gpu_tol on a real GPU.
  */
+/// @brief Whether the backend is a real GPU, where two runs of a case are
+/// not bitwise reproducible (see above).
+inline bool OnRealGpu()
+{
+   return mfem::Device::Allows(mfem::Backend::CUDA_MASK |
+                               mfem::Backend::HIP_MASK);
+}
+
 inline double ReproTol(double host_tol, double gpu_tol = 1e-9)
 {
-   const bool real_gpu = mfem::Device::Allows(mfem::Backend::CUDA_MASK |
-                         mfem::Backend::HIP_MASK);
-   return real_gpu ? gpu_tol : host_tol;
+   return OnRealGpu() ? gpu_tol : host_tol;
 }
 
 } // namespace incns_test
