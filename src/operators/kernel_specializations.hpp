@@ -41,4 +41,21 @@ void AddKernelSpecializations();
  */
 void AddInterpolationKernels();
 
+/**
+ * @brief Compile-time kernels for MFEM's scalar ConvectionIntegrator in 3D at
+ *        OIFS's 3k rule for velocity orders 4 and 5 (5 dofs and 7 points, 6
+ *        and 8): the reference oifs_convection_test compares OifsConvection
+ *        against. The solver itself does not use ConvectionIntegrator, so
+ *        AddKernelSpecializations() does not call this.
+ *
+ * MFEM's table stops at 6 dofs and 7 points in 3D (orders 2 and 3 at this
+ * rule). Its runtime-size kernel keeps a dozen per-thread arrays sized for 14
+ * points per direction, about 260 kB a thread, which CUDA reserves for every
+ * thread the card can hold: ~71 GB on an 80 GB H100, ~58 GB on a 40 GB A100,
+ * where the launch fails "out of memory" (Delta, job 23251030). The
+ * compile-time ones are MFEM's shared-memory kernels. Process-wide and
+ * idempotent.
+ */
+void AddConvectionReferenceKernels();
+
 } // namespace incns

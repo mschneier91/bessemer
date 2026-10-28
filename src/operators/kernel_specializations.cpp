@@ -3,6 +3,7 @@
 #include "operators/component_kernels.hpp"
 
 #include "mfem.hpp"
+#include "mfem/fem/integ/bilininteg_convection_kernels.hpp"
 #include "mfem/fem/integ/bilininteg_vecdiv_pa.hpp"
 #include "mfem/fem/integ/bilininteg_vecmass_pa.hpp"
 #include "mfem/fem/integ/nonlininteg_vecconvection_pa.hpp"
@@ -341,6 +342,19 @@ void AddKernelSpecializations()
       Convection::AddMultPAKernels::Specialization<3, 7, 10>::Add();
       Convection::AddMultPAKernels::Specialization<3, 8, 11>::Add();
       AddInterpolationKernels();
+      return true;
+   }();
+   (void)added;
+}
+
+void AddConvectionReferenceKernels()
+{
+   static const bool added = []
+   {
+      // Velocity order K at the 3K rule: K + 1 dofs, ceil((3K + 1) / 2)
+      // Gauss points per direction.
+      mfem::ConvectionIntegrator::AddSpecialization<3, 5, 7>();
+      mfem::ConvectionIntegrator::AddSpecialization<3, 6, 8>();
       return true;
    }();
    (void)added;

@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include "operators/kernel_specializations.hpp"
 #include "time/oifs_convection.hpp"
 #include "mfem.hpp"
 
@@ -38,6 +39,9 @@ void Deform(const Vector& x, Vector& y)
 
 TEST(OifsConvection, MatchesMfemFormsComponentwise)
 {
+   // The reference's compile-time kernels at orders 4 and 5: MFEM's
+   // runtime-size one does not launch on a 40 GB A100.
+   incns::AddConvectionReferenceKernels();
    int rank = 0;
    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
    for (const int k : {2, 3, 4, 5, 6, 7})

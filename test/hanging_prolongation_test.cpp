@@ -104,7 +104,11 @@ TEST(HangingProlongation, HP1_MatchesMfemsAssembledP)
          P.MultTranspose(xl, z2);
          EXPECT_LT(RelMax(z1, z2), 1e-14) << "MultTranspose, " << what;
          hp.AbsMult(x, y1);
-         P.AbsMult(1.0, x, 0.0, y2);
+         // |P| x as |P^T|^T x: MFEM 4.10's HypreParMatrix::AbsMult segfaults
+         // with hypre 3.2's GPU build on a rank with off-processor columns
+         // (two A100s, 2026-10-27); its AbsMultTranspose does not.
+         std::unique_ptr<HypreParMatrix> Pt(P.Transpose());
+         Pt->AbsMultTranspose(1.0, x, 0.0, y2);
          EXPECT_LT(RelMax(y1, y2), 1e-15) << "AbsMult, " << what;
          hp.AbsMultTranspose(xl, z1);
          P.AbsMultTranspose(1.0, xl, 0.0, z2);
@@ -158,3 +162,4 @@ TEST(HangingProlongation, HP2_MixedSpacesHandOutTheRightOne)
       EXPECT_LT(RelMax(y1, y2), 1e-15) << "after Update(), dim " << dim;
    }
 }
+
