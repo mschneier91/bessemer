@@ -16,13 +16,12 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/incns/__init__.py
 # The Stokes transient MMS example, run through the Python interface at
 # np in {1,2,4}: defines the exact solution + forcing as compiled fields,
 # marches, and checks the reproduced-to-tolerance error (label `fast`).
-find_program(MPIEXEC_EXECUTABLE NAMES mpirun REQUIRED)
 find_program(INCNS_PYTHON_EXE NAMES python3 REQUIRED)
 set(INCNS_TEST_NPS 1 2 4)
 foreach(np IN LISTS INCNS_TEST_NPS)
   add_test(
     NAME py_stokes_ex_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+    COMMAND ${INCNS_MPIEXEC} -n ${np} ${INCNS_PYTHON_EXE}
             ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run.py)
   set_tests_properties(py_stokes_ex_np${np} PROPERTIES
     LABELS "fast"
@@ -34,7 +33,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # The same MMS driven from a YAML deck (config + BC topology in YAML).
   add_test(
     NAME py_stokes_ex_yaml_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+    COMMAND ${INCNS_MPIEXEC} -n ${np} ${INCNS_PYTHON_EXE}
             ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run_yaml.py)
   set_tests_properties(py_stokes_ex_yaml_np${np} PROPERTIES
     LABELS "fast"
@@ -46,7 +45,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # No-slip channel from a deck (the `no_slip` boundary type, no field bound).
   add_test(
     NAME py_channel_noslip_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+    COMMAND ${INCNS_MPIEXEC} -n ${np} ${INCNS_PYTHON_EXE}
             ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run_channel.py)
   set_tests_properties(py_channel_noslip_np${np} PROPERTIES
     LABELS "fast"
@@ -58,7 +57,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # The MMS through adaptive mesh refinement (anisotropic events), from Python.
   add_test(
     NAME py_stokes_amr_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+    COMMAND ${INCNS_MPIEXEC} -n ${np} ${INCNS_PYTHON_EXE}
             ${CMAKE_SOURCE_DIR}/examples/python/stokes_ex/run_amr.py)
   set_tests_properties(py_stokes_amr_np${np} PROPERTIES
     LABELS "fast"
@@ -71,7 +70,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # them), summaries back as dicts, unknown keys as Python errors.
   add_test(
     NAME py_run_deck_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+    COMMAND ${INCNS_MPIEXEC} -n ${np} ${INCNS_PYTHON_EXE}
             ${CMAKE_SOURCE_DIR}/examples/python/drive/run_deck.py)
   set_tests_properties(py_run_deck_np${np} PROPERTIES
     LABELS "fast"
@@ -84,7 +83,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # the subgrid statistics as scalars and in the summary.
   add_test(
     NAME py_run_les_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} ${INCNS_PYTHON_EXE}
+    COMMAND ${INCNS_MPIEXEC} -n ${np} ${INCNS_PYTHON_EXE}
             ${CMAKE_SOURCE_DIR}/examples/python/drive/run_les.py)
   set_tests_properties(py_run_les_np${np} PROPERTIES
     LABELS "fast"

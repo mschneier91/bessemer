@@ -5,6 +5,9 @@
 #if defined(OPEN_MPI) && OPEN_MPI
 #include <mpi-ext.h> // MPIX_Query_cuda_support
 #endif
+#if defined(MFEM_USE_CUDA) && defined(INCNS_MPI_GTL)
+#include <cuda_runtime.h> // the device the GTL sees at MPI_Init
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -109,11 +112,18 @@ void ConfigureHyprePool(const std::string& backend)
 
 /// @return Whether the MPI library takes CUDA device pointers: Open MPI built
 ///         with CUDA (MPIX_CUDA_AWARE_SUPPORT) and its CUDA support loaded at
-///         run time. Other MPIs: false.
+///         run time, or an MPICH 4 (Cray MPICH included) whose GPU support is
+///         on (MPIX_GPU_query_support; Cray MPICH: MPICH_GPU_SUPPORT_ENABLED=1
+///         with its GTL linked, see ConfigureMpiTransport). Other MPIs: false.
 bool MpiTakesCudaPointers()
 {
 #if defined(MPIX_CUDA_AWARE_SUPPORT) && MPIX_CUDA_AWARE_SUPPORT
    return mfem::Mpi::IsInitialized() && MPIX_Query_cuda_support() == 1;
+#elif defined(MPICH_NUMVERSION) && defined(MPIX_GPU_SUPPORT_CUDA)
+   if (!mfem::Mpi::IsInitialized()) { return false; }
+   int supported = 0;
+   MPIX_GPU_query_support(MPIX_GPU_SUPPORT_CUDA, &supported);
+   return supported == 1;
 #else
    return false;
 #endif
@@ -193,6 +203,24 @@ void ConfigureMpiTransport()
 {
 #if defined(MFEM_USE_CUDA)
    setenv("UCX_TLS", "^cuda_ipc", 0); // 0: a value the job set wins
+#endif
+#if defined(MFEM_USE_CUDA) && defined(INCNS_MPI_GTL)
+   // Cray MPICH takes device buffers only with its GPU support on, read at
+   // MPI_Init; CMake links its GTL whenever it defines INCNS_MPI_GTL (with
+   // the variable at 1 and no GTL, MPI_Init aborts).
+   setenv("MPICH_GPU_SUPPORT_ENABLED", "1", 0);
+   // The GTL keeps the device current at MPI_Init. ConfigureDevice moves each
+   // rank to its own GPU afterwards, and on every rank whose GPU is not 0 the
+   // GTL then turns CUDA IPC off ("This process is not using the same device
+   // it did during gtl_init"; Delta, job 23251132). So select that GPU here,
+   // by ResolveDeviceId's rule; without a launcher hint it is left to
+   // ConfigureDevice.
+   const int local = LauncherLocalRank();
+   int ngpu = 0;
+   if (local >= 0 && cudaGetDeviceCount(&ngpu) == cudaSuccess && ngpu > 1)
+   {
+      cudaSetDevice(local % ngpu);
+   }
 #endif
 }
 

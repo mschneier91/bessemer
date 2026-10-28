@@ -55,6 +55,15 @@ void ConfigureDevice(const std::string& backend);
  * Taylor-Green Q6 IMEX Schur at 136.6M DOFs (2.00 s against 0.79 s without
  * it); at 21.6M it was 8 % faster (0.139 against 0.151 s; jobs 49401722,
  * 49408610). UCX reads the variable during MPI_Init.
+ *
+ * With Cray MPICH in a CUDA build (CMake links its GPU Transport Layer and
+ * defines @c INCNS_MPI_GTL), it also sets @c MPICH_GPU_SUPPORT_ENABLED=1
+ * unless the environment sets it: Cray MPICH then takes device buffers, and
+ * ConfigureDevice turns GPU-aware MPI on. @c MPICH_GPU_SUPPORT_ENABLED=0 in
+ * the job keeps exchanges staged through the host. It also makes the rank's
+ * own GPU current (ConfigureDevice's choice, from the launcher's local rank):
+ * Cray's GTL keeps the device current at MPI_Init and turns its CUDA IPC off
+ * on a rank that moves to another one.
  */
 void ConfigureMpiTransport();
 

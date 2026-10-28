@@ -200,7 +200,9 @@ else
   run_dir=$(mktemp -d)
   summary="$run_dir/summary.json"
   start=$(date +%s)
-  if (cd "$run_dir" && mpirun -np 2 "$REPO/build/$preset/apps/run_case" \
+  # $INCNS_MPIEXEC is unquoted on purpose: a launcher with options splits into words.
+  # shellcheck disable=SC2086
+  if (cd "$run_dir" && ${INCNS_MPIEXEC:-mpirun} -n 2 "$REPO/build/$preset/apps/run_case" \
         "$REPO/cases/cavity.yaml" --summary "$summary") >"$run_dir/run.log" 2>&1 \
      && grep -q '"status": "ok"' "$summary" 2>/dev/null; then
     steps=$(awk -F': *' '/"steps"/ {gsub(/,/,"",$2); print $2; exit}' "$summary")
@@ -208,7 +210,7 @@ else
   else
     fail "the smoke run (cases/cavity.yaml at 2 MPI ranks) failed; its output:"
     tail -12 "$run_dir/run.log" | sed 's/^/          /'
-    hint "if mpirun refuses to start: is another MPI job holding the cores? scripts/reap.sh --dry"
+    hint "if ${INCNS_MPIEXEC%% *} refuses to start: is another MPI job holding the cores? scripts/reap.sh --dry"
   fi
   rm -rf "$run_dir"
 fi

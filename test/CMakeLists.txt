@@ -14,7 +14,6 @@
 #   verify -- convergence-rate studies (test/verify_*_test.cpp), np=4, on
 #            demand and every third day in CI.
 
-find_program(MPIEXEC_EXECUTABLE NAMES mpirun REQUIRED)
 find_package(GTest REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
@@ -34,7 +33,7 @@ set(INCNS_DEV_NP 1)
 foreach(np IN LISTS INCNS_TEST_NPS)
   add_test(
     NAME hello_mpi_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:hello_mpi>)
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:hello_mpi>)
   set_tests_properties(hello_mpi_np${np} PROPERTIES
     LABELS "smoke"
     PROCESSORS ${np}
@@ -59,7 +58,7 @@ function(incns_add_mpi_test name src)
   foreach(np IN LISTS INCNS_TEST_NPS)
     add_test(
       NAME ${name}_np${np}
-      COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:${name}>)
+      COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:${name}>)
     # The np=1 run carries `dev` IN ADDITION to `fast`, so `-L dev` selects the
     # serial pre-filter while `-L fast` still selects everything it always did.
     set(_labels "fast")
@@ -155,7 +154,7 @@ target_link_libraries(dfg_cylinder_slow_test PRIVATE incns incns_test_main
 target_compile_definitions(dfg_cylinder_slow_test PRIVATE
   INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
 add_test(NAME dfg_cylinder_slow_np4
-  COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:dfg_cylinder_slow_test>)
+  COMMAND ${INCNS_MPIEXEC} -n 4 $<TARGET_FILE:dfg_cylinder_slow_test>)
 set_tests_properties(dfg_cylinder_slow_np4 PROPERTIES
   LABELS "slow" PROCESSORS 4 TIMEOUT 3600)
 incns_add_mpi_test(cc_robustness_test cc_robustness_test.cpp
@@ -170,7 +169,7 @@ target_link_libraries(cc_sweep_slow_test PRIVATE incns incns_test_main
 target_compile_definitions(cc_sweep_slow_test PRIVATE
   INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml")
 add_test(NAME cc_sweep_slow_np4
-  COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:cc_sweep_slow_test>)
+  COMMAND ${INCNS_MPIEXEC} -n 4 $<TARGET_FILE:cc_sweep_slow_test>)
 set_tests_properties(cc_sweep_slow_np4 PROPERTIES
   LABELS "slow" PROCESSORS 4 TIMEOUT 3600)
 # Verification tier: convergence rates through Case on minimal decks, so they
@@ -186,7 +185,7 @@ function(incns_add_verify_test name src)
     INCNS_BASELINES_FILE="${CMAKE_CURRENT_SOURCE_DIR}/baselines.yaml"
     INCNS_VERIFY_OUT="${CMAKE_BINARY_DIR}/verify")
   add_test(NAME ${name}_np4
-    COMMAND ${MPIEXEC_EXECUTABLE} -np 4 $<TARGET_FILE:${name}>)
+    COMMAND ${INCNS_MPIEXEC} -n 4 $<TARGET_FILE:${name}>)
   set_tests_properties(${name}_np4 PROPERTIES
     LABELS "verify" PROCESSORS 4 TIMEOUT 3600)
 endfunction()
@@ -247,7 +246,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     list(APPEND _labels "dev")
   endif()
   add_test(NAME run_case_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml
             --summary run_case_np${np}_summary.json)
   set_tests_properties(run_case_np${np} PROPERTIES
@@ -255,7 +254,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "status=ok")
   # Deck boundary conditions end to end: the lid-driven cavity.
   add_test(NAME run_case_cavity_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/cavity.yaml
             --summary run_case_cavity_np${np}_summary.json)
   set_tests_properties(run_case_cavity_np${np} PROPERTIES
@@ -263,7 +262,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "status=ok")
   # A solid deck end to end: the 2D cantilever (equation linear_elasticity).
   add_test(NAME run_case_cantilever_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/cantilever_2d.yaml
             --summary run_case_cantilever_np${np}_summary.json)
   set_tests_properties(run_case_cantilever_np${np} PROPERTIES
@@ -271,7 +270,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "status=ok")
   # A hyperelastic deck end to end: Turek-Hron CSM1 (equation hyperelasticity).
   add_test(NAME run_case_csm1_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/turek_hron_csm1.yaml
             --summary run_case_csm1_np${np}_summary.json)
   set_tests_properties(run_case_csm1_np${np} PROPERTIES
@@ -281,7 +280,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # ParaView output, so each rank count runs in its own directory.
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mesh_deform_np${np})
   add_test(NAME run_case_mesh_deform_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/mesh_deform_2d.yaml
             --summary run_case_mesh_deform_np${np}_summary.json
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mesh_deform_np${np})
@@ -292,7 +291,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # its coupling log, so each rank count runs in its own directory.
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fsi_flag_np${np})
   add_test(NAME run_case_fsi_flag_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/fsi_flag.yaml
             --summary run_case_fsi_flag_np${np}_summary.json
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fsi_flag_np${np})
@@ -301,7 +300,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "status=ok")
   # The same cantilever with its load applied suddenly: a dynamic march.
   add_test(NAME run_case_cantilever_dynamic_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_SOURCE_DIR}/cases/cantilever_2d_dynamic.yaml
             --summary run_case_cantilever_dynamic_np${np}_summary.json)
   set_tests_properties(run_case_cantilever_dynamic_np${np} PROPERTIES
@@ -310,7 +309,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
   # A walled deck without boundary_conditions must be refused, not run with
   # silent do-nothing walls.
   add_test(NAME run_case_rejects_missing_bcs_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_CURRENT_SOURCE_DIR}/decks/no_bcs_walled_box.yaml
             --summary run_case_rejects_np${np}_summary.json)
   set_tests_properties(run_case_rejects_missing_bcs_np${np} PROPERTIES
@@ -318,7 +317,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "declares no boundary_conditions")
   # A closed domain whose moving walls change its volume must be refused.
   add_test(NAME run_case_rejects_volume_change_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_CURRENT_SOURCE_DIR}/decks/ale_closed_volume.yaml
             --summary run_case_volume_np${np}_summary.json)
   set_tests_properties(run_case_rejects_volume_change_np${np} PROPERTIES
@@ -326,7 +325,7 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "changes the volume of a closed domain")
   # FSI with a static St. Venant-Kirchhoff solid must be refused at setup.
   add_test(NAME run_case_rejects_static_svk_fsi_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_CURRENT_SOURCE_DIR}/decks/fsi_static_svk.yaml
             --summary run_case_static_svk_np${np}_summary.json)
   set_tests_properties(run_case_rejects_static_svk_fsi_np${np} PROPERTIES
@@ -334,14 +333,14 @@ foreach(np IN LISTS INCNS_TEST_NPS)
     PASS_REGULAR_EXPRESSION "fsi.solid hyperelasticity needs solid.analysis: dynamic")
   # A deck that sets a key twice must be refused, not run with the first value.
   add_test(NAME run_case_rejects_duplicate_key_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:run_case>
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:run_case>
             ${CMAKE_CURRENT_SOURCE_DIR}/decks/duplicate_key.yaml
             --summary run_case_rejects_duplicate_np${np}_summary.json)
   set_tests_properties(run_case_rejects_duplicate_key_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "'order_u' in section 'discretization' \\(lines 8, 10\\)")
   add_test(NAME taylor_green_np${np}
-    COMMAND ${MPIEXEC_EXECUTABLE} -np ${np} $<TARGET_FILE:taylor_green>)
+    COMMAND ${INCNS_MPIEXEC} -n ${np} $<TARGET_FILE:taylor_green>)
   set_tests_properties(taylor_green_np${np} PROPERTIES
     LABELS "${_labels}" PROCESSORS ${np}
     PASS_REGULAR_EXPRESSION "taylor_green: done")

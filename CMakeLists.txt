@@ -92,10 +92,28 @@ if(USE_CUDA)
 
   # The link is driven by mpicxx, not nvcc, so nothing supplies the CUDA runtime
   # implicitly -- and an nvcc-compiled TU needs libcudart for the fatbin
-  # registration nvcc emits into it. Worth being explicit: MFEM's config.mk asks
-  # for -lcusparse/-lcublas with no -L at all, so today those resolve purely
-  # through the environment's LIBRARY_PATH.
+  # registration nvcc emits into it. MFEM's config.mk also asks for
+  # -lcusparse/-lcublas/-lcurand/-lcusolver with no -L at all: Bridges-2's CUDA
+  # module resolved them through LIBRARY_PATH, Delta's leaves it empty, so the
+  # toolkit's library directory goes on every link line.
   find_package(CUDAToolkit REQUIRED)
+  link_directories(${CUDAToolkit_LIBRARY_DIR})
+
+  # Cray MPICH moves device buffers only through its GPU Transport Layer
+  # (libmpi_gtl_cuda in <mpich>/gtl/lib), which Cray's own compiler wrappers
+  # link and its plain mpicxx does not. With Cray MPICH as the compiler wrapper
+  # (<prefix>/pe/mpich/<version>/ofi/<vendor>/<version>/bin/mpicxx), link it
+  # into every target, kept even though nothing calls it directly, and tell
+  # ConfigureMpiTransport (INCNS_MPI_GTL) to switch MPICH's GPU support on.
+  get_filename_component(_incns_mpicxx "${CMAKE_CXX_COMPILER}" REALPATH)
+  if(_incns_mpicxx MATCHES "^(.*/pe/mpich/[^/]+)/ofi/")
+    find_library(INCNS_MPI_GTL_CUDA NAMES mpi_gtl_cuda
+                 PATHS "${CMAKE_MATCH_1}/gtl/lib" NO_DEFAULT_PATH REQUIRED)
+    message(STATUS "incns: Cray MPICH, GPU transport layer ${INCNS_MPI_GTL_CUDA}")
+    add_compile_definitions(INCNS_MPI_GTL)
+    link_libraries("-Wl,--push-state,--no-as-needed" "${INCNS_MPI_GTL_CUDA}"
+                   "-Wl,--pop-state")
+  endif()
 endif()
 
 # INCNS_PROFILE scoped timing in libincns' own hot paths (lightweight; on by
@@ -111,6 +129,20 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 find_package(MFEM REQUIRED)   # provides the `incns_mfem` interface target
 
 enable_testing()
+
+# The MPI launcher the tests run under: $INCNS_MPIEXEC from scripts/env.sh,
+# which is mpirun unless the machine's environment names another in its
+# `mpiexec` file (Cray MPICH under Slurm launches only through srun). Every
+# launcher here takes `-n <ranks>`.
+if(DEFINED ENV{INCNS_MPIEXEC} AND NOT "$ENV{INCNS_MPIEXEC}" STREQUAL "")
+  separate_arguments(INCNS_MPIEXEC UNIX_COMMAND "$ENV{INCNS_MPIEXEC}")
+else()
+  set(INCNS_MPIEXEC mpirun)
+endif()
+list(GET INCNS_MPIEXEC 0 _incns_launcher)
+find_program(INCNS_MPIEXEC_EXECUTABLE NAMES ${_incns_launcher} REQUIRED)
+list(REMOVE_AT INCNS_MPIEXEC 0)
+list(PREPEND INCNS_MPIEXEC ${INCNS_MPIEXEC_EXECUTABLE})
 
 add_subdirectory(src)    # libincns
 add_subdirectory(apps)

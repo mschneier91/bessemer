@@ -88,7 +88,7 @@ fi
 _spack_ext_prefixes=$(awk '
   /^    [a-zA-Z0-9_-]+:[[:space:]]*$/ { key=$1; sub(":", "", key); next }
   /^[[:space:]]+prefix:/ {
-    if (key ~ /^(gcc|apple-clang|llvm|intel-oneapi-compilers|openmpi|mpich|cmake)$/) print $2
+    if (key ~ /^(gcc|apple-clang|llvm|intel-oneapi-compilers|openmpi|mpich|cray-mpich|cmake)$/) print $2
   }
 ' "$_env_dir/spack.yaml" 2>/dev/null)
 
@@ -120,9 +120,29 @@ INCNS_EXT_PREFIXES
 }
 
 _leak=0
-for _t in gcc g++ cmake mpicc mpicxx mpirun; do
+for _t in gcc g++ cmake mpicc mpicxx; do
   _incns_assert_spack "$_t" || _leak=1
 done
+
+# --- the MPI launcher --------------------------------------------------------
+# mpirun, from the environment's MPI, unless the environment names another in
+# its `mpiexec` file: the launcher and its options on one line (comments start
+# with #). A site MPI may launch only through the scheduler -- Cray MPICH under
+# Slurm has no mpirun, its ranks start with srun -- and the scheduler is the
+# system's, so a named launcher is only required to exist. CTest and the doctor
+# run "$INCNS_MPIEXEC -n <ranks> ...".
+INCNS_MPIEXEC=mpirun
+if [ -f "$_env_dir/mpiexec" ]; then
+  INCNS_MPIEXEC=$(sed -n '/^[[:space:]]*[^#[:space:]]/{p;q;}' "$_env_dir/mpiexec")
+fi
+export INCNS_MPIEXEC
+_launcher=${INCNS_MPIEXEC%% *}
+if [ "$_launcher" = mpirun ]; then
+  _incns_assert_spack mpirun || _leak=1
+elif ! command -v "$_launcher" >/dev/null 2>&1; then
+  echo "env.sh: the launcher '$_launcher' named in $_env_dir/mpiexec is not on PATH" >&2
+  _leak=1
+fi
 if [ "$_leak" -ne 0 ]; then
   return 1 2>/dev/null || exit 1
 fi

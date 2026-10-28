@@ -8,11 +8,13 @@ fits together and how to set up a machine: [docs/install/spack.md](../docs/insta
 | `stack.yaml` | what bessemer needs, for any machine; `scripts/setup.sh` builds a machine's environment from it |
 | `desktop/` | the maintainer's workstation (reference lock) |
 | `psc_gpu/` | PSC Bridges-2 H100 nodes, usable by any Bridges-2 user ([bridges2.md](../docs/install/bridges2.md)) |
+| `delta/` | NCSA Delta A100 nodes: Cray MPICH launched with `srun`, CUDA 13.2, `cuda_arch=80` ([delta.md](../docs/install/delta.md)) |
 | `psc_cpu/` | PSC Bridges-2, the same stack with no CUDA; selected with `INCNS_MACHINE=psc_cpu` ([bridges2.md](../docs/install/bridges2.md)) |
 | `<name>/` | other machines, created by `scripts/setup.sh`; untracked unless the project maintains that machine |
 | `<name>/spack.yaml.sha256` | checksum of the `spack.yaml` the lock was resolved from (`scripts/envlock.sh`); committed with the lock |
 | `<name>/hosts` | optional: hostname patterns of the machines that use this environment (`scripts/machine.sh`) |
 | `<name>/preset` | optional: the build preset this environment is for, when it isn't `cpu` (`scripts/setup.sh`, `scripts/doctor.sh`) |
+| `<name>/mpiexec` | optional: the MPI launcher and its options on one line, when it isn't `mpirun` (`scripts/env.sh` exports it as `INCNS_MPIEXEC`; CTest and the doctor add `-n <ranks>`) |
 | `<name>/INSTALL` | optional: names the document this environment installs by, when `scripts/setup.sh` can't do it |
 | `.machine` | which environment this checkout uses (untracked; written by `setup.sh`) |
 
