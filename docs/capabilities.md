@@ -116,8 +116,9 @@ work, and the benchmark READMEs under [../benchmarks](../benchmarks) the validat
 ### Boundary and initial conditions, forcing
 - **Boundary types:**
   - `no_slip`;
-  - `velocity`: constant, or parabolic in 2D and 3D, optionally ramped or sine-modulated
-    in time;
+  - `velocity`: constant, parabolic in 2D and 3D, or (3D) Poiseuille flow in a circular
+    pipe of any axis (`profile: pipe`) with optional seeded travelling perturbations of
+    zero net flux, optionally ramped or sine-modulated in time;
   - `velocity_dirichlet`: any field from Python or C++, by group name;
   - `outflow`: Braack-Mucha directional do-nothing, stable under backflow, or classical;
   - `interface` (FSI).
@@ -414,8 +415,7 @@ work, and the benchmark READMEs under [../benchmarks](../benchmarks) the validat
 - **Flow statistics:** fixed meshes only (no AMR, mesh motion or FSI): the averages are
   kept per node. Radial profiles are 3D only (lines in 2D). A wall bin is an exact area
   average only when its edges lie on element edges. Sample points outside the discrete
-  mesh are NaN. No inflow profile for pipes yet (the parabolic profile is a rectangular
-  duct's in 3D). Cost, measured on one A100 (Taylor-Green Q6, 6.0M velocity DOFs, one line and
+  mesh are NaN. Cost, measured on one A100 (Taylor-Green Q6, 6.0M velocity DOFs, one line and
   five profile stations): 4.2 ms per step (2.3 % of the 0.185 s step), 0.07 s of setup, 0.15 s
   per write of the sample sets, and 148 MiB of device memory, 9 numbers per velocity node and 1
   per pressure node ([status.md](status.md)).

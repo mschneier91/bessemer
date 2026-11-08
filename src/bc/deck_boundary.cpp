@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 
 namespace incns
@@ -30,6 +31,99 @@ double TimeFactor(const BcSpec& s, double t)
    return 1.0;
 }
 
+// The pipe profile's frame and perturbation phases, from its spec.
+struct PipeFrame
+{
+   double a[3], e1[3], e2[3];                   // axis and cross-section basis
+   double phi[kPipePerturbationModes];          // azimuthal phases
+   double psi[kPipePerturbationModes];          // temporal phases
+};
+
+PipeFrame MakePipeFrame(const BcSpec& s)
+{
+   PipeFrame f;
+   const double n = std::sqrt(s.axis[0] * s.axis[0] + s.axis[1] * s.axis[1] +
+                              s.axis[2] * s.axis[2]);
+   for (int d = 0; d < 3; ++d) { f.a[d] = s.axis[d] / n; }
+   // e1: the coordinate direction least aligned with a, made orthogonal.
+   int c = 0;
+   for (int d = 1; d < 3; ++d)
+   {
+      if (std::abs(f.a[d]) < std::abs(f.a[c])) { c = d; }
+   }
+   double e[3] = {0.0, 0.0, 0.0};
+   e[c] = 1.0;
+   double dot = f.a[c];
+   double m = 0.0;
+   for (int d = 0; d < 3; ++d)
+   {
+      f.e1[d] = e[d] - dot * f.a[d];
+      m += f.e1[d] * f.e1[d];
+   }
+   m = std::sqrt(m);
+   for (int d = 0; d < 3; ++d) { f.e1[d] /= m; }
+   f.e2[0] = f.a[1] * f.e1[2] - f.a[2] * f.e1[1];
+   f.e2[1] = f.a[2] * f.e1[0] - f.a[0] * f.e1[2];
+   f.e2[2] = f.a[0] * f.e1[1] - f.a[1] * f.e1[0];
+   // Phases from a 64-bit linear congruential generator (Knuth's MMIX
+   // constants): the same sequence on every rank and platform.
+   std::uint64_t state = 0x9E3779B97F4A7C15ull ^
+                         static_cast<std::uint64_t>(s.perturbation_seed);
+   auto next = [&state]()
+   {
+      state = state * 6364136223846793005ull + 1442695040888963407ull;
+      return static_cast<double>(state >> 11) * (1.0 / 9007199254740992.0);
+   };
+   for (int k = 0; k < kPipePerturbationModes; ++k)
+   {
+      f.phi[k] = 2.0 * M_PI * next();
+      f.psi[k] = 2.0 * M_PI * next();
+   }
+   return f;
+}
+
+void PipeVelocityInFrame(const BcSpec& s, const PipeFrame& f, const Vector& x,
+                         double t, Vector& u)
+{
+   u.SetSize(3);
+   u = 0.0;
+   double r[3], ra = 0.0;
+   for (int d = 0; d < 3; ++d)
+   {
+      r[d] = x(d) - s.center[d];
+      ra += r[d] * f.a[d];
+   }
+   double p1 = 0.0, p2 = 0.0;
+   for (int d = 0; d < 3; ++d)
+   {
+      const double q = r[d] - ra * f.a[d];
+      p1 += q * f.e1[d];
+      p2 += q * f.e2[d];
+   }
+   const double rho = std::sqrt(p1 * p1 + p2 * p2) / s.radius;
+   if (rho >= 1.0) { return; }
+   const double w = 1.0 - rho * rho;
+   double ua = 2.0 * s.u_mean * w;
+   if (s.perturbation > 0.0)
+   {
+      const int K = kPipePerturbationModes;
+      const double theta = std::atan2(p2, p1);
+      const double amp = s.perturbation * s.u_mean / std::sqrt(double(K));
+      for (int k = 0; k < K; ++k)
+      {
+         const int mk = 1 + k % 3;
+         // rho^m (1 - rho^2) peaks at rho^2 = m / (m + 2).
+         const double r2 = double(mk) / (mk + 2.0);
+         const double peak = std::pow(r2, 0.5 * mk) * (1.0 - r2);
+         const double shape = std::pow(rho, mk) * w / peak;
+         const double fk = (k + 1.0) * s.perturbation_frequency / K;
+         ua += amp * shape * std::cos(mk * theta + f.phi[k]) *
+               std::sin(2.0 * M_PI * fk * t + f.psi[k]);
+      }
+   }
+   for (int d = 0; d < 3; ++d) { u(d) = ua * f.a[d]; }
+}
+
 // u = sc g(x) of a deck-given boundary velocity, sc multiplied first (as the
 // data always was): sc = 1 gives the shape g bit for bit.
 void Profile(const BcSpec& spec, int dim, const Vector& x, double sc, Vector& u)
@@ -38,6 +132,13 @@ void Profile(const BcSpec& spec, int dim, const Vector& x, double sc, Vector& u)
    if (spec.profile == BcProfile::Constant)
    {
       for (int d = 0; d < dim; ++d) { u(d) = sc * spec.value[d]; }
+   }
+   else if (spec.profile == BcProfile::Pipe)
+   {
+      // Unperturbed (the separable form): perturbed pipes take
+      // PipeVelocityInFrame directly.
+      PipeVelocityInFrame(spec, MakePipeFrame(spec), x, 0.0, u);
+      u *= sc;
    }
    else
    {
@@ -52,6 +153,12 @@ void Profile(const BcSpec& spec, int dim, const Vector& x, double sc, Vector& u)
    }
 }
 } // namespace
+
+void PipeVelocity(const BcSpec& spec, const Vector& x, double t, Vector& u)
+{
+   MFEM_VERIFY(spec.profile == BcProfile::Pipe, "PipeVelocity: not a pipe");
+   PipeVelocityInFrame(spec, MakePipeFrame(spec), x, t, u);
+}
 
 DeckBoundaryConditions::DeckBoundaryConditions(const Parameters& p,
       ParMesh& mesh)
@@ -201,6 +308,24 @@ void DeckBoundaryConditions::Apply(BoundaryConditions& bc,
          case BcType::Velocity:
          {
             const BcSpec spec = s; // the coefficient keeps its own copy
+            if (spec.profile == BcProfile::Pipe && spec.perturbation > 0.0)
+            {
+               // Not separable in time: projected at every use.
+               const PipeFrame frame = MakePipeFrame(spec);
+               coeffs_.push_back(std::make_unique<VectorFunctionCoefficient>(
+                                    dim,
+                                    [spec, frame](const Vector & x, double t,
+                                                  Vector & u)
+               {
+                  PipeVelocityInFrame(spec, frame, x, t, u);
+                  u *= TimeFactor(spec, t);
+               }));
+               for (int a : attrs_[g])
+               {
+                  bc.AddVelocityDirichlet(a, *coeffs_.back());
+               }
+               break;
+            }
             // s(t) g(x): the OIFS substeps project g once and scale it.
             coeffs_.push_back(std::make_unique<SeparableVectorCoefficient>(
                                  dim,

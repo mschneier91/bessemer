@@ -13,7 +13,13 @@
 //     factors times the projected shapes reproduce the projected data on
 //     every Dirichlet dof -- bit for bit where s = 1, to roundoff during the
 //     sine (the projection averages s g where shapes are averaged) -- and so
-//     does the cached path the Stokes step takes.
+//     does the cached path the Stokes step takes;
+//  B5 the pipe profile (profile: pipe): Poiseuille flow along a tilted axis
+//     (2 u_mean on the axis, zero at the wall, the flux u_mean pi R^2 by
+//     polar quadrature), its perturbation carries no net flux at any time,
+//     is bounded by eps u_mean sqrt(K), changes the field and follows its
+//     seed; on a box the unperturbed profile is separable in time and the
+//     perturbed one is not.
 
 #include <gtest/gtest.h>
 
@@ -223,5 +229,135 @@ TEST(DeckBoundary, B4_DeckVelocityIsSeparable)
       MPI_Allreduce(MPI_IN_PLACE, &dmax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
       if (t == 4.0) { EXPECT_EQ(dmax, 0.0); }
       else { EXPECT_LE(dmax, 2e-15 * v[0]); }
+   }
+}
+
+namespace
+{
+// u_mean pi R^2 by polar quadrature of the pipe profile's axial component
+// over its cross-section (exact for its polynomial-times-trigonometric form).
+double PipeFlux(const incns::BcSpec& s, double t)
+{
+   const IntegrationRule& ir = IntRules.Get(Geometry::SEGMENT, 21);
+   const int nth = 32;
+   double a[3];
+   const double n = std::sqrt(s.axis[0] * s.axis[0] + s.axis[1] * s.axis[1] +
+                              s.axis[2] * s.axis[2]);
+   for (int d = 0; d < 3; ++d) { a[d] = s.axis[d] / n; }
+   // Any orthonormal basis of the cross-section will do.
+   double e1[3] = {a[1], -a[0], 0.0};
+   double m = std::sqrt(e1[0] * e1[0] + e1[1] * e1[1]);
+   for (double& c : e1) { c /= m; }
+   const double e2[3] = {a[1] * e1[2] - a[2] * e1[1], a[2] * e1[0] - a[0] * e1[2],
+                         a[0] * e1[1] - a[1] * e1[0]
+                        };
+   Vector x(3), u(3);
+   double flux = 0.0;
+   for (int i = 0; i < ir.GetNPoints(); ++i)
+   {
+      const double r = ir.IntPoint(i).x * s.radius;
+      for (int j = 0; j < nth; ++j)
+      {
+         const double th = 2.0 * M_PI * j / nth;
+         for (int d = 0; d < 3; ++d)
+         {
+            x(d) = s.center[d] + r * (std::cos(th) * e1[d] + std::sin(th) * e2[d]);
+         }
+         incns::PipeVelocity(s, x, t, u);
+         const double ua = u(0) * a[0] + u(1) * a[1] + u(2) * a[2];
+         flux += ir.IntPoint(i).weight * s.radius * (2.0 * M_PI / nth) * r * ua;
+      }
+   }
+   return flux;
+}
+} // namespace
+
+TEST(DeckBoundary, B5_PipeProfile)
+{
+   const std::string box =
+      "equation: navier_stokes\nphysics:\n  nu: 0.01\n"
+      "mesh:\n  dim: 3\n  elements: [3, 3, 3]\n  lengths: [1, 1, 1]\n"
+      "  periodic: [false, false, false]\n";
+   auto deck = [&](const std::string& extra)
+   {
+      return incns::Parameters::LoadYAMLString(
+                box + "boundary_conditions:\n"
+                "  - {select: [zmin], type: velocity, profile: pipe, u_mean: 0.3, "
+                "radius: 0.5, center: [0.5, 0.5, 0.0], axis: [0.3, -0.2, 1.0]" +
+                extra + "}\n"
+                "  - {select: [xmin, xmax, ymin, ymax], type: no_slip}\n"
+                "  - {select: [zmax], type: outflow}\n");
+   };
+   const incns::Parameters plain = deck("");
+   const incns::Parameters pert = deck(", perturbation: 0.1, "
+                                       "perturbation_frequency: 2.0, "
+                                       "perturbation_seed: 7");
+   const incns::BcSpec& s0 = plain.boundary_conditions[0];
+   const incns::BcSpec& s1 = pert.boundary_conditions[0];
+   ASSERT_EQ(s0.profile, incns::BcProfile::Pipe);
+   EXPECT_EQ(s1.perturbation, 0.1);
+   EXPECT_EQ(s1.perturbation_seed, 7);
+
+   // The axis and the wall.
+   const double an = std::sqrt(0.09 + 0.04 + 1.0);
+   const double a[3] = {0.3 / an, -0.2 / an, 1.0 / an};
+   Vector x(3), u(3), v(3);
+   x(0) = 0.5 + 2.0 * a[0];
+   x(1) = 0.5 + 2.0 * a[1];
+   x(2) = 2.0 * a[2];
+   incns::PipeVelocity(s0, x, 0.0, u);
+   for (int d = 0; d < 3; ++d) { EXPECT_NEAR(u(d), 0.6 * a[d], 1e-15); }
+   // A point at r = R: a unit vector orthogonal to a.
+   const double q[3] = {a[2], 0.0, -a[0]};
+   const double qn = std::sqrt(q[0] * q[0] + q[2] * q[2]);
+   for (int d = 0; d < 3; ++d) { x(d) = (d < 2 ? 0.5 : 0.0) + 0.5 * q[d] / qn; }
+   incns::PipeVelocity(s1, x, 0.37, u);
+   EXPECT_LE(u.Normlinf(), 1e-15);
+
+   // The flux, with and without the perturbation, at several times.
+   const double exact = 0.3 * M_PI * 0.25;
+   EXPECT_NEAR(PipeFlux(s0, 0.0), exact, 1e-13);
+   for (double t : {0.0, 0.11, 0.73, 5.2})
+   {
+      EXPECT_NEAR(PipeFlux(s1, t), exact, 1e-13) << "t = " << t;
+   }
+
+   // The perturbation: bounded, present, and the seed's.
+   incns::BcSpec s2 = s1;
+   s2.perturbation_seed = 8;
+   const double bound = 0.1 * 0.3 * std::sqrt(double(incns::kPipePerturbationModes));
+   double dmax = 0.0, seed_diff = 0.0;
+   for (int k = 0; k < 200; ++k)
+   {
+      const double r = 0.45 * (k % 10) / 9.0, th = 0.7 * k, t = 0.013 * k;
+      x(0) = 0.5 + r * std::cos(th);
+      x(1) = 0.5 + r * std::sin(th);
+      x(2) = 0.0;
+      incns::PipeVelocity(s0, x, t, u);
+      incns::PipeVelocity(s1, x, t, v);
+      v -= u;
+      EXPECT_LE(v.Normlinf(), bound);
+      dmax = std::max(dmax, v.Normlinf());
+      Vector w(3);
+      incns::PipeVelocity(s1, x, t, u);
+      incns::PipeVelocity(s2, x, t, w);
+      w -= u;
+      seed_diff = std::max(seed_diff, w.Normlinf());
+      incns::PipeVelocity(s1, x, t, w);
+      w -= u;
+      EXPECT_EQ(w.Normlinf(), 0.0); // deterministic
+   }
+   EXPECT_GT(dmax, 0.1 * 0.3 * 0.2);
+   EXPECT_GT(seed_diff, 0.1 * 0.3 * 0.1);
+
+   // Separable without the perturbation, not with it.
+   for (const incns::Parameters* p : {&plain, &pert})
+   {
+      auto mesh = incns::MakeCaseMesh(*p);
+      incns::MixedSpaces spaces(*mesh, 2, 1);
+      incns::BoundaryConditions bc(spaces.Velocity());
+      incns::DeckBoundaryConditions db(*p, *mesh);
+      db.Apply(bc, nullptr, true);
+      EXPECT_EQ(bc.DirichletIsSeparable(), p == &plain);
    }
 }

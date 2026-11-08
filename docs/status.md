@@ -4,10 +4,30 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-10-28)
+## Where development left off (2026-11-08)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**FDA nozzle set up; a circular-pipe inflow for decks (2026-11-08, cloud thread "Run FDA
+nozzle Re 500 smoke test"; human: "ya go do that and then a summary I can give bessemer on
+what to run on the HPC").** benchmarks/fda_nozzle/: the hex mesh script (gmsh), a 148-hex
+test mesh, Re 500 decks (Q3 smoke to t = 5, Q3 to t = 1000, the Q6 defaults), a Re 2000
+inflow-sweep deck, `run.sbatch`, and [HANDOFF.md](../benchmarks/fda_nozzle/HANDOFF.md),
+the run plan for the GPU session. New deck surface: `profile: pipe` for `velocity`
+boundaries (Poiseuille flow 2 u_mean (1 - (r/R)^2) along any axis; with `perturbation`,
+six travelling azimuthal modes of zero net flux, seeded); unperturbed it is separable in
+time (the cached path), perturbed it is projected per use. Tests: `deck_boundary_test` B5
+(on-axis value, wall, flux by polar quadrature with and without the perturbation, bound,
+seed, separability), `benchmark_setup_test` B1 (a deck on a generated mesh loads with the
+committed tiny mesh and covers its boundaries). Cloud scratch build (MFEM v4.10 + #5464,
+apt hypre 2.28 and Open MPI, not the Spack toolchain), CPU, np 1/2/4 for those two tests;
+the decks ran on CPUs (HANDOFF.md, last section). Not run on a GPU; the full fast tier not
+run here (CI). Found: the run starts from rest, and the inlet pipe's profile develops on
+its viscous time, R^2 / (nu j0^2) = 195 at Re 500 (780 at Re 2000), so a steady Re 500
+needs t ~ 900 unless the throat and jet settle sooner. An initial condition with the
+pipes in Poiseuille flow would remove that; not built. **Next:** the GPU session runs
+HANDOFF.md's stage 1.
 
 **Flow statistics landed and tested on A100s (2026-10-27; human: "push to main and note that
 this still needs to be tested", then the GPU checks on NCSA Delta).** Asked for for the FDA

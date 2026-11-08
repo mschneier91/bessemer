@@ -100,8 +100,12 @@ enum class BcType
 /// Spatial shape of a deck-given boundary velocity (BcType::Velocity).
 enum class BcProfile
 {
-   Constant, ///< `value` everywhere on the group.
-   Parabolic ///< u_x = 4 u_max y (height - y) / height^2 (a channel inflow).
+   Constant,  ///< `value` everywhere on the group.
+   Parabolic, ///< u_x = 4 u_max y (height - y) / height^2 (a channel inflow).
+   /// Poiseuille flow in a circular pipe (3D): 2 u_mean (1 - (r/R)^2) along
+   /// the axis, optionally with travelling azimuthal perturbations
+   /// (PipeVelocity in bc/deck_boundary.hpp).
+   Pipe
 };
 
 /// Time modulation s(t) of a deck-given boundary velocity.
@@ -149,6 +153,16 @@ struct BcSpec
    /// Parabolic in 3D: channel width (z from 0 to width; 0 = height). The
    /// profile is then the product 16 u_max y (h - y) z (w - z) / (h w)^2.
    double width = 0.0;
+   double u_mean = 1.0; ///< Pipe: bulk (mean) velocity.
+   double radius = 1.0; ///< Pipe: radius R.
+   std::array<double, 3> center = {0.0, 0.0, 0.0}; ///< Pipe: a point on the axis.
+   /// Pipe: the axis, the direction of the flow (normalized when used).
+   std::array<double, 3> axis = {0.0, 0.0, 1.0};
+   /// Pipe: amplitude of the perturbation relative to u_mean (0 = none).
+   double perturbation = 0.0;
+   /// Pipe: the highest perturbation frequency (cycles per unit time).
+   double perturbation_frequency = 1.0;
+   int perturbation_seed = 1; ///< Pipe: seed of the perturbation's phases.
    BcTimeProfile time_profile = BcTimeProfile::Constant; ///< Time modulation.
    double time_scale = 1.0; ///< T of the Ramp / Sine modulation.
 };

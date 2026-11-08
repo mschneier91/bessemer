@@ -2,7 +2,7 @@
  * @file deck_boundary.hpp
  * @brief The deck's boundary_conditions groups applied to a
  *        BoundaryConditions set: selections resolved to attributes, deck-given
- *        velocities (constant or parabolic, optionally time-modulated) built
+ *        velocities (constant, parabolic or pipe, optionally time-modulated) built
  *        as coefficients, and a coverage check (every real boundary in exactly
  *        one group).
  */
@@ -20,6 +20,30 @@
 
 namespace incns
 {
+
+/// Number of travelling modes in the pipe profile's perturbation.
+constexpr int kPipePerturbationModes = 6;
+
+/**
+ * @brief The deck's pipe inflow (profile: pipe) at a point, without the time
+ *        modulation: Poiseuille flow plus the optional perturbation.
+ *
+ * With a the unit axis, r the distance from the axis and rho = r / R:
+ * u = [2 u_mean (1 - rho^2) + eps u_mean / sqrt(K) sum_k S_m(rho)
+ * cos(m_k theta + phi_k) sin(2 pi f_k t + psi_k)] a, K = 6, m_k = 1 +
+ * (k - 1) mod 3, f_k = k f / K, S_m(rho) = rho^m (1 - rho^2) scaled to peak 1,
+ * theta measured in a fixed basis of the cross-section, the phases phi_k and
+ * psi_k from the seed (the same on every rank and platform). Each mode has
+ * m >= 1, so the perturbation carries no net flux through the cross-section,
+ * and it vanishes at the wall. Zero outside the pipe (rho >= 1).
+ *
+ * @param spec A BcSpec with profile Pipe.
+ * @param x    The point (3D).
+ * @param t    Time (only the perturbation depends on it).
+ * @param u    The velocity (resized to 3).
+ */
+void PipeVelocity(const BcSpec& spec, const mfem::Vector& x, double t,
+                  mfem::Vector& u);
 
 /**
  * @brief Builds and owns the boundary data of a deck's boundary_conditions.
