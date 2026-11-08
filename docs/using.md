@@ -50,7 +50,9 @@ Boundary groups select box faces (`xmin` ... `zmax`) or the geometry's named bou
 `inflow`, `outflow`, `sides` / `walls`, `body` / `cylinder`, and for a Gmsh file its
 physical-group names (more with `mesh.boundary_names`). A constant or parabolic velocity
 is given right in the deck, optionally ramped or sine-modulated in time; in 3D the
-parabolic profile is a product of parabolas in y and z. Every real
+parabolic profile is a product of parabolas in y and z, and `profile: pipe` gives
+Poiseuille flow in a circular pipe (centre, axis, radius, bulk velocity), optionally with
+travelling perturbations for transition studies (benchmarks/fda_nozzle). Every real
 boundary must be in exactly one group: a deck that leaves one out is refused with the
 boundary named, rather than run with a silent do-nothing wall. Omitted
 keys take library defaults, and a key the loader doesn't know is an error that names the

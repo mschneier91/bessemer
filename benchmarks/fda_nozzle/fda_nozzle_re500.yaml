@@ -1,0 +1,81 @@
+# FDA benchmark nozzle, throat Re 500, at the defaults (Q6/Q5 since 2026-10-16,
+# OIFS at CFL 2): about 43.5M velocity DOFs on the level-0 mesh. Steady laminar
+# jet. t_final and the statistics' start (t >= 900 of 1000 here, as the Q3
+# deck) are to be shortened to what the Q3 run (fda_nozzle_re500_q3.yaml)
+# shows the throat and jet need: at Q6 every 100 time units cost ~3 h (estimate). About 45 GB of GPU memory: one 80 GB H100, or two
+# 40 GB A100s (np 2).
+#
+#   srun -n 2 build/cuda/apps/run_case benchmarks/fda_nozzle/fda_nozzle_re500.yaml
+# Geometry (benchmarks/fda_nozzle/fda_nozzle_mesh.py; lengths in throat
+# diameters, d = 1): inlet pipe D = 3 (12 long, from z = -27.67), a 20-degree
+# cone to the throat d = 1 (10 long), the sudden expansion at z = 0, outlet
+# pipe D to z = 30. Flow in +z. Throat Reynolds number Re = U_th d / nu with
+# U_th = 1 the throat's mean velocity, so nu = 1 / Re and the inlet's mean
+# velocity is (d / D)^2 = 1/9. Inflow: Poiseuille in the inlet pipe (profile:
+# pipe), ramped up over the first 2 time units; walls no-slip; outlet
+# do-nothing (directional, the default).
+
+equation: navier_stokes
+
+physics:
+  nu: 0.002        # Re = 500 at the throat
+
+mesh:
+  dim: 3
+  geometry: file
+  file: runs/fda_nozzle/fda_nozzle_l0.msh   # 56,320 hexes, geometry order 3
+
+time:
+  dt: 0.001          # the first step; then CFL control
+  t_final: 1000
+
+boundary_conditions:
+  - {select: [inlet], type: velocity, profile: pipe, u_mean: 0.1111111111111111,
+     radius: 1.5, center: [0, 0, 0], axis: [0, 0, 1],
+     time_profile: ramp, time_scale: 2.0}
+  - {select: [walls], type: no_slip}
+  - {select: [outlet], type: outflow}
+
+flow_statistics:
+  # Time averages for the comparison with the FDA PIV data. Stations are in
+  # throat diameters from the sudden expansion (FDA's axial locations, -0.088
+  # to 0.080 m with d = 4 mm; check them against the data release before
+  # comparing; 0.01 and 15.01 sit just off element faces, where some
+  # points are missed). Upstream of the cone and downstream of the step the pipe radius
+  # is 1.5, in the throat 0.5.
+  enabled: true
+  start_time: 900.0
+  interval: 1
+  fields: false
+  lines:
+    - {name: centerline, from: [0, 0, -27.67], to: [0, 0, 30], points: 1155}
+  profiles:
+    - {name: inlet, origin: [0, 0, 0], axis: [0, 0, 1], stations: [-22, -16],
+       radius: 1.5, points: 31, azimuths: 16}
+    - {name: throat, origin: [0, 0, 0], axis: [0, 0, 1], stations: [-10.5, -5, -2],
+       radius: 0.5, points: 21, azimuths: 16}
+    - {name: outlet, origin: [0, 0, 0], axis: [0, 0, 1],
+       stations: [0.01, 2, 4, 6, 8, 10, 12, 15.01, 20], radius: 1.5, points: 61,
+       azimuths: 16}
+  walls:
+    # Bin widths about the axial cell sizes (an empty bin is NaN): 0.49
+    # upstream, 0.25 in the jet region, 1 in the coarse far outlet.
+    - {name: wall_upstream, boundaries: [walls], origin: [0, 0, 0],
+       axis: [0, 0, 1], from: -27.67, to: 0, bins: 56}
+    - {name: wall_jet, boundaries: [walls], origin: [0, 0, 0], axis: [0, 0, 1],
+       from: 0, to: 15, bins: 60}
+    - {name: wall_far, boundaries: [walls], origin: [0, 0, 0], axis: [0, 0, 1],
+       from: 15, to: 30, bins: 15}
+
+checkpoint:
+  enabled: true
+  path: runs/fda_nozzle/re500/chk
+  interval: 500
+
+output:
+  path: runs/fda_nozzle/re500
+  name: re500
+  progress: 1.0
+  history: true
+  diagnostics: true
+  interval: 20

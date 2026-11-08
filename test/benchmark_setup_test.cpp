@@ -17,7 +17,9 @@
 //     faces) exact to the geometry order, and the 3D parabolic inflow
 //     carries u_max (4/9) H W;
 //  B1 every deck in benchmarks/ loads (the parser rejects unknown keys), and
-//     the benchmark settings are what their headers say.
+//     the benchmark settings are what their headers say; a deck on a mesh
+//     file generated outside git loads with the small mesh committed beside
+//     it, and its boundary groups cover that mesh's boundaries.
 
 #include <gtest/gtest.h>
 
@@ -35,6 +37,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <regex>
 #include <string>
 
 using namespace mfem;
@@ -365,8 +369,36 @@ TEST(BenchmarkSetup, B1_EveryBenchmarkDeckLoads)
    for (const auto& e : fs::recursive_directory_iterator(root))
    {
       if (e.path().extension() != ".yaml") { continue; }
-      const incns::Parameters p = incns::Parameters::LoadYAML(e.path().string());
+      // A deck on a mesh file generated outside git (runs/...) loads with the
+      // small mesh committed beside it, <dir>/<dir>_tiny.msh: the loader reads
+      // the file's boundary names, and the deck's boundary groups must cover
+      // them.
+      std::ifstream in(e.path());
+      std::string text((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+      const std::regex file_key("(\\n  file: *)([^ #\\n]+)");
+      std::smatch m;
+      const bool generated = std::regex_search(text, m, file_key) &&
+                             !fs::exists(m[2].str());
+      if (!generated)
+      {
+         const incns::Parameters p = incns::Parameters::LoadYAML(e.path().string());
+         EXPECT_EQ(p.equation, incns::Equation::NavierStokes) << e.path();
+         ++decks;
+         continue;
+      }
+      const fs::path dir = e.path().parent_path();
+      const fs::path tiny = dir / (dir.filename().string() + "_tiny.msh");
+      ASSERT_TRUE(fs::exists(tiny)) << e.path() << " uses the generated mesh "
+                                    << m[2].str() << " and " << tiny
+                                    << " does not exist";
+      text = std::regex_replace(text, file_key, "$1" + tiny.string(),
+                                std::regex_constants::format_first_only);
+      const incns::Parameters p = incns::Parameters::LoadYAMLString(text);
       EXPECT_EQ(p.equation, incns::Equation::NavierStokes) << e.path();
+      auto mesh = incns::MakeCaseMesh(p);
+      incns::DeckBoundaryConditions bcs(p, *mesh);
+      EXPECT_TRUE(bcs.CoverageProblems().empty()) << e.path();
       ++decks;
    }
    // At least the decks named below (tgv n21/n32/n42, channel 180/395, dfg

@@ -867,8 +867,18 @@ void FillFromDeck(DeckReader& r, Parameters& p)
              "xmax, ymin, ymax, zmin, zmax; the geometry's boundary names; or all. "
              "type velocity takes value: [u, v] (constant), or profile: parabolic "
              "with u_max and height (u_x = 4 u_max y (height - y) / height^2; in 3D "
-             "times 4 z (width - z) / width^2, width defaulting to height), "
-             "optionally time_profile: ramp | sine with time_scale T (ramp: "
+             "times 4 z (width - z) / width^2, width defaulting to height), or (3D) "
+             "profile: pipe with u_mean and radius R, optionally center (a point "
+             "on the axis, default the origin) and axis (the flow direction, "
+             "default [0, 0, 1]): Poiseuille flow 2 u_mean (1 - (r/R)^2) along the "
+             "axis, plus with perturbation: eps (default 0) six travelling "
+             "azimuthal modes in the axial component, k = 1..6 with azimuthal "
+             "number 1 + (k - 1) mod 3, frequency k f / 6 (f = "
+             "perturbation_frequency, default 1), radial shape (r/R)^m (1 - "
+             "(r/R)^2) scaled to peak 1, each of amplitude eps u_mean / sqrt(6), "
+             "phases from perturbation_seed (default 1); they carry no net flux. "
+             "Both kinds of velocity take, "
+             "optionally, time_profile: ramp | sine with time_scale T (ramp: "
              "sin^2(pi t / 2T) for t < T; sine: sin(pi t / T)). velocity_dirichlet "
              "takes its field from Python or C++ by the group name. A flow "
              "boundary may move (the ALE fluid, docs/ale_fluid.md): motion: "
@@ -900,16 +910,19 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          static const std::set<std::string> entry_keys =
          {
             "group", "type", "select", "value", "profile", "u_max", "height",
-            "width", "time_profile", "time_scale", "expression", "parameters",
-            "motion"
+            "width", "u_mean", "radius", "center", "axis", "perturbation",
+            "perturbation_frequency", "perturbation_seed", "time_profile",
+            "time_scale", "expression", "parameters", "motion"
          };
          for (const auto& kv : e)
          {
             const std::string k = kv.first.as<std::string>();
             MFEM_VERIFY(entry_keys.count(k), "parameters: unknown "
                         "boundary_conditions key '" << k << "' (group, type, "
-                        "select, value, profile, u_max, height, width, "
-                        "time_profile, time_scale, expression, parameters, motion)");
+                        "select, value, profile, u_max, height, width, u_mean, "
+                        "radius, center, axis, perturbation, "
+                        "perturbation_frequency, perturbation_seed, time_profile, "
+                        "time_scale, expression, parameters, motion)");
          }
          BcSpec s;
          if (e["group"]) { s.group = e["group"].as<std::string>(); }
@@ -986,8 +999,9 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          if (by_expression)
          {
             for (const char* k :
-                 {"profile", "u_max", "height", "width", "time_profile",
-                  "time_scale"
+                 {"profile", "u_max", "height", "width", "u_mean", "radius",
+                  "center", "axis", "perturbation", "perturbation_frequency",
+                  "perturbation_seed", "time_profile", "time_scale"
                  })
             {
                MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
@@ -1007,8 +1021,9 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                s.value[d] = e["value"][d].as<double>();
             }
             for (const char* k :
-                 {"profile", "u_max", "height", "width", "time_profile",
-                  "time_scale"
+                 {"profile", "u_max", "height", "width", "u_mean", "radius",
+                  "center", "axis", "perturbation", "perturbation_frequency",
+                  "perturbation_seed", "time_profile", "time_scale"
                  })
             {
                MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
@@ -1040,10 +1055,60 @@ void FillFromDeck(DeckReader& r, Parameters& p)
                s.height = e["height"].as<double>();
                if (e["width"]) { s.width = e["width"].as<double>(); }
             }
+            else if (prof == "pipe")
+            {
+               s.profile = BcProfile::Pipe;
+               MFEM_VERIFY(p.mesh.dim == 3, "parameters: profile pipe is 3D");
+               MFEM_VERIFY(e["u_mean"] && e["radius"], "parameters: profile "
+                           "pipe needs u_mean and radius");
+               s.u_mean = e["u_mean"].as<double>();
+               s.radius = e["radius"].as<double>();
+               MFEM_VERIFY(s.radius > 0.0, "parameters: pipe radius must be > 0");
+               auto point = [&](const char* k, std::array<double, 3>& dst)
+               {
+                  if (!e[k]) { return; }
+                  MFEM_VERIFY(e[k].IsSequence() && e[k].size() == 3,
+                              "parameters: pipe " << k << " needs 3 components");
+                  for (int d = 0; d < 3; ++d) { dst[d] = e[k][d].as<double>(); }
+               };
+               point("center", s.center);
+               point("axis", s.axis);
+               const double an = std::sqrt(s.axis[0] * s.axis[0] +
+                                           s.axis[1] * s.axis[1] +
+                                           s.axis[2] * s.axis[2]);
+               MFEM_VERIFY(an > 0.0, "parameters: pipe axis must be nonzero");
+               if (e["perturbation"])
+               {
+                  s.perturbation = e["perturbation"].as<double>();
+               }
+               if (e["perturbation_frequency"])
+               {
+                  s.perturbation_frequency =
+                     e["perturbation_frequency"].as<double>();
+               }
+               if (e["perturbation_seed"])
+               {
+                  s.perturbation_seed = e["perturbation_seed"].as<int>();
+               }
+               MFEM_VERIFY(s.perturbation >= 0.0 &&
+                           s.perturbation_frequency >= 0.0, "parameters: pipe "
+                           "perturbation and perturbation_frequency must be >= 0");
+            }
             else
             {
                MFEM_ABORT("parameters: unknown boundary profile '" << prof
-                          << "' (constant|parabolic)");
+                          << "' (constant|parabolic|pipe)");
+            }
+            if (s.profile != BcProfile::Pipe)
+            {
+               for (const char* k :
+                    {"u_mean", "radius", "center", "axis", "perturbation",
+                     "perturbation_frequency", "perturbation_seed"
+                    })
+               {
+                  MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
+                              << "' needs profile pipe");
+               }
             }
             if (e["time_profile"])
             {
@@ -1063,8 +1128,10 @@ void FillFromDeck(DeckReader& r, Parameters& p)
          else
          {
             for (const char* k :
-                 {"value", "profile", "u_max", "height", "width",
-                  "time_profile", "time_scale"
+                 {"value", "profile", "u_max", "height", "width", "u_mean",
+                  "radius", "center", "axis", "perturbation",
+                  "perturbation_frequency", "perturbation_seed", "time_profile",
+                  "time_scale"
                  })
             {
                MFEM_VERIFY(!e[k], "parameters: boundary key '" << k
@@ -1932,6 +1999,10 @@ void Parameters::Normalize()
          s.u_max /= nondim.U_ref;
          s.height /= nondim.L_ref;
          s.width /= nondim.L_ref;
+         s.u_mean /= nondim.U_ref;
+         s.radius /= nondim.L_ref;
+         for (double& c : s.center) { c /= nondim.L_ref; }
+         s.perturbation_frequency /= U_over_L; // cycles per unit time
          s.time_scale *= U_over_L;
       }
       for (auto& x : probes.pressure_difference)
