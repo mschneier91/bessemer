@@ -248,8 +248,8 @@ double PipeFlux(const incns::BcSpec& s, double t)
    double e1[3] = {a[1], -a[0], 0.0};
    double m = std::sqrt(e1[0] * e1[0] + e1[1] * e1[1]);
    for (double& c : e1) { c /= m; }
-   const double e2[3] = {a[1] * e1[2] - a[2] * e1[1], a[2] * e1[0] - a[0] * e1[2],
-                         a[0] * e1[1] - a[1] * e1[0]
+   const double e2[3] = {a[1]* e1[2] - a[2]* e1[1], a[2]* e1[0] - a[0]* e1[2],
+                         a[0]* e1[1] - a[1]* e1[0]
                         };
    Vector x(3), u(3);
    double flux = 0.0;
@@ -278,7 +278,7 @@ TEST(DeckBoundary, B5_PipeProfile)
       "equation: navier_stokes\nphysics:\n  nu: 0.01\n"
       "mesh:\n  dim: 3\n  elements: [3, 3, 3]\n  lengths: [1, 1, 1]\n"
       "  periodic: [false, false, false]\n";
-   auto deck = [&](const std::string& extra)
+   auto deck = [&](const std::string & extra)
    {
       return incns::Parameters::LoadYAMLString(
                 box + "boundary_conditions:\n"
@@ -325,7 +325,8 @@ TEST(DeckBoundary, B5_PipeProfile)
    // The perturbation: bounded, present, and the seed's.
    incns::BcSpec s2 = s1;
    s2.perturbation_seed = 8;
-   const double bound = 0.1 * 0.3 * std::sqrt(double(incns::kPipePerturbationModes));
+   const double bound = 0.1 * 0.3 * std::sqrt(double(
+                           incns::kPipePerturbationModes));
    double dmax = 0.0, seed_diff = 0.0;
    for (int k = 0; k < 200; ++k)
    {
