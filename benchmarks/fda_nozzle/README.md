@@ -10,7 +10,9 @@ https://github.com/OSEL-DAM/CFD-and-Blood-Damage-Benchmarks (not fetched by
 
 **Status (2026-11-11):** stage 1 of [HANDOFF.md](HANDOFF.md) has run at Re 500 on A100s, at
 Q3/Q2 and Q4/Q3 (Results below). Not run: Re 500 at the defaults (Q6/Q5; a 24-step probe
-only), the Re 2000 inflow sweep, the Re 6500 p-ladder, and any comparison with FDA's data.
+only), the Re 2000 inflow sweep and the Re 6500 p-ladder. Against FDA's Re 500 data the
+velocities fall within or close to the five labs' spread; the wall pressure differs from the
+experiment as every code's in FDA's study did (Results).
 
 ## Files
 
@@ -114,7 +116,87 @@ velocity, pressures in its square, and z in throat diameters from the expansion.
   downstream settles is not known; the values beyond z = 65 are not a steady answer.
 
 What these runs do not establish: one mesh at two orders is not a mesh-converged answer;
-the radial profile sets were not compared; nothing was compared with FDA's data. Re 500 at
+the two orders' radial profile sets were not compared with each other. Re 500 at
 the defaults (Q6/Q5) has only a probe on the short-outlet mesh: 24 steps to t = 0.3 at
 36.8M velocity DOFs, status ok. The smoke deck ran before these (Q3/Q2, short outlet, 302
 steps to t = 5 in 5.4 min, status ok).
+
+**Re 500 against FDA's experiments** (2026-11-11; human: "the ultimate goal is to make sure
+we are matching the FDA results", "Yes, record it"). `SE_exp_0500.zip` of FDA's repository:
+five labs' PIV (centreline and radial profiles of the axial velocity), four labs' wall
+pressures; SI units. Its stated flow rate (5.20624e-6 m³/s), throat diameter (4 mm), density
+(1056 kg/m³) and viscosity (0.0035 Pa s) give a throat mean velocity U = 0.4143 m/s, ρU² =
+181.3 Pa and Re 500.0; the data are scaled with these. FDA's profile stations, in diameters:
+z = -22, -16, -12, -5, -2, 0, 2, 4, 6, 8, 15, 20, so the data end at z = 20, where neither the
+outlet length nor the unsteady far field matters. The long-outlet Q4/Q3 run is compared; Q3
+gives the same numbers to three digits at every station. The comparison scripts are not
+committed, and the data are not fetched by `fetch_references.py` yet.
+
+Centreline axial velocity, in U:
+
+| z | Labs, min to max | Labs, mean | Run |
+|---|---|---|---|
+| -22 | 0.201 to 0.224 | 0.210 | 0.222 |
+| -16 | 0.205 to 0.216 | 0.212 | 0.224 |
+| -12 | 0.456 to 0.571 | 0.482 | 0.454 |
+| -10.5 (3 labs) | 0.911 to 0.919 | 0.914 | 0.894 |
+| -5 | 1.589 to 1.725 | 1.642 | 1.632 |
+| -2 | 1.693 to 1.854 | 1.770 | 1.755 |
+| 0 | 1.712 to 1.818 | 1.757 | 1.808 |
+| 2 | 1.673 to 1.786 | 1.752 | 1.773 |
+| 4 (4 labs) | 1.620 to 1.741 | 1.697 | 1.726 |
+| 6 (4 labs) | 1.572 to 1.635 | 1.610 | 1.671 |
+| 8 | 1.515 to 1.579 | 1.539 | 1.609 |
+| 10 (3 labs) | 1.473 to 1.538 | 1.508 | 1.544 |
+| 12 (3 labs) | 1.445 to 1.518 | 1.483 | 1.478 |
+| 15 | 1.072 to 1.417 | 1.295 | 1.379 |
+| 20 (4 labs) | 1.006 to 1.239 | 1.108 | 1.222 |
+
+- **Centreline:** the run is inside the labs' range at 9 of the 15 points and within 2.2 % of
+  the nearest lab at the others, except z = -16 (3.7 % above the highest lab). In the inlet
+  pipe the run has developed pipe flow's 2/9; the labs average 5 % below it.
+- **Radial profiles** at the 11 stations the deck shares with FDA (each lab's two sides
+  averaged; 20 radii per station; "inside" allows 0.01 beyond the labs' lowest and highest):
+  the run is inside the labs' envelope at 20 of 20 radii at z = -22, -16, -5, -2 and 15, 18 at
+  z = 0 and 2, 19 at z = 20, and 14 at z = 4. Its RMS distance from the labs' mean is 0.008 to
+  0.061 there; the labs' own RMS spread about their mean is 0.004 to 0.063.
+- **At z = 6 and 8 the run is 2 to 7 % above every lab across the jet** (inside at 9 of 20
+  radii; RMS distance 0.040 and 0.044 against a lab spread of 0.009 and 0.011). The labs'
+  profiles there integrate to 0.92 to 0.95 and 0.88 to 0.96 of the nominal flow rate; the
+  run's to 1.001. With each lab's profile scaled to the nominal flow rate the run is inside
+  at 18 and 20 of 20 radii. That reading (a flow-rate offset in the measurements, not a
+  different jet) is the agent's; it is not established.
+- **The deck's profile station z = -10.5 is not one of FDA's, and FDA's z = -12 (in the
+  cone) is not sampled.** The stations in the handoff were from memory. To fix in the decks before the
+  next runs.
+
+Wall pressure relative to z = 0, in Pa at FDA's scales (ρU² = 181.3 Pa):
+
+| z | Labs 243, 468, 763 (mean) | Lab 999 | Run |
+|---|---|---|---|
+| -22.6 | 484, 544, 551 (526) | 222 | 311 |
+| -12.9 | 393, 469, 468 (443) | 142 | 304 |
+| -10.0 | 262, 251, 234 (249) | 117 | 193 |
+| -7.5 | 183, 185, 165 (178) | 72 | 113 |
+| -5.0 | 131, 123, 110 (121) | 26 | 71 |
+| -2.5 | 26, 38, 28 (30) | 9 | 33 |
+| 0.5 | 131, 90, 83 (101) | 14 | -1 |
+| 2.0 | 157, 117, 83 (119) | -16 | -1 |
+| 8.0 | 131, 145, 138 (138) | -7 | 2 |
+
+- **The run's pressure does not match the experiment, and neither did any code in FDA's
+  study.** Three labs put the inlet about 530 Pa above z = 0 and show a rise of 100 to 140 Pa
+  within half a diameter after the expansion; the run gives 311 Pa and no rise. Stewart et
+  al. (2012), Figure 4a, shows the same for every code: the laminar solutions near 310 Pa
+  upstream (all codes about 280 to 390 Pa, read from the figure) and 0 to 25 Pa downstream,
+  none with the rise. The paper: "Experimental errors at the z = 0.0 m normalization point
+  may partly explain the 100-250 N/m² ... offset at Ret = 500. Errors were traced to not
+  using differential pressure transducers in some of the experiments." One lab's pressures
+  are left out of that figure for measurement errors; by the numbers it is lab 999.
+- So the run's pressure agrees with the study's laminar CFD, and the experiment cannot
+  validate it more closely. About 100 Pa of the upstream difference is left unexplained by
+  the paper ("partly").
+
+Not compared: FDA's wall shear stress data (24 points per lab); the shear and Reynolds
+stress profiles. Read of Stewart et al. (2012): the pressure passages and Figures 3 and 4,
+not the whole paper.

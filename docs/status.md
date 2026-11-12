@@ -9,8 +9,9 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
-**FDA nozzle stage 1: Re 500 at Q3/Q2 and Q4/Q3 on A100s (2026-11-11; human: "Yes, record
-them").** NCSA Delta, the CUDA build of main 7aae328; running cases, no code change. Numbers
+**FDA nozzle stage 1: Re 500 at Q3/Q2 and Q4/Q3 on A100s, and against FDA's data
+(2026-11-11; human: "Yes, record them", "Yes, record it").**
+NCSA Delta, the CUDA build of main 7aae328; running cases, no code change. Numbers
 and the run table: [benchmarks/fda_nozzle/README.md](../benchmarks/fda_nozzle/README.md),
 "Results".
 - The committed mesh's outlet (to z = 30 throat diameters) is too short at Re 500: the Q3 run
@@ -25,9 +26,21 @@ and the run table: [benchmarks/fda_nozzle/README.md](../benchmarks/fda_nozzle/RE
   differ by 2.7e-2 in centreline velocity at z = 70 to 73; Q3 and Q4 agree there to 1.3e-4).
 - Cost: Q3 7.1M velocity DOFs, one A100, 1.40 s per step, 3.4 h; Q4 16.9M, two A100s, 2.03 s
   per step, 7.8 h, 19.1 GiB per GPU at the peak.
-- **Not done:** the comparison with FDA's data, the radial profiles, Re 500 at Q6/Q5 (a
-  24-step probe only), a longer run to settle the far downstream, long-outlet decks in the
-  repo, stage 2 (Re 2000; waits for the human's go).
+- **Against FDA's Re 500 experiments** (five labs; the data end at z = 20, so the outlet
+  length and the far field do not enter): centreline velocity inside the labs' range at 9 of
+  15 points and within 2.2 % of the nearest lab elsewhere but z = -16 (+3.7 %); radial
+  profiles inside the labs' envelope except at z = 6 and 8, where the run is 2 to 7 % above
+  every lab and the labs' profiles integrate to 0.88 to 0.96 of the nominal flow rate. Wall
+  pressure: 311 Pa from the inlet to z = 0 against the labs' 530 Pa, and no rise after the
+  expansion where three labs show 100 to 140 Pa; Stewart et al. (2012) show the same for
+  every code in FDA's study (laminar CFD near 310 Pa) and trace the offset partly to the
+  experiment's z = 0 tap. Q3 suffices for the velocities.
+- **To fix before the next runs:** the decks' profile station z = -10.5 is not FDA's; FDA's
+  z = -12 is missing.
+- **Not done:** FDA's wall shear stress data, the Q3 against Q4 radial profiles, Re 500 at
+  Q6/Q5 (a 24-step probe only), a longer run to settle the far downstream, long-outlet decks
+  and the FDA data and comparison scripts in the repo, stage 2 (Re 2000; waits for the
+  human's go).
 
 **FDA nozzle set up; a circular-pipe inflow for decks (2026-11-08, cloud thread "Run FDA
 nozzle Re 500 smoke test"; human: "ya go do that and then a summary I can give bessemer on
