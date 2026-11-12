@@ -55,9 +55,15 @@ flow_statistics:
   lines:
     - {name: centerline, from: [0, 0, -27.67], to: [0, 0, 30], points: 1155}
   profiles:
+    # FDA's twelve profile stations: z = -22, -16, -12, -5, -2, 0, 2, 4, 6, 8, 15, 20
+    # (checked against its Re 500 data, SE_exp_0500.zip). z = -12 is in the cone,
+    # where the wall is at r = 0.8527; z = 10 and 12 below are extra (FDA has the
+    # centreline there, no profile).
     - {name: inlet, origin: [0, 0, 0], axis: [0, 0, 1], stations: [-22, -16],
        radius: 1.5, points: 31, azimuths: 16}
-    - {name: throat, origin: [0, 0, 0], axis: [0, 0, 1], stations: [-10.5, -5, -2],
+    - {name: cone, origin: [0, 0, 0], axis: [0, 0, 1], stations: [-12],
+       radius: 0.85, points: 35, azimuths: 16}
+    - {name: throat, origin: [0, 0, 0], axis: [0, 0, 1], stations: [-5, -2],
        radius: 0.5, points: 21, azimuths: 16}
     - {name: outlet, origin: [0, 0, 0], axis: [0, 0, 1],
        stations: [0.01, 2, 4, 6, 8, 10, 12, 15.01, 20], radius: 1.5, points: 61,

@@ -114,10 +114,12 @@ they don't, Q6 is the reference and Q3 was not resolved.
 **Comparison with FDA's data.** FDA's PIV and pressure data are at
 https://github.com/OSEL-DAM/CFD-and-Blood-Damage-Benchmarks (not in the repo; no
 redistribution terms checked). The decks sample the centreline, radial profiles at
-z/d = −22, −16, −10.5, −5, −2, 0, 2, 4, 6, 8, 10, 12, 15, 20 and the wall in 0.25 d bins.
-I took those stations from memory of Hariharan et al. 2011 (FDA's sudden-expansion
-locations, −0.088 to 0.080 m with d = 4 mm). Check them against the data release before
-comparing. Normalize with `flow_stats.py normalize --u-ref 1 --l-ref 1`. FDA reports
+z/d = −22, −16, −12, −5, −2, 0, 2, 4, 6, 8, 10, 12, 15, 20 and the wall in 0.25 d bins.
+Those are FDA's twelve profile stations (−0.088 to 0.080 m with d = 4 mm), checked against
+its Re 500 data release on 2026-11-11, plus z/d = 10 and 12, where FDA has the centreline
+only. Until then the decks had −10.5 (from memory) in place of −12; the Re 500 runs of
+README.md's Results were made with −10.5.
+Normalize with `flow_stats.py normalize --u-ref 1 --l-ref 1`. FDA reports
 velocities in m/s at its flow rate: U_th = Re·μ/(ρ d) with its blood analogue's
 properties (ρ 1056 kg/m³, μ 3.5 mPa·s).
 

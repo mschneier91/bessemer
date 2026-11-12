@@ -166,9 +166,11 @@ Centreline axial velocity, in U:
   run's to 1.001. With each lab's profile scaled to the nominal flow rate the run is inside
   at 18 and 20 of 20 radii. That reading (a flow-rate offset in the measurements, not a
   different jet) is the agent's; it is not established.
-- **The deck's profile station z = -10.5 is not one of FDA's, and FDA's z = -12 (in the
-  cone) is not sampled.** The stations in the handoff were from memory. To fix in the decks before the
-  next runs.
+- **These runs sampled z = -10.5, which is not one of FDA's profile stations, and not FDA's
+  z = -12 (in the cone).** The handoff's stations were from memory. The decks now have
+  z = -12 (profile set `cone`, to r = 0.85; the wall is at 0.8527) in place of -10.5
+  (2026-11-11). The changed decks have not been run or loaded by a test here: no build on
+  the machine they were edited on.
 
 Wall pressure relative to z = 0, in Pa at FDA's scales (ρU² = 181.3 Pa):
 

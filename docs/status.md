@@ -35,8 +35,9 @@ and the run table: [benchmarks/fda_nozzle/README.md](../benchmarks/fda_nozzle/RE
   expansion where three labs show 100 to 140 Pa; Stewart et al. (2012) show the same for
   every code in FDA's study (laminar CFD near 310 Pa) and trace the offset partly to the
   experiment's z = 0 tap. Q3 suffices for the velocities.
-- **To fix before the next runs:** the decks' profile station z = -10.5 is not FDA's; FDA's
-  z = -12 is missing.
+- **The decks' profile stations are FDA's now:** z = -12 in the cone (set `cone`) replaces
+  z = -10.5, which was from memory, in the four nozzle decks. Not run and not loaded by
+  `benchmark_setup_test` B1 on the Mac they were edited on (no build there); CI is the check.
 - **Not done:** FDA's wall shear stress data, the Q3 against Q4 radial profiles, Re 500 at
   Q6/Q5 (a 24-step probe only), a longer run to settle the far downstream, long-outlet decks
   and the FDA data and comparison scripts in the repo, stage 2 (Re 2000; waits for the
