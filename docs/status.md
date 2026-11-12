@@ -4,10 +4,30 @@ The living handoff log: where the project stands, what was decided (dated, with 
 decided), and what is open. The maintainer and their agents update it as work lands.
 Rules and design live in [developing.md](developing.md); this file is the *state*.
 
-## Where development left off (2026-11-08)
+## Where development left off (2026-11-11)
 
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
+
+**FDA nozzle stage 1: Re 500 at Q3/Q2 and Q4/Q3 on A100s (2026-11-11; human: "Yes, record
+them").** NCSA Delta, the CUDA build of main 7aae328; running cases, no code change. Numbers
+and the run table: [benchmarks/fda_nozzle/README.md](../benchmarks/fda_nozzle/README.md),
+"Results".
+- The committed mesh's outlet (to z = 30 throat diameters) is too short at Re 500: the Q3 run
+  on it is steady by t = 180, but the recirculation leaves through the outlet. With the
+  outlet to z = 90 (87,040 hexes; the mesh command is in the README) the flow reattaches at
+  z = 52.4. The committed Re 500 decks still name the short mesh.
+- Q3 against Q4 on the long outlet, averaged over t = 200 to 350: centreline velocity within
+  1.6e-3 downstream of the expansion (0.09 % of its peak, 1.809 against 1.808), reattachment
+  at z = 52.42 against 52.37, downstream wall pressure within 7e-4. Q3 is not resolved where
+  the cone meets the throat: wall shear stress differs by 11 % of its local peak there.
+- Neither long-outlet run is steady beyond z = 65 at t = 350 (the Q4 run's half windows
+  differ by 2.7e-2 in centreline velocity at z = 70 to 73; Q3 and Q4 agree there to 1.3e-4).
+- Cost: Q3 7.1M velocity DOFs, one A100, 1.40 s per step, 3.4 h; Q4 16.9M, two A100s, 2.03 s
+  per step, 7.8 h, 19.1 GiB per GPU at the peak.
+- **Not done:** the comparison with FDA's data, the radial profiles, Re 500 at Q6/Q5 (a
+  24-step probe only), a longer run to settle the far downstream, long-outlet decks in the
+  repo, stage 2 (Re 2000; waits for the human's go).
 
 **FDA nozzle set up; a circular-pipe inflow for decks (2026-11-08, cloud thread "Run FDA
 nozzle Re 500 smoke test"; human: "ya go do that and then a summary I can give bessemer on
