@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bessemer": {
+      "command": "python3",
+      "args": ["mcp_server/bessemer_mcp.py"]
+    }
+  }
+}

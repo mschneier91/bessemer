@@ -58,7 +58,9 @@ boundary named, rather than run with a silent do-nothing wall. Omitted
 keys take library defaults, and a key the loader doesn't know is an error that names the
 closest valid key. **Every key, with its default and allowed values:
 [deck_reference.md](deck_reference.md)** (generated from the loader; `run_case
---deck-reference` prints it). The sections at a glance:
+--deck-reference` prints it, `--deck-schema` as JSON). `run_case <deck> --check` vets a
+deck without running it: the loader's error, or the mesh size, the DOF counts and the
+settings in effect, as JSON ([assistant.md](assistant.md)). The sections at a glance:
 
 | Section | Keys |
 |---|---|
