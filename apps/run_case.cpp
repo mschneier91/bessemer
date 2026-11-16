@@ -7,26 +7,206 @@
 // default (docs/deck_reference.md is that output). Every run writes a
 // machine-readable summary (<output.path>/<output.name>_summary.json, or
 // --summary <file>): "running" at the start, then "ok" or "diverged" (exit
-// code 2).
+// code 2). `run_case <deck.yaml> --check` loads the deck, builds the mesh and
+// checks the boundary groups without stepping, and prints a JSON report (the
+// DOF counts, the settings in effect, or the deck's error); `run_case
+// --deck-schema` prints every deck key as JSON. Both serve tools that write
+// and vet decks (mcp_server/, docs/assistant.md); neither changes a run.
 
 #include "ale/mesh_motion_case.hpp"
 #include "fsi/fsi_case.hpp"
 #include "bc/boundary_names.hpp"
+#include "bc/deck_boundary.hpp"
 #include "config/initial_conditions.hpp"
 #include "config/parameters.hpp"
 #include "mesh/case_mesh.hpp"
 #include "solid/elasticity_case.hpp"
 #include "solver/case.hpp"
 #include "util/device.hpp"
+#include "util/json.hpp"
 #include "mfem.hpp"
 
+#include <cmath>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
 using namespace mfem;
+
+namespace
+{
+
+/// @return The equation's deck name.
+const char* EquationName(incns::Equation e)
+{
+   switch (e)
+   {
+      case incns::Equation::Stokes: return "stokes";
+      case incns::Equation::NavierStokes: return "navier_stokes";
+      case incns::Equation::LinearElasticity: return "linear_elasticity";
+      case incns::Equation::MeshMotion: return "mesh_motion";
+      case incns::Equation::Hyperelasticity: return "hyperelasticity";
+   }
+   return "unknown";
+}
+
+/// @return The step control's deck name.
+const char* StepControlName(incns::StepControl s)
+{
+   switch (s)
+   {
+      case incns::StepControl::Fixed: return "fixed";
+      case incns::StepControl::Error: return "error";
+      case incns::StepControl::Cfl: return "cfl";
+   }
+   return "unknown";
+}
+
+/// @return The global true size of an H1 space of @p order, @p vdim components.
+long long H1Size(ParMesh& mesh, int order, int vdim)
+{
+   H1_FECollection fec(order, mesh.Dimension());
+   ParFiniteElementSpace fes(&mesh, &fec, vdim);
+   return static_cast<long long>(fes.GlobalTrueVSize());
+}
+
+/**
+ * @brief `run_case <deck> --check`: load the deck, build its mesh, check the
+ *        boundary groups and count the DOFs, without building a solver or
+ *        stepping. Prints one JSON object on rank 0 (status "ok" or "error"
+ *        with the loader's message). Collective.
+ * @param deck The deck's path.
+ * @return 0 when the deck is ready to run, 3 otherwise.
+ */
+int CheckDeck(const char* deck)
+{
+#ifdef MFEM_USE_EXCEPTIONS
+   // Errors become exceptions here, so the report carries their message.
+   // Without exceptions an MFEM error prints its message and aborts, and the
+   // report is missing: callers read the message from stderr then.
+   mfem::set_error_action(mfem::MFEM_ERROR_THROW);
+#endif
+   incns::Json out;
+   out["deck"].Set(deck);
+   bool ok = true;
+   try
+   {
+      const incns::Parameters p = incns::Parameters::LoadYAML(deck);
+      out["equation"].Set(EquationName(p.equation));
+      std::unique_ptr<ParMesh> pmesh = incns::MakeCaseMesh(p);
+      ParMesh& mesh = *pmesh;
+      const int dim = mesh.Dimension();
+      out["mesh"]["dimension"].Set(dim);
+      out["mesh"]["elements"].Set(static_cast<long long>(mesh.GetGlobalNE()));
+      std::string names;
+      for (const std::string& n : incns::BoundaryNames(p))
+      {
+         names += (names.empty() ? "" : ", ") + n;
+      }
+      out["mesh"]["boundary_names"].Set(names);
+
+      // The checks run_case makes before building a case.
+      std::string problems;
+      if (p.boundary_conditions.empty() && !names.empty())
+      {
+         problems = "the mesh has boundaries (" + names + ") but the deck "
+                    "declares no boundary_conditions";
+      }
+      else if (!p.boundary_conditions.empty())
+      {
+         incns::DeckBoundaryConditions bc(p, mesh);
+         for (const std::string& s : bc.CoverageProblems())
+         {
+            problems += (problems.empty() ? "" : "; ") + s;
+         }
+      }
+      if (!problems.empty())
+      {
+         ok = false;
+         out["error"].Set("boundary_conditions: every real boundary needs "
+                          "exactly one group: " + problems);
+      }
+
+      if (incns::IsSolid(p.equation) || p.equation == incns::Equation::MeshMotion)
+      {
+         const int k = incns::IsSolid(p.equation) ? p.solid.Order(p.order_u) :
+                       p.mesh_motion.Order(p.order_u);
+         out["orders"]["displacement"].Set(k);
+         out["dofs"]["displacement"].Set(H1Size(mesh, k, dim));
+      }
+      else
+      {
+         const long long nu = H1Size(mesh, p.order_u, dim);
+         const long long np = H1Size(mesh, p.order_p, 1);
+         out["orders"]["velocity"].Set(p.order_u);
+         out["orders"]["pressure"].Set(p.order_p);
+         out["dofs"]["velocity"].Set(nu);
+         out["dofs"]["pressure"].Set(np);
+         out["dofs"]["total"].Set(nu + np);
+         incns::Json& e = out["in_effect"];
+         e["convection"].Set(p.Convection() == incns::ConvectionTreatment::Oifs ?
+                             "oifs" : "imex");
+         e["bdf_order"].Set(p.BdfOrder());
+         e["collocated_mass"].Set(p.CollocatedMass());
+         e["grad_div_h"].Set(p.GradDivH());
+         e["nu"].Set(p.nu);
+         if (p.CflSteps()) { e["cfl_target"].Set(p.CflTarget()); }
+      }
+      incns::Json& t = out["time"];
+      t["step_control"].Set(StepControlName(p.step_control));
+      t["dt"].Set(p.dt);
+      t["t_final"].Set(p.t_final);
+      // The step count is known only when dt does not adapt.
+      const bool fixed_dt = p.step_control == incns::StepControl::Fixed ||
+                            (p.step_control == incns::StepControl::Cfl &&
+                             !p.CflSteps());
+      if (p.equation == incns::Equation::MeshMotion)
+      {
+         t["steps"].Set(p.mesh_motion.steps); // moves
+      }
+      else if (incns::IsSolid(p.equation) && !p.fsi.enabled &&
+               p.solid.analysis == incns::SolidAnalysis::Static)
+      {
+         t["steps"].Set(0); // one static solve
+      }
+      else if (fixed_dt && p.dt > 0.0 && !p.amr.enabled)
+      {
+         t["steps"].Set(static_cast<long long>(std::ceil(p.t_final / p.dt - 1e-9)));
+      }
+      out["amr"].Set(p.amr.enabled);
+      out["fsi"].Set(p.fsi.enabled);
+      out["output_summary"].Set(p.output.path + "/" + p.output.name +
+                                "_summary.json");
+   }
+   catch (const std::exception& ex)
+   {
+      ok = false;
+      out["error"].Set(ex.what());
+   }
+   out["status"].Set(ok ? "ok" : "error");
+   if (Mpi::Root()) { std::cout << out.Dump(); }
+   return ok ? 0 : 3;
+}
+
+/// `run_case --deck-schema`: every deck key as JSON, keyed by its path.
+void PrintDeckSchema()
+{
+   incns::Json out;
+   for (const incns::DeckKey& k : incns::Parameters::DeckSchema())
+   {
+      incns::Json& e = out[k.path];
+      e["type"].Set(k.type);
+      e["default"].Set(k.default_value);
+      if (!k.values.empty()) { e["values"].Set(k.values); }
+      e["description"].Set(k.description);
+   }
+   std::cout << out.Dump();
+}
+
+} // namespace
 
 int main(int argc, char* argv[])
 {
@@ -40,7 +220,9 @@ int main(int argc, char* argv[])
       {
          std::cerr << "usage: run_case <deck.yaml>\n"
                    "       run_case <deck.yaml> --summary <file.json>\n"
-                   "       run_case --deck-reference   (every deck key, Markdown)"
+                   "       run_case <deck.yaml> --check   (vet the deck, JSON; no run)\n"
+                   "       run_case --deck-reference   (every deck key, Markdown)\n"
+                   "       run_case --deck-schema      (every deck key, JSON)"
                    << std::endl;
       }
       return argc < 2 ? 1 : 0;
@@ -49,6 +231,15 @@ int main(int argc, char* argv[])
    {
       if (Mpi::Root()) { std::cout << incns::Parameters::DeckReferenceMarkdown(); }
       return 0;
+   }
+   if (!std::strcmp(argv[1], "--deck-schema"))
+   {
+      if (Mpi::Root()) { PrintDeckSchema(); }
+      return 0;
+   }
+   for (int i = 2; i < argc; ++i)
+   {
+      if (!std::strcmp(argv[i], "--check")) { return CheckDeck(argv[1]); }
    }
 
    std::string summary;

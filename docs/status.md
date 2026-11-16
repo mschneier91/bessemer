@@ -9,6 +9,25 @@ Rules and design live in [developing.md](developing.md); this file is the *state
 Keep this section short and current: whoever stops working updates it (AGENTS.md rule 8).
 The dated log below keeps the history.
 
+**An assistant (MCP) server, the AI entry point (2026-11-16, cloud thread "Build AI entry
+point for Bessemer"; human: "I'd like to have it before the nozzle release actually asap").**
+`mcp_server/bessemer_mcp.py` (standard library only, stdio) gives an assistant
+`check_setup`, `list_examples`, `deck_keys`, `read_doc`, `new_case`, `write_deck`,
+`check_deck`, `run_deck`, `run_status`, `stop_run` and `read_results`, on the user's own
+machine only (no scheduler, no credentials); `.mcp.json` registers it for Claude Code in
+the checkout; [assistant.md](assistant.md) describes it. Two driver options feed it:
+`run_case <deck> --check` (load, mesh, boundary coverage, DOF counts, settings in effect;
+JSON, no solver built) and `run_case --deck-schema` (every key as JSON). A run is
+unchanged. Test `mcp_server_test` (fast, one rank). Cloud scratch build (MFEM v4.10,
+apt hypre and Open MPI, not the Spack toolchain), CPU: the test and the `run_case`
+cavity/TGV tests pass; `--check` vetted every `cases/` deck class (flow, solid, mesh
+motion, FSI) and a 3D benchmark deck; also driven by the official MCP Python SDK as a
+client. Not done: the full fast tier here (CI), any GPU use, a Windows/macOS check of
+the server, and a cost estimate in wall time before a run (the ETA comes from the run's
+own progress lines; the memory estimate is 0.6-1.5 kB per velocity DOF from the GPU
+measurements). The optional instruction file for other coding assistants is AGENTS.md
+as it stands.
+
 **FDA nozzle stage 1: Re 500 at Q3/Q2 and Q4/Q3 on A100s, and against FDA's data
 (2026-11-11; human: "Yes, record them", "Yes, record it").**
 NCSA Delta, the CUDA build of main 7aae328; running cases, no code change. Numbers

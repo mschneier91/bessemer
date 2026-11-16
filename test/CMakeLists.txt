@@ -235,6 +235,15 @@ add_test(NAME flow_stats_script
   COMMAND python3 ${CMAKE_SOURCE_DIR}/benchmarks/flow_stats.py --selftest)
 set_tests_properties(flow_stats_script PROPERTIES LABELS "fast"
   PASS_REGULAR_EXPRESSION "selftest.*ok" FAIL_REGULAR_EXPRESSION "FAILED")
+# The assistant (MCP) server over stdio, with run_case --check / --deck-schema
+# and a one-rank run (docs/assistant.md; standard library only).
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mcp_server_test)
+add_test(NAME mcp_server_test
+  COMMAND python3 ${CMAKE_SOURCE_DIR}/mcp_server/test_bessemer_mcp.py
+          $<TARGET_FILE:run_case> ${CMAKE_CURRENT_BINARY_DIR}/mcp_server_test
+          ${INCNS_MPIEXEC})
+set_tests_properties(mcp_server_test PROPERTIES LABELS "fast" PROCESSORS 1
+  PASS_REGULAR_EXPRESSION "mcp_server_test: all passed" FAIL_REGULAR_EXPRESSION "FAIL:")
 incns_add_mpi_test(deck_test deck_test.cpp
   INCNS_TGV_DECK="${CMAKE_SOURCE_DIR}/cases/tgv2d_stokes.yaml"
   INCNS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

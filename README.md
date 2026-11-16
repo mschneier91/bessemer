@@ -24,6 +24,12 @@ first setup builds the whole toolchain from Spack, compiler included, which on a
 hours and about 20 GB; the agent starts only when you agree. Later sessions start in
 seconds.
 
+The repository also ships an [MCP](https://modelcontextprotocol.io) server,
+`mcp_server/bessemer_mcp.py`, that gives an assistant tools to set up a case, vet the
+deck (size, memory, errors), run it on your machine and read the results. Claude Code
+offers it when you open this checkout (`.mcp.json`). Other clients such as Claude
+Desktop can be pointed at it too: [docs/assistant.md](docs/assistant.md).
+
 ## What to ask
 
 | You say | The agent |

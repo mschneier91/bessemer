@@ -43,6 +43,7 @@ may not be CFD specialists; match their vocabulary.
 | What bessemer can and can't do: features, validated results, limits | [docs/capabilities.md](docs/capabilities.md) |
 | Run a standard benchmark (Taylor–Green, channel, DFG 3D) | [benchmarks/README.md](benchmarks/README.md) |
 | Run a simulation: an example deck, a new deck, a Python case | [docs/using.md](docs/using.md); every deck key: [docs/deck_reference.md](docs/deck_reference.md) |
+| Use or change the assistant (MCP) server's tools (`mcp_server/`) | [docs/assistant.md](docs/assistant.md) |
 | Install or build on a machine; how the Spack environments work | Run `scripts/setup.sh --plan` first: it says what this machine needs and names the procedure to follow. Background: [docs/install/spack.md](docs/install/spack.md); machines with their own page: [environments/README.md](environments/README.md) |
 | Change the solver (`src/`, `test/`, `apps/`) | [docs/developing.md](docs/developing.md): read it fully before planning |
 | **Where development left off**, open items, past decisions | [docs/status.md](docs/status.md) |
@@ -102,6 +103,7 @@ scripts/test.sh cpu -L fast              # fast tier: 180 tests, ~4 min
 . scripts/env.sh                         # activate the toolchain in this shell
 mpirun -np 4 build/cpu/apps/run_case cases/dfg_2d3.yaml   # an example deck
 build/cpu/apps/run_case --deck-reference                  # every deck key
+build/cpu/apps/run_case runs/my/deck.yaml --check         # vet a deck (JSON), no run
 ```
 
 Every `run_case` run writes `<output.path>/<output.name>_summary.json`: read its `status`
